@@ -577,6 +577,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "nexus-launcher"
+version = "0.1.0"
+dependencies = [
+ "nexus-core",
+ "nexus-protocol",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "tokio",
+ "windows-sys 0.61.2",
+]
+
+[[package]]
 name = "nexus-protocol"
 version = "0.1.0"
 dependencies = [

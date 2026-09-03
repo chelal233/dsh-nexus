@@ -1,0 +1,158 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="color-scheme" content="dark" />
+    <title>Nexus Console</title>
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body>
+    <div class="shell">
+      <header class="topbar">
+        <div class="brand">
+          <span class="brand-mark">N</span>
+          <div>
+            <p class="eyebrow">DSH NEXUS</p>
+            <h1>Console</h1>
+          </div>
+        </div>
+        <div class="connection">
+          <label for="api-base">Agent API</label>
+          <input id="api-base" value="http://127.0.0.1:3090" spellcheck="false" />
+          <button class="button primary" data-action="refresh">刷新</button>
+          <span id="connection-state" class="pill muted">未连接</span>
+        </div>
+      </header>
+
+      <main class="dashboard">
+        <section class="hero card">
+          <div>
+            <p class="eyebrow">REPLACEABLE WEBSHELL</p>
+            <h2>Agent 是核心，界面只是一个客户端。</h2>
+            <p class="hero-copy">
+              这个静态 Console 只调用 loopback v1 API。生命周期、Harness、profile、checkpoint、release、更新和诊断均由 Rust Agent 持有。
+            </p>
+          </div>
+          <div class="hero-actions">
+            <button class="button" data-action="create-checkpoint">创建记录点</button>
+            <button class="button danger" data-action="collect-diagnostics">收集诊断</button>
+          </div>
+        </section>
+
+        <section class="card overview-card">
+          <div class="card-heading">
+            <div>
+              <p class="eyebrow">RUNTIME</p>
+              <h3>运行概览</h3>
+            </div>
+            <span id="agent-lifecycle" class="pill muted">—</span>
+          </div>
+          <dl class="metrics">
+            <div><dt>Harness</dt><dd id="agent-harness">—</dd></div>
+            <div><dt>Profile</dt><dd id="agent-profile">—</dd></div>
+            <div><dt>Release</dt><dd id="agent-release">—</dd></div>
+            <div><dt>API</dt><dd id="agent-api-version">—</dd></div>
+          </dl>
+          <div class="button-row">
+            <button class="button" data-action="harness-start">启动 Harness</button>
+            <button class="button" data-action="harness-stop">停止 Harness</button>
+            <button class="button" data-action="harness-restart">重启 Harness</button>
+          </div>
+        </section>
+
+        <section class="card profile-card">
+          <div class="card-heading">
+            <div><p class="eyebrow">PROFILE</p><h3>Profile</h3></div>
+            <span id="profile-count" class="pill muted">0</span>
+          </div>
+          <p id="profile-active" class="highlight">当前：—</p>
+          <div class="inline-form">
+            <input id="profile-name" placeholder="例如 web 或 desktop" spellcheck="false" />
+            <button class="button primary" data-action="profile-select">切换</button>
+          </div>
+          <ul id="profile-list" class="compact-list"></ul>
+        </section>
+
+        <section class="card harness-card">
+          <div class="card-heading">
+            <div><p class="eyebrow">SUPERVISOR</p><h3>Harness 监督</h3></div>
+            <span id="harness-state" class="pill muted">—</span>
+          </div>
+          <dl class="detail-list">
+            <div><dt>PID</dt><dd id="harness-pid">—</dd></div>
+            <div><dt>退出码</dt><dd id="harness-exit">—</dd></div>
+            <div><dt>错误</dt><dd id="harness-error">—</dd></div>
+          </dl>
+        </section>
+
+        <section class="card release-card">
+          <div class="card-heading">
+            <div><p class="eyebrow">IMMUTABLE SLOTS</p><h3>Release slots</h3></div>
+            <button class="icon-button" title="刷新 release" data-action="refresh">↻</button>
+          </div>
+          <div class="inline-form">
+            <input id="release-id" placeholder="slot id" spellcheck="false" />
+            <button class="button" data-action="release-promote">提升</button>
+            <button class="button" data-action="release-rollback">回滚</button>
+          </div>
+          <ul id="release-list" class="compact-list"></ul>
+        </section>
+
+        <section class="card update-card">
+          <div class="card-heading">
+            <div><p class="eyebrow">UPDATES</p><h3>上游更新</h3></div>
+            <span id="update-state" class="pill muted">—</span>
+          </div>
+          <dl class="detail-list">
+            <div><dt>当前任务</dt><dd id="update-release">—</dd></div>
+            <div><dt>版本</dt><dd id="update-version">—</dd></div>
+            <div><dt>错误</dt><dd id="update-error">—</dd></div>
+          </dl>
+          <div class="inline-form">
+            <input id="update-id" placeholder="可选 slot id" spellcheck="false" />
+            <input id="update-version-input" placeholder="可选版本" spellcheck="false" />
+            <button class="button primary" data-action="update-install">执行更新</button>
+          </div>
+        </section>
+
+        <section class="card checkpoint-card">
+          <div class="card-heading">
+            <div><p class="eyebrow">RECOVERY</p><h3>记录点</h3></div>
+            <span id="checkpoint-count" class="pill muted">0</span>
+          </div>
+          <ul id="checkpoint-list" class="compact-list"></ul>
+        </section>
+
+        <section class="card config-card">
+          <div class="card-heading">
+            <div><p class="eyebrow">NEXUS-OWNED</p><h3>配置</h3></div>
+            <span class="pill">脱敏只读</span>
+          </div>
+          <p class="muted-copy">配置写入通过 v1 API 完成。页面只展示脱敏摘要，不会把 Harness 或 .dsh 数据复制到 UI。</p>
+          <dl class="detail-list">
+            <div><dt>Harness 配置</dt><dd id="config-harness">—</dd></div>
+            <div><dt>更新配置</dt><dd id="config-update">—</dd></div>
+          </dl>
+        </section>
+
+        <section class="card diagnostics-card">
+          <div class="card-heading">
+            <div><p class="eyebrow">OBSERVABILITY</p><h3>诊断包</h3></div>
+            <button class="button" data-action="collect-diagnostics">收集</button>
+          </div>
+          <ul id="diagnostics-list" class="compact-list"></ul>
+        </section>
+
+        <section class="card activity-card">
+          <div class="card-heading">
+            <div><p class="eyebrow">LOCAL ACTIVITY</p><h3>活动</h3></div>
+            <button class="icon-button" title="清空活动" data-action="clear-activity">×</button>
+          </div>
+          <ol id="activity-log" class="activity-list"></ol>
+        </section>
+      </main>
+    </div>
+    <script type="module" src="./app.js"></script>
+  </body>
+</html>

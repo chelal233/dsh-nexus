@@ -4,6 +4,7 @@ members = [
     "crates/nexus-core",
     "crates/nexus-agent",
     "crates/nexus-cli",
+    "crates/nexus-launcher",
 ]
 resolver = "2"
 
@@ -24,3 +25,4 @@ tokio = {
 }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
+windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_Security", "Win32_Storage_FileSystem", "Win32_System_Threading"] }

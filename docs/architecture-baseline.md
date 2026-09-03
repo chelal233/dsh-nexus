@@ -1,12 +1,12 @@
 # Nexus architecture baseline
 
-Status: Phase 8 Nexus-owned configuration management (headless MVP)
+Status: Phase 9 launcher bootstrap and replaceable static WebShell foundation
 
 ## Purpose
 
 Nexus is a headless control plane around the standalone DeepSeek Harness. The
-first implementation slice provides a Rust Agent, a versioned local protocol,
-and a CLI. It does not modify or vendor Harness source code.
+implementation provides a Rust Agent, a versioned local protocol, a CLI, and
+a thin launcher boundary. It does not modify or vendor Harness source code.
 
 ## Non-negotiable boundaries
 
@@ -50,7 +50,9 @@ nexus-core      paths, configuration, and state model
        ^
 nexus-agent     foreground loopback HTTP server, HarnessSupervisor, updater, diagnostics, config
        ^
-nexusctl        CLI client (`status`, `harness`, `profile`, `checkpoint`, `release`, `update`)
+nexusctl        CLI client (`status`, `harness`, `profile`, `checkpoint`, `release`, `update`, `config`)
+nexus-launcher  process bootstrap (`start`, `run`, `stop`, `status`, `logs`)
+apps/nexus-console  dependency-free replaceable WebShell client
 ```
 
 The Agent exposes:
@@ -225,12 +227,32 @@ runtime has stopped/returned idle. Setting sections is currently an API-level
 operation so a future Tauri, Electron, browser, or script frontend can supply
 typed forms without taking ownership of persistence or process coordination.
 
+`nexus-launcher` is a thin process boundary around the Agent. `start` resolves
+the sibling `nexus-agent` (or an explicit `--agent`/`NEXUS_AGENT_BIN`), creates a
+recoverable lock and launch record below `run/`, redirects Agent logs into the
+Nexus `logs/` directory, and waits for loopback health before returning. `run`
+keeps the Agent attached in the foreground and turns Ctrl+C into the same
+graceful shutdown request. `stop` only calls the Agent shutdown endpoint and
+waits for the listener to disappear; it never kills an arbitrary PID. A lock
+older than the bounded stale interval is recoverable only after a fresh health
+probe confirms that no Agent is serving the configured port.
+
+The static Console lives under `apps/nexus-console/`. It validates that its API
+base is loopback-only, renders Agent/Harness/profile/release/update/checkpoint/
+diagnostic/config status, and sends explicit v1 actions. It stores no runtime
+state and has no dependency on Tauri or Electron. A native shell can load the
+same assets, or a browser can use a future same-origin proxy; browser-origin
+CORS remains an explicit security integration step rather than an implicit
+wildcard.
+
 ## Current scope and exclusions
 
-This headless MVP does not add Tauri, Electron, Harness source dependencies,
-plugin marketplaces, recommendations, advertising, cloud sync, remote control,
-or authentication. The replaceable UI can be added later against the v1 Agent
-protocol. Release registration/promotion remain explicit metadata operations;
+This headless MVP does not add native Tauri/Electron packaging, Harness source
+dependencies, plugin marketplaces, recommendations, advertising, cloud sync,
+remote control, or authentication. A dependency-free static WebShell foundation
+is included under `apps/nexus-console/`; native packaging and browser-origin
+CORS/same-origin integration remain separate follow-up slices against the v1
+Agent protocol. Release registration/promotion remain explicit metadata operations;
 the update executor installs a verified immutable slot but does not silently
 change the active pointer or start Harness. Once a slot is explicitly promoted,
 the supervisor resolves `{release_root}` from the catalog and performs launch

@@ -1,0 +1,99 @@
+:root {
+  color-scheme: dark;
+  --bg: #0b1015;
+  --panel: rgba(19, 28, 37, 0.9);
+  --panel-strong: #17212b;
+  --line: rgba(173, 205, 224, 0.13);
+  --text: #edf5f7;
+  --muted: #91a3ad;
+  --accent: #67d4c5;
+  --accent-strong: #b7f6e8;
+  --danger: #ff8f87;
+  --shadow: 0 24px 70px rgba(0, 0, 0, 0.27);
+  font-family: "Segoe UI Variable", "Noto Sans SC", system-ui, sans-serif;
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  min-width: 320px;
+  color: var(--text);
+  background:
+    radial-gradient(circle at 15% -10%, rgba(69, 152, 151, 0.19), transparent 32rem),
+    radial-gradient(circle at 96% 0%, rgba(79, 97, 173, 0.15), transparent 30rem),
+    var(--bg);
+}
+
+button, input { font: inherit; }
+button { cursor: pointer; }
+
+.shell { width: min(1440px, calc(100% - 40px)); margin: 0 auto; padding: 28px 0 64px; }
+.topbar { display: flex; align-items: center; justify-content: space-between; gap: 24px; margin-bottom: 24px; }
+.brand, .connection, .card-heading, .button-row, .inline-form, .hero-actions { display: flex; align-items: center; }
+.brand { gap: 12px; }
+.brand-mark { display: grid; place-items: center; width: 42px; height: 42px; border: 1px solid rgba(103, 212, 197, 0.5); border-radius: 13px; color: var(--accent-strong); background: rgba(103, 212, 197, 0.11); font-weight: 800; letter-spacing: .05em; }
+.eyebrow { margin: 0 0 5px; color: var(--accent); font-size: 10px; font-weight: 800; letter-spacing: .18em; }
+h1, h2, h3, p { margin-top: 0; }
+h1 { margin-bottom: 0; font-size: 21px; letter-spacing: -.02em; }
+h2 { max-width: 680px; margin-bottom: 12px; font-size: clamp(24px, 3.1vw, 42px); line-height: 1.08; letter-spacing: -.045em; }
+h3 { margin-bottom: 0; font-size: 16px; letter-spacing: -.02em; }
+.connection { gap: 8px; }
+.connection label { color: var(--muted); font-size: 12px; }
+input { min-width: 0; border: 1px solid var(--line); border-radius: 9px; padding: 9px 11px; color: var(--text); background: rgba(6, 10, 14, .48); outline: none; }
+input:focus { border-color: rgba(103, 212, 197, .65); box-shadow: 0 0 0 3px rgba(103, 212, 197, .1); }
+#api-base { width: 235px; }
+.dashboard { display: grid; grid-template-columns: repeat(12, 1fr); gap: 14px; }
+.card { min-width: 0; border: 1px solid var(--line); border-radius: 18px; padding: 19px; background: var(--panel); box-shadow: var(--shadow); backdrop-filter: blur(18px); }
+.hero { display: flex; grid-column: span 12; align-items: flex-end; justify-content: space-between; gap: 28px; padding: 30px; background: linear-gradient(120deg, rgba(34, 77, 79, .78), rgba(19, 28, 37, .9) 62%); }
+.hero-copy { max-width: 740px; margin-bottom: 0; color: #bdd0d4; line-height: 1.65; }
+.hero-actions { flex-wrap: wrap; justify-content: flex-end; gap: 8px; }
+.overview-card { grid-column: span 6; }
+.profile-card, .harness-card { grid-column: span 3; }
+.release-card, .update-card { grid-column: span 6; }
+.checkpoint-card, .config-card, .diagnostics-card { grid-column: span 4; }
+.activity-card { grid-column: span 12; }
+.card-heading { justify-content: space-between; gap: 12px; margin-bottom: 17px; }
+.metrics { display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; margin: 0 0 18px; }
+.metrics div, .detail-list div { min-width: 0; }
+dt { color: var(--muted); font-size: 11px; }
+dd { margin: 5px 0 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 14px; font-weight: 650; }
+.detail-list { display: grid; gap: 13px; margin: 0 0 18px; }
+.button-row, .inline-form { flex-wrap: wrap; gap: 8px; }
+.button { border: 1px solid rgba(180, 207, 218, .18); border-radius: 9px; padding: 8px 11px; color: var(--text); background: rgba(255, 255, 255, .05); transition: border-color .16s ease, background .16s ease, transform .16s ease; }
+.button:hover { border-color: rgba(103, 212, 197, .58); background: rgba(103, 212, 197, .11); transform: translateY(-1px); }
+.button.primary { border-color: rgba(103, 212, 197, .5); color: #07201f; background: var(--accent); }
+.button.primary:hover { background: var(--accent-strong); }
+.button.danger { border-color: rgba(255, 143, 135, .35); color: #ffd2ce; }
+.icon-button { border: 0; border-radius: 8px; padding: 5px 8px; color: var(--muted); background: transparent; font-size: 20px; }
+.icon-button:hover { color: var(--text); background: rgba(255, 255, 255, .08); }
+.pill { display: inline-flex; align-items: center; border: 1px solid rgba(103, 212, 197, .3); border-radius: 999px; padding: 4px 8px; color: var(--accent-strong); background: rgba(103, 212, 197, .08); font-size: 10px; font-weight: 700; white-space: nowrap; }
+.pill.muted { border-color: var(--line); color: var(--muted); background: rgba(255, 255, 255, .03); }
+.pill.good { color: var(--accent-strong); }
+.pill.bad { border-color: rgba(255, 143, 135, .35); color: var(--danger); background: rgba(255, 143, 135, .08); }
+.highlight { margin-bottom: 15px; color: var(--accent-strong); font-size: 14px; font-weight: 650; }
+.compact-list { display: grid; gap: 8px; margin: 0; padding: 0; list-style: none; }
+.compact-list li { display: flex; justify-content: space-between; gap: 12px; border-top: 1px solid var(--line); padding-top: 8px; color: #c6d5d9; font-size: 12px; }
+.compact-list li:first-child { border-top: 0; padding-top: 0; }
+.compact-list .empty { color: var(--muted); }
+.inline-form input { flex: 1 1 110px; }
+.muted-copy { margin-bottom: 15px; color: var(--muted); font-size: 12px; line-height: 1.55; }
+.activity-list { display: grid; gap: 7px; max-height: 180px; overflow: auto; margin: 0; padding-left: 21px; color: #bdcdd2; font-size: 12px; line-height: 1.45; }
+.activity-list li::marker { color: var(--accent); }
+
+@media (max-width: 1050px) {
+  .profile-card, .harness-card { grid-column: span 6; }
+  .checkpoint-card, .config-card, .diagnostics-card { grid-column: span 6; }
+}
+
+@media (max-width: 720px) {
+  .shell { width: min(100% - 24px, 640px); padding-top: 15px; }
+  .topbar, .hero { align-items: flex-start; flex-direction: column; }
+  .connection { width: 100%; align-items: stretch; flex-wrap: wrap; }
+  .connection label { width: 100%; }
+  #api-base { width: 100%; flex: 1 1 100%; }
+  .overview-card, .profile-card, .harness-card, .release-card, .update-card, .checkpoint-card, .config-card, .diagnostics-card { grid-column: span 12; }
+  .metrics { grid-template-columns: repeat(2, 1fr); }
+  .hero { padding: 22px; }
+  .hero-actions { justify-content: flex-start; }
+}

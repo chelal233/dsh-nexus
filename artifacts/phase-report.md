@@ -1,48 +1,57 @@
-# Phase 8 report: Nexus-owned configuration management
+# Phase 9 report: launcher bootstrap and replaceable WebShell foundation
 
 ## Worktree and scope
 
 - Task: `nexus-bootstrap`
-- Phase: `config-management`
-- Worktree: `E:\git\dsh-nexus-config-config`
-- Scope: typed v1 configuration protocol, atomic Nexus config store, Agent
-  config API, CLI config commands, credential-safe response redaction, tests,
-  and documentation.
+- Phase: `launcher-webshell`
+- Worktree: `E:\git\dsh-nexus-launcher`
+- Branch: `codex/nexus-bootstrap/launcher-webshell`
+- Scope: Rust launcher lifecycle, Windows-safe detached process creation,
+  foreground supervision, run metadata, static Console/WebShell assets, and
+  architecture documentation.
 - Exclusions: no Harness source/package/lockfile/build changes, no `.dsh`
-  traversal, no production data, deployment, or native UI build.
+  traversal or migration, no production data, deployment, native Tauri/Electron
+  packaging, or browser-origin CORS changes.
 
 ## Delivered
 
-- Added `HarnessConfigPayload`, `UpdateConfigPayload`, and explicit
-  `ConfigAction`/`ConfigCommand`/`ConfigResponse` wire types.
-- Added `ConfigStore` for validated, same-directory atomic writes to the
-  Nexus-owned `config.json`; missing configuration remains a valid empty
-  document.
-- Added `GET|POST /v1/config` with status, set, and clear operations. Harness
-  changes are rejected while the supervised child is starting/running; update
-  changes are rejected while an update job is running.
-- Added `nexusctl config status`, `config clear-harness`, and
-  `config clear-update`; JSON output is available for GUI/WebShell clients.
-- Responses preserve useful flag names while redacting sensitive argument
-  values, including `--api-key value` and `--token=value` forms.
-- Added round-trip/atomicity coverage and a release-binary API/CLI smoke script
-  at `E:\git\dsh-nexus-controller-artifacts\config-management\config-smoke.ps1`.
+- Added `nexus-launcher` with `start`, `run`/`foreground`, `stop`, `status`,
+  and `logs` commands. It resolves the sibling Agent or an explicit
+  `--agent`/`NEXUS_AGENT_BIN`, owns only `run/agent.lock` and `run/agent.json`,
+  and never scans for or kills arbitrary processes.
+- Added Windows detached startup using an explicit inheritable-handle list so
+  PowerShell capture pipes cannot keep the Agent or launcher alive. Agent
+  stdout/stderr are appended under the Nexus-owned `logs/` directory.
+- Added foreground supervision with Ctrl+C and loopback shutdown handling,
+  bounded child reaping, and exact-PID termination only as a timeout fallback.
+  Health probing uses a longer connection window to tolerate a concurrently
+  polling local WebShell during Agent startup.
+- Added `apps/nexus-console/`, a dependency-free static WebShell that validates
+  loopback API targets, renders Agent/Harness/profile/release/update/checkpoint/
+  diagnostics/config state, and sends explicit v1 actions. It owns no runtime
+  state and is loadable by a future Tauri/Electron shell or same-origin proxy.
+- Updated the architecture baseline to make the launcher and replaceable
+  WebShell boundaries explicit; Harness remains an immutable upstream runtime.
 
 ## Verification
 
-- `cargo fmt --all` — pass.
-- `cargo test --workspace --locked` — 30 tests passed, 0 failed.
+- `cargo fmt --all -- --check` — pass.
+- `cargo test --workspace --locked` — 33 tests passed, 0 failed.
 - `cargo build --workspace --release --locked` — pass.
 - `git diff --check` — pass.
-- Release-binary config smoke — pass: Agent health, empty initial config,
-  redacted Harness secret, durable Harness/update writes, `nexusctl config
-  status --json`, clears, and graceful Agent shutdown.
+- Release-binary lifecycle/WebShell smoke — pass via
+  `E:\git\dsh-nexus-controller-artifacts\launcher-webshell\launcher-smoke.ps1`:
+  detached start, idempotent start, status/log paths, stale-lock recovery,
+  graceful/idempotent stop, foreground run under Windows PowerShell with
+  redirected output, exact cleanup, and static asset/reference checks.
+- Additional foreground probes with concurrent early loopback polling passed
+  after the bounded connection-window fix.
 
 ## Boundaries carried forward
 
-`config.json` is Nexus-owned and does not replace Harness' `$HOME/.dsh` data.
-The API validates and coordinates; it does not infer Harness flags, edit the
-upstream tree, or silently restart processes. Tauri/Electron remains a
-replaceable client of the loopback v1 protocol. A native UI and resident
-launcher are the next implementation slice; their absence does not reduce the
-headless Agent's functionality.
+The launcher is a process boundary, not a second control plane. Agent APIs and
+`nexusctl` remain usable without any GUI, and the launcher does not own Harness
+profiles, releases, checkpoints, or `$HOME/.dsh`. Native Tauri/Electron
+packaging, browser-origin CORS/same-origin integration, and resident tray UI
+remain separate follow-up slices; their absence does not reduce headless Agent
+functionality.
