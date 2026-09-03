@@ -62,6 +62,7 @@
             <button class="button" data-action="harness-start">启动 Harness</button>
             <button class="button" data-action="harness-stop">停止 Harness</button>
             <button class="button" data-action="harness-restart">重启 Harness</button>
+            <button class="button primary" data-action="harness-open">打开 Harness</button>
           </div>
         </section>
 
@@ -87,7 +88,14 @@
             <div><dt>PID</dt><dd id="harness-pid">—</dd></div>
             <div><dt>退出码</dt><dd id="harness-exit">—</dd></div>
             <div><dt>错误</dt><dd id="harness-error">—</dd></div>
+            <div><dt>认证入口</dt><dd id="harness-url">—</dd></div>
           </dl>
+          <div class="inline-form">
+            <input id="harness-token" aria-label="Harness token" readonly placeholder="未发现本次认证 token" />
+            <button class="button" data-action="harness-copy">复制 token</button>
+            <button class="icon-button" title="刷新 Harness 认证信息" data-action="harness-refresh">↻</button>
+          </div>
+          <p id="harness-ui-message" class="muted-copy">Launcher 会从有界的 Harness 输出日志中读取最新 loopback 认证入口。</p>
         </section>
 
         <section class="card release-card">

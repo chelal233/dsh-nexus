@@ -74,6 +74,13 @@ function setText(selector, value) {
   if (node) node.textContent = value == null || value === "" ? "—" : String(value);
 }
 
+function setInputValue(selector, value, placeholder = "") {
+  const node = document.querySelector(selector);
+  if (!node) return;
+  node.value = value == null || value === "" ? "" : String(value);
+  if (placeholder) node.placeholder = placeholder;
+}
+
 function setPill(selector, value, tone = "muted") {
   const node = document.querySelector(selector);
   if (!node) return;
@@ -112,6 +119,30 @@ function formatUnix(value) {
   return new Date(Number(value) * 1000).toLocaleString();
 }
 
+function renderHarnessUi(info) {
+  setText("#harness-url", info?.url);
+  setInputValue("#harness-token", info?.token, info?.message || "未发现本次认证 token");
+  setText("#harness-ui-message", info?.message || (info?.token
+    ? `已发现认证入口（${formatUnix(info.observed_at_unix)}），可直接打开 Harness。`
+    : "已发现 loopback Harness 地址，但其中没有可提取的 token。"));
+}
+
+async function refreshHarnessUi() {
+  if (!launcherAvailable) {
+    renderHarnessUi({
+      available: false,
+      message: "当前是静态预览；使用 nexus-launcher console 后才能读取认证入口。",
+    });
+    return;
+  }
+  try {
+    const info = await launcherRequest("/launcher/harness");
+    renderHarnessUi(info);
+  } catch (error) {
+    renderHarnessUi({ available: false, message: `读取 Harness 认证信息失败：${error.message}` });
+  }
+}
+
 async function refreshLauncher() {
   try {
     const status = await launcherRequest("/launcher/status");
@@ -125,11 +156,16 @@ async function refreshLauncher() {
     if (status.agent_api && apiInput.value === DEFAULT_API) {
       apiInput.value = status.agent_api;
     }
+    await refreshHarnessUi();
     return status;
   } catch (error) {
     const wasAvailable = launcherAvailable;
     launcherAvailable = false;
     setPill("#launcher-state", "静态预览", "muted");
+    renderHarnessUi({
+      available: false,
+      message: "当前是静态预览；使用 nexus-launcher console 后才能读取认证入口。",
+    });
     if (wasAvailable) log(`Launcher 主机不可用：${error.message}`, true);
     return null;
   }
@@ -218,12 +254,48 @@ async function launcherAct(label, action) {
   }
 }
 
+async function openHarness() {
+  if (!launcherAvailable) {
+    log("打开 Harness：当前是静态预览，请使用 nexus-launcher console 启动宿主", true);
+    return;
+  }
+  try {
+    const info = await launcherRequest("/launcher/harness", {
+      method: "POST",
+      body: { action: "open" },
+    });
+    renderHarnessUi(info);
+    log("打开 Harness：已调用系统浏览器");
+  } catch (error) {
+    log(`打开 Harness：${error.message}`, true);
+  }
+}
+
+async function copyHarnessToken() {
+  const token = document.querySelector("#harness-token")?.value;
+  if (!token) {
+    log("复制 token：当前没有可用 token", true);
+    return;
+  }
+  try {
+    await navigator.clipboard.writeText(token);
+    log("复制 token：完成");
+  } catch (error) {
+    log(`复制 token：${error.message}`, true);
+  }
+}
+
 document.addEventListener("click", event => {
   const action = event.target.closest("[data-action]")?.dataset.action;
   if (!action) return;
   if (action === "refresh") refresh();
   if (action.startsWith("agent-")) launcherAct(`Agent ${action.slice(6)}`, action.slice(6));
-  if (action.startsWith("harness-")) act(`Harness ${action.slice(8)}`, "/v1/harness", { action: action.slice(8) });
+  if (["harness-start", "harness-stop", "harness-restart"].includes(action)) {
+    act(`Harness ${action.slice(8)}`, "/v1/harness", { action: action.slice(8) });
+  }
+  if (action === "harness-open") openHarness();
+  if (action === "harness-refresh") refreshHarnessUi();
+  if (action === "harness-copy") copyHarnessToken();
   if (action === "profile-select") {
     const profile = document.querySelector("#profile-name").value.trim();
     if (profile) act("Profile 切换", "/v1/profiles", { action: "select", profile });

@@ -1,6 +1,6 @@
 # Nexus architecture baseline
 
-Status: Phase 10 single-entry launcher host and replaceable Console foundation
+Status: Phase 11 launcher configuration and Harness access
 
 ## Purpose
 
@@ -40,7 +40,9 @@ Agent boot.
 starts or reconnects to Agent, starts a configured Harness, serves the local
 WebShell, supervises Agent availability, and is the future home for tray,
 notifications, and single-instance behavior. It must remain usable without a
-GUI through its command line and loopback endpoints.
+GUI through its command line and loopback endpoints. Launcher settings are
+loaded from a small `launcher.json` at the Nexus data root, so the host can be
+reconfigured without taking ownership of Agent's Harness/update `config.json`.
 
 `nexus-console` is only a view/client layer. A future Tauri or Electron shell
 should load this UI (or a replacement UI) and call the launcher's local API;
@@ -208,6 +210,32 @@ root containing `config.json`, `state.json`, `profiles.json`, `checkpoints/`,
 copy `$HOME/.dsh`, `DSH_HOME`, Harness credentials, or Harness session data.
 Nexus never defaults to `$HOME/.dsh`.
 
+The Launcher reads an optional `<data-root>/launcher.json` independently of
+the Agent-owned `config.json`:
+
+```json
+{
+  "schema_version": 1,
+  "agent_program": "E:/git/dsh-nexus/target/release/nexus-agent.exe",
+  "agent_port": 3090,
+  "console_dir": "E:/git/dsh-nexus/apps/nexus-console",
+  "console_port": 3091,
+  "wait_secs": 20,
+  "open_browser": true
+}
+```
+
+The effective precedence is `CLI > launcher.json > environment > built-in
+defaults`. `--data-dir` selects the root before that file is loaded and is
+therefore intentionally not a field in `launcher.json`. CLI overrides are
+`--agent`, `--port`, `--console-dir`, `--console-port`, `--wait-secs`, and
+`--open`/`--no-open`; environment overrides are
+`NEXUS_DATA_DIR`, `NEXUS_AGENT_PORT`, `NEXUS_AGENT_BIN`, `NEXUS_CONSOLE_DIR`,
+`NEXUS_CONSOLE_PORT`, `NEXUS_LAUNCHER_WAIT_SECS`, and `NEXUS_CONSOLE_OPEN`.
+Invalid file values fail closed with the config path in the error; invalid
+environment values fall back to defaults. Unknown JSON fields are ignored for
+forward compatibility.
+
 `state.json` is Nexus runtime metadata, published through a temporary file and
 an atomic replace in the same Nexus root. It is kept separate from the
 external Harness working/data directory. Supervisor stdout and stderr are
@@ -269,6 +297,15 @@ separate operating-system process: stopping the Console host does not
 implicitly stop Agent. Use the UI's explicit stop action or
 `nexus-launcher stop` when Agent should end.
 
+The Launcher also exposes `GET /launcher/harness` and
+`POST /launcher/harness` with `{"action":"open"}`. These endpoints inspect
+only a bounded tail of the Nexus-owned `logs/harness.stdout.log` and
+`harness.stderr.log`, select the newest token-bearing loopback HTTP URL, and
+allow the user to open it in the system browser. The response includes the
+latest extracted token for local display/copy in Console. URLs with remote
+hosts, HTTPS, credentials, or control characters are ignored; no arbitrary
+path or URL is opened, and no `.dsh`/Harness source is read.
+
 `start`, `run`, `stop`, `status`, and `logs` remain script/recovery fallbacks.
 They keep the existing guarantees: `start` returns only after health, `run`
 keeps Agent attached in the foreground, and `stop` calls the Agent shutdown
@@ -281,17 +318,21 @@ The Console view lives under `apps/nexus-console/`. It validates that its API
 base is loopback-only, renders Agent/Harness/profile/release/update/checkpoint/
 diagnostic/config status, and sends explicit v1 actions. When served by
 `nexus-launcher console`, it also uses `/launcher/status` and
-`/launcher/agent` for Agent lifecycle controls. If those routes are absent,
-the page deliberately degrades to a read/action client for a separately
-started Agent; this is the development-only Python static preview path. The
-view stores no runtime state and has no dependency on Tauri or Electron. A
-native shell can load the same assets or replace them entirely.
+`/launcher/agent` for Agent lifecycle controls, plus `/launcher/harness` to
+open the Harness UI and display/copy its latest token. If those routes are
+absent, the page deliberately degrades to a read/action client for a
+separately started Agent; this is the development-only Python static preview
+path. The view stores no runtime state and has no dependency on Tauri or
+Electron. A native shell can load the same assets or replace them entirely.
 
 ## Current scope and exclusions
 
 This phase does not add native Tauri/Electron packaging, Harness source
 dependencies, plugin marketplaces, recommendations, advertising, cloud sync,
-remote control, or authentication. The single-entry Rust host is available via
+remote control, or Launcher API authentication. The Harness token viewer only
+surfaces a token that the opaque upstream process already printed to a local
+loopback URL; it is not a new Nexus authentication protocol. The single-entry
+Rust host is available via
 `nexus-launcher console`; a dependency-free static WebShell view is included
 under `apps/nexus-console/`, while native packaging remains a separate
 follow-up slice against the launcher/Agent protocols. Browser access is limited

@@ -21,10 +21,44 @@ The explicit `console` word is optional: launching `nexus-launcher.exe` with no
 command enters the same host mode, which is the future double-click path. Use
 `--agent PATH` when the Agent binary is not beside the launcher, and
 `--console-dir PATH` when the UI is packaged separately. The host listens on
-`http://127.0.0.1:3091/`; its local `/launcher/*` endpoints provide Agent
-lifecycle controls for the view. Agent remains an independent process when the
-Console host exits; use the explicit stop button or `nexus-launcher stop` to
-end it.
+`http://127.0.0.1:3091/`; its local `/launcher/*` endpoints provide Agent and
+Harness controls for the view. The “打开 Harness” action opens the newest
+loopback authentication URL observed in the bounded Harness stdout/stderr
+tail, while the page exposes the extracted token for copying. No Harness
+source or `$HOME/.dsh` data is read. Agent remains an independent process when
+the Console host exits; use the explicit stop button or `nexus-launcher stop`
+to end it.
+
+## Launcher configuration
+
+The launcher reads an optional `<data-root>/launcher.json`, separate from the
+Agent-owned `config.json`:
+
+```json
+{
+  "schema_version": 1,
+  "agent_program": "E:/git/dsh-nexus/target/release/nexus-agent.exe",
+  "agent_port": 3090,
+  "console_dir": "E:/git/dsh-nexus/apps/nexus-console",
+  "console_port": 3091,
+  "wait_secs": 20,
+  "open_browser": true
+}
+```
+
+The effective precedence is CLI > `launcher.json` > environment > built-in
+defaults. `--data-dir` chooses the root before `launcher.json` is loaded, so
+it is intentionally not a field in that file. CLI overrides include
+`--agent`, `--port`, `--console-dir`, `--console-port`, `--wait-secs`, and
+`--open`/`--no-open`. Environment overrides are
+`NEXUS_DATA_DIR`, `NEXUS_AGENT_PORT`, `NEXUS_AGENT_BIN`, `NEXUS_CONSOLE_DIR`,
+`NEXUS_CONSOLE_PORT`, `NEXUS_LAUNCHER_WAIT_SECS`, and `NEXUS_CONSOLE_OPEN`.
+
+The local Launcher API adds `GET /launcher/harness` for the latest safe URL
+and token, and `POST /launcher/harness` with
+`{"action":"open"}` to invoke the system browser. It only accepts plain HTTP
+loopback hosts (`127.0.0.1`, `localhost`, or `::1`); missing/remote URLs are
+not opened.
 
 `nexusctl` is still available as a short-lived recovery/automation client. It
 does not host Agent or replace the launcher.

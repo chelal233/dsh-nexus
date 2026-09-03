@@ -24,7 +24,7 @@ use axum::{
 };
 use nexus_core::{load_harness_launch_spec, NexusConfig, NexusPaths};
 use nexus_protocol::{HarnessAction, HarnessCommand, HealthResponse, HealthStatus, StateResponse};
-use reqwest::Client;
+use reqwest::{Client, Url};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use tokio::{
@@ -39,8 +39,14 @@ const DEFAULT_WAIT_SECS: u64 = 20;
 const DEFAULT_STOP_WAIT_SECS: u64 = 15;
 const LOCK_STALE_AFTER_SECS: u64 = 30;
 const DEFAULT_CONSOLE_PORT: u16 = 3091;
+const DEFAULT_LAUNCHER_SCHEMA_VERSION: u32 = 1;
+const HARNESS_LOG_TAIL_BYTES: u64 = 64 * 1024;
 const AGENT_BINARY_ENV: &str = "NEXUS_AGENT_BIN";
 const CONSOLE_DIR_ENV: &str = "NEXUS_CONSOLE_DIR";
+const CONSOLE_PORT_ENV: &str = "NEXUS_CONSOLE_PORT";
+const LAUNCHER_WAIT_SECS_ENV: &str = "NEXUS_LAUNCHER_WAIT_SECS";
+const CONSOLE_OPEN_ENV: &str = "NEXUS_CONSOLE_OPEN";
+const LAUNCHER_CONFIG_FILE: &str = "launcher.json";
 
 #[derive(Debug, Clone)]
 struct Options {
@@ -48,6 +54,7 @@ struct Options {
     config: NexusConfig,
     agent_program: Option<PathBuf>,
     console_dir: Option<PathBuf>,
+    console_port: u16,
     wait_secs: u64,
     no_open: bool,
     json: bool,
@@ -72,6 +79,95 @@ struct ConsoleStatus {
     data_root: String,
     agent_pid: Option<u32>,
     agent_program: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+struct LauncherConfigFile {
+    #[serde(default = "default_launcher_schema_version")]
+    schema_version: u32,
+    #[serde(default)]
+    agent_program: Option<PathBuf>,
+    #[serde(default)]
+    agent_port: Option<u16>,
+    #[serde(default)]
+    console_dir: Option<PathBuf>,
+    #[serde(default)]
+    console_port: Option<u16>,
+    #[serde(default)]
+    wait_secs: Option<u64>,
+    #[serde(default)]
+    open_browser: Option<bool>,
+}
+
+impl Default for LauncherConfigFile {
+    fn default() -> Self {
+        Self {
+            schema_version: DEFAULT_LAUNCHER_SCHEMA_VERSION,
+            agent_program: None,
+            agent_port: None,
+            console_dir: None,
+            console_port: None,
+            wait_secs: None,
+            open_browser: None,
+        }
+    }
+}
+
+impl LauncherConfigFile {
+    fn validate(&self, path: &Path) -> Result<(), String> {
+        if self.schema_version != DEFAULT_LAUNCHER_SCHEMA_VERSION {
+            return Err(format!(
+                "{} has unsupported schema_version {}; expected {}",
+                path.display(),
+                self.schema_version,
+                DEFAULT_LAUNCHER_SCHEMA_VERSION
+            ));
+        }
+        validate_optional_path(self.agent_program.as_deref(), "agent_program")?;
+        validate_optional_path(self.console_dir.as_deref(), "console_dir")?;
+        validate_optional_port(self.agent_port, "agent_port")?;
+        validate_optional_port(self.console_port, "console_port")?;
+        if let Some(seconds) = self.wait_secs {
+            if !(1..=300).contains(&seconds) {
+                return Err(format!(
+                    "{} wait_secs must be between 1 and 300",
+                    path.display()
+                ));
+            }
+        }
+        Ok(())
+    }
+}
+
+fn default_launcher_schema_version() -> u32 {
+    DEFAULT_LAUNCHER_SCHEMA_VERSION
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+struct HarnessUiInfo {
+    available: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    url: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    token: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    source: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    observed_at_unix: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    message: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct ConsoleHarnessCommand {
+    action: ConsoleHarnessAction,
+}
+
+#[derive(Debug, Clone, Copy, Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum ConsoleHarnessAction {
+    Open,
+    Status,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -162,16 +258,43 @@ where
     I: IntoIterator<Item = S>,
     S: Into<std::ffi::OsString>,
 {
-    let mut config = NexusConfig::from_env();
-    let mut command = None;
-    let mut agent_program = None;
-    let mut console_dir = None;
-    let mut wait_secs = DEFAULT_WAIT_SECS;
-    let mut no_open = false;
-    let mut json = false;
-    let mut args = arguments.into_iter().map(Into::into);
+    let raw_args: Vec<std::ffi::OsString> = arguments.into_iter().map(Into::into).collect();
+    if raw_args
+        .iter()
+        .any(|argument| matches!(argument.to_string_lossy().as_ref(), "--help" | "-h"))
+    {
+        print_help();
+        return Ok(None);
+    }
 
-    while let Some(argument) = args.next() {
+    let mut config = NexusConfig::from_env();
+    if let Some(data_dir) = cli_option_value(&raw_args, "--data-dir")? {
+        config.data_dir = Some(validate_path_value(data_dir, "--data-dir")?);
+    }
+    let launcher_config = load_launcher_config(&config.paths())?;
+    let mut command = None;
+    let mut agent_program = launcher_config.agent_program.clone();
+    let mut console_dir = launcher_config.console_dir.clone();
+    let mut console_port = launcher_config
+        .console_port
+        .or_else(|| env_port(CONSOLE_PORT_ENV))
+        .unwrap_or(DEFAULT_CONSOLE_PORT);
+    let mut wait_secs = launcher_config
+        .wait_secs
+        .or_else(|| env_wait_secs())
+        .unwrap_or(DEFAULT_WAIT_SECS);
+    let mut no_open = !launcher_config
+        .open_browser
+        .or_else(env_open_browser)
+        .unwrap_or(true);
+    let mut json = false;
+    if let Some(port) = launcher_config.agent_port {
+        config.port = port;
+    }
+
+    let mut index = 0usize;
+    while index < raw_args.len() {
+        let argument = &raw_args[index];
         match argument.to_string_lossy().as_ref() {
             "start" if command.is_none() => command = Some(LauncherCommand::Start),
             "run" | "foreground" if command.is_none() => command = Some(LauncherCommand::Run),
@@ -180,54 +303,27 @@ where
             "status" if command.is_none() => command = Some(LauncherCommand::Status),
             "logs" if command.is_none() => command = Some(LauncherCommand::Logs),
             "--data-dir" => {
-                let value = args
-                    .next()
-                    .ok_or_else(|| "--data-dir requires PATH".to_owned())?;
-                let path = PathBuf::from(value);
-                if path.as_os_str().is_empty() {
-                    return Err("--data-dir cannot be empty".to_owned());
-                }
-                config.data_dir = Some(path);
+                let value = next_cli_value(&raw_args, &mut index, "--data-dir")?;
+                config.data_dir = Some(validate_path_value(value, "--data-dir")?);
             }
             "--port" => {
-                let value = args
-                    .next()
-                    .ok_or_else(|| "--port requires PORT".to_owned())?;
+                let value = next_cli_value(&raw_args, &mut index, "--port")?;
                 config.port = parse_port(&value.to_string_lossy())?;
             }
             "--agent" => {
-                let value = args
-                    .next()
-                    .ok_or_else(|| "--agent requires PATH".to_owned())?;
-                let path = PathBuf::from(value);
-                if path.as_os_str().is_empty()
-                    || path.to_string_lossy().chars().any(char::is_control)
-                {
-                    return Err(
-                        "--agent must be a non-empty path without control characters".to_owned(),
-                    );
-                }
-                agent_program = Some(path);
+                let value = next_cli_value(&raw_args, &mut index, "--agent")?;
+                agent_program = Some(validate_path_value(value, "--agent")?);
             }
             "--console-dir" => {
-                let value = args
-                    .next()
-                    .ok_or_else(|| "--console-dir requires PATH".to_owned())?;
-                let path = PathBuf::from(value);
-                if path.as_os_str().is_empty()
-                    || path.to_string_lossy().chars().any(char::is_control)
-                {
-                    return Err(
-                        "--console-dir must be a non-empty path without control characters"
-                            .to_owned(),
-                    );
-                }
-                console_dir = Some(path);
+                let value = next_cli_value(&raw_args, &mut index, "--console-dir")?;
+                console_dir = Some(validate_path_value(value, "--console-dir")?);
+            }
+            "--console-port" => {
+                let value = next_cli_value(&raw_args, &mut index, "--console-port")?;
+                console_port = parse_port(&value.to_string_lossy())?;
             }
             "--wait-secs" => {
-                let value = args
-                    .next()
-                    .ok_or_else(|| "--wait-secs requires SECONDS".to_owned())?;
+                let value = next_cli_value(&raw_args, &mut index, "--wait-secs")?;
                 wait_secs = value
                     .to_string_lossy()
                     .parse::<u64>()
@@ -236,13 +332,11 @@ where
                     .ok_or_else(|| "--wait-secs must be between 1 and 300".to_owned())?;
             }
             "--no-open" => no_open = true,
+            "--open" => no_open = false,
             "--json" => json = true,
-            "--help" | "-h" => {
-                print_help();
-                return Ok(None);
-            }
             value => return Err(format!("unknown argument: {value}")),
         }
+        index += 1;
     }
 
     // Double-clicking the launcher is the user-facing path. Keep the explicit
@@ -255,10 +349,115 @@ where
         config,
         agent_program,
         console_dir,
+        console_port,
         wait_secs,
         no_open,
         json,
     }))
+}
+
+fn cli_option_value(
+    arguments: &[std::ffi::OsString],
+    option: &str,
+) -> Result<Option<std::ffi::OsString>, String> {
+    let mut value = None;
+    let mut index = 0usize;
+    while index < arguments.len() {
+        if arguments[index].to_string_lossy() == option {
+            value = Some(
+                arguments
+                    .get(index + 1)
+                    .cloned()
+                    .ok_or_else(|| format!("{option} requires a value"))?,
+            );
+            index += 2;
+        } else {
+            index += 1;
+        }
+    }
+    Ok(value)
+}
+
+fn next_cli_value(
+    arguments: &[std::ffi::OsString],
+    index: &mut usize,
+    option: &str,
+) -> Result<std::ffi::OsString, String> {
+    let value = arguments
+        .get(*index + 1)
+        .cloned()
+        .ok_or_else(|| format!("{option} requires a value"))?;
+    *index += 1;
+    Ok(value)
+}
+
+fn validate_path_value(value: std::ffi::OsString, option: &str) -> Result<PathBuf, String> {
+    let path = PathBuf::from(value);
+    if path.as_os_str().is_empty() || path.to_string_lossy().chars().any(char::is_control) {
+        return Err(format!(
+            "{option} must be a non-empty path without control characters"
+        ));
+    }
+    Ok(path)
+}
+
+fn validate_optional_path(path: Option<&Path>, field: &str) -> Result<(), String> {
+    if let Some(path) = path {
+        if path.as_os_str().is_empty() || path.to_string_lossy().chars().any(char::is_control) {
+            return Err(format!(
+                "launcher.json {field} must be a non-empty path without control characters"
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn validate_optional_port(port: Option<u16>, field: &str) -> Result<(), String> {
+    if matches!(port, Some(0)) {
+        return Err(format!("launcher.json {field} must be between 1 and 65535"));
+    }
+    Ok(())
+}
+
+fn env_port(name: &str) -> Option<u16> {
+    env::var(name)
+        .ok()
+        .and_then(|value| value.parse::<u16>().ok())
+        .filter(|port| *port != 0)
+}
+
+fn env_wait_secs() -> Option<u64> {
+    env::var(LAUNCHER_WAIT_SECS_ENV)
+        .ok()
+        .and_then(|value| value.parse::<u64>().ok())
+        .filter(|seconds| (1..=300).contains(seconds))
+}
+
+fn env_open_browser() -> Option<bool> {
+    env::var(CONSOLE_OPEN_ENV).ok().and_then(|value| {
+        match value.trim().to_ascii_lowercase().as_str() {
+            "1" | "true" | "yes" | "on" => Some(true),
+            "0" | "false" | "no" | "off" => Some(false),
+            _ => None,
+        }
+    })
+}
+
+fn launcher_config_path(paths: &NexusPaths) -> PathBuf {
+    paths.root.join(LAUNCHER_CONFIG_FILE)
+}
+
+fn load_launcher_config(paths: &NexusPaths) -> Result<LauncherConfigFile, String> {
+    let path = launcher_config_path(paths);
+    if !path.is_file() {
+        return Ok(LauncherConfigFile::default());
+    }
+    let bytes = fs::read(&path)
+        .map_err(|error| format!("cannot read launcher config {}: {error}", path.display()))?;
+    let config: LauncherConfigFile = serde_json::from_slice(&bytes)
+        .map_err(|error| format!("cannot parse launcher config {}: {error}", path.display()))?;
+    config.validate(&path)?;
+    Ok(config)
 }
 
 fn parse_port(value: &str) -> Result<u16, String> {
@@ -404,11 +603,26 @@ impl ConsoleController {
             running: health.is_some(),
             desired_agent_running: state.desired_agent_running,
             agent_api: format!("http://127.0.0.1:{}", self.options.config.port),
-            console_url: format!("http://127.0.0.1:{DEFAULT_CONSOLE_PORT}/"),
+            console_url: format!("http://127.0.0.1:{}/", self.options.console_port),
             data_root: self.paths.root.display().to_string(),
             agent_pid,
             agent_program,
         }
+    }
+
+    fn harness_ui(&self) -> HarnessUiInfo {
+        read_harness_ui_info(&self.paths)
+    }
+
+    fn open_harness(&self) -> Result<HarnessUiInfo, String> {
+        let info = self.harness_ui();
+        let Some(url) = info.url.as_deref() else {
+            return Err(info.message.unwrap_or_else(|| {
+                "Harness authentication URL was not found in the recent Harness log".to_owned()
+            }));
+        };
+        open_browser_url(url)?;
+        Ok(info)
     }
 
     async fn start_harness_if_configured(&self) {
@@ -448,17 +662,25 @@ impl ConsoleController {
 async fn run_console(options: &Options, paths: &NexusPaths, client: &Client) -> Result<(), String> {
     let controller = ConsoleController::new(options.clone(), paths.clone(), client.clone());
     let console_dir = resolve_console_dir(options.console_dir.as_deref())?;
-    let listener = TcpListener::bind(console_bind_addr())
+    let listener = TcpListener::bind(console_bind_addr(options.console_port))
         .await
-        .map_err(|error| format!("cannot bind Console at {DEFAULT_CONSOLE_PORT}: {error}"))?;
+        .map_err(|error| {
+            format!(
+                "cannot bind Console at 127.0.0.1:{}: {error}",
+                options.console_port
+            )
+        })?;
     controller.start_agent().await?;
     let app = build_console_router(controller.clone(), console_dir);
     println!(
-        "nexus console: http://127.0.0.1:{DEFAULT_CONSOLE_PORT}/ (Agent {})",
+        "nexus console: http://127.0.0.1:{}/ (Agent {})",
+        options.console_port,
         controller.status().await.agent_api
     );
     if !options.no_open {
-        open_console_browser();
+        if let Err(error) = open_console_browser(options.console_port) {
+            eprintln!("nexus-launcher: cannot open Console browser: {error}");
+        }
     }
 
     let watchdog = tokio::spawn(controller.clone().watchdog());
@@ -475,16 +697,15 @@ async fn run_console(options: &Options, paths: &NexusPaths, client: &Client) -> 
     server_result
 }
 
-fn console_bind_addr() -> SocketAddr {
-    SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), DEFAULT_CONSOLE_PORT)
+fn console_bind_addr(port: u16) -> SocketAddr {
+    SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), port)
 }
 
 fn resolve_console_dir(explicit: Option<&Path>) -> Result<PathBuf, String> {
     let mut candidates = Vec::new();
     if let Some(path) = explicit {
         candidates.push(path.to_owned());
-    }
-    if let Some(path) = env::var_os(CONSOLE_DIR_ENV).filter(|value| !value.is_empty()) {
+    } else if let Some(path) = env::var_os(CONSOLE_DIR_ENV).filter(|value| !value.is_empty()) {
         candidates.push(PathBuf::from(path));
     }
     if let Ok(executable) = env::current_exe() {
@@ -514,22 +735,42 @@ fn resolve_console_dir(explicit: Option<&Path>) -> Result<PathBuf, String> {
         })
 }
 
-fn open_console_browser() {
-    let url = format!("http://127.0.0.1:{DEFAULT_CONSOLE_PORT}/");
+fn open_console_browser(port: u16) -> Result<(), String> {
+    open_browser_url(&format!("http://127.0.0.1:{port}/"))
+}
+
+fn open_browser_url(url: &str) -> Result<(), String> {
     #[cfg(windows)]
     {
-        let _ = StdCommand::new("cmd")
-            .args(["/C", "start", "", &url])
-            .status();
+        let status = StdCommand::new("cmd")
+            .args(["/C", "start", "", url])
+            .status()
+            .map_err(|error| format!("failed to invoke the system browser: {error}"))?;
+        if !status.success() {
+            return Err(format!("system browser exited with {status}"));
+        }
     }
     #[cfg(target_os = "macos")]
     {
-        let _ = StdCommand::new("open").arg(&url).status();
+        let status = StdCommand::new("open")
+            .arg(url)
+            .status()
+            .map_err(|error| format!("failed to invoke the system browser: {error}"))?;
+        if !status.success() {
+            return Err(format!("system browser exited with {status}"));
+        }
     }
     #[cfg(all(unix, not(target_os = "macos")))]
     {
-        let _ = StdCommand::new("xdg-open").arg(&url).status();
+        let status = StdCommand::new("xdg-open")
+            .arg(url)
+            .status()
+            .map_err(|error| format!("failed to invoke the system browser: {error}"))?;
+        if !status.success() {
+            return Err(format!("system browser exited with {status}"));
+        }
     }
+    Ok(())
 }
 
 fn build_console_router(controller: ConsoleController, console_dir: PathBuf) -> Router {
@@ -538,6 +779,10 @@ fn build_console_router(controller: ConsoleController, console_dir: PathBuf) -> 
         .route(
             "/launcher/agent",
             get(console_agent_status).post(console_agent_control),
+        )
+        .route(
+            "/launcher/harness",
+            get(console_harness_status).post(console_harness_control),
         )
         .route("/launcher/logs", get(console_logs))
         .fallback_service(ServeDir::new(console_dir).append_index_html_on_directories(true))
@@ -572,6 +817,30 @@ async fn console_agent_control(
     }
 }
 
+async fn console_harness_status(
+    State(controller): State<ConsoleController>,
+) -> Json<HarnessUiInfo> {
+    Json(controller.harness_ui())
+}
+
+async fn console_harness_control(
+    State(controller): State<ConsoleController>,
+    Json(command): Json<ConsoleHarnessCommand>,
+) -> Response {
+    let result = match command.action {
+        ConsoleHarnessAction::Open => controller.open_harness(),
+        ConsoleHarnessAction::Status => Ok(controller.harness_ui()),
+    };
+    match result {
+        Ok(info) => (StatusCode::OK, Json(info)).into_response(),
+        Err(error) => (
+            StatusCode::NOT_FOUND,
+            Json(json!({"ok": false, "message": error})),
+        )
+            .into_response(),
+    }
+}
+
 async fn console_logs(State(controller): State<ConsoleController>) -> Json<Value> {
     Json(json!({
         "data_root": controller.paths.root.display().to_string(),
@@ -579,8 +848,153 @@ async fn console_logs(State(controller): State<ConsoleController>) -> Json<Value
         "agent_stderr": controller.paths.logs_dir.join("agent.stderr.log"),
         "harness_stdout": controller.paths.logs_dir.join("harness.stdout.log"),
         "harness_stderr": controller.paths.logs_dir.join("harness.stderr.log"),
+        "launcher_config": launcher_config_path(&controller.paths),
         "launch_record": launch_record_path(&controller.paths),
     }))
+}
+
+/// Return the newest loopback Harness URL from a bounded log tail.
+///
+/// Harness remains an opaque upstream process. The launcher only observes the
+/// text it already redirected to its own logs; it does not inspect `$HOME/.dsh`
+/// or infer a URL from a process command line. A URL is considered usable only
+/// when it is plain HTTP and loopback-bound. Token-bearing URLs are preferred
+/// because readiness/health messages may also contain a loopback URL.
+fn read_harness_ui_info(paths: &NexusPaths) -> HarnessUiInfo {
+    let log_paths = [
+        paths.logs_dir.join("harness.stdout.log"),
+        paths.logs_dir.join("harness.stderr.log"),
+    ];
+    let mut candidates = Vec::new();
+    for path in log_paths {
+        let Ok((text, modified_at)) = read_log_tail(&path, HARNESS_LOG_TAIL_BYTES) else {
+            continue;
+        };
+        for (order, word) in text.split_whitespace().enumerate() {
+            let cleaned = trim_log_url(word);
+            let Some((url, token)) = parse_loopback_harness_url(cleaned) else {
+                continue;
+            };
+            candidates.push(HarnessUrlCandidate {
+                url,
+                token,
+                source: path.display().to_string(),
+                observed_at_unix: modified_at,
+                order,
+            });
+        }
+    }
+
+    candidates.sort_by(|left, right| {
+        (left.token.is_some(), left.observed_at_unix, left.order).cmp(&(
+            right.token.is_some(),
+            right.observed_at_unix,
+            right.order,
+        ))
+    });
+    if let Some(candidate) = candidates.pop() {
+        return HarnessUiInfo {
+            available: true,
+            url: Some(candidate.url),
+            token: candidate.token,
+            source: Some(candidate.source),
+            observed_at_unix: Some(candidate.observed_at_unix),
+            message: None,
+        };
+    }
+
+    HarnessUiInfo {
+        available: false,
+        url: None,
+        token: None,
+        source: Some(
+            paths
+                .logs_dir
+                .join("harness.stdout.log")
+                .display()
+                .to_string(),
+        ),
+        observed_at_unix: None,
+        message: Some(
+            "Harness authentication URL not found yet; start or restart Harness and refresh"
+                .to_owned(),
+        ),
+    }
+}
+
+#[derive(Debug)]
+struct HarnessUrlCandidate {
+    url: String,
+    token: Option<String>,
+    source: String,
+    observed_at_unix: u64,
+    order: usize,
+}
+
+fn read_log_tail(path: &Path, max_bytes: u64) -> io::Result<(String, u64)> {
+    let mut file = fs::File::open(path)?;
+    let metadata = file.metadata()?;
+    let modified_at = metadata
+        .modified()
+        .ok()
+        .and_then(|time| time.duration_since(UNIX_EPOCH).ok())
+        .map(|duration| duration.as_secs())
+        .unwrap_or(0);
+    let start = metadata.len().saturating_sub(max_bytes);
+    file.seek(SeekFrom::Start(start))?;
+    let mut bytes = Vec::new();
+    file.read_to_end(&mut bytes)?;
+    Ok((String::from_utf8_lossy(&bytes).into_owned(), modified_at))
+}
+
+fn trim_log_url(value: &str) -> &str {
+    value.trim_matches(|character: char| {
+        character.is_control()
+            || matches!(
+                character,
+                '`' | '"' | '\'' | '(' | ')' | '[' | ']' | '<' | '>' | ',' | ';' | '.'
+            )
+    })
+}
+
+fn parse_loopback_harness_url(raw: &str) -> Option<(String, Option<String>)> {
+    if raw.is_empty() {
+        return None;
+    }
+    let url = Url::parse(raw).ok()?;
+    if url.scheme() != "http"
+        || url.username() != ""
+        || url.password().is_some()
+        || !is_loopback_host(url.host_str()?)
+        || url.port_or_known_default().is_none()
+        || url.as_str().chars().any(char::is_control)
+    {
+        return None;
+    }
+    let token = url
+        .query_pairs()
+        .find_map(|(key, value)| is_token_key(&key).then(|| value.into_owned()))
+        .filter(|value| !value.is_empty())
+        .or_else(|| {
+            url.fragment().and_then(|fragment| {
+                fragment.split('&').find_map(|part| {
+                    let (key, value) = part.split_once('=')?;
+                    is_token_key(key).then(|| value.to_owned())
+                })
+            })
+        });
+    Some((url.as_str().to_owned(), token))
+}
+
+fn is_loopback_host(host: &str) -> bool {
+    matches!(host, "127.0.0.1" | "localhost" | "::1")
+}
+
+fn is_token_key(key: &str) -> bool {
+    matches!(
+        key.to_ascii_lowercase().as_str(),
+        "token" | "access_token" | "auth_token" | "session_token" | "authorization"
+    )
 }
 
 async fn ensure_agent_started(
@@ -1387,6 +1801,7 @@ fn print_logs(options: &Options, paths: &NexusPaths) {
             "agent_stderr": paths.logs_dir.join("agent.stderr.log"),
             "harness_stdout": paths.logs_dir.join("harness.stdout.log"),
             "harness_stderr": paths.logs_dir.join("harness.stderr.log"),
+            "launcher_config": launcher_config_path(paths),
             "launch_record": launch_record_path(paths),
         });
         println!(
@@ -1411,6 +1826,7 @@ fn print_logs(options: &Options, paths: &NexusPaths) {
             "harness_stderr: {}",
             paths.logs_dir.join("harness.stderr.log").display()
         );
+        println!("launcher_config: {}", launcher_config_path(paths).display());
         println!("launch_record: {}", launch_record_path(paths).display());
     }
 }
@@ -1454,20 +1870,34 @@ fn print_help() {
 Usage:
   nexus-launcher start [--data-dir PATH] [--port PORT] [--agent PATH] [--wait-secs SECONDS] [--json]
   nexus-launcher run|foreground [--data-dir PATH] [--port PORT] [--agent PATH] [--wait-secs SECONDS]
-  nexus-launcher console [--data-dir PATH] [--port PORT] [--agent PATH] [--console-dir PATH] [--wait-secs SECONDS] [--no-open]
+  nexus-launcher console [--data-dir PATH] [--port PORT] [--agent PATH] [--console-dir PATH] [--console-port PORT] [--wait-secs SECONDS] [--no-open|--open]
   nexus-launcher stop [--data-dir PATH] [--port PORT] [--json]
   nexus-launcher status [--data-dir PATH] [--port PORT] [--json]
   nexus-launcher logs [--data-dir PATH] [--json]
 
 With no command, the launcher enters `console`. The Console host starts or
 reconnects to the loopback Agent, starts a configured Harness, serves the
-replaceable WebShell on 127.0.0.1:3091, and supervises Agent availability.
+replaceable WebShell on the configured loopback Console port, and supervises
+Agent availability. The Console can open the latest loopback Harness
+authentication URL observed in the bounded Harness log tail and display its
+token without reading `$HOME/.dsh` or changing Harness source.
 `start`/`run`/`stop`/`status`/`logs` remain script and recovery fallbacks. The
 Agent remains the owner of Harness, profile, checkpoint, release, update, and
 diagnostic business behavior.
 
+Launcher configuration is read from `<data-root>/launcher.json`. Precedence is
+CLI > launcher.json > environment > built-in defaults. `--data-dir` selects
+the data root before that file is loaded, so it is intentionally not a field
+inside launcher.json. The file is separate from the Agent-owned `config.json`.
+
 Environment: NEXUS_DATA_DIR, NEXUS_AGENT_PORT, NEXUS_AGENT_BIN,
-NEXUS_CONSOLE_DIR."#
+NEXUS_CONSOLE_DIR, NEXUS_CONSOLE_PORT, NEXUS_LAUNCHER_WAIT_SECS,
+NEXUS_CONSOLE_OPEN. `--open` and `--no-open` override the configured browser
+preference. `GET /launcher/harness` returns the latest safe Harness URL/token;
+`POST /launcher/harness` with `{{"action":"open"}}` opens it in the system
+browser.
+
+"#
     );
 }
 
@@ -1517,8 +1947,15 @@ mod tests {
 
     #[test]
     fn console_command_accepts_console_directory_and_disable_open() {
+        let root = std::env::temp_dir().join(format!(
+            "nexus-launcher-parser-{}-{}",
+            process::id(),
+            unix_time_seconds()
+        ));
         let options = parse_args_from([
             "console",
+            "--data-dir",
+            root.to_str().expect("temporary path is UTF-8"),
             "--console-dir",
             "E:\\git\\dsh-nexus\\apps\\nexus-console",
             "--no-open",
@@ -1531,15 +1968,129 @@ mod tests {
             Some(PathBuf::from("E:\\git\\dsh-nexus\\apps\\nexus-console"))
         );
         assert!(options.no_open);
+        let _ = fs::remove_dir_all(root);
     }
 
     #[test]
     fn no_command_defaults_to_console_host() {
-        let options = parse_args_from(std::iter::empty::<&str>())
-            .expect("empty arguments parse")
-            .expect("console options are present");
+        let root = std::env::temp_dir().join(format!(
+            "nexus-launcher-default-{}-{}",
+            process::id(),
+            unix_time_seconds()
+        ));
+        let options = parse_args_from([
+            "--data-dir",
+            root.to_str().expect("temporary path is UTF-8"),
+            "--open",
+        ])
+        .expect("empty arguments parse")
+        .expect("console options are present");
         assert_eq!(options.command, LauncherCommand::Console);
         assert!(!options.no_open);
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn launcher_config_is_loaded_before_cli_overrides() {
+        let root = std::env::temp_dir().join(format!(
+            "nexus-launcher-config-{}-{}",
+            process::id(),
+            unix_time_seconds()
+        ));
+        fs::create_dir_all(&root).expect("temporary root creates");
+        let launcher_config = LauncherConfigFile {
+            schema_version: DEFAULT_LAUNCHER_SCHEMA_VERSION,
+            agent_program: Some(PathBuf::from("configured-agent")),
+            agent_port: Some(3190),
+            console_dir: Some(PathBuf::from("configured-console")),
+            console_port: Some(3191),
+            wait_secs: Some(9),
+            open_browser: Some(false),
+        };
+        fs::write(
+            root.join(LAUNCHER_CONFIG_FILE),
+            serde_json::to_vec_pretty(&launcher_config).expect("config encodes"),
+        )
+        .expect("config writes");
+
+        let root_arg = root.to_str().expect("temporary path is UTF-8");
+        let configured = parse_args_from(["console", "--data-dir", root_arg])
+            .expect("configured arguments parse")
+            .expect("configured options are present");
+        assert_eq!(configured.config.port, 3190);
+        assert_eq!(
+            configured.agent_program,
+            Some(PathBuf::from("configured-agent"))
+        );
+        assert_eq!(
+            configured.console_dir,
+            Some(PathBuf::from("configured-console"))
+        );
+        assert_eq!(configured.console_port, 3191);
+        assert_eq!(configured.wait_secs, 9);
+        assert!(configured.no_open);
+
+        let overridden = parse_args_from([
+            "console",
+            "--data-dir",
+            root_arg,
+            "--port",
+            "3290",
+            "--agent",
+            "cli-agent",
+            "--console-dir",
+            "cli-console",
+            "--console-port",
+            "3291",
+            "--wait-secs",
+            "11",
+            "--open",
+        ])
+        .expect("override arguments parse")
+        .expect("override options are present");
+        assert_eq!(overridden.config.port, 3290);
+        assert_eq!(overridden.agent_program, Some(PathBuf::from("cli-agent")));
+        assert_eq!(overridden.console_dir, Some(PathBuf::from("cli-console")));
+        assert_eq!(overridden.console_port, 3291);
+        assert_eq!(overridden.wait_secs, 11);
+        assert!(!overridden.no_open);
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn harness_ui_info_prefers_a_loopback_token_url() {
+        let root = std::env::temp_dir().join(format!(
+            "nexus-launcher-harness-url-{}-{}",
+            process::id(),
+            unix_time_seconds()
+        ));
+        let paths = NexusPaths::from_root(root.clone());
+        paths.ensure_directories().expect("directories create");
+        fs::write(
+            paths.logs_dir.join("harness.stdout.log"),
+            "ready at http://127.0.0.1:3080/health\nOpen this URL: http://127.0.0.1:3080/?token=abc123.\n",
+        )
+        .expect("Harness log writes");
+        fs::write(
+            paths.logs_dir.join("harness.stderr.log"),
+            "ignore https://example.com/?token=remote\n",
+        )
+        .expect("Harness stderr writes");
+
+        let info = read_harness_ui_info(&paths);
+        assert!(info.available);
+        assert_eq!(
+            info.url.as_deref(),
+            Some("http://127.0.0.1:3080/?token=abc123")
+        );
+        assert_eq!(info.token.as_deref(), Some("abc123"));
+        assert!(info
+            .source
+            .as_deref()
+            .is_some_and(|source| source.ends_with("harness.stdout.log")));
+        assert!(parse_loopback_harness_url("https://127.0.0.1:3080/?token=x").is_none());
+        assert!(parse_loopback_harness_url("http://example.com/?token=x").is_none());
+        let _ = fs::remove_dir_all(root);
     }
 
     #[test]
