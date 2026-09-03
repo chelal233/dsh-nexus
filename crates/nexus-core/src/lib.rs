@@ -10,8 +10,8 @@ use std::{
 
 use nexus_protocol::{
     decode_json, encode_json, AgentLifecycleState, AgentStatePayload, CheckpointManifest,
-    HarnessRuntimeInfo, HarnessState, NexusStateSummary, ReleaseManifest, UpdateRuntimeInfo,
-    UpdateState,
+    DiagnosticsBundle, DiagnosticsFile, HarnessRuntimeInfo, HarnessState, NexusStateSummary,
+    ReleaseManifest, UpdateRuntimeInfo, UpdateState,
 };
 use serde::{Deserialize, Serialize};
 
@@ -29,6 +29,12 @@ pub const MAX_UPDATE_SOURCE_LEN: usize = 2048;
 pub const MAX_UPDATE_REF_LEN: usize = 256;
 pub const MAX_UPDATE_TEXT_LEN: usize = 4096;
 pub const DEFAULT_UPDATE_TIMEOUT_SECS: u64 = 900;
+pub const DIAGNOSTICS_SCHEMA_VERSION: u32 = 1;
+pub const MAX_DIAGNOSTICS_FILES: usize = 64;
+pub const MAX_DIAGNOSTICS_BUNDLES: usize = 32;
+pub const MAX_DIAGNOSTICS_FILE_BYTES: usize = 512 * 1024;
+pub const MAX_DIAGNOSTICS_LOG_BYTES: usize = 256 * 1024;
+pub const MAX_DIAGNOSTICS_NOTE_LEN: usize = 4096;
 pub const DATA_DIR_ENV: &str = "NEXUS_DATA_DIR";
 pub const PORT_ENV: &str = "NEXUS_AGENT_PORT";
 pub const HARNESS_PROGRAM_ENV: &str = "NEXUS_HARNESS_PROGRAM";
@@ -107,6 +113,7 @@ pub struct NexusPaths {
     pub checkpoints_dir: PathBuf,
     pub releases_dir: PathBuf,
     pub downloads_dir: PathBuf,
+    pub diagnostics_dir: PathBuf,
     pub run_dir: PathBuf,
 }
 
@@ -122,6 +129,7 @@ impl NexusPaths {
             checkpoints_dir: root.join("checkpoints"),
             releases_dir: root.join("releases"),
             downloads_dir: root.join("downloads"),
+            diagnostics_dir: root.join("diagnostics"),
             run_dir: root.join("run"),
             root,
         }
@@ -134,6 +142,7 @@ impl NexusPaths {
             &self.checkpoints_dir,
             &self.releases_dir,
             &self.downloads_dir,
+            &self.diagnostics_dir,
             &self.run_dir,
         ] {
             fs::create_dir_all(directory)?;
@@ -1288,6 +1297,271 @@ fn default_update_schema() -> u32 {
     UPDATE_SCHEMA_VERSION
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+struct DiagnosticsDocument {
+    #[serde(default = "default_diagnostics_schema")]
+    schema_version: u32,
+    bundle: DiagnosticsBundle,
+}
+
+/// Nexus-only, bounded diagnostics snapshots. Collection reads a fixed set of
+/// Nexus metadata and text logs; it never traverses `$HOME/.dsh`, Harness data,
+/// or the process environment.
+#[derive(Clone)]
+pub struct DiagnosticsStore {
+    paths: NexusPaths,
+    write_gate: Arc<Mutex<()>>,
+}
+
+impl DiagnosticsStore {
+    pub fn new(paths: NexusPaths) -> Self {
+        Self {
+            paths,
+            write_gate: Arc::new(Mutex::new(())),
+        }
+    }
+
+    pub fn paths(&self) -> &NexusPaths {
+        &self.paths
+    }
+
+    pub fn list(&self) -> io::Result<Vec<DiagnosticsBundle>> {
+        let _guard = self.lock_gate()?;
+        if !self.paths.diagnostics_dir.exists() {
+            return Ok(Vec::new());
+        }
+        let mut bundles = Vec::new();
+        for entry in fs::read_dir(&self.paths.diagnostics_dir)? {
+            let entry = entry?;
+            if !entry.file_type()?.is_dir() {
+                continue;
+            }
+            let manifest_path = entry.path().join("diagnostics.json");
+            if !manifest_path.exists() {
+                continue;
+            }
+            let bytes = fs::read(&manifest_path)?;
+            let document: DiagnosticsDocument = decode_json(&bytes).map_err(invalid_data)?;
+            if document.schema_version != DIAGNOSTICS_SCHEMA_VERSION {
+                return Err(invalid_data("unsupported diagnostics schema version"));
+            }
+            validate_diagnostics_bundle(&document.bundle)?;
+            bundles.push(document.bundle);
+        }
+        bundles.sort_by(|left, right| {
+            right
+                .created_at_unix
+                .cmp(&left.created_at_unix)
+                .then_with(|| right.id.cmp(&left.id))
+        });
+        bundles.truncate(MAX_DIAGNOSTICS_BUNDLES);
+        Ok(bundles)
+    }
+
+    pub fn collect(&self, note: Option<String>) -> io::Result<DiagnosticsBundle> {
+        validate_optional_diagnostics_text(note.as_deref(), "diagnostics note")?;
+        let _guard = self.lock_gate()?;
+        self.paths.ensure_directories()?;
+        let id = format!("diag-{}", unix_time_nanos());
+        validate_release_id(&id)?;
+        let bundle_dir = self.paths.diagnostics_dir.join(&id);
+        let files_dir = bundle_dir.join("files");
+        fs::create_dir(&bundle_dir)?;
+        fs::create_dir(&files_dir)?;
+
+        let mut sources = Vec::new();
+        for path in [
+            &self.paths.state_file,
+            &self.paths.profiles_file,
+            &self.paths.release_pointers_file,
+            &self.paths.update_state_file,
+        ] {
+            if is_regular_diagnostics_file(path) {
+                if let Some(name) = path.file_name().and_then(|value| value.to_str()) {
+                    sources.push((
+                        path.clone(),
+                        PathBuf::from(name),
+                        MAX_DIAGNOSTICS_FILE_BYTES,
+                    ));
+                }
+            }
+        }
+        if self.paths.logs_dir.is_dir() {
+            let mut logs = fs::read_dir(&self.paths.logs_dir)?
+                .filter_map(Result::ok)
+                .filter(|entry| {
+                    entry
+                        .file_type()
+                        .map(|kind| kind.is_file())
+                        .unwrap_or(false)
+                })
+                .filter_map(|entry| {
+                    let name = entry.file_name().to_str()?.to_owned();
+                    Some((
+                        entry.path(),
+                        PathBuf::from("logs").join(name),
+                        MAX_DIAGNOSTICS_LOG_BYTES,
+                    ))
+                })
+                .collect::<Vec<_>>();
+            logs.sort_by(|left, right| left.1.cmp(&right.1));
+            sources.extend(logs);
+        }
+        sources.truncate(MAX_DIAGNOSTICS_FILES);
+
+        let mut files = Vec::new();
+        for (source, relative, limit) in sources {
+            let raw = read_diagnostics_file(&source, limit)?;
+            let truncated = raw.len() > limit;
+            let bounded = if truncated { &raw[..limit] } else { &raw[..] };
+            let (payload, redacted) = redact_diagnostics_payload(bounded);
+            let destination = files_dir.join(&relative);
+            let Some(parent) = destination.parent() else {
+                continue;
+            };
+            fs::create_dir_all(parent)?;
+            write_diagnostics_file(&destination, &payload)?;
+            files.push(DiagnosticsFile {
+                name: relative.to_string_lossy().replace('\\', "/"),
+                bytes: payload.len() as u64,
+                redacted,
+                truncated,
+            });
+        }
+        files.sort_by(|left, right| left.name.cmp(&right.name));
+        let directory = fs::canonicalize(&bundle_dir)?
+            .to_string_lossy()
+            .into_owned();
+        let bundle = DiagnosticsBundle {
+            id,
+            created_at_unix: unix_time_seconds(),
+            directory,
+            note,
+            files,
+        };
+        validate_diagnostics_bundle(&bundle)?;
+        let document = DiagnosticsDocument {
+            schema_version: DIAGNOSTICS_SCHEMA_VERSION,
+            bundle: bundle.clone(),
+        };
+        write_json_atomic(&bundle_dir, &bundle_dir.join("diagnostics.json"), &document)?;
+        Ok(bundle)
+    }
+
+    fn lock_gate(&self) -> io::Result<std::sync::MutexGuard<'_, ()>> {
+        self.write_gate
+            .lock()
+            .map_err(|_| io::Error::other("diagnostics lock is poisoned"))
+    }
+}
+
+fn default_diagnostics_schema() -> u32 {
+    DIAGNOSTICS_SCHEMA_VERSION
+}
+
+fn validate_optional_diagnostics_text(value: Option<&str>, label: &str) -> io::Result<()> {
+    if let Some(value) = value {
+        if value.len() > MAX_DIAGNOSTICS_NOTE_LEN || value.chars().any(char::is_control) {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                format!("{label} is too long or contains a control character"),
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn validate_diagnostics_bundle(bundle: &DiagnosticsBundle) -> io::Result<()> {
+    validate_release_id(&bundle.id)?;
+    if bundle.directory.is_empty() || bundle.directory.chars().any(char::is_control) {
+        return Err(invalid_data("diagnostics directory is invalid"));
+    }
+    validate_optional_diagnostics_text(bundle.note.as_deref(), "diagnostics note")?;
+    if bundle.files.len() > MAX_DIAGNOSTICS_FILES {
+        return Err(invalid_data("diagnostics bundle contains too many files"));
+    }
+    let mut previous = None;
+    for file in &bundle.files {
+        let segments = file.name.split('/').collect::<Vec<_>>();
+        if file.name.is_empty()
+            || file.name.starts_with('/')
+            || segments
+                .iter()
+                .any(|segment| segment.is_empty() || *segment == "." || *segment == "..")
+            || file.name.chars().any(char::is_control)
+        {
+            return Err(invalid_data("diagnostics file name is unsafe"));
+        }
+        if let Some(previous) = previous {
+            if previous >= file.name.as_str() {
+                return Err(invalid_data("diagnostics files are not sorted"));
+            }
+        }
+        previous = Some(file.name.as_str());
+    }
+    Ok(())
+}
+
+fn redact_diagnostics_payload(payload: &[u8]) -> (Vec<u8>, bool) {
+    let Ok(text) = std::str::from_utf8(payload) else {
+        return (b"[binary diagnostics payload omitted]\n".to_vec(), true);
+    };
+    let mut redacted = false;
+    let mut output = String::with_capacity(text.len());
+    for line in text.split_inclusive('\n') {
+        if diagnostics_line_is_sensitive(line) {
+            output.push_str("[REDACTED]\n");
+            redacted = true;
+        } else {
+            output.push_str(line);
+        }
+    }
+    (output.into_bytes(), redacted)
+}
+
+fn is_regular_diagnostics_file(path: &Path) -> bool {
+    fs::symlink_metadata(path)
+        .map(|metadata| metadata.file_type().is_file())
+        .unwrap_or(false)
+}
+
+fn read_diagnostics_file(path: &Path, limit: usize) -> io::Result<Vec<u8>> {
+    use io::Read;
+    let file = fs::File::open(path)?;
+    let mut bytes = Vec::new();
+    file.take((limit as u64).saturating_add(1))
+        .read_to_end(&mut bytes)?;
+    Ok(bytes)
+}
+
+fn write_diagnostics_file(path: &Path, payload: &[u8]) -> io::Result<()> {
+    use io::Write;
+    let mut file = fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(path)?;
+    file.write_all(payload)?;
+    file.sync_all()
+}
+
+fn diagnostics_line_is_sensitive(line: &str) -> bool {
+    let lower = line.to_ascii_lowercase();
+    [
+        "password",
+        "passwd",
+        "secret",
+        "authorization",
+        "api_key",
+        "apikey",
+        "access_token",
+        "refresh_token",
+        "cookie",
+        "private_key",
+    ]
+    .iter()
+    .any(|marker| lower.contains(marker) && (line.contains('=') || line.contains(':')))
+}
+
 fn unix_time_nanos() -> u128 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -1366,7 +1640,7 @@ mod tests {
 
     use super::{
         is_within, load_harness_launch_spec, read_runtime_metadata, write_runtime_metadata,
-        AgentState, CheckpointStore, HarnessLaunchSpec, NexusConfig, NexusPaths,
+        AgentState, CheckpointStore, DiagnosticsStore, HarnessLaunchSpec, NexusConfig, NexusPaths,
         NexusRuntimeMetadata, ProfileStore, ReleaseStore,
     };
 
@@ -1388,6 +1662,10 @@ mod tests {
         assert_eq!(
             paths.update_state_file,
             PathBuf::from("workspace/nexus/update-state.json")
+        );
+        assert_eq!(
+            paths.diagnostics_dir,
+            PathBuf::from("workspace/nexus/diagnostics")
         );
     }
 
@@ -1697,6 +1975,36 @@ mod tests {
             vec!["--profile", "web.dark", "--release", "harness-rc1"]
         );
         assert!(spec.render_args_for_context("web", None, None).is_err());
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn diagnostics_collects_bounded_redacted_nexus_files_only() {
+        let root = unique_test_root("diagnostics");
+        let paths = NexusPaths::from_root(root.clone());
+        paths.ensure_directories().expect("directories create");
+        fs::write(
+            paths.logs_dir.join("harness.stdout.log"),
+            "normal failure\nAuthorization: bearer secret-value\n",
+        )
+        .expect("diagnostic log writes");
+        let store = DiagnosticsStore::new(paths.clone());
+        let bundle = store
+            .collect(Some("after failed start".to_owned()))
+            .expect("diagnostics collect");
+        assert!(bundle.id.starts_with("diag-"));
+        let log = bundle
+            .files
+            .iter()
+            .find(|file| file.name == "logs/harness.stdout.log")
+            .expect("harness log is included");
+        assert!(log.redacted);
+        let log_path = PathBuf::from(&bundle.directory).join("files/logs/harness.stdout.log");
+        let copied = fs::read_to_string(log_path).expect("copied diagnostics log reads");
+        assert!(copied.contains("[REDACTED]"));
+        assert!(!copied.contains("secret-value"));
+        assert_eq!(store.list().expect("diagnostics list").len(), 1);
+        assert!(!root.join(".dsh").exists());
         let _ = fs::remove_dir_all(root);
     }
 

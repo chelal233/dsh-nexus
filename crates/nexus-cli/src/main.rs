@@ -3,10 +3,10 @@ use std::{env, net::SocketAddr, process};
 use nexus_core::{NexusConfig, DEFAULT_AGENT_PORT};
 use nexus_protocol::{
     CheckpointAction, CheckpointCommand, CheckpointCreateResponse, CheckpointListResponse,
-    CheckpointRestoreResponse, ErrorResponse, HarnessAction, HarnessCommand, HarnessResponse,
-    ProfileAction, ProfileCommand, ProfileListResponse, ProfileSelectResponse, ReleaseAction,
-    ReleaseCommand, ReleaseListResponse, StateResponse, UpdateAction, UpdateCommand,
-    UpdateResponse,
+    CheckpointRestoreResponse, DiagnosticsAction, DiagnosticsCommand, DiagnosticsResponse,
+    ErrorResponse, HarnessAction, HarnessCommand, HarnessResponse, ProfileAction, ProfileCommand,
+    ProfileListResponse, ProfileSelectResponse, ReleaseAction, ReleaseCommand, ReleaseListResponse,
+    StateResponse, UpdateAction, UpdateCommand, UpdateResponse,
 };
 
 #[derive(Debug)]
@@ -30,6 +30,7 @@ enum Command {
         Option<String>,
     ),
     Update(UpdateAction, Option<String>, Option<String>),
+    Diagnostics(DiagnosticsAction, Option<String>),
 }
 
 #[tokio::main]
@@ -188,6 +189,17 @@ fn parse_args() -> Result<Option<Options>, String> {
                 };
                 command = Some(Command::Update(action, release_id, version));
             }
+            "diagnostics" if command.is_none() => {
+                let action = args
+                    .next()
+                    .ok_or_else(|| "diagnostics requires status or collect".to_owned())?;
+                let action = match action.to_string_lossy().as_ref() {
+                    "status" => DiagnosticsAction::Status,
+                    "collect" => DiagnosticsAction::Collect,
+                    value => return Err(format!("unknown diagnostics action: {value}")),
+                };
+                command = Some(Command::Diagnostics(action, None));
+            }
             "--json" => json = true,
             "--note" => {
                 let note = args
@@ -202,11 +214,11 @@ fn parse_args() -> Result<Option<Options>, String> {
                     Some(Command::Release(ReleaseAction::Register, _, _, _, current)) => {
                         *current = Some(note);
                     }
+                    Some(Command::Diagnostics(DiagnosticsAction::Collect, current)) => {
+                        *current = Some(note);
+                    }
                     _ => {
-                        return Err(
-                            "--note is only valid for checkpoint create or release register"
-                                .to_owned(),
-                        )
+                        return Err("--note is only valid for checkpoint create, release register, or diagnostics collect".to_owned())
                     }
                 }
             }
@@ -244,7 +256,7 @@ fn parse_args() -> Result<Option<Options>, String> {
 
     let Some(command) = command else {
         return Err(
-            "a command is required (supported: status, harness, profile, checkpoint)".to_owned(),
+            "a command is required (supported: status, harness, profile, checkpoint, release, update, diagnostics)".to_owned(),
         );
     };
 
@@ -336,6 +348,20 @@ async fn run(options: Options) -> Result<(), String> {
                 action: *action,
                 release_id: release_id.clone(),
                 version: version.clone(),
+            })
+            .send()
+            .await
+            .map_err(|error| format!("agent is unavailable: {error}"))?,
+        Command::Diagnostics(DiagnosticsAction::Status, _) => client
+            .get(format!("http://{address}/v1/diagnostics"))
+            .send()
+            .await
+            .map_err(|error| format!("agent is unavailable: {error}"))?,
+        Command::Diagnostics(action, note) => client
+            .post(format!("http://{address}/v1/diagnostics"))
+            .json(&DiagnosticsCommand {
+                action: *action,
+                note: note.clone(),
             })
             .send()
             .await
@@ -517,6 +543,37 @@ async fn run(options: Options) -> Result<(), String> {
                 }
             }
         }
+        Command::Diagnostics(_, _) => {
+            let diagnostics: DiagnosticsResponse = serde_json::from_str(&body)
+                .map_err(|error| format!("invalid agent response: {error}"))?;
+            if options.json {
+                print_json_value(
+                    &serde_json::to_value(&diagnostics).map_err(|error| error.to_string())?,
+                )?;
+            } else if diagnostics.bundles.is_empty() {
+                println!("no diagnostics bundles");
+            } else {
+                for bundle in &diagnostics.bundles {
+                    println!(
+                        "{} created_at_unix={} files={} directory={}",
+                        bundle.id,
+                        bundle.created_at_unix,
+                        bundle.files.len(),
+                        bundle.directory
+                    );
+                    for file in &bundle.files {
+                        let mut flags = String::new();
+                        if file.redacted {
+                            flags.push('R');
+                        }
+                        if file.truncated {
+                            flags.push('T');
+                        }
+                        println!("  {} bytes={} {}", file.name, file.bytes, flags);
+                    }
+                }
+            }
+        }
     }
 
     Ok(())
@@ -589,6 +646,8 @@ Usage:
   nexusctl release rollback [--json] [--port PORT]
   nexusctl update status [--json] [--port PORT]
   nexusctl update install [ID VERSION] [--json] [--port PORT]
+  nexusctl diagnostics status [--json] [--port PORT]
+  nexusctl diagnostics collect [--note TEXT] [--json] [--port PORT]
 
 Queries and controls the loopback Nexus Agent API."#
     );

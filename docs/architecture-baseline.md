@@ -1,6 +1,6 @@
 # Nexus architecture baseline
 
-Status: Phase 6 release-aware Harness launch (headless MVP)
+Status: Phase 7 diagnostics collection (headless MVP)
 
 ## Purpose
 
@@ -48,7 +48,7 @@ nexus-protocol  versioned JSON wire types (v1)
        ^
 nexus-core      paths, configuration, and state model
        ^
-nexus-agent     foreground loopback HTTP server, HarnessSupervisor, updater
+nexus-agent     foreground loopback HTTP server, HarnessSupervisor, updater, diagnostics
        ^
 nexusctl        CLI client (`status`, `harness`, `profile`, `checkpoint`, `release`, `update`)
 ```
@@ -78,6 +78,11 @@ The Agent exposes:
   verify commands, then atomically publishes the candidate as a release slot.
   The command never edits or vendors the upstream Harness checkout. A failed
   job is recorded in `update-state.json` and its candidate is discarded.
+- `GET|POST /v1/diagnostics` — list or collect bounded Nexus-only diagnostic
+  bundles. Collection copies runtime metadata and text logs into a new
+  `diagnostics/<id>/` directory, redacting common credential-bearing lines and
+  omitting binary payloads. It never traverses `$HOME/.dsh`, Harness data, or
+  the process environment.
 
 The Harness response always includes a `state` and may include `pid`,
 `exit_code`, `error`, and timestamps. A missing `harness.program` is a normal
@@ -160,7 +165,7 @@ The fields can be overridden explicitly for development and tests with
 separated), `NEXUS_HARNESS_WORKING_DIR`, `NEXUS_HARNESS_READINESS_URL`, and
 `NEXUS_HARNESS_READINESS_TIMEOUT_SECS`. `NEXUS_DATA_DIR` selects the Nexus
 root containing `config.json`, `state.json`, `profiles.json`, `checkpoints/`,
-`releases/`, `downloads/`, `update-state.json`, and `logs`; it does not select or
+`releases/`, `downloads/`, `update-state.json`, `diagnostics/`, and `logs`; it does not select or
 copy `$HOME/.dsh`, `DSH_HOME`, Harness credentials, or Harness session data.
 Nexus never defaults to `$HOME/.dsh`.
 
@@ -168,6 +173,13 @@ Nexus never defaults to `$HOME/.dsh`.
 an atomic replace in the same Nexus root. It is kept separate from the
 external Harness working/data directory. Supervisor stdout and stderr are
 appended to `logs/harness.stdout.log` and `logs/harness.stderr.log`.
+
+Diagnostics bundles are stored under `diagnostics/<id>/`. Each bundle contains
+only a bounded allowlist of Nexus metadata and copied text logs. Sensitive
+credential-shaped lines are replaced with `[REDACTED]`, binary payloads are
+omitted, and oversized files are truncated. The API returns the local bundle
+directory and file metadata so a GUI or script can attach the bundle without
+receiving raw secrets over the wire.
 
 Readiness probes are deliberately limited to loopback targets (`localhost`,
 `127.0.0.1`, or `[::1]`) and plain HTTP, so the optional URL cannot turn the
@@ -209,5 +221,6 @@ the update executor installs a verified immutable slot but does not silently
 change the active pointer or start Harness. Once a slot is explicitly promoted,
 the supervisor resolves `{release_root}` from the catalog and performs launch
 from that canonical directory; it never guesses a release from the process
-working directory. Profile selection does not claim to understand Harness
-internals, and checkpoint restore remains metadata-only.
+working directory. Diagnostics are bounded and redacted as described above;
+they are not a general filesystem archive. Profile selection does not claim to
+understand Harness internals, and checkpoint restore remains metadata-only.

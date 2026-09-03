@@ -575,15 +575,72 @@ impl UpdateResponse {
     }
 }
 
+/// Nexus-owned diagnostic collection actions. Collection only reads a fixed
+/// allowlist of Nexus metadata and redacted text logs.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum DiagnosticsAction {
+    Status,
+    Collect,
+}
+
+impl Default for DiagnosticsAction {
+    fn default() -> Self {
+        Self::Status
+    }
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct DiagnosticsCommand {
+    pub action: DiagnosticsAction,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub note: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct DiagnosticsFile {
+    pub name: String,
+    pub bytes: u64,
+    #[serde(default)]
+    pub redacted: bool,
+    #[serde(default)]
+    pub truncated: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct DiagnosticsBundle {
+    pub id: String,
+    pub created_at_unix: u64,
+    pub directory: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub note: Option<String>,
+    pub files: Vec<DiagnosticsFile>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct DiagnosticsResponse {
+    pub api_version: String,
+    pub bundles: Vec<DiagnosticsBundle>,
+}
+
+impl DiagnosticsResponse {
+    pub fn new(bundles: Vec<DiagnosticsBundle>) -> Self {
+        Self {
+            api_version: API_VERSION.to_owned(),
+            bundles,
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
         AgentLifecycleState, CheckpointCreateRequest, CheckpointCreateResponse, CheckpointManifest,
-        CheckpointRestoreRequest, HarnessAction, HarnessCommand, HarnessResponse,
-        HarnessRuntimeInfo, HarnessState, LifecycleAction, LifecycleCommand, NexusStateSummary,
-        ProfileListResponse, ProfileSelectRequest, ReleaseAction, ReleaseCommand,
-        ReleaseListResponse, ReleaseManifest, UpdateAction, UpdateCommand, UpdateResponse,
-        UpdateRuntimeInfo,
+        CheckpointRestoreRequest, DiagnosticsAction, DiagnosticsCommand, DiagnosticsResponse,
+        HarnessAction, HarnessCommand, HarnessResponse, HarnessRuntimeInfo, HarnessState,
+        LifecycleAction, LifecycleCommand, NexusStateSummary, ProfileListResponse,
+        ProfileSelectRequest, ReleaseAction, ReleaseCommand, ReleaseListResponse, ReleaseManifest,
+        UpdateAction, UpdateCommand, UpdateResponse, UpdateRuntimeInfo,
     };
 
     #[test]
@@ -730,5 +787,24 @@ mod tests {
         assert_eq!(response_json["api_version"], "v1");
         assert_eq!(response_json["update"]["state"], "running");
         assert!(response_json["update"].get("finished_at_unix").is_none());
+    }
+
+    #[test]
+    fn diagnostics_protocol_marks_redaction_and_uses_v1_json() {
+        let command = DiagnosticsCommand {
+            action: DiagnosticsAction::Collect,
+            note: Some("before update".to_owned()),
+        };
+        let command_json = serde_json::to_value(command).expect("diagnostics command serializes");
+        assert_eq!(command_json["action"], "collect");
+        assert_eq!(command_json["note"], "before update");
+
+        let response = DiagnosticsResponse::new(Vec::new());
+        let response_json =
+            serde_json::to_value(response).expect("diagnostics response serializes");
+        assert_eq!(response_json["api_version"], "v1");
+        assert!(response_json["bundles"]
+            .as_array()
+            .is_some_and(Vec::is_empty));
     }
 }

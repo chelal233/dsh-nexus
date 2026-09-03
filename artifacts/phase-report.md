@@ -1,60 +1,46 @@
-# Phase 6 report: release-aware Harness launch
+# Phase 7 report: bounded diagnostics collection
 
 ## Worktree and scope
 
 - Task: `nexus-bootstrap`
-- Phase: `release-binding`
-- Worktree: `E:\git\dsh-nexus-release-binding`
-- Branch: `codex/nexus-bootstrap/release-binding`
-- Base: `7db8f6fdd1b91838d17f6fba74e381a3dc590689`
-- Scope: `nexus-core`, `nexus-agent` supervisor, architecture baseline, and
-  this report.
-- Exclusions: no Harness source change, no Desktop/Tauri/Electron code, no
-  production launch, and no writes under `D:\dsh-local`.
+- Phase: `diagnostics`
+- Worktree: `E:\git\dsh-nexus-diagnostics`
+- Branch: `codex/nexus-bootstrap/diagnostics`
+- Base: `bb9df16f1cf6d9b99c857f3292ccdd622b51d364`
+- Scope: v1 diagnostics protocol, Nexus core store, Agent/CLI routes, docs,
+  and this report.
+- Exclusions: no Harness source or `.dsh` traversal, no production data,
+  deployment, or UI shell.
 
 ## Delivered
 
-- Added `ReleaseStore::release_root`, which resolves only a registered slot,
-  requires its immutable manifest, canonicalizes the path, and verifies it is
-  contained below Nexus `releases/`.
-- Extended `HarnessLaunchSpec` with explicit `{release}` and `{release_root}`
-  rendering alongside `{profile}`. Missing release context is a clear
-  configuration error; static launch specifications remain compatible.
-- Updated `HarnessSupervisor` to load the current release catalog before every
-  start, resolve the selected canonical slot, and render program, working
-  directory, and arguments from that context. It never infers a release from
-  the process cwd or edits upstream Harness files.
+- Added `DiagnosticsStore` with a Nexus-only allowlist: runtime state,
+  profiles, release pointers, update state, and text logs. It never reads the
+  process environment, Harness working/data directories, or `$HOME/.dsh`.
+- Added bounded collection (`64` files; metadata capped at `512 KiB`, logs at
+  `256 KiB`) with binary omission, truncation markers, safe filenames, and
+  create-new/sync writes into `diagnostics/<id>/files/`.
+- Added conservative line redaction for credential-shaped log fields
+  (`password`, token, authorization, cookie, private key, and related markers)
+  before a bundle is published. The response exposes local path and metadata,
+  not raw file contents.
+- Added durable bundle manifests and `GET|POST /v1/diagnostics`; extended
+  `nexusctl diagnostics status|collect` with optional notes and JSON output.
 
 ## Verification
 
 - `cargo fmt --all -- --check` — pass.
-- `cargo test --workspace --locked` — 26 tests passed, 0 failed.
-- `cargo build --workspace --locked --release` — exit 0.
-- `git diff --check` — exit 0.
-- Core tests cover slot containment, placeholder rendering, missing-release
-  rejection, and the existing profile/checkpoint/release invariants.
-- Runtime smoke used a fake PowerShell Harness command and a Nexus-owned
-  release slot. After register/promote, the supervisor rendered
-  `{release_root}`, `{release}`, and `{profile}` and wrote a marker inside the
-  selected slot:
-
-  ```text
-  REGISTER_STATUS=201
-  PROMOTE_STATUS=200
-  START_STATUS=200
-  HARNESS_STATE=stopped
-  STATE_RELEASE=harness-rc1
-  MARKER_EXISTS=True
-  MARKER_CONTENT=web|harness-rc1
-  SHUTDOWN_STATUS=202
-  AGENT_EXITED=True
-  ```
-
-  No real Harness binary or upstream source was launched.
+- `cargo test --workspace --locked` — 28 tests passed, 0 failed.
+- `cargo build --workspace --locked --release` — pass.
+- `git diff --check` — pass.
+- Runtime smoke returned `COLLECT_STATUS=201`, created a bundle with three
+  allowlisted files, redacted an authorization line, reported
+  `SECRET_PRESENT=False`, returned it from status, and shut down the Agent with
+  `AGENT_EXITED=True`.
 
 ## Boundaries carried forward
 
-Release promotion is still an explicit stopped-state operation. The update
-executor stages a verified slot, but does not auto-promote it or start Harness.
-Tauri/Electron shell, diagnostics export, local authentication, and automatic
-update policy remain independent layers over the same headless Agent API.
+Diagnostics are intentionally a local, bounded handoff primitive rather than
+a general archive or cloud uploader. Tauri/Electron, authentication, update
+auto-policy, plugin activation, and any remote export remain replaceable layers
+over the headless Agent protocol.

@@ -10,16 +10,17 @@ use axum::{
     Json, Router,
 };
 use nexus_core::{
-    AgentState, CheckpointStore, NexusConfig, NexusStateSnapshot, ProfileCatalog, ProfileStore,
-    ReleaseCatalog, ReleaseStore, RuntimeMetadataStore, DEFAULT_PROFILE,
+    AgentState, CheckpointStore, DiagnosticsStore, NexusConfig, NexusStateSnapshot, ProfileCatalog,
+    ProfileStore, ReleaseCatalog, ReleaseStore, RuntimeMetadataStore, DEFAULT_PROFILE,
 };
 use nexus_protocol::{
     AgentLifecycleState, CheckpointAction, CheckpointCommand, CheckpointCreateResponse,
-    CheckpointListResponse, CheckpointRestoreResponse, ErrorResponse, HarnessAction,
-    HarnessCommand, HarnessResponse, HarnessRuntimeInfo, HealthResponse, LifecycleAccepted,
-    LifecycleAction, LifecycleCommand, ProfileAction, ProfileCommand, ProfileListResponse,
-    ProfileSelectResponse, ReleaseAction, ReleaseCommand, ReleaseListResponse, StateResponse,
-    UpdateAction, UpdateCommand, UpdateResponse,
+    CheckpointListResponse, CheckpointRestoreResponse, DiagnosticsAction, DiagnosticsCommand,
+    DiagnosticsResponse, ErrorResponse, HarnessAction, HarnessCommand, HarnessResponse,
+    HarnessRuntimeInfo, HealthResponse, LifecycleAccepted, LifecycleAction, LifecycleCommand,
+    ProfileAction, ProfileCommand, ProfileListResponse, ProfileSelectResponse, ReleaseAction,
+    ReleaseCommand, ReleaseListResponse, StateResponse, UpdateAction, UpdateCommand,
+    UpdateResponse,
 };
 use tokio::{
     net::TcpListener,
@@ -39,6 +40,7 @@ struct AppState {
     profiles: ProfileStore,
     checkpoints: CheckpointStore,
     releases: ReleaseStore,
+    diagnostics: DiagnosticsStore,
     updater: UpdateExecutor,
     supervisor: HarnessSupervisor,
     shutdown: watch::Sender<bool>,
@@ -54,6 +56,7 @@ pub async fn run(config: NexusConfig) -> io::Result<()> {
     let checkpoints = CheckpointStore::new(paths.clone());
     let releases = ReleaseStore::new(paths.clone());
     let release_catalog = releases.load()?;
+    let diagnostics = DiagnosticsStore::new(paths.clone());
     let updater = UpdateExecutor::new(paths.clone(), releases.clone());
     let _ = updater.recover_unattached()?;
     let supervisor = HarnessSupervisor::new(paths.clone())?;
@@ -72,6 +75,7 @@ pub async fn run(config: NexusConfig) -> io::Result<()> {
         profiles,
         checkpoints,
         releases,
+        diagnostics,
         updater,
         supervisor: supervisor.clone(),
         shutdown,
@@ -115,6 +119,10 @@ fn build_router(state: AppState) -> Router {
         )
         .route("/v1/releases", get(release_list).post(release_control))
         .route("/v1/updates", get(update_status).post(update_control))
+        .route(
+            "/v1/diagnostics",
+            get(diagnostics_status).post(diagnostics_control),
+        )
         .route("/v1/lifecycle", post(lifecycle))
         .route("/v1/shutdown", post(shutdown))
         .with_state(state)
@@ -496,6 +504,30 @@ async fn update_control(
         {
             Ok(response) => (StatusCode::CREATED, Json(response)).into_response(),
             Err(error) => update_error_response(error),
+        },
+    }
+}
+
+async fn diagnostics_status(State(state): State<AppState>) -> axum::response::Response {
+    match state.diagnostics.list() {
+        Ok(bundles) => (StatusCode::OK, Json(DiagnosticsResponse::new(bundles))).into_response(),
+        Err(error) => data_error_response(error, "diagnostics_list_failed"),
+    }
+}
+
+async fn diagnostics_control(
+    State(state): State<AppState>,
+    Json(command): Json<DiagnosticsCommand>,
+) -> axum::response::Response {
+    match command.action {
+        DiagnosticsAction::Status => diagnostics_status(State(state)).await,
+        DiagnosticsAction::Collect => match state.diagnostics.collect(command.note) {
+            Ok(bundle) => (
+                StatusCode::CREATED,
+                Json(DiagnosticsResponse::new(vec![bundle])),
+            )
+                .into_response(),
+            Err(error) => data_error_response(error, "diagnostics_collect_failed"),
         },
     }
 }
