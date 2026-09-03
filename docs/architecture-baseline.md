@@ -1,6 +1,6 @@
 # Nexus architecture baseline
 
-Status: Phase 3 Profile and external checkpoint metadata
+Status: Phase 4 Profile, checkpoint, and release-slot metadata
 
 ## Purpose
 
@@ -50,7 +50,7 @@ nexus-core      paths, configuration, and state model
        ^
 nexus-agent     foreground loopback HTTP server and HarnessSupervisor
        ^
-nexusctl        CLI client (`status`, `harness`, `profile`, `checkpoint`)
+nexusctl        CLI client (`status`, `harness`, `profile`, `checkpoint`, `release`)
 ```
 
 The Agent exposes:
@@ -68,6 +68,10 @@ The Agent exposes:
 - `GET|POST /v1/checkpoints` — list, create, or restore Nexus-only manifests.
   Restore is rejected while Harness is running; after it succeeds, Agent state
   adopts the saved profile/release metadata but does not start Harness.
+- `GET|POST /v1/releases` — list/current, register an immutable slot manifest,
+  promote a registered slot, or swap current with last-known-good. Promotion
+  and rollback are rejected while Harness is starting/running; registration is
+  metadata-only and does not install, start, or restart Harness.
 
 The Harness response always includes a `state` and may include `pid`,
 `exit_code`, `error`, and timestamps. A missing `harness.program` is a normal
@@ -97,8 +101,10 @@ runtime never hard-codes a drive letter or assumes Windows path separators.
 
 The first path model reserves directories for `logs`, `checkpoints`,
 `releases`, `downloads`, and `run`, and stores the profile catalog in
-`profiles.json`. It does not copy credentials, Harness sessions, or secret
-environment values into Nexus state.
+`profiles.json`. Release slot manifests live below `releases/<id>/manifest.json`
+and the current/last-known-good pointers are atomically published in
+`release-pointers.json`. It does not copy credentials, Harness sessions, or
+secret environment values into Nexus state.
 
 Profiles are Nexus-owned names. The default is `web`; names are limited to
 ASCII letters, digits, `.`, `_`, and `-` with a bounded length. The active name
@@ -154,7 +160,10 @@ with a clear error until a separately specified, authenticated design exists.
 
 This phase does not add Tauri, Electron, Harness source dependencies, plugin
 marketplaces, recommendations, advertising, cloud sync, remote control,
-update/release promotion, or authentication. Profile and checkpoint metadata
-are implemented, but update, release promotion, auth, and Tauri remain later
-phases. Profile selection does not claim to understand Harness internals, and
+network update/build execution, or authentication. Profile, checkpoint, and
+release-slot metadata are implemented, but the external update executor, auth,
+diagnostics, and Tauri remain later phases. Release registration and pointer
+changes do not install or launch a Harness binary yet; the update executor will
+populate immutable slots and bind a selected slot to the explicit launch spec.
+Profile selection does not claim to understand Harness internals, and
 checkpoint restore is intentionally metadata-only.

@@ -10,7 +10,7 @@ use std::{
 
 use nexus_protocol::{
     decode_json, encode_json, AgentLifecycleState, AgentStatePayload, CheckpointManifest,
-    HarnessRuntimeInfo, HarnessState, NexusStateSummary,
+    HarnessRuntimeInfo, HarnessState, NexusStateSummary, ReleaseManifest,
 };
 use serde::{Deserialize, Serialize};
 
@@ -19,6 +19,10 @@ pub const DEFAULT_PROFILE: &str = "web";
 pub const MAX_PROFILE_NAME_LEN: usize = 64;
 pub const PROFILE_SCHEMA_VERSION: u32 = 1;
 pub const CHECKPOINT_SCHEMA_VERSION: u32 = 1;
+pub const RELEASE_SCHEMA_VERSION: u32 = 1;
+pub const MAX_RELEASE_ID_LEN: usize = 128;
+pub const MAX_RELEASE_VERSION_LEN: usize = 128;
+pub const MAX_RELEASE_TEXT_LEN: usize = 4096;
 pub const DATA_DIR_ENV: &str = "NEXUS_DATA_DIR";
 pub const PORT_ENV: &str = "NEXUS_AGENT_PORT";
 pub const HARNESS_PROGRAM_ENV: &str = "NEXUS_HARNESS_PROGRAM";
@@ -83,6 +87,7 @@ pub struct NexusPaths {
     pub config_file: PathBuf,
     pub state_file: PathBuf,
     pub profiles_file: PathBuf,
+    pub release_pointers_file: PathBuf,
     pub logs_dir: PathBuf,
     pub checkpoints_dir: PathBuf,
     pub releases_dir: PathBuf,
@@ -96,6 +101,7 @@ impl NexusPaths {
             config_file: root.join("config.json"),
             state_file: root.join("state.json"),
             profiles_file: root.join("profiles.json"),
+            release_pointers_file: root.join("release-pointers.json"),
             logs_dir: root.join("logs"),
             checkpoints_dir: root.join("checkpoints"),
             releases_dir: root.join("releases"),
@@ -482,6 +488,328 @@ fn validate_checkpoint_manifest(manifest: &CheckpointManifest) -> io::Result<()>
     Ok(())
 }
 
+/// Nexus-owned release catalog. Release manifests are immutable after
+/// registration; only the current/LKG pointer document changes on promotion
+/// and rollback.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ReleaseCatalog {
+    #[serde(default = "default_release_schema")]
+    pub schema_version: u32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub current_release: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_known_good: Option<String>,
+    #[serde(default)]
+    pub releases: Vec<ReleaseManifest>,
+}
+
+impl Default for ReleaseCatalog {
+    fn default() -> Self {
+        Self {
+            schema_version: RELEASE_SCHEMA_VERSION,
+            current_release: None,
+            last_known_good: None,
+            releases: Vec::new(),
+        }
+    }
+}
+
+impl ReleaseCatalog {
+    pub fn find(&self, id: &str) -> Option<&ReleaseManifest> {
+        self.releases.iter().find(|release| release.id == id)
+    }
+
+    fn normalize(&mut self) -> io::Result<()> {
+        if self.schema_version == 0 {
+            self.schema_version = RELEASE_SCHEMA_VERSION;
+        }
+        let mut ids = std::collections::HashSet::new();
+        for release in &self.releases {
+            validate_release_manifest(release)?;
+            if !ids.insert(release.id.as_str()) {
+                return Err(invalid_data("release catalog contains duplicate ids"));
+            }
+        }
+        for pointer in [&self.current_release, &self.last_known_good] {
+            if let Some(id) = pointer {
+                validate_release_id(id)?;
+                if !ids.contains(id.as_str()) {
+                    return Err(invalid_data(format!(
+                        "release pointer references unknown id: {id}"
+                    )));
+                }
+            }
+        }
+        if self.current_release.is_some() && self.current_release == self.last_known_good {
+            return Err(invalid_data(
+                "current and last-known-good release must differ",
+            ));
+        }
+        self.releases.sort_by(|left, right| {
+            right
+                .installed_at_unix
+                .cmp(&left.installed_at_unix)
+                .then_with(|| right.id.cmp(&left.id))
+        });
+        Ok(())
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+struct ReleasePointerDocument {
+    #[serde(default = "default_release_schema")]
+    schema_version: u32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    current_release: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    last_known_good: Option<String>,
+}
+
+/// Durable store for immutable release manifests and atomic current/LKG
+/// pointers. It never downloads, builds, or edits Harness source.
+#[derive(Clone)]
+pub struct ReleaseStore {
+    paths: NexusPaths,
+    write_gate: Arc<Mutex<()>>,
+}
+
+impl ReleaseStore {
+    pub fn new(paths: NexusPaths) -> Self {
+        Self {
+            paths,
+            write_gate: Arc::new(Mutex::new(())),
+        }
+    }
+
+    pub fn paths(&self) -> &NexusPaths {
+        &self.paths
+    }
+
+    pub fn load(&self) -> io::Result<ReleaseCatalog> {
+        let _guard = self.lock_gate()?;
+        self.load_unlocked()
+    }
+
+    pub fn get(&self, id: &str) -> io::Result<ReleaseManifest> {
+        validate_release_id(id)?;
+        self.load()?.find(id).cloned().ok_or_else(|| {
+            io::Error::new(
+                io::ErrorKind::NotFound,
+                format!("release {id} was not found"),
+            )
+        })
+    }
+
+    /// Register a slot manifest without making it active. The slot's
+    /// `manifest.json` is immutable once written; update executors may fill
+    /// the sibling slot contents before or after this metadata operation.
+    pub fn register(
+        &self,
+        id: &str,
+        version: &str,
+        source: Option<String>,
+        note: Option<String>,
+    ) -> io::Result<ReleaseCatalog> {
+        validate_release_id(id)?;
+        validate_release_version(version)?;
+        validate_optional_release_text(source.as_deref(), "release source")?;
+        validate_optional_release_text(note.as_deref(), "release note")?;
+
+        let _guard = self.lock_gate()?;
+        let mut catalog = self.load_unlocked()?;
+        if catalog.find(id).is_some() {
+            return Err(io::Error::new(
+                io::ErrorKind::AlreadyExists,
+                format!("release {id} is already registered"),
+            ));
+        }
+        let manifest = ReleaseManifest {
+            id: id.to_owned(),
+            version: version.to_owned(),
+            installed_at_unix: unix_time_seconds(),
+            source,
+            note,
+        };
+        let slot_dir = self.slot_dir(id)?;
+        fs::create_dir_all(&slot_dir)?;
+        write_json_atomic(&slot_dir, &slot_dir.join("manifest.json"), &manifest)?;
+        catalog.releases.push(manifest);
+        catalog.normalize()?;
+        Ok(catalog)
+    }
+
+    /// Atomically make an already-registered slot current. The previous
+    /// current pointer becomes last-known-good; no manifest is modified.
+    pub fn promote(&self, id: &str) -> io::Result<ReleaseCatalog> {
+        validate_release_id(id)?;
+        let _guard = self.lock_gate()?;
+        let mut catalog = self.load_unlocked()?;
+        if catalog.find(id).is_none() {
+            return Err(io::Error::new(
+                io::ErrorKind::NotFound,
+                format!("release {id} was not found"),
+            ));
+        }
+        if catalog.current_release.as_deref() != Some(id) {
+            if let Some(previous) = catalog.current_release.replace(id.to_owned()) {
+                catalog.last_known_good = Some(previous);
+            }
+            self.write_pointers(&catalog)?;
+        }
+        Ok(catalog)
+    }
+
+    /// Swap current and last-known-good pointers. This is intentionally a
+    /// reversible metadata operation and does not start Harness.
+    pub fn rollback(&self) -> io::Result<ReleaseCatalog> {
+        let _guard = self.lock_gate()?;
+        let mut catalog = self.load_unlocked()?;
+        let Some(last_known_good) = catalog.last_known_good.clone() else {
+            return Err(io::Error::new(
+                io::ErrorKind::NotFound,
+                "no last-known-good release is available",
+            ));
+        };
+        let previous = catalog.current_release.replace(last_known_good);
+        catalog.last_known_good = previous;
+        self.write_pointers(&catalog)?;
+        Ok(catalog)
+    }
+
+    fn load_unlocked(&self) -> io::Result<ReleaseCatalog> {
+        let pointers = if self.paths.release_pointers_file.exists() {
+            let bytes = fs::read(&self.paths.release_pointers_file)?;
+            decode_json::<ReleasePointerDocument>(&bytes).map_err(invalid_data)?
+        } else {
+            ReleasePointerDocument {
+                schema_version: RELEASE_SCHEMA_VERSION,
+                current_release: None,
+                last_known_good: None,
+            }
+        };
+        if pointers.schema_version == 0 {
+            // Version zero was never published, but accepting it here keeps
+            // the same forward-compatible convention as other Nexus stores.
+        }
+
+        let mut catalog = ReleaseCatalog {
+            schema_version: RELEASE_SCHEMA_VERSION,
+            current_release: pointers.current_release,
+            last_known_good: pointers.last_known_good,
+            releases: Vec::new(),
+        };
+        if self.paths.releases_dir.exists() {
+            for entry in fs::read_dir(&self.paths.releases_dir)? {
+                let entry = entry?;
+                if !entry.file_type()?.is_dir() {
+                    continue;
+                }
+                let slot_id = entry.file_name().to_string_lossy().into_owned();
+                let manifest_path = entry.path().join("manifest.json");
+                if !manifest_path.exists() {
+                    // A partially prepared slot is not selectable until its
+                    // immutable manifest is published.
+                    continue;
+                }
+                let bytes = fs::read(&manifest_path)?;
+                let manifest: ReleaseManifest = decode_json(&bytes).map_err(invalid_data)?;
+                validate_release_manifest(&manifest)?;
+                if manifest.id != slot_id {
+                    return Err(invalid_data("release directory does not match manifest id"));
+                }
+                catalog.releases.push(manifest);
+            }
+        }
+        catalog.normalize()?;
+        Ok(catalog)
+    }
+
+    fn write_pointers(&self, catalog: &ReleaseCatalog) -> io::Result<()> {
+        let pointers = ReleasePointerDocument {
+            schema_version: RELEASE_SCHEMA_VERSION,
+            current_release: catalog.current_release.clone(),
+            last_known_good: catalog.last_known_good.clone(),
+        };
+        write_json_atomic(
+            &self.paths.root,
+            &self.paths.release_pointers_file,
+            &pointers,
+        )
+    }
+
+    fn slot_dir(&self, id: &str) -> io::Result<PathBuf> {
+        validate_release_id(id)?;
+        Ok(self.paths.releases_dir.join(id))
+    }
+
+    fn lock_gate(&self) -> io::Result<std::sync::MutexGuard<'_, ()>> {
+        self.write_gate
+            .lock()
+            .map_err(|_| io::Error::other("release store lock is poisoned"))
+    }
+}
+
+fn default_release_schema() -> u32 {
+    RELEASE_SCHEMA_VERSION
+}
+
+pub fn is_valid_release_id(id: &str) -> bool {
+    validate_release_id(id).is_ok()
+}
+
+pub fn validate_release_id(id: &str) -> io::Result<()> {
+    let valid_chars = id
+        .bytes()
+        .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'-'));
+    if id.is_empty() || id.len() > MAX_RELEASE_ID_LEN || id == "." || id == ".." || !valid_chars {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "release id must use a safe ASCII identifier",
+        ));
+    }
+    Ok(())
+}
+
+pub fn validate_release_version(version: &str) -> io::Result<()> {
+    if version.is_empty() || version.len() > MAX_RELEASE_VERSION_LEN {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!("release version must be 1-{MAX_RELEASE_VERSION_LEN} bytes"),
+        ));
+    }
+    validate_release_text(version, "release version")
+}
+
+fn validate_optional_release_text(value: Option<&str>, label: &str) -> io::Result<()> {
+    if let Some(value) = value {
+        if value.len() > MAX_RELEASE_TEXT_LEN {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                format!("{label} exceeds {MAX_RELEASE_TEXT_LEN} bytes"),
+            ));
+        }
+        validate_release_text(value, label)?;
+    }
+    Ok(())
+}
+
+fn validate_release_text(value: &str, label: &str) -> io::Result<()> {
+    if value.chars().any(|character| character.is_control()) {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!("{label} contains a control character"),
+        ));
+    }
+    Ok(())
+}
+
+fn validate_release_manifest(manifest: &ReleaseManifest) -> io::Result<()> {
+    validate_release_id(&manifest.id)?;
+    validate_release_version(&manifest.version)?;
+    validate_optional_release_text(manifest.source.as_deref(), "release source")?;
+    validate_optional_release_text(manifest.note.as_deref(), "release note")
+}
+
 fn write_json_atomic<T: Serialize>(root: &Path, destination: &Path, value: &T) -> io::Result<()> {
     let bytes = encode_json(value).map_err(invalid_data)?;
     fs::create_dir_all(root)?;
@@ -861,6 +1189,10 @@ mod tests {
             paths.releases_dir,
             PathBuf::from("workspace/nexus/releases")
         );
+        assert_eq!(
+            paths.release_pointers_file,
+            PathBuf::from("workspace/nexus/release-pointers.json")
+        );
     }
 
     #[test]
@@ -993,6 +1325,63 @@ mod tests {
             created
         );
         assert!(!root.join(".dsh").exists());
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn release_store_registers_promotes_and_rolls_back_atomically() {
+        let root = unique_test_root("releases");
+        let paths = NexusPaths::from_root(root.clone());
+        let store = super::ReleaseStore::new(paths.clone());
+
+        let initial = store.load().expect("release catalog loads");
+        assert!(initial.current_release.is_none());
+        assert!(initial.releases.is_empty());
+
+        let alpha = store
+            .register(
+                "harness-alpha5",
+                "alpha.5",
+                Some("git:alpha5".to_owned()),
+                None,
+            )
+            .expect("alpha registers");
+        assert!(alpha.find("harness-alpha5").is_some());
+        assert!(paths
+            .releases_dir
+            .join("harness-alpha5")
+            .join("manifest.json")
+            .exists());
+
+        let rc = store
+            .register("harness-rc1", "rc.1", Some("git:rc1".to_owned()), None)
+            .expect("rc registers");
+        assert_eq!(rc.releases.len(), 2);
+        assert!(store.register("harness-rc1", "rc.1", None, None).is_err());
+
+        let promoted_alpha = store.promote("harness-alpha5").expect("alpha promotes");
+        assert_eq!(
+            promoted_alpha.current_release.as_deref(),
+            Some("harness-alpha5")
+        );
+        assert!(promoted_alpha.last_known_good.is_none());
+
+        let promoted_rc = store.promote("harness-rc1").expect("rc promotes");
+        assert_eq!(promoted_rc.current_release.as_deref(), Some("harness-rc1"));
+        assert_eq!(
+            promoted_rc.last_known_good.as_deref(),
+            Some("harness-alpha5")
+        );
+
+        let rolled_back = store.rollback().expect("rollback succeeds");
+        assert_eq!(
+            rolled_back.current_release.as_deref(),
+            Some("harness-alpha5")
+        );
+        assert_eq!(rolled_back.last_known_good.as_deref(), Some("harness-rc1"));
+        assert!(store.rollback().is_ok());
+        assert!(store.promote("../escape").is_err());
 
         let _ = fs::remove_dir_all(root);
     }

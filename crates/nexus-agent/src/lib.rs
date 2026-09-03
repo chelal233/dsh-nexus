@@ -11,14 +11,14 @@ use axum::{
 };
 use nexus_core::{
     AgentState, CheckpointStore, NexusConfig, NexusStateSnapshot, ProfileCatalog, ProfileStore,
-    RuntimeMetadataStore, DEFAULT_PROFILE,
+    ReleaseCatalog, ReleaseStore, RuntimeMetadataStore, DEFAULT_PROFILE,
 };
 use nexus_protocol::{
     AgentLifecycleState, CheckpointAction, CheckpointCommand, CheckpointCreateResponse,
     CheckpointListResponse, CheckpointRestoreResponse, ErrorResponse, HarnessAction,
     HarnessCommand, HarnessResponse, HarnessRuntimeInfo, HealthResponse, LifecycleAccepted,
     LifecycleAction, LifecycleCommand, ProfileAction, ProfileCommand, ProfileListResponse,
-    ProfileSelectResponse, StateResponse,
+    ProfileSelectResponse, ReleaseAction, ReleaseCommand, ReleaseListResponse, StateResponse,
 };
 use tokio::{
     net::TcpListener,
@@ -35,6 +35,7 @@ struct AppState {
     metadata: RuntimeMetadataStore,
     profiles: ProfileStore,
     checkpoints: CheckpointStore,
+    releases: ReleaseStore,
     supervisor: HarnessSupervisor,
     shutdown: watch::Sender<bool>,
 }
@@ -47,13 +48,15 @@ pub async fn run(config: NexusConfig) -> io::Result<()> {
     let profiles = ProfileStore::new(paths.clone());
     let profile_catalog = profiles.load()?;
     let checkpoints = CheckpointStore::new(paths.clone());
+    let releases = ReleaseStore::new(paths.clone());
+    let release_catalog = releases.load()?;
     let supervisor = HarnessSupervisor::new(paths.clone())?;
     let metadata = supervisor.metadata_store();
     let initial_harness = supervisor.recover_unattached().await;
     let mut initial_runtime = AgentState::starting();
     initial_runtime.profile = Some(profile_catalog.active_profile.clone());
+    initial_runtime.release = release_catalog.current_release.clone();
     initial_runtime.harness = initial_harness.state;
-    initial_runtime.release = metadata.read()?.and_then(|value| value.release);
     metadata.write_snapshot(&initial_runtime, initial_harness.clone())?;
     let runtime = Arc::new(RwLock::new(initial_runtime));
     let (shutdown, shutdown_receiver) = watch::channel(false);
@@ -62,6 +65,7 @@ pub async fn run(config: NexusConfig) -> io::Result<()> {
         metadata: metadata.clone(),
         profiles,
         checkpoints,
+        releases,
         supervisor: supervisor.clone(),
         shutdown,
     };
@@ -102,6 +106,7 @@ fn build_router(state: AppState) -> Router {
             "/v1/checkpoints",
             get(checkpoint_list).post(checkpoint_control),
         )
+        .route("/v1/releases", get(release_list).post(release_control))
         .route("/v1/lifecycle", post(lifecycle))
         .route("/v1/shutdown", post(shutdown))
         .with_state(state)
@@ -323,6 +328,16 @@ async fn checkpoint_restore(state: AppState, id: String) -> axum::response::Resp
             return data_error_response(error, code);
         }
     };
+    if let Some(release) = checkpoint.release.as_deref() {
+        if let Err(error) = state.releases.get(release) {
+            let code = if error.kind() == io::ErrorKind::NotFound {
+                "checkpoint_release_not_found"
+            } else {
+                "checkpoint_release_unavailable"
+            };
+            return data_error_response(error, code);
+        }
+    }
     let catalog = match state.profiles.select(&checkpoint.profile) {
         Ok(catalog) => catalog,
         Err(error) => return data_error_response(error, "checkpoint_profile_invalid"),
@@ -341,6 +356,111 @@ async fn checkpoint_restore(state: AppState, id: String) -> axum::response::Resp
         Json(CheckpointRestoreResponse::restored(checkpoint)),
     )
         .into_response()
+}
+
+fn release_list_response(catalog: ReleaseCatalog) -> ReleaseListResponse {
+    ReleaseListResponse::new(
+        catalog.current_release,
+        catalog.last_known_good,
+        catalog.releases,
+    )
+}
+
+async fn release_list(State(state): State<AppState>) -> axum::response::Response {
+    match state.releases.load() {
+        Ok(catalog) => (StatusCode::OK, Json(release_list_response(catalog))).into_response(),
+        Err(error) => data_error_response(error, "release_catalog_unavailable"),
+    }
+}
+
+async fn release_control(
+    State(state): State<AppState>,
+    Json(command): Json<ReleaseCommand>,
+) -> axum::response::Response {
+    match command.action {
+        ReleaseAction::List | ReleaseAction::Current => release_list(State(state)).await,
+        ReleaseAction::Register => {
+            let Some(id) = command.id.as_deref() else {
+                return data_error_response(
+                    io::Error::new(io::ErrorKind::InvalidInput, "release id is required"),
+                    "release_invalid",
+                );
+            };
+            let Some(version) = command.version.as_deref() else {
+                return data_error_response(
+                    io::Error::new(io::ErrorKind::InvalidInput, "release version is required"),
+                    "release_invalid",
+                );
+            };
+            match state
+                .releases
+                .register(id, version, command.source, command.note)
+            {
+                Ok(catalog) => {
+                    (StatusCode::CREATED, Json(release_list_response(catalog))).into_response()
+                }
+                Err(error) => data_error_response(error, "release_register_failed"),
+            }
+        }
+        ReleaseAction::Promote => {
+            let Some(id) = command.id.as_deref() else {
+                return data_error_response(
+                    io::Error::new(io::ErrorKind::InvalidInput, "release id is required"),
+                    "release_invalid",
+                );
+            };
+            let harness = sync_harness_state(&state).await;
+            if matches!(
+                harness.state,
+                nexus_protocol::HarnessState::Starting | nexus_protocol::HarnessState::Running
+            ) {
+                return api_error_response(
+                    StatusCode::CONFLICT,
+                    "release_change_conflict",
+                    "cannot promote a release while Harness is running; stop Harness first",
+                );
+            }
+            let catalog = match state.releases.promote(id) {
+                Ok(catalog) => catalog,
+                Err(error) => return data_error_response(error, "release_promote_failed"),
+            };
+            apply_release_catalog(&state, catalog, harness).await
+        }
+        ReleaseAction::Rollback => {
+            let harness = sync_harness_state(&state).await;
+            if matches!(
+                harness.state,
+                nexus_protocol::HarnessState::Starting | nexus_protocol::HarnessState::Running
+            ) {
+                return api_error_response(
+                    StatusCode::CONFLICT,
+                    "release_change_conflict",
+                    "cannot roll back a release while Harness is running; stop Harness first",
+                );
+            }
+            let catalog = match state.releases.rollback() {
+                Ok(catalog) => catalog,
+                Err(error) => return data_error_response(error, "release_rollback_failed"),
+            };
+            apply_release_catalog(&state, catalog, harness).await
+        }
+    }
+}
+
+async fn apply_release_catalog(
+    state: &AppState,
+    catalog: ReleaseCatalog,
+    harness: HarnessRuntimeInfo,
+) -> axum::response::Response {
+    let current = {
+        let mut current = state.runtime.write().await;
+        current.set_release(catalog.current_release.clone());
+        current.clone()
+    };
+    if let Err(error) = state.metadata.write_snapshot(&current, harness) {
+        return data_error_response(error, "release_state_persistence_failed");
+    }
+    (StatusCode::OK, Json(release_list_response(catalog))).into_response()
 }
 
 fn api_error_response(
@@ -363,6 +483,7 @@ fn data_error_response(error: io::Error, fallback_code: &str) -> axum::response:
     let status = match error.kind() {
         io::ErrorKind::InvalidInput | io::ErrorKind::InvalidData => StatusCode::BAD_REQUEST,
         io::ErrorKind::NotFound => StatusCode::NOT_FOUND,
+        io::ErrorKind::AlreadyExists => StatusCode::CONFLICT,
         _ => StatusCode::INTERNAL_SERVER_ERROR,
     };
     api_error_response(status, fallback_code, error.to_string())

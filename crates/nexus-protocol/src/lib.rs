@@ -407,13 +407,88 @@ impl CheckpointRestoreResponse {
     }
 }
 
+/// A Nexus-owned immutable Harness release slot.  The slot directory is
+/// derived from `id` below the Nexus data root; the manifest deliberately
+/// contains metadata only until the external update executor is introduced.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ReleaseManifest {
+    pub id: String,
+    pub version: String,
+    pub installed_at_unix: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub note: Option<String>,
+}
+
+/// Current and last-known-good pointers are stored separately from immutable
+/// release manifests so promotion and rollback are one atomic metadata swap.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ReleasePointers {
+    pub current_release: Option<String>,
+    pub last_known_good: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ReleaseListResponse {
+    pub api_version: String,
+    pub current_release: Option<String>,
+    pub last_known_good: Option<String>,
+    pub releases: Vec<ReleaseManifest>,
+}
+
+impl ReleaseListResponse {
+    pub fn new(
+        current_release: Option<String>,
+        last_known_good: Option<String>,
+        releases: Vec<ReleaseManifest>,
+    ) -> Self {
+        Self {
+            api_version: API_VERSION.to_owned(),
+            current_release,
+            last_known_good,
+            releases,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ReleaseAction {
+    List,
+    Current,
+    Register,
+    Promote,
+    Rollback,
+}
+
+impl Default for ReleaseAction {
+    fn default() -> Self {
+        Self::List
+    }
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ReleaseCommand {
+    pub action: ReleaseAction,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub version: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub note: Option<String>,
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
         AgentLifecycleState, CheckpointCreateRequest, CheckpointCreateResponse, CheckpointManifest,
         CheckpointRestoreRequest, HarnessAction, HarnessCommand, HarnessResponse,
         HarnessRuntimeInfo, HarnessState, LifecycleAction, LifecycleCommand, NexusStateSummary,
-        ProfileListResponse, ProfileSelectRequest,
+        ProfileListResponse, ProfileSelectRequest, ReleaseAction, ReleaseCommand,
+        ReleaseListResponse, ReleaseManifest,
     };
 
     #[test]
@@ -510,5 +585,34 @@ mod tests {
             serde_json::to_value(restore).expect("restore serializes")["id"],
             "cp-123"
         );
+    }
+
+    #[test]
+    fn release_protocol_uses_stable_pointer_and_manifest_json() {
+        let command = ReleaseCommand {
+            action: ReleaseAction::Promote,
+            id: Some("harness-rc1".to_owned()),
+            ..ReleaseCommand::default()
+        };
+        let command_json = serde_json::to_value(command).expect("release command serializes");
+        assert_eq!(command_json["action"], "promote");
+        assert_eq!(command_json["id"], "harness-rc1");
+        assert!(command_json.get("version").is_none());
+
+        let response = ReleaseListResponse::new(
+            Some("harness-rc1".to_owned()),
+            Some("harness-alpha5".to_owned()),
+            vec![ReleaseManifest {
+                id: "harness-rc1".to_owned(),
+                version: "rc.1".to_owned(),
+                installed_at_unix: 123,
+                source: Some("git".to_owned()),
+                note: None,
+            }],
+        );
+        let json = serde_json::to_value(response).expect("release response serializes");
+        assert_eq!(json["api_version"], "v1");
+        assert_eq!(json["current_release"], "harness-rc1");
+        assert_eq!(json["releases"][0]["version"], "rc.1");
     }
 }

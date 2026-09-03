@@ -1,12 +1,12 @@
-# Phase 3 report: profiles and external checkpoints
+# Phase 4 report: profiles, checkpoints, and release slots
 
 ## Worktree and scope
 
 - Task: `nexus-bootstrap`
-- Phase: `profile-checkpoint`
-- Worktree: `E:\git\dsh-nexus-profile-checkpoint`
-- Branch: `codex/nexus-bootstrap/profile-checkpoint`
-- Base: `3142ca5b3f8db9490565ba3572d176c05a413d1c`
+- Phase: `release-slots`
+- Worktree: `E:\git\dsh-nexus-release-slots`
+- Branch: `codex/nexus-bootstrap/release-slots`
+- Base: `316c8f7583affc2a285cf485d88ade416b79bd94`
 - Scope: the Rust workspace, `docs/architecture-baseline.md`, and this
   report only.
 - Exclusions: no Harness/Desktop/Tauri source, no `Cargo.lock` changes, no
@@ -14,50 +14,58 @@
 
 ## Delivered
 
-- Added stable v1 JSON types for profile list/status/select and checkpoint
-  list/create/restore operations. Profile names and checkpoint IDs are
-  bounded safe ASCII identifiers; manifests and requests round-trip in tests.
-- Added Nexus-owned `ProfileStore` and `ProfileCatalog`. The default active
-  profile is `web`; selection validates names, records known profiles, and
-  atomically publishes `profiles.json` below `NEXUS_DATA_DIR` (or the normal
-  Nexus data root). No Harness data directory is consulted.
-- Added `CheckpointStore`. It atomically writes `checkpoints/cp-*.json`
-  manifests containing timestamp, profile, release, note, and a Nexus state
-  summary. List/read/restore validate IDs and manifest/profile consistency;
-  restore is metadata-only and never copies or rewrites `.dsh` data.
-- Agent boot loads the active profile and keeps `AgentState.profile` and
-  `state.json` metadata aligned. `GET|POST /v1/profiles` supports list/status/
-  select; switching while Harness is starting/running returns HTTP 409 without
-  an implicit restart. `GET|POST /v1/checkpoints` supports list/create/restore;
-  restore rejects a running Harness, applies profile/release metadata while
-  stopped, and never auto-starts Harness.
-- Harness launch supports an explicit `{profile}` replacement in
-  `HarnessLaunchSpec.args`; `start_with_profile` and `restart_with_profile`
-  accept the selected profile while `start`/`restart` remain compatible
-  wrappers. No Harness CLI semantics, `DSH_HOME`, or Harness configuration is
-  inferred or injected.
-- Extended `nexusctl` with `profile status|list|select NAME` and
-  `checkpoint list|create [--note TEXT]|restore ID`, retaining existing
-  `status` and `harness` commands plus `--json` and readable HTTP errors.
-- Updated the architecture baseline to document Nexus-owned profile rendering,
-  metadata-only checkpoints, and the remaining update/release/auth/Tauri
-  boundaries.
+- Preserved the stable v1 JSON types for profile and checkpoint operations and
+  added release list/current/register/promote/rollback commands. Release IDs,
+  versions, and text metadata are bounded and validated before persistence.
+- Added Nexus-owned immutable release manifests under
+  `releases/<id>/manifest.json`. Registration is append-only metadata: it does
+  not download, build, overwrite, or launch Harness.
+- Added an atomic `release-pointers.json` document with `current_release` and
+  `last_known_good` pointers. Promoting a registered slot moves the previous
+  current pointer to LKG; rollback swaps the two pointers so the operation is
+  reversible and no manifest is modified.
+- Agent boot now reads the release pointer and keeps `AgentState.release` and
+  `state.json` metadata aligned. `GET|POST /v1/releases` exposes the catalog;
+  promotion and rollback return HTTP 409 while Harness is starting/running and
+  update Agent metadata only while stopped.
+- Checkpoint restore validates a saved release against the registered catalog
+  before applying profile/release metadata, preventing a pointer to an
+  unavailable slot. It still never copies or rewrites `.dsh` data.
+- Extended `nexusctl` with `release list|current`, `release register ID VERSION`,
+  `release promote ID`, and `release rollback`, with optional `--source`,
+  `--note`, `--json`, and `--port` options.
+- Updated the architecture baseline to describe immutable release slots,
+  atomic current/LKG pointers, and the remaining external update executor,
+  authentication, diagnostics, and Tauri boundaries.
 
 ## Test-first and verification
 
-The new protocol test was first run before the types existed and failed to
-compile; it passed after implementation. A supervisor placeholder test was
-also run before the rendering method existed and failed to compile, then
-passed after implementation. Final commands were run from this worktree with
-Rust 1.98.0:
+Final commands were run from this worktree with Rust 1.98.0:
 
 - `cargo fmt --all -- --check` — exit 0.
 - `cargo check --workspace --locked` — exit 0.
-- `cargo test --workspace --locked` — exit 0; 18 unit tests passed, 0 failed.
+- `cargo test --workspace --locked` — exit 0; 24 unit tests passed, 0 failed.
 - `git diff --check` — exit 0.
-- Fake Nexus store tests covered default/selected profiles and a checkpoint
-  manifest without launching a real Harness. No external `.dsh` data was read
-  or written.
+- Fake Nexus store tests covered default/selected profiles, checkpoint
+  manifests, and release registration/promotion/rollback without launching a
+  real Harness. No external `.dsh` data was read or written.
+
+Runtime/CLI smoke used an ignored temporary Nexus root and a fake
+`powershell.exe Start-Sleep` child; no real Harness was launched:
+
+```text
+nexusctl release list --json                 -> empty catalog, no pointers
+nexusctl release register harness-alpha5 ...  -> immutable manifest created
+nexusctl release register harness-rc1 ...     -> second manifest created
+nexusctl release promote harness-alpha5       -> current=alpha5
+nexusctl release promote harness-rc1          -> current=rc1, LKG=alpha5
+nexusctl release rollback                     -> current=alpha5, LKG=rc1
+nexusctl status --json                       -> state.release=alpha5
+nexusctl harness start                       -> fake Harness running
+nexusctl release promote harness-rc1         -> HTTP 409 release_change_conflict
+nexusctl harness stop                        -> bounded stop completed
+POST /v1/shutdown                            -> 202; Agent exited
+```
 
 ## Not done / boundaries
 
@@ -69,5 +77,7 @@ Rust 1.98.0:
 - Profile names are metadata and are rendered only where an explicit
   `{profile}` placeholder is configured. Nexus does not guess a Harness CLI
   flag or internal implementation.
-- Update/release promotion, authentication, Tauri/Desktop integration, and
-  remote control remain future phases.
+- The external update executor (git/download/build/readiness), authentication,
+  diagnostics, Tauri/Desktop integration, and remote control remain future
+  phases. Release registration and pointer swaps are metadata-only and do not
+  yet bind a selected slot to the Harness launch command.

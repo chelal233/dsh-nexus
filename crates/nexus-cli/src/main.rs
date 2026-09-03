@@ -4,7 +4,8 @@ use nexus_core::{NexusConfig, DEFAULT_AGENT_PORT};
 use nexus_protocol::{
     CheckpointAction, CheckpointCommand, CheckpointCreateResponse, CheckpointListResponse,
     CheckpointRestoreResponse, ErrorResponse, HarnessAction, HarnessCommand, HarnessResponse,
-    ProfileAction, ProfileCommand, ProfileListResponse, ProfileSelectResponse, StateResponse,
+    ProfileAction, ProfileCommand, ProfileListResponse, ProfileSelectResponse, ReleaseAction,
+    ReleaseCommand, ReleaseListResponse, StateResponse,
 };
 
 #[derive(Debug)]
@@ -20,6 +21,13 @@ enum Command {
     Harness(HarnessAction),
     Profile(ProfileAction, Option<String>),
     Checkpoint(CheckpointAction, Option<String>, Option<String>),
+    Release(
+        ReleaseAction,
+        Option<String>,
+        Option<String>,
+        Option<String>,
+        Option<String>,
+    ),
 }
 
 #[tokio::main]
@@ -106,6 +114,40 @@ fn parse_args() -> Result<Option<Options>, String> {
                 };
                 command = Some(Command::Checkpoint(action, id, None));
             }
+            "release" if command.is_none() => {
+                let action = args.next().ok_or_else(|| {
+                    "release requires list, current, register ID VERSION, promote ID, or rollback"
+                        .to_owned()
+                })?;
+                let action = match action.to_string_lossy().as_ref() {
+                    "list" => ReleaseAction::List,
+                    "current" => ReleaseAction::Current,
+                    "register" => ReleaseAction::Register,
+                    "promote" => ReleaseAction::Promote,
+                    "rollback" => ReleaseAction::Rollback,
+                    value => return Err(format!("unknown release action: {value}")),
+                };
+                let id = match action {
+                    ReleaseAction::Register | ReleaseAction::Promote => Some(
+                        args.next()
+                            .ok_or_else(|| "release action requires ID".to_owned())?
+                            .to_string_lossy()
+                            .into_owned(),
+                    ),
+                    _ => None,
+                };
+                let version = if action == ReleaseAction::Register {
+                    Some(
+                        args.next()
+                            .ok_or_else(|| "release register requires VERSION".to_owned())?
+                            .to_string_lossy()
+                            .into_owned(),
+                    )
+                } else {
+                    None
+                };
+                command = Some(Command::Release(action, id, version, None, None));
+            }
             "--json" => json = true,
             "--note" => {
                 let note = args
@@ -117,7 +159,28 @@ fn parse_args() -> Result<Option<Options>, String> {
                     Some(Command::Checkpoint(CheckpointAction::Create, _, current)) => {
                         *current = Some(note);
                     }
-                    _ => return Err("--note is only valid for checkpoint create".to_owned()),
+                    Some(Command::Release(ReleaseAction::Register, _, _, _, current)) => {
+                        *current = Some(note);
+                    }
+                    _ => {
+                        return Err(
+                            "--note is only valid for checkpoint create or release register"
+                                .to_owned(),
+                        )
+                    }
+                }
+            }
+            "--source" => {
+                let source = args
+                    .next()
+                    .ok_or_else(|| "--source requires TEXT".to_owned())?
+                    .to_string_lossy()
+                    .into_owned();
+                match command.as_mut() {
+                    Some(Command::Release(ReleaseAction::Register, _, _, current, _)) => {
+                        *current = Some(source);
+                    }
+                    _ => return Err("--source is only valid for release register".to_owned()),
                 }
             }
             "--port" => {
@@ -132,7 +195,7 @@ fn parse_args() -> Result<Option<Options>, String> {
                     .ok_or_else(|| format!("invalid port: {}", value.to_string_lossy()))?;
             }
             "--help" | "-h" => {
-                print_help();
+                print_help_v2();
                 return Ok(None);
             }
             value => return Err(format!("unknown argument: {value}")),
@@ -200,6 +263,23 @@ async fn run(options: Options) -> Result<(), String> {
             .json(&CheckpointCommand {
                 action: *action,
                 id: id.clone(),
+                note: note.clone(),
+            })
+            .send()
+            .await
+            .map_err(|error| format!("agent is unavailable: {error}"))?,
+        Command::Release(ReleaseAction::List | ReleaseAction::Current, _, _, _, _) => client
+            .get(format!("http://{address}/v1/releases"))
+            .send()
+            .await
+            .map_err(|error| format!("agent is unavailable: {error}"))?,
+        Command::Release(action, id, version, source, note) => client
+            .post(format!("http://{address}/v1/releases"))
+            .json(&ReleaseCommand {
+                action: *action,
+                id: id.clone(),
+                version: version.clone(),
+                source: source.clone(),
                 note: note.clone(),
             })
             .send()
@@ -323,6 +403,44 @@ async fn run(options: Options) -> Result<(), String> {
                 }
             }
         },
+        Command::Release(_, _, _, _, _) => {
+            let releases: ReleaseListResponse = serde_json::from_str(&body)
+                .map_err(|error| format!("invalid agent response: {error}"))?;
+            if options.json {
+                print_json_value(
+                    &serde_json::to_value(&releases).map_err(|error| error.to_string())?,
+                )?;
+            } else {
+                println!(
+                    "current_release: {}",
+                    releases.current_release.as_deref().unwrap_or("<none>")
+                );
+                println!(
+                    "last_known_good: {}",
+                    releases.last_known_good.as_deref().unwrap_or("<none>")
+                );
+                if releases.releases.is_empty() {
+                    println!("no releases");
+                } else {
+                    for release in &releases.releases {
+                        let mut markers = String::new();
+                        if releases.current_release.as_deref() == Some(release.id.as_str()) {
+                            markers.push('*');
+                        }
+                        if releases.last_known_good.as_deref() == Some(release.id.as_str()) {
+                            markers.push('L');
+                        }
+                        if markers.is_empty() {
+                            markers.push(' ');
+                        }
+                        println!(
+                            "{markers} {} version={} installed_at_unix={}",
+                            release.id, release.version, release.installed_at_unix
+                        );
+                    }
+                }
+            }
+        }
     }
 
     Ok(())
@@ -377,9 +495,23 @@ fn print_json_value(value: &serde_json::Value) -> Result<(), String> {
     Ok(())
 }
 
-fn print_help() {
+fn print_help_v2() {
     println!(
-        "nexusctl\n\nUsage:\n  nexusctl status [--json] [--port PORT]\n  nexusctl harness status|start|stop|restart [--json] [--port PORT]\n  nexusctl profile status|list [--json] [--port PORT]\n  nexusctl profile select NAME [--json] [--port PORT]\n  nexusctl checkpoint list [--json] [--port PORT]\n  nexusctl checkpoint create [--note TEXT] [--json] [--port PORT]\n  nexusctl checkpoint restore ID [--json] [--port PORT]\n\n\
-         Queries and controls the loopback Nexus Agent API."
+        r#"nexusctl
+
+Usage:
+  nexusctl status [--json] [--port PORT]
+  nexusctl harness status|start|stop|restart [--json] [--port PORT]
+  nexusctl profile status|list [--json] [--port PORT]
+  nexusctl profile select NAME [--json] [--port PORT]
+  nexusctl checkpoint list [--json] [--port PORT]
+  nexusctl checkpoint create [--note TEXT] [--json] [--port PORT]
+  nexusctl checkpoint restore ID [--json] [--port PORT]
+  nexusctl release list|current [--json] [--port PORT]
+  nexusctl release register ID VERSION [--source TEXT] [--note TEXT] [--json] [--port PORT]
+  nexusctl release promote ID [--json] [--port PORT]
+  nexusctl release rollback [--json] [--port PORT]
+
+Queries and controls the loopback Nexus Agent API."#
     );
 }
