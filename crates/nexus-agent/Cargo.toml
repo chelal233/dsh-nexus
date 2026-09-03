@@ -1,0 +1,22 @@
+[package]
+name = "nexus-agent"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[lib]
+name = "nexus_agent"
+path = "src/lib.rs"
+
+[[bin]]
+name = "nexus-agent"
+path = "src/main.rs"
+
+[dependencies]
+axum.workspace = true
+nexus-core = { path = "../nexus-core" }
+nexus-protocol = { path = "../nexus-protocol" }
+tokio.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
