@@ -19,6 +19,7 @@ use nexus_protocol::{
     HarnessCommand, HarnessResponse, HarnessRuntimeInfo, HealthResponse, LifecycleAccepted,
     LifecycleAction, LifecycleCommand, ProfileAction, ProfileCommand, ProfileListResponse,
     ProfileSelectResponse, ReleaseAction, ReleaseCommand, ReleaseListResponse, StateResponse,
+    UpdateAction, UpdateCommand, UpdateResponse,
 };
 use tokio::{
     net::TcpListener,
@@ -26,8 +27,10 @@ use tokio::{
 };
 
 mod supervisor;
+mod updater;
 
 pub use supervisor::{HarnessSupervisor, HarnessSupervisorError};
+pub use updater::{UpdateExecutor, UpdateExecutorError};
 
 #[derive(Clone)]
 struct AppState {
@@ -36,6 +39,7 @@ struct AppState {
     profiles: ProfileStore,
     checkpoints: CheckpointStore,
     releases: ReleaseStore,
+    updater: UpdateExecutor,
     supervisor: HarnessSupervisor,
     shutdown: watch::Sender<bool>,
 }
@@ -50,6 +54,8 @@ pub async fn run(config: NexusConfig) -> io::Result<()> {
     let checkpoints = CheckpointStore::new(paths.clone());
     let releases = ReleaseStore::new(paths.clone());
     let release_catalog = releases.load()?;
+    let updater = UpdateExecutor::new(paths.clone(), releases.clone());
+    let _ = updater.recover_unattached()?;
     let supervisor = HarnessSupervisor::new(paths.clone())?;
     let metadata = supervisor.metadata_store();
     let initial_harness = supervisor.recover_unattached().await;
@@ -66,6 +72,7 @@ pub async fn run(config: NexusConfig) -> io::Result<()> {
         profiles,
         checkpoints,
         releases,
+        updater,
         supervisor: supervisor.clone(),
         shutdown,
     };
@@ -107,6 +114,7 @@ fn build_router(state: AppState) -> Router {
             get(checkpoint_list).post(checkpoint_control),
         )
         .route("/v1/releases", get(release_list).post(release_control))
+        .route("/v1/updates", get(update_status).post(update_control))
         .route("/v1/lifecycle", post(lifecycle))
         .route("/v1/shutdown", post(shutdown))
         .with_state(state)
@@ -463,6 +471,35 @@ async fn apply_release_catalog(
     (StatusCode::OK, Json(release_list_response(catalog))).into_response()
 }
 
+async fn update_status(State(state): State<AppState>) -> axum::response::Response {
+    let update = match state.updater.status() {
+        Ok(update) => update,
+        Err(error) => return update_error_response(error),
+    };
+    let release = update
+        .release_id
+        .as_deref()
+        .and_then(|id| state.releases.get(id).ok());
+    (StatusCode::OK, Json(UpdateResponse::new(update, release))).into_response()
+}
+
+async fn update_control(
+    State(state): State<AppState>,
+    Json(command): Json<UpdateCommand>,
+) -> axum::response::Response {
+    match command.action {
+        UpdateAction::Status => update_status(State(state)).await,
+        UpdateAction::Install => match state
+            .updater
+            .install(command.release_id, command.version)
+            .await
+        {
+            Ok(response) => (StatusCode::CREATED, Json(response)).into_response(),
+            Err(error) => update_error_response(error),
+        },
+    }
+}
+
 fn api_error_response(
     status: StatusCode,
     code: &str,
@@ -514,6 +551,38 @@ fn harness_error_response(error: HarnessSupervisorError) -> axum::response::Resp
         HarnessSupervisorError::Persistence(_) => (
             StatusCode::INTERNAL_SERVER_ERROR,
             "harness_state_persistence_failed",
+        ),
+    };
+    (
+        status,
+        Json(ErrorResponse {
+            api_version: nexus_protocol::API_VERSION.to_owned(),
+            code: code.to_owned(),
+            message: error.to_string(),
+        }),
+    )
+        .into_response()
+}
+
+fn update_error_response(error: UpdateExecutorError) -> axum::response::Response {
+    let (status, code) = match &error {
+        UpdateExecutorError::NotConfigured => {
+            (StatusCode::UNPROCESSABLE_ENTITY, "update_not_configured")
+        }
+        UpdateExecutorError::AlreadyRunning => (StatusCode::CONFLICT, "update_already_running"),
+        UpdateExecutorError::Configuration(_) => (
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "update_configuration_error",
+        ),
+        UpdateExecutorError::Spawn { .. }
+        | UpdateExecutorError::Process { .. }
+        | UpdateExecutorError::Failed { .. }
+        | UpdateExecutorError::TimedOut { .. } => {
+            (StatusCode::BAD_GATEWAY, "update_execution_failed")
+        }
+        UpdateExecutorError::Persistence(_) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "update_state_persistence_failed",
         ),
     };
     (

@@ -5,7 +5,8 @@ use nexus_protocol::{
     CheckpointAction, CheckpointCommand, CheckpointCreateResponse, CheckpointListResponse,
     CheckpointRestoreResponse, ErrorResponse, HarnessAction, HarnessCommand, HarnessResponse,
     ProfileAction, ProfileCommand, ProfileListResponse, ProfileSelectResponse, ReleaseAction,
-    ReleaseCommand, ReleaseListResponse, StateResponse,
+    ReleaseCommand, ReleaseListResponse, StateResponse, UpdateAction, UpdateCommand,
+    UpdateResponse,
 };
 
 #[derive(Debug)]
@@ -28,6 +29,7 @@ enum Command {
         Option<String>,
         Option<String>,
     ),
+    Update(UpdateAction, Option<String>, Option<String>),
 }
 
 #[tokio::main]
@@ -52,7 +54,7 @@ fn parse_args() -> Result<Option<Options>, String> {
     let mut config = NexusConfig::from_env();
     let mut command = None;
     let mut json = false;
-    let mut args = env::args_os().skip(1);
+    let mut args = env::args_os().skip(1).peekable();
 
     while let Some(argument) = args.next() {
         match argument.to_string_lossy().as_ref() {
@@ -147,6 +149,44 @@ fn parse_args() -> Result<Option<Options>, String> {
                     None
                 };
                 command = Some(Command::Release(action, id, version, None, None));
+            }
+            "update" if command.is_none() => {
+                let action = args
+                    .next()
+                    .ok_or_else(|| "update requires status or install [ID VERSION]".to_owned())?;
+                let action = match action.to_string_lossy().as_ref() {
+                    "status" => UpdateAction::Status,
+                    "install" => UpdateAction::Install,
+                    value => return Err(format!("unknown update action: {value}")),
+                };
+                let (release_id, version) = if action == UpdateAction::Install {
+                    let id = match args.peek() {
+                        Some(value) if !value.to_string_lossy().starts_with('-') => args.next(),
+                        _ => None,
+                    };
+                    let version = match id {
+                        Some(id) => {
+                            let version = match args.peek() {
+                                Some(value) if !value.to_string_lossy().starts_with('-') => {
+                                    args.next()
+                                }
+                                _ => None,
+                            };
+                            let Some(version) = version else {
+                                return Err("update install accepts either no positional values or ID VERSION".to_owned());
+                            };
+                            (
+                                Some(id.to_string_lossy().into_owned()),
+                                Some(version.to_string_lossy().into_owned()),
+                            )
+                        }
+                        None => (None, None),
+                    };
+                    version
+                } else {
+                    (None, None)
+                };
+                command = Some(Command::Update(action, release_id, version));
             }
             "--json" => json = true,
             "--note" => {
@@ -281,6 +321,21 @@ async fn run(options: Options) -> Result<(), String> {
                 version: version.clone(),
                 source: source.clone(),
                 note: note.clone(),
+            })
+            .send()
+            .await
+            .map_err(|error| format!("agent is unavailable: {error}"))?,
+        Command::Update(UpdateAction::Status, _, _) => client
+            .get(format!("http://{address}/v1/updates"))
+            .send()
+            .await
+            .map_err(|error| format!("agent is unavailable: {error}"))?,
+        Command::Update(action, release_id, version) => client
+            .post(format!("http://{address}/v1/updates"))
+            .json(&UpdateCommand {
+                action: *action,
+                release_id: release_id.clone(),
+                version: version.clone(),
             })
             .send()
             .await
@@ -441,6 +496,27 @@ async fn run(options: Options) -> Result<(), String> {
                 }
             }
         }
+        Command::Update(_, _, _) => {
+            let update: UpdateResponse = serde_json::from_str(&body)
+                .map_err(|error| format!("invalid agent response: {error}"))?;
+            if options.json {
+                print_json_value(
+                    &serde_json::to_value(&update).map_err(|error| error.to_string())?,
+                )?;
+            } else {
+                println!("update_state: {:?}", update.update.state);
+                println!(
+                    "release_id: {}",
+                    update.update.release_id.as_deref().unwrap_or("<none>")
+                );
+                if let Some(release) = update.release {
+                    println!("release_version: {}", release.version);
+                }
+                if let Some(error) = update.update.error {
+                    println!("error: {error}");
+                }
+            }
+        }
     }
 
     Ok(())
@@ -511,6 +587,8 @@ Usage:
   nexusctl release register ID VERSION [--source TEXT] [--note TEXT] [--json] [--port PORT]
   nexusctl release promote ID [--json] [--port PORT]
   nexusctl release rollback [--json] [--port PORT]
+  nexusctl update status [--json] [--port PORT]
+  nexusctl update install [ID VERSION] [--json] [--port PORT]
 
 Queries and controls the loopback Nexus Agent API."#
     );

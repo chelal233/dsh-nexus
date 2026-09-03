@@ -481,6 +481,100 @@ pub struct ReleaseCommand {
     pub note: Option<String>,
 }
 
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum UpdateAction {
+    Status,
+    Install,
+}
+
+impl Default for UpdateAction {
+    fn default() -> Self {
+        Self::Status
+    }
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct UpdateCommand {
+    pub action: UpdateAction,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub release_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub version: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum UpdateState {
+    Idle,
+    Running,
+    Succeeded,
+    Failed,
+}
+
+impl Default for UpdateState {
+    fn default() -> Self {
+        Self::Idle
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct UpdateRuntimeInfo {
+    pub state: UpdateState,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub release_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub started_at_unix: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub finished_at_unix: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub exit_code: Option<i32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+}
+
+impl UpdateRuntimeInfo {
+    pub fn idle() -> Self {
+        Self {
+            state: UpdateState::Idle,
+            release_id: None,
+            started_at_unix: None,
+            finished_at_unix: None,
+            exit_code: None,
+            error: None,
+        }
+    }
+
+    pub fn running(release_id: String, started_at_unix: u64) -> Self {
+        Self {
+            state: UpdateState::Running,
+            release_id: Some(release_id),
+            started_at_unix: Some(started_at_unix),
+            finished_at_unix: None,
+            exit_code: None,
+            error: None,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct UpdateResponse {
+    pub api_version: String,
+    pub update: UpdateRuntimeInfo,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub release: Option<ReleaseManifest>,
+}
+
+impl UpdateResponse {
+    pub fn new(update: UpdateRuntimeInfo, release: Option<ReleaseManifest>) -> Self {
+        Self {
+            api_version: API_VERSION.to_owned(),
+            update,
+            release,
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
@@ -488,7 +582,8 @@ mod tests {
         CheckpointRestoreRequest, HarnessAction, HarnessCommand, HarnessResponse,
         HarnessRuntimeInfo, HarnessState, LifecycleAction, LifecycleCommand, NexusStateSummary,
         ProfileListResponse, ProfileSelectRequest, ReleaseAction, ReleaseCommand,
-        ReleaseListResponse, ReleaseManifest,
+        ReleaseListResponse, ReleaseManifest, UpdateAction, UpdateCommand, UpdateResponse,
+        UpdateRuntimeInfo,
     };
 
     #[test]
@@ -614,5 +709,26 @@ mod tests {
         assert_eq!(json["api_version"], "v1");
         assert_eq!(json["current_release"], "harness-rc1");
         assert_eq!(json["releases"][0]["version"], "rc.1");
+    }
+
+    #[test]
+    fn update_protocol_uses_stable_install_json() {
+        let command = UpdateCommand {
+            action: UpdateAction::Install,
+            release_id: Some("harness-rc1".to_owned()),
+            version: Some("rc.1".to_owned()),
+        };
+        let json = serde_json::to_value(command).expect("update command serializes");
+        assert_eq!(json["action"], "install");
+        assert_eq!(json["release_id"], "harness-rc1");
+
+        let response = UpdateResponse::new(
+            UpdateRuntimeInfo::running("harness-rc1".to_owned(), 100),
+            None,
+        );
+        let response_json = serde_json::to_value(response).expect("update response serializes");
+        assert_eq!(response_json["api_version"], "v1");
+        assert_eq!(response_json["update"]["state"], "running");
+        assert!(response_json["update"].get("finished_at_unix").is_none());
     }
 }

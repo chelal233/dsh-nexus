@@ -5,12 +5,13 @@ use std::{
     net::{IpAddr, Ipv4Addr, SocketAddr},
     path::{Path, PathBuf},
     sync::{Arc, Mutex},
-    time::{SystemTime, UNIX_EPOCH},
+    time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
 use nexus_protocol::{
     decode_json, encode_json, AgentLifecycleState, AgentStatePayload, CheckpointManifest,
-    HarnessRuntimeInfo, HarnessState, NexusStateSummary, ReleaseManifest,
+    HarnessRuntimeInfo, HarnessState, NexusStateSummary, ReleaseManifest, UpdateRuntimeInfo,
+    UpdateState,
 };
 use serde::{Deserialize, Serialize};
 
@@ -23,6 +24,11 @@ pub const RELEASE_SCHEMA_VERSION: u32 = 1;
 pub const MAX_RELEASE_ID_LEN: usize = 128;
 pub const MAX_RELEASE_VERSION_LEN: usize = 128;
 pub const MAX_RELEASE_TEXT_LEN: usize = 4096;
+pub const UPDATE_SCHEMA_VERSION: u32 = 1;
+pub const MAX_UPDATE_SOURCE_LEN: usize = 2048;
+pub const MAX_UPDATE_REF_LEN: usize = 256;
+pub const MAX_UPDATE_TEXT_LEN: usize = 4096;
+pub const DEFAULT_UPDATE_TIMEOUT_SECS: u64 = 900;
 pub const DATA_DIR_ENV: &str = "NEXUS_DATA_DIR";
 pub const PORT_ENV: &str = "NEXUS_AGENT_PORT";
 pub const HARNESS_PROGRAM_ENV: &str = "NEXUS_HARNESS_PROGRAM";
@@ -30,6 +36,14 @@ pub const HARNESS_ARGS_ENV: &str = "NEXUS_HARNESS_ARGS";
 pub const HARNESS_WORKING_DIR_ENV: &str = "NEXUS_HARNESS_WORKING_DIR";
 pub const HARNESS_READINESS_URL_ENV: &str = "NEXUS_HARNESS_READINESS_URL";
 pub const HARNESS_READINESS_TIMEOUT_ENV: &str = "NEXUS_HARNESS_READINESS_TIMEOUT_SECS";
+pub const UPDATE_SOURCE_ENV: &str = "NEXUS_UPDATE_SOURCE";
+pub const UPDATE_REF_ENV: &str = "NEXUS_UPDATE_REF";
+pub const UPDATE_GIT_PROGRAM_ENV: &str = "NEXUS_UPDATE_GIT_PROGRAM";
+pub const UPDATE_BUILD_PROGRAM_ENV: &str = "NEXUS_UPDATE_BUILD_PROGRAM";
+pub const UPDATE_BUILD_ARGS_ENV: &str = "NEXUS_UPDATE_BUILD_ARGS";
+pub const UPDATE_VERIFY_PROGRAM_ENV: &str = "NEXUS_UPDATE_VERIFY_PROGRAM";
+pub const UPDATE_VERIFY_ARGS_ENV: &str = "NEXUS_UPDATE_VERIFY_ARGS";
+pub const UPDATE_TIMEOUT_ENV: &str = "NEXUS_UPDATE_TIMEOUT_SECS";
 pub const RUNTIME_SCHEMA_VERSION: u32 = 1;
 
 /// Runtime configuration intentionally binds only to loopback.
@@ -88,6 +102,7 @@ pub struct NexusPaths {
     pub state_file: PathBuf,
     pub profiles_file: PathBuf,
     pub release_pointers_file: PathBuf,
+    pub update_state_file: PathBuf,
     pub logs_dir: PathBuf,
     pub checkpoints_dir: PathBuf,
     pub releases_dir: PathBuf,
@@ -102,6 +117,7 @@ impl NexusPaths {
             state_file: root.join("state.json"),
             profiles_file: root.join("profiles.json"),
             release_pointers_file: root.join("release-pointers.json"),
+            update_state_file: root.join("update-state.json"),
             logs_dir: root.join("logs"),
             checkpoints_dir: root.join("checkpoints"),
             releases_dir: root.join("releases"),
@@ -638,6 +654,73 @@ impl ReleaseStore {
         Ok(catalog)
     }
 
+    /// Publish a prepared candidate directory as an immutable release slot.
+    /// The candidate must live below Nexus `downloads/`; it is renamed into
+    /// `releases/<id>` and the manifest is written last so an interrupted
+    /// preparation can never become selectable.
+    pub fn register_prepared(
+        &self,
+        candidate_dir: &Path,
+        id: &str,
+        version: &str,
+        source: Option<String>,
+        note: Option<String>,
+    ) -> io::Result<ReleaseCatalog> {
+        validate_release_id(id)?;
+        validate_release_version(version)?;
+        validate_optional_release_text(source.as_deref(), "release source")?;
+        validate_optional_release_text(note.as_deref(), "release note")?;
+
+        let _guard = self.lock_gate()?;
+        let mut catalog = self.load_unlocked()?;
+        if catalog.find(id).is_some() {
+            return Err(io::Error::new(
+                io::ErrorKind::AlreadyExists,
+                format!("release {id} is already registered"),
+            ));
+        }
+        self.paths.ensure_directories()?;
+        let candidate = fs::canonicalize(candidate_dir)?;
+        if !candidate.is_dir() {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "prepared release candidate is not a directory",
+            ));
+        }
+        let downloads_root = fs::canonicalize(&self.paths.downloads_dir)?;
+        if !is_within(&downloads_root, &candidate) || candidate == downloads_root {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "prepared release candidate must be below Nexus downloads",
+            ));
+        }
+
+        let slot_dir = self.slot_dir(id)?;
+        if slot_dir.exists() {
+            return Err(io::Error::new(
+                io::ErrorKind::AlreadyExists,
+                format!("release slot {} already exists", slot_dir.display()),
+            ));
+        }
+        fs::rename(&candidate, &slot_dir)?;
+        let manifest = ReleaseManifest {
+            id: id.to_owned(),
+            version: version.to_owned(),
+            installed_at_unix: unix_time_seconds(),
+            source,
+            note,
+        };
+        if let Err(error) = write_json_atomic(&slot_dir, &slot_dir.join("manifest.json"), &manifest)
+        {
+            // Leave the renamed directory in place without a manifest. Load
+            // deliberately ignores such an incomplete slot for recovery.
+            return Err(error);
+        }
+        catalog.releases.push(manifest);
+        catalog.normalize()?;
+        Ok(catalog)
+    }
+
     /// Atomically make an already-registered slot current. The previous
     /// current pointer becomes last-known-good; no manifest is modified.
     pub fn promote(&self, id: &str) -> io::Result<ReleaseCatalog> {
@@ -1100,6 +1183,88 @@ impl RuntimeMetadataStore {
     }
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+struct UpdateStateDocument {
+    #[serde(default = "default_update_schema")]
+    schema_version: u32,
+    update: UpdateRuntimeInfo,
+}
+
+/// Durable status for the in-process external update executor. It is kept in
+/// its own file so update failures cannot corrupt Agent/Harness runtime state.
+#[derive(Clone)]
+pub struct UpdateStateStore {
+    paths: NexusPaths,
+    write_gate: Arc<Mutex<()>>,
+}
+
+impl UpdateStateStore {
+    pub fn new(paths: NexusPaths) -> Self {
+        Self {
+            paths,
+            write_gate: Arc::new(Mutex::new(())),
+        }
+    }
+
+    pub fn paths(&self) -> &NexusPaths {
+        &self.paths
+    }
+
+    pub fn load(&self) -> io::Result<UpdateRuntimeInfo> {
+        let _guard = self.lock_gate()?;
+        if !self.paths.update_state_file.exists() {
+            return Ok(UpdateRuntimeInfo::idle());
+        }
+        let bytes = fs::read(&self.paths.update_state_file)?;
+        let document: UpdateStateDocument = decode_json(&bytes).map_err(invalid_data)?;
+        Ok(document.update)
+    }
+
+    pub fn write(&self, update: &UpdateRuntimeInfo) -> io::Result<()> {
+        let _guard = self.lock_gate()?;
+        let document = UpdateStateDocument {
+            schema_version: UPDATE_SCHEMA_VERSION,
+            update: update.clone(),
+        };
+        write_json_atomic(&self.paths.root, &self.paths.update_state_file, &document)
+    }
+
+    /// An Agent restart cannot reattach to an update child that was running
+    /// in the previous process. Mark that stale state failed rather than
+    /// reporting a job that no longer exists.
+    pub fn recover_unattached(&self) -> io::Result<UpdateRuntimeInfo> {
+        let _guard = self.lock_gate()?;
+        if !self.paths.update_state_file.exists() {
+            return Ok(UpdateRuntimeInfo::idle());
+        }
+        let bytes = fs::read(&self.paths.update_state_file)?;
+        let document: UpdateStateDocument = decode_json(&bytes).map_err(invalid_data)?;
+        let mut update = document.update;
+        if update.state == UpdateState::Running {
+            update.state = UpdateState::Failed;
+            update.finished_at_unix = Some(unix_time_seconds());
+            update.error =
+                Some("previous update process was not attached to this Agent instance".to_owned());
+            let document = UpdateStateDocument {
+                schema_version: UPDATE_SCHEMA_VERSION,
+                update: update.clone(),
+            };
+            write_json_atomic(&self.paths.root, &self.paths.update_state_file, &document)?;
+        }
+        Ok(update)
+    }
+
+    fn lock_gate(&self) -> io::Result<std::sync::MutexGuard<'_, ()>> {
+        self.write_gate
+            .lock()
+            .map_err(|_| io::Error::other("update state lock is poisoned"))
+    }
+}
+
+fn default_update_schema() -> u32 {
+    UPDATE_SCHEMA_VERSION
+}
+
 fn unix_time_nanos() -> u128 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -1169,13 +1334,17 @@ pub fn is_within(root: &Path, path: &Path) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use std::{fs, path::PathBuf};
+    use std::{
+        fs,
+        path::{Path, PathBuf},
+    };
 
     use nexus_protocol::{AgentLifecycleState, HarnessRuntimeInfo, HarnessState};
 
     use super::{
         is_within, load_harness_launch_spec, read_runtime_metadata, write_runtime_metadata,
         AgentState, CheckpointStore, NexusConfig, NexusPaths, NexusRuntimeMetadata, ProfileStore,
+        ReleaseStore,
     };
 
     #[test]
@@ -1192,6 +1361,10 @@ mod tests {
         assert_eq!(
             paths.release_pointers_file,
             PathBuf::from("workspace/nexus/release-pointers.json")
+        );
+        assert_eq!(
+            paths.update_state_file,
+            PathBuf::from("workspace/nexus/update-state.json")
         );
     }
 
@@ -1386,6 +1559,80 @@ mod tests {
         let _ = fs::remove_dir_all(root);
     }
 
+    #[test]
+    fn update_spec_rejects_embedded_credentials_and_renders_placeholders() {
+        let mut spec = super::UpdateSpec {
+            source: "https://user:secret@example.invalid/repo".to_owned(),
+            ref_name: "main".to_owned(),
+            git_program: PathBuf::from("git"),
+            build_program: Some(PathBuf::from("builder")),
+            build_args: vec!["--source".to_owned(), "{source}".to_owned()],
+            verify_program: None,
+            verify_args: Vec::new(),
+            timeout_secs: Some(10),
+        };
+        assert!(spec.validate().is_err());
+        spec.source = "https://example.invalid/repo".to_owned();
+        spec.validate().expect("safe update spec validates");
+        assert_eq!(
+            spec.render_args(&spec.build_args, Path::new("candidate"), "harness-rc1"),
+            vec!["--source", "candidate"]
+        );
+    }
+
+    #[test]
+    fn update_state_store_recovers_stale_running_job() {
+        let root = unique_test_root("update-state");
+        let paths = NexusPaths::from_root(root.clone());
+        let store = super::UpdateStateStore::new(paths.clone());
+        let running = nexus_protocol::UpdateRuntimeInfo::running("harness-rc1".to_owned(), 1);
+        store.write(&running).expect("update state writes");
+        let recovered = store.recover_unattached().expect("stale state recovers");
+        assert_eq!(recovered.state, nexus_protocol::UpdateState::Failed);
+        assert!(recovered.error.is_some());
+        assert_eq!(store.load().expect("state reloads"), recovered);
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn release_store_publishes_prepared_candidate_only_below_downloads() {
+        let root = unique_test_root("prepared-release");
+        let paths = NexusPaths::from_root(root.clone());
+        paths.ensure_directories().expect("directories create");
+        let candidate = paths.downloads_dir.join("candidate");
+        fs::create_dir_all(&candidate).expect("candidate creates");
+        fs::write(candidate.join("harness.txt"), "immutable upstream").expect("payload writes");
+
+        let catalog = ReleaseStore::new(paths.clone())
+            .register_prepared(
+                &candidate,
+                "harness-rc1",
+                "rc.1",
+                Some("file://fixture".to_owned()),
+                None,
+            )
+            .expect("prepared release registers");
+        assert!(catalog.find("harness-rc1").is_some());
+        assert!(!candidate.exists());
+        assert!(paths
+            .releases_dir
+            .join("harness-rc1")
+            .join("harness.txt")
+            .exists());
+        assert!(paths
+            .releases_dir
+            .join("harness-rc1")
+            .join("manifest.json")
+            .exists());
+
+        let outside = root.join("outside");
+        fs::create_dir_all(&outside).expect("outside creates");
+        assert!(ReleaseStore::new(paths.clone())
+            .register_prepared(&outside, "harness-escape", "bad", None, None)
+            .is_err());
+        let _ = fs::remove_dir_all(root);
+    }
+
     fn unique_test_root(label: &str) -> PathBuf {
         std::env::temp_dir().join(format!(
             "nexus-core-{label}-{}-{}",
@@ -1432,10 +1679,181 @@ impl HarnessLaunchSpec {
     }
 }
 
+/// Monotonic-enough timestamp helper for naming disposable update
+/// candidates. It is not used as a security token or a release version.
+pub fn unix_time_nanos_for_update() -> u128 {
+    unix_time_nanos()
+}
+
+/// External update commands are configured by Nexus and run in a disposable
+/// candidate directory. No command is inferred from the Harness source tree.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct UpdateSpec {
+    pub source: String,
+    #[serde(default = "default_update_ref")]
+    pub ref_name: String,
+    #[serde(default = "default_git_program")]
+    pub git_program: PathBuf,
+    #[serde(default)]
+    pub build_program: Option<PathBuf>,
+    #[serde(default)]
+    pub build_args: Vec<String>,
+    #[serde(default)]
+    pub verify_program: Option<PathBuf>,
+    #[serde(default)]
+    pub verify_args: Vec<String>,
+    #[serde(default)]
+    pub timeout_secs: Option<u64>,
+}
+
+impl UpdateSpec {
+    pub fn validate(&self) -> io::Result<()> {
+        validate_update_source(&self.source)?;
+        validate_update_ref(&self.ref_name)?;
+        validate_update_program(&self.git_program, "git program")?;
+        validate_update_optional_program(self.build_program.as_deref(), "build program")?;
+        validate_update_optional_program(self.verify_program.as_deref(), "verify program")?;
+        validate_update_args(&self.build_args, "build arguments")?;
+        validate_update_args(&self.verify_args, "verify arguments")?;
+        if let Some(timeout) = self.timeout_secs {
+            if timeout == 0 || timeout > 86_400 {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    "update timeout must be between 1 and 86400 seconds",
+                ));
+            }
+        }
+        Ok(())
+    }
+
+    pub fn timeout(&self) -> Duration {
+        Duration::from_secs(self.timeout_secs.unwrap_or(DEFAULT_UPDATE_TIMEOUT_SECS))
+    }
+
+    pub fn render_args(&self, args: &[String], source_dir: &Path, release_id: &str) -> Vec<String> {
+        let source = source_dir.to_string_lossy();
+        args.iter()
+            .map(|argument| {
+                argument
+                    .replace("{source}", &source)
+                    .replace("{release}", release_id)
+                    .replace("{ref}", &self.ref_name)
+            })
+            .collect()
+    }
+}
+
+fn default_update_ref() -> String {
+    "main".to_owned()
+}
+
+fn default_git_program() -> PathBuf {
+    PathBuf::from("git")
+}
+
+fn validate_update_source(source: &str) -> io::Result<()> {
+    if source.is_empty() || source.len() > MAX_UPDATE_SOURCE_LEN {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!("update source must be 1-{MAX_UPDATE_SOURCE_LEN} bytes"),
+        ));
+    }
+    if source.chars().any(|character| character.is_control()) {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "update source contains a control character",
+        ));
+    }
+    // Do not persist or execute URLs with embedded credentials. A future
+    // authenticated design must supply credentials through a separate secret
+    // provider rather than a git remote string.
+    if let Some((_, authority_and_path)) = source.split_once("://") {
+        let authority = authority_and_path
+            .split(['/', '?', '#'])
+            .next()
+            .unwrap_or_default();
+        if authority.contains('@') {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "update source must not contain embedded credentials",
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn validate_update_ref(ref_name: &str) -> io::Result<()> {
+    if ref_name.is_empty() || ref_name.len() > MAX_UPDATE_REF_LEN {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!("update ref must be 1-{MAX_UPDATE_REF_LEN} bytes"),
+        ));
+    }
+    if ref_name
+        .chars()
+        .any(|character| character.is_control() || character.is_whitespace())
+    {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "update ref must not contain whitespace or control characters",
+        ));
+    }
+    Ok(())
+}
+
+fn validate_update_program(program: &Path, label: &str) -> io::Result<()> {
+    if program.as_os_str().is_empty() {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!("{label} cannot be empty"),
+        ));
+    }
+    if program
+        .to_string_lossy()
+        .chars()
+        .any(|character| character.is_control())
+    {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!("{label} contains a control character"),
+        ));
+    }
+    Ok(())
+}
+
+fn validate_update_optional_program(program: Option<&Path>, label: &str) -> io::Result<()> {
+    if let Some(program) = program {
+        validate_update_program(program, label)?;
+    }
+    Ok(())
+}
+
+fn validate_update_args(args: &[String], label: &str) -> io::Result<()> {
+    if args.len() > 128 {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!("{label} contain too many entries"),
+        ));
+    }
+    for argument in args {
+        if argument.len() > MAX_UPDATE_TEXT_LEN
+            || argument.chars().any(|character| character.is_control())
+        {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                format!("{label} contain an invalid entry"),
+            ));
+        }
+    }
+    Ok(())
+}
+
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
 pub struct NexusConfigFile {
     #[serde(default)]
     pub harness: Option<HarnessLaunchSpec>,
+    #[serde(default)]
+    pub update: Option<UpdateSpec>,
 }
 
 /// Load the optional external Harness command from Nexus-owned configuration
@@ -1481,6 +1899,69 @@ pub fn load_harness_launch_spec(paths: &NexusPaths) -> io::Result<Option<Harness
         configured.readiness_timeout_secs = Some(timeout);
     }
 
+    Ok(Some(configured))
+}
+
+/// Load the optional external update plan from Nexus-owned configuration and
+/// apply explicit environment overrides. A missing plan is intentional: the
+/// Agent can still supervise an already configured Harness without updates.
+pub fn load_update_spec(paths: &NexusPaths) -> io::Result<Option<UpdateSpec>> {
+    let mut spec = if paths.config_file.exists() {
+        let bytes = fs::read(&paths.config_file)?;
+        let document: NexusConfigFile = decode_json(&bytes).map_err(invalid_data)?;
+        match document.update {
+            Some(spec) => Some(spec),
+            None => decode_json::<UpdateSpec>(&bytes).ok(),
+        }
+    } else {
+        None
+    };
+
+    if let Some(source) = non_empty_env(UPDATE_SOURCE_ENV) {
+        let mut configured = spec.take().unwrap_or_else(|| UpdateSpec {
+            source: source.clone(),
+            ref_name: default_update_ref(),
+            git_program: default_git_program(),
+            build_program: None,
+            build_args: Vec::new(),
+            verify_program: None,
+            verify_args: Vec::new(),
+            timeout_secs: None,
+        });
+        configured.source = source;
+        spec = Some(configured);
+    }
+
+    let Some(mut configured) = spec else {
+        return Ok(None);
+    };
+    if let Some(ref_name) = non_empty_env(UPDATE_REF_ENV) {
+        configured.ref_name = ref_name;
+    }
+    if let Some(program) = non_empty_env(UPDATE_GIT_PROGRAM_ENV) {
+        configured.git_program = PathBuf::from(program);
+    }
+    if let Some(program) = non_empty_env(UPDATE_BUILD_PROGRAM_ENV) {
+        configured.build_program = Some(PathBuf::from(program));
+    }
+    if let Some(args) = non_empty_env(UPDATE_BUILD_ARGS_ENV) {
+        configured.build_args = parse_args_override(&args);
+    }
+    if let Some(program) = non_empty_env(UPDATE_VERIFY_PROGRAM_ENV) {
+        configured.verify_program = Some(PathBuf::from(program));
+    }
+    if let Some(args) = non_empty_env(UPDATE_VERIFY_ARGS_ENV) {
+        configured.verify_args = parse_args_override(&args);
+    }
+    if let Some(timeout) = non_empty_env(UPDATE_TIMEOUT_ENV) {
+        configured.timeout_secs = Some(timeout.parse::<u64>().map_err(|_| {
+            io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "NEXUS_UPDATE_TIMEOUT_SECS must be an integer",
+            )
+        })?);
+    }
+    configured.validate()?;
     Ok(Some(configured))
 }
 

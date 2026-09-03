@@ -1,6 +1,6 @@
 # Nexus architecture baseline
 
-Status: Phase 4 Profile, checkpoint, and release-slot metadata
+Status: Phase 5 external update executor (headless MVP)
 
 ## Purpose
 
@@ -48,9 +48,9 @@ nexus-protocol  versioned JSON wire types (v1)
        ^
 nexus-core      paths, configuration, and state model
        ^
-nexus-agent     foreground loopback HTTP server and HarnessSupervisor
+nexus-agent     foreground loopback HTTP server, HarnessSupervisor, updater
        ^
-nexusctl        CLI client (`status`, `harness`, `profile`, `checkpoint`, `release`)
+nexusctl        CLI client (`status`, `harness`, `profile`, `checkpoint`, `release`, `update`)
 ```
 
 The Agent exposes:
@@ -72,6 +72,12 @@ The Agent exposes:
   promote a registered slot, or swap current with last-known-good. Promotion
   and rollback are rejected while Harness is starting/running; registration is
   metadata-only and does not install, start, or restart Harness.
+- `GET|POST /v1/updates` — inspect durable update status or run one serialized
+  external update job. An update clones the configured Git ref into a temporary
+  Nexus `downloads/` candidate, optionally runs explicitly configured build and
+  verify commands, then atomically publishes the candidate as a release slot.
+  The command never edits or vendors the upstream Harness checkout. A failed
+  job is recorded in `update-state.json` and its candidate is discarded.
 
 The Harness response always includes a `state` and may include `pid`,
 `exit_code`, `error`, and timestamps. A missing `harness.program` is a normal
@@ -103,8 +109,10 @@ The first path model reserves directories for `logs`, `checkpoints`,
 `releases`, `downloads`, and `run`, and stores the profile catalog in
 `profiles.json`. Release slot manifests live below `releases/<id>/manifest.json`
 and the current/last-known-good pointers are atomically published in
-`release-pointers.json`. It does not copy credentials, Harness sessions, or
-secret environment values into Nexus state.
+`release-pointers.json`. Update execution status is published separately in
+`update-state.json`; command stdout/stderr use release-specific files under
+`logs/`. Nexus does not copy credentials, Harness sessions, or secret
+environment values into Nexus state.
 
 Profiles are Nexus-owned names. The default is `web`; names are limited to
 ASCII letters, digits, `.`, `_`, and `-` with a bounded length. The active name
@@ -142,7 +150,7 @@ The fields can be overridden explicitly for development and tests with
 separated), `NEXUS_HARNESS_WORKING_DIR`, `NEXUS_HARNESS_READINESS_URL`, and
 `NEXUS_HARNESS_READINESS_TIMEOUT_SECS`. `NEXUS_DATA_DIR` selects the Nexus
 root containing `config.json`, `state.json`, `profiles.json`, `checkpoints/`,
-and `logs`; it does not select or
+`releases/`, `downloads/`, `update-state.json`, and `logs`; it does not select or
 copy `$HOME/.dsh`, `DSH_HOME`, Harness credentials, or Harness session data.
 Nexus never defaults to `$HOME/.dsh`.
 
@@ -156,14 +164,39 @@ Readiness probes are deliberately limited to loopback targets (`localhost`,
 Agent into a remote-network/SSRF probe. HTTPS or a non-loopback URL is rejected
 with a clear error until a separately specified, authenticated design exists.
 
+The optional update plan is configured under the `update` key in the same
+`config.json` (or through the `NEXUS_UPDATE_*` environment overrides):
+
+```json
+{
+  "update": {
+    "source": "https://github.com/example/dsh-harness.git",
+    "ref_name": "main",
+    "git_program": "git",
+    "build_program": "cargo",
+    "build_args": ["build", "--release"],
+    "verify_program": "cargo",
+    "verify_args": ["test", "--locked"],
+    "timeout_secs": 900
+  }
+}
+```
+
+Build and verify arguments may use `{source}`, `{release}`, and `{ref}`
+placeholders. Programs are spawned directly with argument vectors; no shell
+interpolation is performed. Source URLs with embedded credentials, unsafe refs,
+control characters, and unbounded argument lists are rejected. A job is
+serialized per Agent and stale `running` state is converted to a durable
+failure after an Agent restart because Nexus cannot attach to an old child.
+
 ## Current scope and exclusions
 
-This phase does not add Tauri, Electron, Harness source dependencies, plugin
-marketplaces, recommendations, advertising, cloud sync, remote control,
-network update/build execution, or authentication. Profile, checkpoint, and
-release-slot metadata are implemented, but the external update executor, auth,
-diagnostics, and Tauri remain later phases. Release registration and pointer
-changes do not install or launch a Harness binary yet; the update executor will
-populate immutable slots and bind a selected slot to the explicit launch spec.
-Profile selection does not claim to understand Harness internals, and
-checkpoint restore is intentionally metadata-only.
+This headless MVP does not add Tauri, Electron, Harness source dependencies,
+plugin marketplaces, recommendations, advertising, cloud sync, remote control,
+or authentication. The replaceable UI can be added later against the v1 Agent
+protocol. Release registration/promotion remain explicit metadata operations;
+the update executor installs a verified immutable slot but does not silently
+change the active pointer or start Harness. A future apply operation must keep
+promotion stopped/atomic and bind the selected slot through an explicit launch
+spec. Profile selection does not claim to understand Harness internals, and
+checkpoint restore remains metadata-only.
