@@ -243,18 +243,20 @@ The static Console lives under `apps/nexus-console/`. It validates that its API
 base is loopback-only, renders Agent/Harness/profile/release/update/checkpoint/
 diagnostic/config status, and sends explicit v1 actions. It stores no runtime
 state and has no dependency on Tauri or Electron. A native shell can load the
-same assets, or a browser can use a future same-origin proxy; browser-origin
-CORS remains an explicit security integration step rather than an implicit
-wildcard.
+same assets, or a browser can use the fixed local origins
+`http://127.0.0.1:3091`, `http://localhost:3091`, and `http://[::1]:3091`.
+The Agent handles their `OPTIONS` preflight and returns narrowly scoped CORS
+headers; it never enables wildcard or credentialed remote access.
 
 ## Current scope and exclusions
 
 This headless MVP does not add native Tauri/Electron packaging, Harness source
 dependencies, plugin marketplaces, recommendations, advertising, cloud sync,
 remote control, or authentication. A dependency-free static WebShell foundation
-is included under `apps/nexus-console/`; native packaging and browser-origin
-CORS/same-origin integration remain separate follow-up slices against the v1
-Agent protocol. Release registration/promotion remain explicit metadata operations;
+is included under `apps/nexus-console/`; native packaging remains a separate
+follow-up slice against the v1 Agent protocol. Browser access is limited to the
+fixed local CORS origins documented above. Release registration/promotion remain
+explicit metadata operations;
 the update executor installs a verified immutable slot but does not silently
 change the active pointer or start Harness. Once a slot is explicitly promoted,
 the supervisor resolves `{release_root}` from the catalog and performs launch

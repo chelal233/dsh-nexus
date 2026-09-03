@@ -3,9 +3,18 @@
 use std::{io, sync::Arc};
 
 use axum::{
-    extract::State,
-    http::StatusCode,
+    extract::{Request, State},
+    http::{
+        header::{
+            ACCESS_CONTROL_ALLOW_HEADERS, ACCESS_CONTROL_ALLOW_METHODS,
+            ACCESS_CONTROL_ALLOW_ORIGIN, ACCESS_CONTROL_MAX_AGE, ACCESS_CONTROL_REQUEST_HEADERS,
+            ACCESS_CONTROL_REQUEST_METHOD, ORIGIN, VARY,
+        },
+        HeaderValue, Method, StatusCode,
+    },
+    middleware::{self, Next},
     response::IntoResponse,
+    response::Response,
     routing::{get, post},
     Json, Router,
 };
@@ -33,6 +42,15 @@ mod updater;
 
 pub use supervisor::{HarnessSupervisor, HarnessSupervisorError};
 pub use updater::{UpdateExecutor, UpdateExecutorError};
+
+const LOCAL_CONSOLE_ORIGINS: &[&str] = &[
+    "http://127.0.0.1:3091",
+    "http://localhost:3091",
+    "http://[::1]:3091",
+];
+const CORS_ALLOWED_METHODS: &str = "GET, POST";
+const CORS_ALLOWED_HEADERS: &str = "content-type, accept";
+const CORS_MAX_AGE_SECS: &str = "300";
 
 #[derive(Clone)]
 struct AppState {
@@ -130,7 +148,99 @@ fn build_router(state: AppState) -> Router {
         .route("/v1/config", get(config_status).post(config_control))
         .route("/v1/lifecycle", post(lifecycle))
         .route("/v1/shutdown", post(shutdown))
+        .layer(middleware::from_fn(local_console_cors))
         .with_state(state)
+}
+
+/// Allow only the fixed local origin used by the dependency-free WebShell.
+/// The Agent remains loopback-only; this middleware does not enable remote
+/// origins or credentialed browser requests.
+async fn local_console_cors(request: Request, next: Next) -> Response {
+    let origin = request
+        .headers()
+        .get(ORIGIN)
+        .and_then(|value| value.to_str().ok())
+        .map(str::to_owned);
+
+    if request.method() == Method::OPTIONS && origin.is_some() {
+        let allowed = origin.as_deref().is_some_and(is_allowed_console_origin)
+            && is_allowed_preflight(&request);
+        if !allowed {
+            return StatusCode::FORBIDDEN.into_response();
+        }
+        let mut response = StatusCode::NO_CONTENT.into_response();
+        add_console_cors_headers(&mut response, origin.as_deref().expect("origin is present"));
+        return response;
+    }
+
+    let mut response = next.run(request).await;
+    if let Some(origin) = origin
+        .as_deref()
+        .filter(|origin| is_allowed_console_origin(origin))
+    {
+        add_console_cors_headers(&mut response, origin);
+    }
+    response
+}
+
+fn is_allowed_console_origin(origin: &str) -> bool {
+    LOCAL_CONSOLE_ORIGINS.contains(&origin)
+}
+
+fn is_allowed_cors_method(method: &str) -> bool {
+    matches!(method.trim().to_ascii_uppercase().as_str(), "GET" | "POST")
+}
+
+fn are_allowed_cors_headers(headers: &str) -> bool {
+    headers
+        .split(',')
+        .map(str::trim)
+        .filter(|header| !header.is_empty())
+        .all(|header| {
+            matches!(
+                header.to_ascii_lowercase().as_str(),
+                "content-type" | "accept"
+            )
+        })
+}
+
+fn is_allowed_preflight(request: &Request) -> bool {
+    let Some(method) = request
+        .headers()
+        .get(ACCESS_CONTROL_REQUEST_METHOD)
+        .and_then(|value| value.to_str().ok())
+    else {
+        return false;
+    };
+    if !is_allowed_cors_method(method) {
+        return false;
+    }
+    request
+        .headers()
+        .get(ACCESS_CONTROL_REQUEST_HEADERS)
+        .and_then(|value| value.to_str().ok())
+        .map_or(true, are_allowed_cors_headers)
+}
+
+fn add_console_cors_headers(response: &mut Response, origin: &str) {
+    let Ok(origin) = HeaderValue::from_str(origin) else {
+        return;
+    };
+    let headers = response.headers_mut();
+    headers.insert(ACCESS_CONTROL_ALLOW_ORIGIN, origin);
+    headers.insert(VARY, HeaderValue::from_static("Origin"));
+    headers.insert(
+        ACCESS_CONTROL_ALLOW_METHODS,
+        HeaderValue::from_static(CORS_ALLOWED_METHODS),
+    );
+    headers.insert(
+        ACCESS_CONTROL_ALLOW_HEADERS,
+        HeaderValue::from_static(CORS_ALLOWED_HEADERS),
+    );
+    headers.insert(
+        ACCESS_CONTROL_MAX_AGE,
+        HeaderValue::from_static(CORS_MAX_AGE_SECS),
+    );
 }
 
 async fn health(State(state): State<AppState>) -> Json<HealthResponse> {
@@ -863,5 +973,31 @@ async fn wait_for_shutdown(mut receiver: watch::Receiver<bool>) {
         result = tokio::signal::ctrl_c() => {
             let _ = result;
         }
+    }
+}
+
+#[cfg(test)]
+mod cors_tests {
+    use super::{are_allowed_cors_headers, is_allowed_console_origin, is_allowed_cors_method};
+
+    #[test]
+    fn allows_only_the_fixed_local_console_origins() {
+        assert!(is_allowed_console_origin("http://127.0.0.1:3091"));
+        assert!(is_allowed_console_origin("http://localhost:3091"));
+        assert!(is_allowed_console_origin("http://[::1]:3091"));
+        assert!(!is_allowed_console_origin("http://127.0.0.1:3092"));
+        assert!(!is_allowed_console_origin("https://127.0.0.1:3091"));
+        assert!(!is_allowed_console_origin("http://192.168.1.10:3091"));
+    }
+
+    #[test]
+    fn restricts_preflight_methods_and_headers() {
+        assert!(is_allowed_cors_method("GET"));
+        assert!(is_allowed_cors_method("POST"));
+        assert!(!is_allowed_cors_method("DELETE"));
+        assert!(are_allowed_cors_headers("content-type"));
+        assert!(are_allowed_cors_headers("Content-Type, accept"));
+        assert!(!are_allowed_cors_headers("authorization"));
+        assert!(!are_allowed_cors_headers("content-type, x-client-secret"));
     }
 }
