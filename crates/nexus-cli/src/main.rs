@@ -1,12 +1,21 @@
 use std::{env, net::SocketAddr, process};
 
 use nexus_core::{NexusConfig, DEFAULT_AGENT_PORT};
-use nexus_protocol::StateResponse;
+use nexus_protocol::{
+    ErrorResponse, HarnessAction, HarnessCommand, HarnessResponse, StateResponse,
+};
 
 #[derive(Debug)]
 struct Options {
+    command: Command,
     json: bool,
     port: u16,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Command {
+    Status,
+    Harness(HarnessAction),
 }
 
 #[tokio::main]
@@ -21,7 +30,7 @@ async fn main() {
         }
     };
 
-    if let Err(message) = run_status(options).await {
+    if let Err(message) = run(options).await {
         eprintln!("nexusctl: {message}");
         process::exit(1);
     }
@@ -35,7 +44,19 @@ fn parse_args() -> Result<Option<Options>, String> {
 
     while let Some(argument) = args.next() {
         match argument.to_string_lossy().as_ref() {
-            "status" if command.is_none() => command = Some("status"),
+            "status" if command.is_none() => command = Some(Command::Status),
+            "harness" if command.is_none() => {
+                let action = args
+                    .next()
+                    .ok_or_else(|| "harness requires status, start, or stop".to_owned())?;
+                let action = match action.to_string_lossy().as_ref() {
+                    "status" => HarnessAction::Status,
+                    "start" => HarnessAction::Start,
+                    "stop" => HarnessAction::Stop,
+                    value => return Err(format!("unknown harness action: {value}")),
+                };
+                command = Some(Command::Harness(action));
+            }
             "--json" => json = true,
             "--port" => {
                 let value = args
@@ -56,11 +77,14 @@ fn parse_args() -> Result<Option<Options>, String> {
         }
     }
 
-    if command != Some("status") {
-        return Err("a command is required (supported: status)".to_owned());
-    }
+    let Some(command) = command else {
+        return Err(
+            "a command is required (supported: status, harness status|start|stop)".to_owned(),
+        );
+    };
 
     Ok(Some(Options {
+        command,
         json,
         port: if config.port == 0 {
             DEFAULT_AGENT_PORT
@@ -70,14 +94,27 @@ fn parse_args() -> Result<Option<Options>, String> {
     }))
 }
 
-async fn run_status(options: Options) -> Result<(), String> {
+async fn run(options: Options) -> Result<(), String> {
     let address = SocketAddr::from(([127, 0, 0, 1], options.port));
-    let url = format!("http://{address}/v1/state");
-    let response = reqwest::Client::new()
-        .get(url)
-        .send()
-        .await
-        .map_err(|error| format!("agent is unavailable: {error}"))?;
+    let client = reqwest::Client::new();
+    let response = match options.command {
+        Command::Status => client
+            .get(format!("http://{address}/v1/state"))
+            .send()
+            .await
+            .map_err(|error| format!("agent is unavailable: {error}"))?,
+        Command::Harness(HarnessAction::Status) => client
+            .get(format!("http://{address}/v1/harness"))
+            .send()
+            .await
+            .map_err(|error| format!("agent is unavailable: {error}"))?,
+        Command::Harness(action) => client
+            .post(format!("http://{address}/v1/harness"))
+            .json(&HarnessCommand { action })
+            .send()
+            .await
+            .map_err(|error| format!("agent is unavailable: {error}"))?,
+    };
     let status = response.status();
     let body = response
         .text()
@@ -85,37 +122,91 @@ async fn run_status(options: Options) -> Result<(), String> {
         .map_err(|error| format!("failed to read agent response: {error}"))?;
 
     if !status.is_success() {
-        return Err(format!("agent returned HTTP {status}"));
+        if let Ok(error) = serde_json::from_str::<ErrorResponse>(&body) {
+            return Err(format!(
+                "agent returned HTTP {status}: {} ({})",
+                error.message, error.code
+            ));
+        }
+        return Err(format!("agent returned HTTP {status}: {body}"));
     }
 
-    let state: StateResponse =
-        serde_json::from_str(&body).map_err(|error| format!("invalid agent response: {error}"))?;
-
-    if options.json {
-        println!(
-            "{}",
-            serde_json::to_string_pretty(&state)
-                .map_err(|error| format!("failed to encode JSON: {error}"))?
-        );
-    } else {
-        println!("lifecycle: {:?}", state.state.lifecycle);
-        println!("harness: {:?}", state.state.harness);
-        println!(
-            "profile: {}",
-            state.state.profile.as_deref().unwrap_or("<none>")
-        );
-        println!(
-            "release: {}",
-            state.state.release.as_deref().unwrap_or("<none>")
-        );
+    match options.command {
+        Command::Status => {
+            let state: StateResponse = serde_json::from_str(&body)
+                .map_err(|error| format!("invalid agent response: {error}"))?;
+            if options.json {
+                print_state_json(&state)?;
+            } else {
+                println!("lifecycle: {:?}", state.state.lifecycle);
+                println!("harness: {:?}", state.state.harness);
+                println!(
+                    "profile: {}",
+                    state.state.profile.as_deref().unwrap_or("<none>")
+                );
+                println!(
+                    "release: {}",
+                    state.state.release.as_deref().unwrap_or("<none>")
+                );
+            }
+        }
+        Command::Harness(_) => {
+            let harness: HarnessResponse = serde_json::from_str(&body)
+                .map_err(|error| format!("invalid agent response: {error}"))?;
+            if options.json {
+                print_harness_json(&harness)?;
+            } else {
+                print_harness(&harness);
+            }
+        }
     }
 
     Ok(())
 }
 
+fn print_state_json(value: &StateResponse) -> Result<(), String> {
+    println!(
+        "{}",
+        serde_json::to_string_pretty(value)
+            .map_err(|error| format!("failed to encode JSON: {error}"))?
+    );
+    Ok(())
+}
+
+fn print_harness_json(value: &HarnessResponse) -> Result<(), String> {
+    println!(
+        "{}",
+        serde_json::to_string_pretty(value)
+            .map_err(|error| format!("failed to encode JSON: {error}"))?
+    );
+    Ok(())
+}
+
+fn print_harness(response: &HarnessResponse) {
+    println!("state: {:?}", response.harness.state);
+    println!(
+        "pid: {}",
+        response
+            .harness
+            .pid
+            .map_or_else(|| "<none>".to_owned(), |pid| pid.to_string())
+    );
+    println!(
+        "exit_code: {}",
+        response
+            .harness
+            .exit_code
+            .map_or_else(|| "<none>".to_owned(), |code| code.to_string())
+    );
+    println!(
+        "error: {}",
+        response.harness.error.as_deref().unwrap_or("<none>")
+    );
+}
+
 fn print_help() {
     println!(
-        "nexusctl\n\nUsage: nexusctl status [--json] [--port PORT]\n\n\
-         Queries the loopback Nexus Agent control API."
+        "nexusctl\n\nUsage:\n  nexusctl status [--json] [--port PORT]\n  nexusctl harness status [--json] [--port PORT]\n  nexusctl harness start [--json] [--port PORT]\n  nexusctl harness stop [--json] [--port PORT]\n\n\
+         Queries and controls the loopback Nexus Agent API."
     );
 }

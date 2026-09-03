@@ -1,6 +1,6 @@
 # Nexus architecture baseline
 
-Status: Phase 1 bootstrap
+Status: Phase 2 Harness supervisor
 
 ## Purpose
 
@@ -28,9 +28,10 @@ state machines for Harness process supervision, profile selection, release
 promotion/rollback, checkpoints, safe mode, diagnostics, and external plugin
 activation. These responsibilities must remain usable without any GUI.
 
-The initial Agent state is intentionally small: it reports its own lifecycle
-and whether a Harness process is attached. Harness process management will be
-added behind the same Agent boundary in later phases.
+The Agent state now reports its own lifecycle and the externally supervised
+Harness process. Harness remains an immutable, replaceable upstream binary;
+Nexus starts it only when a caller requests it and never auto-starts it during
+Agent boot.
 
 ### Console/WebShell is replaceable
 
@@ -47,9 +48,9 @@ nexus-protocol  versioned JSON wire types (v1)
        ^
 nexus-core      paths, configuration, and state model
        ^
-nexus-agent     foreground loopback HTTP server
+nexus-agent     foreground loopback HTTP server and HarnessSupervisor
        ^
-nexusctl        CLI client (`status`, optional JSON output)
+nexusctl        CLI client (`status`, `harness status|start|stop`)
 ```
 
 The Agent exposes:
@@ -58,6 +59,17 @@ The Agent exposes:
 - `GET /v1/state` — current Agent/Harness state;
 - `POST /v1/lifecycle` with `{"action":"shutdown"}` — graceful shutdown;
 - `POST /v1/shutdown` — convenience graceful-shutdown endpoint.
+- `GET /v1/harness` — current external Harness process information;
+- `POST /v1/harness` with `{"action":"start|stop|restart"}` — explicit
+  process control. `status` is also accepted as a harmless query action.
+
+The Harness response always includes a `state` and may include `pid`,
+`exit_code`, `error`, and timestamps. A missing `harness.program` is a normal
+control-plane-only configuration: start returns a readable
+`harness_not_configured` error instead of panicking. Stop is idempotent when no
+child is attached. A stop first waits for natural process exit for a bounded
+grace period (five seconds by default), then uses the platform-neutral Tokio
+kill fallback.
 
 The default listener is `127.0.0.1:3090`, deliberately separate from the
 current Harness Web port. No remote bind option is exposed in this phase.
@@ -81,8 +93,44 @@ The first path model reserves directories for `logs`, `checkpoints`,
 `releases`, `downloads`, and `run`. It does not copy credentials, Harness
 sessions, or secret environment values into Nexus state.
 
+Phase 2 reads optional Harness launch configuration from the Nexus-owned
+`config.json` under the `harness` key (a direct launch-spec object is also
+accepted):
+
+```json
+{
+  "harness": {
+    "program": "/opt/dsh-harness/bin/harness",
+    "args": ["--headless"],
+    "working_dir": "/opt/dsh-harness",
+    "readiness_url": "http://127.0.0.1:8080/health",
+    "readiness_timeout_secs": 30
+  }
+}
+```
+
+The fields can be overridden explicitly for development and tests with
+`NEXUS_HARNESS_PROGRAM`, `NEXUS_HARNESS_ARGS` (JSON array or whitespace
+separated), `NEXUS_HARNESS_WORKING_DIR`, `NEXUS_HARNESS_READINESS_URL`, and
+`NEXUS_HARNESS_READINESS_TIMEOUT_SECS`. `NEXUS_DATA_DIR` selects the Nexus
+root containing `config.json`, `state.json`, and `logs`; it does not select or
+copy `$HOME/.dsh`, `DSH_HOME`, Harness credentials, or Harness session data.
+Nexus never defaults to `$HOME/.dsh`.
+
+`state.json` is Nexus runtime metadata, published through a temporary file and
+an atomic replace in the same Nexus root. It is kept separate from the
+external Harness working/data directory. Supervisor stdout and stderr are
+appended to `logs/harness.stdout.log` and `logs/harness.stderr.log`.
+
+Readiness probes are deliberately limited to loopback targets (`localhost`,
+`127.0.0.1`, or `[::1]`) and plain HTTP, so the optional URL cannot turn the
+Agent into a remote-network/SSRF probe. HTTPS or a non-loopback URL is rejected
+with a clear error until a separately specified, authenticated design exists.
+
 ## Current scope and exclusions
 
 This phase does not add Tauri, Electron, Harness source dependencies, plugin
-marketplaces, recommendations, advertising, cloud sync, or remote control.
-Those can be considered later without changing the Agent-first boundary.
+marketplaces, recommendations, advertising, cloud sync, remote control,
+profiles, checkpoints, update/release promotion, or authentication. Tauri,
+profile/checkpoint/update/auth concerns remain later phases and are not
+implemented by this supervisor slice.
