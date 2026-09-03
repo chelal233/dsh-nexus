@@ -1,6 +1,6 @@
 # Nexus architecture baseline
 
-Status: Phase 2 Harness supervisor
+Status: Phase 3 Profile and external checkpoint metadata
 
 ## Purpose
 
@@ -41,7 +41,7 @@ consume the Agent protocol rather than own lifecycle state or write runtime
 files directly. Electron, a browser, or a script can replace it without
 changing Agent behavior.
 
-## Phase 1 components
+## Components
 
 ```text
 nexus-protocol  versioned JSON wire types (v1)
@@ -50,7 +50,7 @@ nexus-core      paths, configuration, and state model
        ^
 nexus-agent     foreground loopback HTTP server and HarnessSupervisor
        ^
-nexusctl        CLI client (`status`, `harness status|start|stop`)
+nexusctl        CLI client (`status`, `harness`, `profile`, `checkpoint`)
 ```
 
 The Agent exposes:
@@ -62,6 +62,12 @@ The Agent exposes:
 - `GET /v1/harness` — current external Harness process information;
 - `POST /v1/harness` with `{"action":"start|stop|restart"}` — explicit
   process control. `status` is also accepted as a harmless query action.
+- `GET|POST /v1/profiles` — list/status the Nexus catalog or select a profile;
+  selecting while Harness is starting/running returns a readable conflict and
+  never performs an implicit restart.
+- `GET|POST /v1/checkpoints` — list, create, or restore Nexus-only manifests.
+  Restore is rejected while Harness is running; after it succeeds, Agent state
+  adopts the saved profile/release metadata but does not start Harness.
 
 The Harness response always includes a `state` and may include `pid`,
 `exit_code`, `error`, and timestamps. A missing `harness.program` is a normal
@@ -90,8 +96,24 @@ is resolved with platform APIs/environment conventions:
 runtime never hard-codes a drive letter or assumes Windows path separators.
 
 The first path model reserves directories for `logs`, `checkpoints`,
-`releases`, `downloads`, and `run`. It does not copy credentials, Harness
-sessions, or secret environment values into Nexus state.
+`releases`, `downloads`, and `run`, and stores the profile catalog in
+`profiles.json`. It does not copy credentials, Harness sessions, or secret
+environment values into Nexus state.
+
+Profiles are Nexus-owned names. The default is `web`; names are limited to
+ASCII letters, digits, `.`, `_`, and `-` with a bounded length. The active name
+is persisted with the known names in `profiles.json`. A profile is rendered
+into Harness launch arguments only when a Nexus-owned `HarnessLaunchSpec.args`
+entry explicitly contains the `{profile}` placeholder. Nexus does not infer a
+Harness CLI flag, edit Harness configuration, inject `DSH_HOME`, or read
+`$HOME/.dsh`.
+
+Checkpoints are JSON manifests under the Nexus-owned `checkpoints/` directory.
+They record a safe ID, timestamp, profile, release metadata, optional note,
+and a verifiable Nexus state summary. Writes use an atomic same-directory
+publication. Restore reads and applies only this Nexus metadata; it never
+copies, rewrites, or restores `.dsh` user data, Harness sessions, or
+credentials.
 
 Phase 2 reads optional Harness launch configuration from the Nexus-owned
 `config.json` under the `harness` key (a direct launch-spec object is also
@@ -113,7 +135,8 @@ The fields can be overridden explicitly for development and tests with
 `NEXUS_HARNESS_PROGRAM`, `NEXUS_HARNESS_ARGS` (JSON array or whitespace
 separated), `NEXUS_HARNESS_WORKING_DIR`, `NEXUS_HARNESS_READINESS_URL`, and
 `NEXUS_HARNESS_READINESS_TIMEOUT_SECS`. `NEXUS_DATA_DIR` selects the Nexus
-root containing `config.json`, `state.json`, and `logs`; it does not select or
+root containing `config.json`, `state.json`, `profiles.json`, `checkpoints/`,
+and `logs`; it does not select or
 copy `$HOME/.dsh`, `DSH_HOME`, Harness credentials, or Harness session data.
 Nexus never defaults to `$HOME/.dsh`.
 
@@ -131,6 +154,7 @@ with a clear error until a separately specified, authenticated design exists.
 
 This phase does not add Tauri, Electron, Harness source dependencies, plugin
 marketplaces, recommendations, advertising, cloud sync, remote control,
-profiles, checkpoints, update/release promotion, or authentication. Tauri,
-profile/checkpoint/update/auth concerns remain later phases and are not
-implemented by this supervisor slice.
+update/release promotion, or authentication. Profile and checkpoint metadata
+are implemented, but update, release promotion, auth, and Tauri remain later
+phases. Profile selection does not claim to understand Harness internals, and
+checkpoint restore is intentionally metadata-only.

@@ -9,8 +9,8 @@ use std::{
 };
 
 use nexus_core::{
-    load_harness_launch_spec, unix_time_seconds, HarnessLaunchSpec, NexusPaths,
-    RuntimeMetadataStore,
+    load_harness_launch_spec, unix_time_seconds, validate_profile_name, HarnessLaunchSpec,
+    NexusPaths, RuntimeMetadataStore, DEFAULT_PROFILE,
 };
 use nexus_protocol::{HarnessRuntimeInfo, HarnessState};
 use tokio::{
@@ -28,6 +28,7 @@ pub const DEFAULT_READINESS_TIMEOUT_SECS: u64 = 30;
 pub enum HarnessSupervisorError {
     NotConfigured,
     AlreadyRunning,
+    InvalidProfile(String),
     Configuration(io::Error),
     Spawn(io::Error),
     Process(io::Error),
@@ -43,6 +44,7 @@ impl fmt::Display for HarnessSupervisorError {
                 "Harness is not configured; set harness.program in Nexus config.json or {HARNESS_PROGRAM_ENV}"
             ),
             Self::AlreadyRunning => formatter.write_str("Harness is already running"),
+            Self::InvalidProfile(error) => write!(formatter, "invalid Harness profile: {error}"),
             Self::Configuration(error) => write!(formatter, "failed to read Harness configuration: {error}"),
             Self::Spawn(error) => write!(formatter, "failed to start Harness: {error}"),
             Self::Process(error) => write!(formatter, "Harness process error: {error}"),
@@ -149,6 +151,17 @@ impl HarnessSupervisor {
     }
 
     pub async fn start(&self) -> Result<HarnessRuntimeInfo, HarnessSupervisorError> {
+        self.start_with_profile(DEFAULT_PROFILE).await
+    }
+
+    /// Start Harness with the current profile rendered only into explicit
+    /// `{profile}` placeholders in the configured argument list.
+    pub async fn start_with_profile(
+        &self,
+        profile: &str,
+    ) -> Result<HarnessRuntimeInfo, HarnessSupervisorError> {
+        validate_profile_name(profile)
+            .map_err(|error| HarnessSupervisorError::InvalidProfile(error.to_string()))?;
         let spec = load_harness_launch_spec(&self.paths)
             .map_err(HarnessSupervisorError::Configuration)?
             .filter(|spec| !spec.program.as_os_str().is_empty())
@@ -176,7 +189,7 @@ impl HarnessSupervisor {
                 .map_err(HarnessSupervisorError::Spawn)?;
             let mut command = Command::new(&spec.program);
             command
-                .args(&spec.args)
+                .args(spec.render_args_for_profile(profile))
                 .stdin(Stdio::null())
                 .stdout(Stdio::from(stdout))
                 .stderr(Stdio::from(stderr));
@@ -275,8 +288,15 @@ impl HarnessSupervisor {
     }
 
     pub async fn restart(&self) -> Result<HarnessRuntimeInfo, HarnessSupervisorError> {
+        self.restart_with_profile(DEFAULT_PROFILE).await
+    }
+
+    pub async fn restart_with_profile(
+        &self,
+        profile: &str,
+    ) -> Result<HarnessRuntimeInfo, HarnessSupervisorError> {
         let _ = self.stop().await?;
-        self.start().await
+        self.start_with_profile(profile).await
     }
 
     async fn mark_running(&self, generation: u64) -> HarnessRuntimeInfo {
@@ -645,5 +665,22 @@ mod tests {
     fn graceful_wait_is_explicitly_bounded() {
         let duration = Duration::from_millis(25);
         assert_eq!(duration, Duration::from_millis(25));
+    }
+
+    #[test]
+    fn launch_args_replace_only_the_explicit_profile_placeholder() {
+        let mut spec = nexus_core::HarnessLaunchSpec::new("harness".into());
+        spec.args = vec![
+            "--profile".to_owned(),
+            "{profile}".to_owned(),
+            "literal".to_owned(),
+        ];
+        assert_eq!(
+            spec.render_args_for_profile("web.dark"),
+            vec!["--profile", "web.dark", "literal"]
+        );
+
+        spec.args = vec!["--headless".to_owned()];
+        assert_eq!(spec.render_args_for_profile("web"), vec!["--headless"]);
     }
 }

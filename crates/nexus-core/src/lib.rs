@@ -9,12 +9,16 @@ use std::{
 };
 
 use nexus_protocol::{
-    decode_json, encode_json, AgentLifecycleState, AgentStatePayload, HarnessRuntimeInfo,
-    HarnessState,
+    decode_json, encode_json, AgentLifecycleState, AgentStatePayload, CheckpointManifest,
+    HarnessRuntimeInfo, HarnessState, NexusStateSummary,
 };
 use serde::{Deserialize, Serialize};
 
 pub const DEFAULT_AGENT_PORT: u16 = 3090;
+pub const DEFAULT_PROFILE: &str = "web";
+pub const MAX_PROFILE_NAME_LEN: usize = 64;
+pub const PROFILE_SCHEMA_VERSION: u32 = 1;
+pub const CHECKPOINT_SCHEMA_VERSION: u32 = 1;
 pub const DATA_DIR_ENV: &str = "NEXUS_DATA_DIR";
 pub const PORT_ENV: &str = "NEXUS_AGENT_PORT";
 pub const HARNESS_PROGRAM_ENV: &str = "NEXUS_HARNESS_PROGRAM";
@@ -78,6 +82,7 @@ pub struct NexusPaths {
     pub root: PathBuf,
     pub config_file: PathBuf,
     pub state_file: PathBuf,
+    pub profiles_file: PathBuf,
     pub logs_dir: PathBuf,
     pub checkpoints_dir: PathBuf,
     pub releases_dir: PathBuf,
@@ -90,6 +95,7 @@ impl NexusPaths {
         Self {
             config_file: root.join("config.json"),
             state_file: root.join("state.json"),
+            profiles_file: root.join("profiles.json"),
             logs_dir: root.join("logs"),
             checkpoints_dir: root.join("checkpoints"),
             releases_dir: root.join("releases"),
@@ -113,6 +119,396 @@ impl NexusPaths {
 
         Ok(())
     }
+}
+
+/// Nexus-owned profile catalog.  Profiles are names only in this phase; the
+/// catalog deliberately does not contain Harness settings or user data.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ProfileCatalog {
+    #[serde(default = "default_profile_schema")]
+    pub schema_version: u32,
+    pub active_profile: String,
+    #[serde(default = "default_profiles")]
+    pub profiles: Vec<String>,
+}
+
+impl Default for ProfileCatalog {
+    fn default() -> Self {
+        Self {
+            schema_version: PROFILE_SCHEMA_VERSION,
+            active_profile: DEFAULT_PROFILE.to_owned(),
+            profiles: vec![DEFAULT_PROFILE.to_owned()],
+        }
+    }
+}
+
+impl ProfileCatalog {
+    pub fn new(active_profile: impl Into<String>, profiles: Vec<String>) -> io::Result<Self> {
+        let mut catalog = Self {
+            schema_version: PROFILE_SCHEMA_VERSION,
+            active_profile: active_profile.into(),
+            profiles,
+        };
+        catalog.normalize()?;
+        Ok(catalog)
+    }
+
+    pub fn validate_name(name: &str) -> io::Result<()> {
+        validate_profile_name(name)
+    }
+
+    fn normalize(&mut self) -> io::Result<()> {
+        if self.schema_version == 0 {
+            self.schema_version = PROFILE_SCHEMA_VERSION;
+        }
+        validate_profile_name(&self.active_profile)?;
+        if self.profiles.is_empty() {
+            self.profiles.push(DEFAULT_PROFILE.to_owned());
+        }
+        for name in &self.profiles {
+            validate_profile_name(name)?;
+        }
+        if !self
+            .profiles
+            .iter()
+            .any(|name| name == &self.active_profile)
+        {
+            self.profiles.push(self.active_profile.clone());
+        }
+        self.profiles.sort_unstable();
+        self.profiles.dedup();
+        Ok(())
+    }
+}
+
+fn default_profile_schema() -> u32 {
+    PROFILE_SCHEMA_VERSION
+}
+
+fn default_profiles() -> Vec<String> {
+    vec![DEFAULT_PROFILE.to_owned()]
+}
+
+/// Return whether `name` is safe to use as a profile identifier and catalog
+/// value.  It is intentionally stricter than a platform path parser.
+pub fn is_valid_profile_name(name: &str) -> bool {
+    validate_profile_name(name).is_ok()
+}
+
+pub fn validate_profile_name(name: &str) -> io::Result<()> {
+    let valid_chars = name
+        .bytes()
+        .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'-'));
+    if name.is_empty() {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "profile name cannot be empty",
+        ));
+    }
+    if name.len() > MAX_PROFILE_NAME_LEN {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!("profile name exceeds {MAX_PROFILE_NAME_LEN} bytes"),
+        ));
+    }
+    if name == "." || name == ".." || !valid_chars {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "profile name must contain only ASCII letters, digits, '.', '_', or '-'",
+        ));
+    }
+    Ok(())
+}
+
+/// Durable store for the active profile and known profile names.
+#[derive(Clone)]
+pub struct ProfileStore {
+    paths: NexusPaths,
+    write_gate: Arc<Mutex<()>>,
+}
+
+impl ProfileStore {
+    pub fn new(paths: NexusPaths) -> Self {
+        Self {
+            paths,
+            write_gate: Arc::new(Mutex::new(())),
+        }
+    }
+
+    pub fn paths(&self) -> &NexusPaths {
+        &self.paths
+    }
+
+    /// Load the catalog, creating an atomic default `profiles.json` on first
+    /// use.  No Harness directory is consulted.
+    pub fn load(&self) -> io::Result<ProfileCatalog> {
+        let _guard = self.lock_gate()?;
+        self.load_unlocked()
+    }
+
+    pub fn read(&self) -> io::Result<Option<ProfileCatalog>> {
+        let _guard = self.lock_gate()?;
+        self.read_unlocked()
+    }
+
+    pub fn write(&self, catalog: &ProfileCatalog) -> io::Result<()> {
+        let _guard = self.lock_gate()?;
+        let mut catalog = catalog.clone();
+        catalog.normalize()?;
+        write_json_atomic(&self.paths.root, &self.paths.profiles_file, &catalog)
+    }
+
+    /// Select a valid profile and add it to the known catalog if necessary.
+    /// This changes metadata only; it never starts or restarts Harness.
+    pub fn select(&self, name: &str) -> io::Result<ProfileCatalog> {
+        validate_profile_name(name)?;
+        let _guard = self.lock_gate()?;
+        let mut catalog = self.load_unlocked()?;
+        catalog.active_profile = name.to_owned();
+        catalog.normalize()?;
+        write_json_atomic(&self.paths.root, &self.paths.profiles_file, &catalog)?;
+        Ok(catalog)
+    }
+
+    fn load_unlocked(&self) -> io::Result<ProfileCatalog> {
+        let Some(mut catalog) = self.read_unlocked()? else {
+            let catalog = ProfileCatalog::default();
+            write_json_atomic(&self.paths.root, &self.paths.profiles_file, &catalog)?;
+            return Ok(catalog);
+        };
+        let before = catalog.clone();
+        catalog.normalize()?;
+        if catalog != before {
+            write_json_atomic(&self.paths.root, &self.paths.profiles_file, &catalog)?;
+        }
+        Ok(catalog)
+    }
+
+    fn read_unlocked(&self) -> io::Result<Option<ProfileCatalog>> {
+        if !self.paths.profiles_file.exists() {
+            return Ok(None);
+        }
+        let bytes = fs::read(&self.paths.profiles_file)?;
+        decode_json(&bytes).map(Some).map_err(invalid_data)
+    }
+
+    fn lock_gate(&self) -> io::Result<std::sync::MutexGuard<'_, ()>> {
+        self.write_gate
+            .lock()
+            .map_err(|_| io::Error::other("profile catalog lock is poisoned"))
+    }
+}
+
+/// Alias used by integrations that call the on-disk object a profile catalog.
+pub type ProfileCatalogStore = ProfileStore;
+
+/// Nexus-only state captured in a checkpoint manifest.
+pub type NexusStateSnapshot = NexusStateSummary;
+
+/// Durable manifests stored below the Nexus-owned `checkpoints/` directory.
+#[derive(Clone)]
+pub struct CheckpointStore {
+    paths: NexusPaths,
+    write_gate: Arc<Mutex<()>>,
+}
+
+impl CheckpointStore {
+    pub fn new(paths: NexusPaths) -> Self {
+        Self {
+            paths,
+            write_gate: Arc::new(Mutex::new(())),
+        }
+    }
+
+    pub fn paths(&self) -> &NexusPaths {
+        &self.paths
+    }
+
+    pub fn create(
+        &self,
+        profile: &str,
+        release: Option<String>,
+        note: Option<String>,
+        state: NexusStateSnapshot,
+    ) -> io::Result<CheckpointManifest> {
+        validate_profile_name(profile)?;
+        if state.profile != profile {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "checkpoint state profile does not match manifest profile",
+            ));
+        }
+        if let Some(note) = note.as_ref() {
+            if note.len() > 4096 {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    "checkpoint note exceeds 4096 bytes",
+                ));
+            }
+        }
+        let _guard = self.lock_gate()?;
+        self.paths.ensure_directories()?;
+        let id = self.next_id()?;
+        let manifest = CheckpointManifest {
+            id: id.clone(),
+            created_at_unix: unix_time_seconds(),
+            profile: profile.to_owned(),
+            release,
+            note,
+            state,
+        };
+        let path = self.path_for_id(&id)?;
+        write_json_atomic(&self.paths.checkpoints_dir, &path, &manifest)?;
+        Ok(manifest)
+    }
+
+    pub fn list(&self) -> io::Result<Vec<CheckpointManifest>> {
+        let _guard = self.lock_gate()?;
+        if !self.paths.checkpoints_dir.exists() {
+            return Ok(Vec::new());
+        }
+        let mut manifests = Vec::new();
+        for entry in fs::read_dir(&self.paths.checkpoints_dir)? {
+            let entry = entry?;
+            let path = entry.path();
+            if path.extension().and_then(|extension| extension.to_str()) != Some("json") {
+                continue;
+            }
+            let bytes = fs::read(&path)?;
+            let manifest: CheckpointManifest = decode_json(&bytes).map_err(invalid_data)?;
+            validate_checkpoint_manifest(&manifest)?;
+            if path.file_stem().and_then(|stem| stem.to_str()) != Some(&manifest.id) {
+                return Err(invalid_data(
+                    "checkpoint filename does not match manifest id",
+                ));
+            }
+            manifests.push(manifest);
+        }
+        manifests.sort_by(|left, right| {
+            right
+                .created_at_unix
+                .cmp(&left.created_at_unix)
+                .then_with(|| right.id.cmp(&left.id))
+        });
+        Ok(manifests)
+    }
+
+    pub fn read(&self, id: &str) -> io::Result<Option<CheckpointManifest>> {
+        validate_checkpoint_id(id)?;
+        let _guard = self.lock_gate()?;
+        let path = self.path_for_id(id)?;
+        if !path.exists() {
+            return Ok(None);
+        }
+        let bytes = fs::read(path)?;
+        let manifest: CheckpointManifest = decode_json(&bytes).map_err(invalid_data)?;
+        validate_checkpoint_manifest(&manifest)?;
+        Ok(Some(manifest))
+    }
+
+    pub fn get(&self, id: &str) -> io::Result<CheckpointManifest> {
+        self.read(id)?.ok_or_else(|| {
+            io::Error::new(
+                io::ErrorKind::NotFound,
+                format!("checkpoint {id} was not found"),
+            )
+        })
+    }
+
+    /// Restore is metadata-only in this phase.  It reads and validates the
+    /// manifest; the Agent decides when to apply its profile/release fields.
+    pub fn restore(&self, id: &str) -> io::Result<CheckpointManifest> {
+        self.get(id)
+    }
+
+    fn next_id(&self) -> io::Result<String> {
+        let timestamp = unix_time_nanos();
+        let base = format!("cp-{timestamp}");
+        let mut candidate = base.clone();
+        let mut suffix = 0_u32;
+        while self
+            .paths
+            .checkpoints_dir
+            .join(format!("{candidate}.json"))
+            .exists()
+        {
+            suffix = suffix.saturating_add(1);
+            candidate = format!("{base}-{suffix}");
+        }
+        validate_checkpoint_id(&candidate)?;
+        Ok(candidate)
+    }
+
+    fn path_for_id(&self, id: &str) -> io::Result<PathBuf> {
+        validate_checkpoint_id(id)?;
+        Ok(self.paths.checkpoints_dir.join(format!("{id}.json")))
+    }
+
+    fn lock_gate(&self) -> io::Result<std::sync::MutexGuard<'_, ()>> {
+        self.write_gate
+            .lock()
+            .map_err(|_| io::Error::other("checkpoint store lock is poisoned"))
+    }
+}
+
+pub const MAX_CHECKPOINT_ID_LEN: usize = 64;
+
+pub fn is_valid_checkpoint_id(id: &str) -> bool {
+    validate_checkpoint_id(id).is_ok()
+}
+
+pub fn validate_checkpoint_id(id: &str) -> io::Result<()> {
+    let valid_chars = id
+        .bytes()
+        .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'-'));
+    if id.is_empty() || id.len() > MAX_CHECKPOINT_ID_LEN || id == "." || id == ".." || !valid_chars
+    {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "checkpoint id must use a safe ASCII identifier",
+        ));
+    }
+    Ok(())
+}
+
+fn validate_checkpoint_manifest(manifest: &CheckpointManifest) -> io::Result<()> {
+    validate_checkpoint_id(&manifest.id)?;
+    validate_profile_name(&manifest.profile)?;
+    if manifest.state.profile != manifest.profile {
+        return Err(invalid_data(
+            "checkpoint state profile does not match profile",
+        ));
+    }
+    Ok(())
+}
+
+fn write_json_atomic<T: Serialize>(root: &Path, destination: &Path, value: &T) -> io::Result<()> {
+    let bytes = encode_json(value).map_err(invalid_data)?;
+    fs::create_dir_all(root)?;
+    let file_name = destination
+        .file_name()
+        .and_then(|name| name.to_str())
+        .ok_or_else(|| invalid_data("destination has no valid filename"))?;
+    let temp_path = root.join(format!(
+        ".{file_name}.tmp-{}-{}",
+        std::process::id(),
+        unix_time_nanos()
+    ));
+    let write_result = (|| {
+        let mut file = fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&temp_path)?;
+        use io::Write;
+        file.write_all(&bytes)?;
+        file.sync_all()?;
+        drop(file);
+        atomic_replace(&temp_path, destination)
+    })();
+    if write_result.is_err() {
+        let _ = fs::remove_file(&temp_path);
+    }
+    write_result
 }
 
 /// Resolve a user-level data root without relying on a platform-specific crate.
@@ -186,7 +582,7 @@ impl AgentState {
         Self {
             lifecycle: AgentLifecycleState::Starting,
             harness: HarnessState::Detached,
-            profile: None,
+            profile: Some(DEFAULT_PROFILE.to_owned()),
             release: None,
             started_at_unix: now,
             updated_at_unix: now,
@@ -210,6 +606,16 @@ impl AgentState {
 
     pub fn set_harness(&mut self, harness: HarnessState) {
         self.harness = harness;
+        self.touch();
+    }
+
+    pub fn set_profile(&mut self, profile: impl Into<String>) {
+        self.profile = Some(profile.into());
+        self.touch();
+    }
+
+    pub fn set_release(&mut self, release: Option<String>) {
+        self.release = release;
         self.touch();
     }
 
@@ -261,7 +667,7 @@ impl NexusRuntimeMetadata {
             schema_version: RUNTIME_SCHEMA_VERSION,
             lifecycle: AgentLifecycleState::Stopped,
             harness: HarnessRuntimeInfo::detached(),
-            profile: None,
+            profile: Some(DEFAULT_PROFILE.to_owned()),
             release: None,
             started_at_unix: now,
             updated_at_unix: now,
@@ -441,7 +847,7 @@ mod tests {
 
     use super::{
         is_within, load_harness_launch_spec, read_runtime_metadata, write_runtime_metadata,
-        AgentState, NexusConfig, NexusPaths, NexusRuntimeMetadata,
+        AgentState, CheckpointStore, NexusConfig, NexusPaths, NexusRuntimeMetadata, ProfileStore,
     };
 
     #[test]
@@ -531,6 +937,66 @@ mod tests {
         let _ = fs::remove_dir_all(root);
     }
 
+    #[test]
+    fn profile_store_defaults_to_web_and_persists_selected_names() {
+        let root = unique_test_root("profiles");
+        let paths = NexusPaths::from_root(root.clone());
+        let store = ProfileStore::new(paths.clone());
+
+        let initial = store.load().expect("profile catalog loads");
+        assert_eq!(initial.active_profile, "web");
+        assert_eq!(initial.profiles, vec!["web"]);
+        assert!(paths.profiles_file.exists());
+
+        let selected = store.select("web.dark").expect("profile selects");
+        assert_eq!(selected.active_profile, "web.dark");
+        assert!(selected.profiles.iter().any(|name| name == "web.dark"));
+        assert_eq!(store.load().expect("profile catalog reloads"), selected);
+        assert!(store.select("../escape").is_err());
+        assert!(!root.join(".dsh").exists());
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn checkpoint_store_writes_and_lists_nexus_only_manifests() {
+        let root = unique_test_root("checkpoints");
+        let paths = NexusPaths::from_root(root.clone());
+        let store = CheckpointStore::new(paths.clone());
+        let state = super::NexusStateSnapshot {
+            lifecycle: AgentLifecycleState::Stopped,
+            harness: HarnessState::Stopped,
+            profile: "web".to_owned(),
+            release: Some("r1".to_owned()),
+            updated_at_unix: 10,
+        };
+
+        let created = store
+            .create(
+                "web",
+                Some("r1".to_owned()),
+                Some("before".to_owned()),
+                state,
+            )
+            .expect("checkpoint creates");
+        assert!(created.id.starts_with("cp-"));
+        assert!(paths
+            .checkpoints_dir
+            .join(format!("{}.json", created.id))
+            .exists());
+        assert_eq!(store.list().expect("checkpoints list").len(), 1);
+        assert_eq!(
+            store
+                .read(&created.id)
+                .expect("checkpoint reads")
+                .expect("checkpoint exists"),
+            created
+        );
+        assert!(!root.join(".dsh").exists());
+
+        let _ = fs::remove_dir_all(root);
+    }
+
     fn unique_test_root(label: &str) -> PathBuf {
         std::env::temp_dir().join(format!(
             "nexus-core-{label}-{}-{}",
@@ -565,6 +1031,15 @@ impl HarnessLaunchSpec {
             readiness_url: None,
             readiness_timeout_secs: None,
         }
+    }
+
+    /// Render the explicitly configured profile placeholder without inferring
+    /// or injecting any Harness-specific flags or environment variables.
+    pub fn render_args_for_profile(&self, profile: &str) -> Vec<String> {
+        self.args
+            .iter()
+            .map(|argument| argument.replace("{profile}", profile))
+            .collect()
     }
 }
 

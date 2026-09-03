@@ -9,11 +9,16 @@ use axum::{
     routing::{get, post},
     Json, Router,
 };
-use nexus_core::{AgentState, NexusConfig, RuntimeMetadataStore};
+use nexus_core::{
+    AgentState, CheckpointStore, NexusConfig, NexusStateSnapshot, ProfileCatalog, ProfileStore,
+    RuntimeMetadataStore, DEFAULT_PROFILE,
+};
 use nexus_protocol::{
-    AgentLifecycleState, ErrorResponse, HarnessAction, HarnessCommand, HarnessResponse,
-    HarnessRuntimeInfo, HealthResponse, LifecycleAccepted, LifecycleAction, LifecycleCommand,
-    StateResponse,
+    AgentLifecycleState, CheckpointAction, CheckpointCommand, CheckpointCreateResponse,
+    CheckpointListResponse, CheckpointRestoreResponse, ErrorResponse, HarnessAction,
+    HarnessCommand, HarnessResponse, HarnessRuntimeInfo, HealthResponse, LifecycleAccepted,
+    LifecycleAction, LifecycleCommand, ProfileAction, ProfileCommand, ProfileListResponse,
+    ProfileSelectResponse, StateResponse,
 };
 use tokio::{
     net::TcpListener,
@@ -28,6 +33,8 @@ pub use supervisor::{HarnessSupervisor, HarnessSupervisorError};
 struct AppState {
     runtime: Arc<RwLock<AgentState>>,
     metadata: RuntimeMetadataStore,
+    profiles: ProfileStore,
+    checkpoints: CheckpointStore,
     supervisor: HarnessSupervisor,
     shutdown: watch::Sender<bool>,
 }
@@ -37,17 +44,24 @@ pub async fn run(config: NexusConfig) -> io::Result<()> {
     let paths = config.paths();
     paths.ensure_directories()?;
 
+    let profiles = ProfileStore::new(paths.clone());
+    let profile_catalog = profiles.load()?;
+    let checkpoints = CheckpointStore::new(paths.clone());
     let supervisor = HarnessSupervisor::new(paths.clone())?;
     let metadata = supervisor.metadata_store();
     let initial_harness = supervisor.recover_unattached().await;
     let mut initial_runtime = AgentState::starting();
+    initial_runtime.profile = Some(profile_catalog.active_profile.clone());
     initial_runtime.harness = initial_harness.state;
+    initial_runtime.release = metadata.read()?.and_then(|value| value.release);
     metadata.write_snapshot(&initial_runtime, initial_harness.clone())?;
     let runtime = Arc::new(RwLock::new(initial_runtime));
     let (shutdown, shutdown_receiver) = watch::channel(false);
     let state = AppState {
         runtime: Arc::clone(&runtime),
         metadata: metadata.clone(),
+        profiles,
+        checkpoints,
         supervisor: supervisor.clone(),
         shutdown,
     };
@@ -83,6 +97,11 @@ fn build_router(state: AppState) -> Router {
         .route("/v1/health", get(health))
         .route("/v1/state", get(current_state))
         .route("/v1/harness", get(harness_status).post(harness_control))
+        .route("/v1/profiles", get(profile_list).post(profile_control))
+        .route(
+            "/v1/checkpoints",
+            get(checkpoint_list).post(checkpoint_control),
+        )
         .route("/v1/lifecycle", post(lifecycle))
         .route("/v1/shutdown", post(shutdown))
         .with_state(state)
@@ -113,10 +132,17 @@ async fn harness_control(
     State(state): State<AppState>,
     Json(command): Json<HarnessCommand>,
 ) -> impl IntoResponse {
+    let profile = state
+        .runtime
+        .read()
+        .await
+        .profile
+        .clone()
+        .unwrap_or_else(|| DEFAULT_PROFILE.to_owned());
     let result = match command.action {
-        HarnessAction::Start => state.supervisor.start().await,
+        HarnessAction::Start => state.supervisor.start_with_profile(&profile).await,
         HarnessAction::Stop => state.supervisor.stop().await,
-        HarnessAction::Restart => state.supervisor.restart().await,
+        HarnessAction::Restart => state.supervisor.restart_with_profile(&profile).await,
         HarnessAction::Status => Ok(state.supervisor.status().await),
     };
 
@@ -156,12 +182,201 @@ async fn set_harness_state(
         .map_err(HarnessSupervisorError::Persistence)
 }
 
+fn profile_list_response(catalog: ProfileCatalog) -> ProfileListResponse {
+    ProfileListResponse::new(catalog.active_profile, catalog.profiles)
+}
+
+async fn profile_list(State(state): State<AppState>) -> axum::response::Response {
+    match state.profiles.load() {
+        Ok(catalog) => (StatusCode::OK, Json(profile_list_response(catalog))).into_response(),
+        Err(error) => data_error_response(error, "profile_catalog_unavailable"),
+    }
+}
+
+async fn profile_control(
+    State(state): State<AppState>,
+    Json(command): Json<ProfileCommand>,
+) -> axum::response::Response {
+    match command.action {
+        ProfileAction::List | ProfileAction::Status => profile_list(State(state)).await,
+        ProfileAction::Select => {
+            let Some(profile) = command.profile.as_deref() else {
+                return data_error_response(
+                    io::Error::new(io::ErrorKind::InvalidInput, "profile is required"),
+                    "profile_invalid",
+                );
+            };
+            let harness = sync_harness_state(&state).await;
+            if matches!(
+                harness.state,
+                nexus_protocol::HarnessState::Starting | nexus_protocol::HarnessState::Running
+            ) {
+                return api_error_response(
+                    StatusCode::CONFLICT,
+                    "profile_change_conflict",
+                    "cannot switch profile while Harness is running; stop Harness first",
+                );
+            }
+            let catalog = match state.profiles.select(profile) {
+                Ok(catalog) => catalog,
+                Err(error) => return data_error_response(error, "profile_invalid"),
+            };
+            let current = {
+                let mut current = state.runtime.write().await;
+                current.set_profile(catalog.active_profile.clone());
+                current.clone()
+            };
+            if let Err(error) = state.metadata.write_snapshot(&current, harness) {
+                return data_error_response(error, "profile_state_persistence_failed");
+            }
+            (
+                StatusCode::OK,
+                Json(ProfileSelectResponse::selected(
+                    current
+                        .profile
+                        .unwrap_or_else(|| DEFAULT_PROFILE.to_owned()),
+                    catalog.profiles,
+                )),
+            )
+                .into_response()
+        }
+    }
+}
+
+async fn checkpoint_list(State(state): State<AppState>) -> axum::response::Response {
+    match state.checkpoints.list() {
+        Ok(checkpoints) => (
+            StatusCode::OK,
+            Json(CheckpointListResponse::new(checkpoints)),
+        )
+            .into_response(),
+        Err(error) => data_error_response(error, "checkpoint_list_failed"),
+    }
+}
+
+async fn checkpoint_control(
+    State(state): State<AppState>,
+    Json(command): Json<CheckpointCommand>,
+) -> axum::response::Response {
+    match command.action {
+        CheckpointAction::List => checkpoint_list(State(state)).await,
+        CheckpointAction::Create => checkpoint_create(state, command.note).await,
+        CheckpointAction::Restore => {
+            let Some(id) = command.id else {
+                return data_error_response(
+                    io::Error::new(io::ErrorKind::InvalidInput, "checkpoint id is required"),
+                    "checkpoint_invalid",
+                );
+            };
+            checkpoint_restore(state, id).await
+        }
+    }
+}
+
+async fn checkpoint_create(state: AppState, note: Option<String>) -> axum::response::Response {
+    let _harness = sync_harness_state(&state).await;
+    let current = state.runtime.read().await.clone();
+    let profile = current
+        .profile
+        .clone()
+        .unwrap_or_else(|| DEFAULT_PROFILE.to_owned());
+    let snapshot = NexusStateSnapshot {
+        lifecycle: current.lifecycle,
+        harness: current.harness,
+        profile: profile.clone(),
+        release: current.release.clone(),
+        updated_at_unix: current.updated_at_unix,
+    };
+    match state
+        .checkpoints
+        .create(&profile, current.release, note, snapshot)
+    {
+        Ok(checkpoint) => (
+            StatusCode::CREATED,
+            Json(CheckpointCreateResponse::from_manifest(checkpoint)),
+        )
+            .into_response(),
+        Err(error) => data_error_response(error, "checkpoint_create_failed"),
+    }
+}
+
+async fn checkpoint_restore(state: AppState, id: String) -> axum::response::Response {
+    let harness = sync_harness_state(&state).await;
+    if matches!(
+        harness.state,
+        nexus_protocol::HarnessState::Starting | nexus_protocol::HarnessState::Running
+    ) {
+        return api_error_response(
+            StatusCode::CONFLICT,
+            "checkpoint_restore_conflict",
+            "cannot restore a checkpoint while Harness is running; stop Harness first",
+        );
+    }
+    let checkpoint = match state.checkpoints.restore(&id) {
+        Ok(checkpoint) => checkpoint,
+        Err(error) => {
+            let code = if error.kind() == io::ErrorKind::NotFound {
+                "checkpoint_not_found"
+            } else {
+                "checkpoint_restore_failed"
+            };
+            return data_error_response(error, code);
+        }
+    };
+    let catalog = match state.profiles.select(&checkpoint.profile) {
+        Ok(catalog) => catalog,
+        Err(error) => return data_error_response(error, "checkpoint_profile_invalid"),
+    };
+    let current = {
+        let mut current = state.runtime.write().await;
+        current.set_profile(catalog.active_profile);
+        current.set_release(checkpoint.release.clone());
+        current.clone()
+    };
+    if let Err(error) = state.metadata.write_snapshot(&current, harness) {
+        return data_error_response(error, "checkpoint_state_persistence_failed");
+    }
+    (
+        StatusCode::OK,
+        Json(CheckpointRestoreResponse::restored(checkpoint)),
+    )
+        .into_response()
+}
+
+fn api_error_response(
+    status: StatusCode,
+    code: &str,
+    message: impl Into<String>,
+) -> axum::response::Response {
+    (
+        status,
+        Json(ErrorResponse {
+            api_version: nexus_protocol::API_VERSION.to_owned(),
+            code: code.to_owned(),
+            message: message.into(),
+        }),
+    )
+        .into_response()
+}
+
+fn data_error_response(error: io::Error, fallback_code: &str) -> axum::response::Response {
+    let status = match error.kind() {
+        io::ErrorKind::InvalidInput | io::ErrorKind::InvalidData => StatusCode::BAD_REQUEST,
+        io::ErrorKind::NotFound => StatusCode::NOT_FOUND,
+        _ => StatusCode::INTERNAL_SERVER_ERROR,
+    };
+    api_error_response(status, fallback_code, error.to_string())
+}
+
 fn harness_error_response(error: HarnessSupervisorError) -> axum::response::Response {
     let (status, code) = match &error {
         HarnessSupervisorError::NotConfigured => {
             (StatusCode::UNPROCESSABLE_ENTITY, "harness_not_configured")
         }
         HarnessSupervisorError::AlreadyRunning => (StatusCode::CONFLICT, "harness_already_running"),
+        HarnessSupervisorError::InvalidProfile(_) => {
+            (StatusCode::BAD_REQUEST, "harness_profile_invalid")
+        }
         HarnessSupervisorError::Configuration(_) => (
             StatusCode::UNPROCESSABLE_ENTITY,
             "harness_configuration_error",

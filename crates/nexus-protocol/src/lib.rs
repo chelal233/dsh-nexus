@@ -216,11 +216,204 @@ impl HarnessResponse {
     }
 }
 
+/// Requests for the Nexus-owned profile catalog.  The list and status
+/// requests are represented by empty JSON objects so clients can use the same
+/// versioned request envelope when needed.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ProfileListRequest {}
+
+pub type ProfileStatusRequest = ProfileListRequest;
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ProfileSelectRequest {
+    pub profile: String,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ProfileAction {
+    List,
+    Status,
+    Select,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ProfileCommand {
+    pub action: ProfileAction,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub profile: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ProfileListResponse {
+    pub api_version: String,
+    pub active_profile: String,
+    pub profiles: Vec<String>,
+}
+
+pub type ProfileStatusResponse = ProfileListResponse;
+
+impl ProfileListResponse {
+    pub fn new(active_profile: impl Into<String>, profiles: Vec<String>) -> Self {
+        Self {
+            api_version: API_VERSION.to_owned(),
+            active_profile: active_profile.into(),
+            profiles,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ProfileSelectResponse {
+    pub api_version: String,
+    pub selected: bool,
+    pub profile: String,
+    pub active_profile: String,
+    pub profiles: Vec<String>,
+}
+
+impl ProfileSelectResponse {
+    pub fn selected(profile: impl Into<String>, profiles: Vec<String>) -> Self {
+        let profile = profile.into();
+        Self {
+            api_version: API_VERSION.to_owned(),
+            selected: true,
+            active_profile: profile.clone(),
+            profile,
+            profiles,
+        }
+    }
+}
+
+/// The Nexus-only state included in a checkpoint.  It is deliberately a
+/// summary rather than a copy of Harness data or credentials.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct NexusStateSummary {
+    pub lifecycle: AgentLifecycleState,
+    pub harness: HarnessState,
+    pub profile: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub release: Option<String>,
+    pub updated_at_unix: u64,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct CheckpointListRequest {}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct CheckpointCreateRequest {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub note: Option<String>,
+}
+
+impl CheckpointCreateRequest {
+    pub fn with_note(note: impl Into<String>) -> Self {
+        Self {
+            note: Some(note.into()),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct CheckpointRestoreRequest {
+    pub id: String,
+}
+
+impl CheckpointRestoreRequest {
+    pub fn new(id: impl Into<String>) -> Self {
+        Self { id: id.into() }
+    }
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum CheckpointAction {
+    List,
+    Create,
+    Restore,
+}
+
+impl Default for CheckpointAction {
+    fn default() -> Self {
+        Self::List
+    }
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct CheckpointCommand {
+    pub action: CheckpointAction,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub note: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct CheckpointManifest {
+    pub id: String,
+    pub created_at_unix: u64,
+    pub profile: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub release: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub note: Option<String>,
+    pub state: NexusStateSummary,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct CheckpointListResponse {
+    pub api_version: String,
+    pub checkpoints: Vec<CheckpointManifest>,
+}
+
+impl CheckpointListResponse {
+    pub fn new(checkpoints: Vec<CheckpointManifest>) -> Self {
+        Self {
+            api_version: API_VERSION.to_owned(),
+            checkpoints,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct CheckpointCreateResponse {
+    pub api_version: String,
+    pub checkpoint: CheckpointManifest,
+}
+
+impl CheckpointCreateResponse {
+    pub fn from_manifest(checkpoint: CheckpointManifest) -> Self {
+        Self {
+            api_version: API_VERSION.to_owned(),
+            checkpoint,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct CheckpointRestoreResponse {
+    pub api_version: String,
+    pub restored: bool,
+    pub checkpoint: CheckpointManifest,
+}
+
+impl CheckpointRestoreResponse {
+    pub fn restored(checkpoint: CheckpointManifest) -> Self {
+        Self {
+            api_version: API_VERSION.to_owned(),
+            restored: true,
+            checkpoint,
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
-        HarnessAction, HarnessCommand, HarnessResponse, HarnessRuntimeInfo, HarnessState,
-        LifecycleAction, LifecycleCommand,
+        AgentLifecycleState, CheckpointCreateRequest, CheckpointCreateResponse, CheckpointManifest,
+        CheckpointRestoreRequest, HarnessAction, HarnessCommand, HarnessResponse,
+        HarnessRuntimeInfo, HarnessState, LifecycleAction, LifecycleCommand, NexusStateSummary,
+        ProfileListResponse, ProfileSelectRequest,
     };
 
     #[test]
@@ -268,5 +461,54 @@ mod tests {
         assert_eq!(runtime.exit_code, Some(17));
         assert_eq!(runtime.error.as_deref(), Some("child exited"));
         assert_eq!(runtime.pid, None);
+    }
+
+    #[test]
+    fn profile_protocol_uses_stable_v1_json() {
+        let request = ProfileSelectRequest {
+            profile: "web.dark".to_owned(),
+        };
+        let request_json = serde_json::to_value(request).expect("profile request serializes");
+        assert_eq!(request_json, serde_json::json!({"profile":"web.dark"}));
+
+        let response =
+            ProfileListResponse::new("web.dark", vec!["web".to_owned(), "web.dark".to_owned()]);
+        let response_json = serde_json::to_value(response).expect("profile response serializes");
+        assert_eq!(response_json["api_version"], "v1");
+        assert_eq!(response_json["active_profile"], "web.dark");
+        assert_eq!(response_json["profiles"][0], "web");
+    }
+
+    #[test]
+    fn checkpoint_protocol_round_trips_manifest_and_requests() {
+        let create = CheckpointCreateRequest::with_note("before migration");
+        let create_json = serde_json::to_value(create).expect("checkpoint create serializes");
+        assert_eq!(create_json["note"], "before migration");
+
+        let manifest = CheckpointManifest {
+            id: "cp-123".to_owned(),
+            created_at_unix: 123,
+            profile: "web".to_owned(),
+            release: Some("r1".to_owned()),
+            note: Some("before migration".to_owned()),
+            state: NexusStateSummary {
+                lifecycle: AgentLifecycleState::Stopped,
+                harness: HarnessState::Stopped,
+                profile: "web".to_owned(),
+                release: Some("r1".to_owned()),
+                updated_at_unix: 123,
+            },
+        };
+        let response = CheckpointCreateResponse::from_manifest(manifest.clone());
+        let encoded = serde_json::to_vec(&response).expect("checkpoint response serializes");
+        let decoded: CheckpointCreateResponse =
+            serde_json::from_slice(&encoded).expect("checkpoint response parses");
+        assert_eq!(decoded.checkpoint, manifest);
+
+        let restore = CheckpointRestoreRequest::new("cp-123");
+        assert_eq!(
+            serde_json::to_value(restore).expect("restore serializes")["id"],
+            "cp-123"
+        );
     }
 }
