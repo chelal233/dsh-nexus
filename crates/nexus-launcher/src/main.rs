@@ -1,6 +1,6 @@
-//! Single-entry host for the headless Nexus Agent and replaceable Console.
+//! Single-entry host for the headless Nexus Agent and native Launcher API.
 //!
-//! The launcher owns process bootstrap metadata and the Console host boundary
+//! The launcher owns process bootstrap metadata and the native GUI API boundary
 //! under Nexus' `run/` directory. It does not own Harness state, profile data,
 //! release pointers, or business logic; those remain in the Agent and are
 //! reachable through its loopback v1 API.
@@ -33,7 +33,6 @@ use tokio::{
     sync::Mutex,
     time::{sleep, Instant},
 };
-use tower_http::services::ServeDir;
 
 const DEFAULT_WAIT_SECS: u64 = 20;
 const DEFAULT_STOP_WAIT_SECS: u64 = 15;
@@ -42,7 +41,6 @@ const DEFAULT_CONSOLE_PORT: u16 = 3091;
 const DEFAULT_LAUNCHER_SCHEMA_VERSION: u32 = 1;
 const HARNESS_LOG_TAIL_BYTES: u64 = 64 * 1024;
 const AGENT_BINARY_ENV: &str = "NEXUS_AGENT_BIN";
-const CONSOLE_DIR_ENV: &str = "NEXUS_CONSOLE_DIR";
 const CONSOLE_PORT_ENV: &str = "NEXUS_CONSOLE_PORT";
 const LAUNCHER_WAIT_SECS_ENV: &str = "NEXUS_LAUNCHER_WAIT_SECS";
 const CONSOLE_OPEN_ENV: &str = "NEXUS_CONSOLE_OPEN";
@@ -53,10 +51,8 @@ struct Options {
     command: LauncherCommand,
     config: NexusConfig,
     agent_program: Option<PathBuf>,
-    console_dir: Option<PathBuf>,
     console_port: u16,
     wait_secs: u64,
-    no_open: bool,
     json: bool,
 }
 
@@ -64,6 +60,9 @@ struct Options {
 enum LauncherCommand {
     Start,
     Run,
+    /// Headless loopback API for the native Tauri shell.
+    Api,
+    /// Compatibility alias for older scripts. It never serves HTML.
     Console,
     Stop,
     Status,
@@ -274,7 +273,9 @@ where
     let launcher_config = load_launcher_config(&config.paths())?;
     let mut command = None;
     let mut agent_program = launcher_config.agent_program.clone();
-    let mut console_dir = launcher_config.console_dir.clone();
+    // These options remain accepted for compatibility with older scripts, but
+    // the native GUI owns the visible surface and the API never opens HTML.
+    let mut _legacy_console_dir = launcher_config.console_dir.clone();
     let mut console_port = launcher_config
         .console_port
         .or_else(|| env_port(CONSOLE_PORT_ENV))
@@ -283,7 +284,7 @@ where
         .wait_secs
         .or_else(env_wait_secs)
         .unwrap_or(DEFAULT_WAIT_SECS);
-    let mut no_open = !launcher_config
+    let mut _legacy_no_open = !launcher_config
         .open_browser
         .or_else(env_open_browser)
         .unwrap_or(true);
@@ -298,6 +299,7 @@ where
         match argument.to_string_lossy().as_ref() {
             "start" if command.is_none() => command = Some(LauncherCommand::Start),
             "run" | "foreground" if command.is_none() => command = Some(LauncherCommand::Run),
+            "api" if command.is_none() => command = Some(LauncherCommand::Api),
             "console" if command.is_none() => command = Some(LauncherCommand::Console),
             "stop" if command.is_none() => command = Some(LauncherCommand::Stop),
             "status" if command.is_none() => command = Some(LauncherCommand::Status),
@@ -316,7 +318,7 @@ where
             }
             "--console-dir" => {
                 let value = next_cli_value(&raw_args, &mut index, "--console-dir")?;
-                console_dir = Some(validate_path_value(value, "--console-dir")?);
+                _legacy_console_dir = Some(validate_path_value(value, "--console-dir")?);
             }
             "--console-port" => {
                 let value = next_cli_value(&raw_args, &mut index, "--console-port")?;
@@ -331,27 +333,24 @@ where
                     .filter(|seconds| (1..=300).contains(seconds))
                     .ok_or_else(|| "--wait-secs must be between 1 and 300".to_owned())?;
             }
-            "--no-open" => no_open = true,
-            "--open" => no_open = false,
+            "--no-open" => _legacy_no_open = true,
+            "--open" => _legacy_no_open = false,
             "--json" => json = true,
             value => return Err(format!("unknown argument: {value}")),
         }
         index += 1;
     }
 
-    // Double-clicking the launcher is the user-facing path. Keep the explicit
-    // subcommand for scripts while making no-argument invocation enter the
-    // same Console host.
-    let command = command.unwrap_or(LauncherCommand::Console);
+    // The native Tauri shell owns the visible window. A no-argument launcher
+    // invocation therefore starts only the headless API and never serves HTML.
+    let command = command.unwrap_or(LauncherCommand::Api);
 
     Ok(Some(Options {
         command,
         config,
         agent_program,
-        console_dir,
         console_port,
         wait_secs,
-        no_open,
         json,
     }))
 }
@@ -483,8 +482,8 @@ async fn run(options: Options) -> Result<(), String> {
         .build()
         .map_err(|error| format!("cannot initialize HTTP client: {error}"))?;
 
-    // Keep the Agent's browser CORS allowlist aligned with the Console host.
-    // The variable is inherited by a newly spawned Agent; an already-running
+    // Keep the Agent's browser CORS allowlist aligned with the legacy browser
+    // port. The variable is inherited by a newly spawned Agent; an already-running
     // Agent must have been started with the same launcher configuration.
     env::set_var(CONSOLE_PORT_ENV, options.console_port.to_string());
 
@@ -512,7 +511,9 @@ async fn run(options: Options) -> Result<(), String> {
             };
             run_foreground(owned, &options, &paths, &client).await?;
         }
-        LauncherCommand::Console => run_console(&options, &paths, &client).await?,
+        LauncherCommand::Api | LauncherCommand::Console => {
+            run_api(&options, &paths, &client).await?
+        }
         LauncherCommand::Stop => stop_agent(&options, &paths, &client).await?,
         LauncherCommand::Status => status_agent(&options, &paths, &client).await?,
         LauncherCommand::Logs => print_logs(&options, &paths),
@@ -664,37 +665,31 @@ impl ConsoleController {
     }
 }
 
-async fn run_console(options: &Options, paths: &NexusPaths, client: &Client) -> Result<(), String> {
+async fn run_api(options: &Options, paths: &NexusPaths, client: &Client) -> Result<(), String> {
     let controller = ConsoleController::new(options.clone(), paths.clone(), client.clone());
-    let console_dir = resolve_console_dir(options.console_dir.as_deref())?;
     let listener = TcpListener::bind(console_bind_addr(options.console_port))
         .await
         .map_err(|error| {
             format!(
-                "cannot bind Console at 127.0.0.1:{}: {error}",
+                "cannot bind Launcher API at 127.0.0.1:{}: {error}",
                 options.console_port
             )
         })?;
     controller.start_agent().await?;
-    let app = build_console_router(controller.clone(), console_dir);
+    let app = build_api_router(controller.clone());
     println!(
-        "nexus console: http://127.0.0.1:{}/ (Agent {})",
+        "nexus launcher api: http://127.0.0.1:{}/ (Agent {})",
         options.console_port,
         controller.status().await.agent_api
     );
-    if !options.no_open {
-        if let Err(error) = open_console_browser(options.console_port) {
-            eprintln!("nexus-launcher: cannot open Console browser: {error}");
-        }
-    }
 
     let watchdog = tokio::spawn(controller.clone().watchdog());
     let server = axum::serve(listener, app);
     let server_result = tokio::select! {
-        result = server => result.map_err(|error| format!("Console server failed: {error}")),
+        result = server => result.map_err(|error| format!("Launcher API server failed: {error}")),
         signal = tokio::signal::ctrl_c() => {
             signal.map_err(|error| format!("cannot listen for Ctrl+C: {error}"))?;
-            println!("nexus console stopped; Agent remains running (use `nexus-launcher stop` to stop it)");
+            println!("nexus launcher api stopped; Agent remains running (use `nexus-launcher stop` to stop it)");
             Ok(())
         }
     };
@@ -706,49 +701,19 @@ fn console_bind_addr(port: u16) -> SocketAddr {
     SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), port)
 }
 
-fn resolve_console_dir(explicit: Option<&Path>) -> Result<PathBuf, String> {
-    let mut candidates = Vec::new();
-    if let Some(path) = explicit {
-        candidates.push(path.to_owned());
-    } else if let Some(path) = env::var_os(CONSOLE_DIR_ENV).filter(|value| !value.is_empty()) {
-        candidates.push(PathBuf::from(path));
-    }
-    if let Ok(executable) = env::current_exe() {
-        if let Some(parent) = executable.parent() {
-            candidates.push(parent.join("console"));
-            let mut ancestor = Some(parent);
-            for _ in 0..4 {
-                if let Some(path) = ancestor {
-                    candidates.push(path.join("apps").join("nexus-console"));
-                    ancestor = path.parent();
-                }
-            }
-        }
-    }
-    if let Ok(current) = env::current_dir() {
-        candidates.push(current.join("apps").join("nexus-console"));
-    }
-
-    candidates
-        .into_iter()
-        .find(|path| path.join("index.html").is_file())
-        .map(|path| fs::canonicalize(&path).unwrap_or(path))
-        .ok_or_else(|| {
-            format!(
-                "Console files were not found; pass --console-dir PATH or set {CONSOLE_DIR_ENV}"
-            )
-        })
-}
-
-fn open_console_browser(port: u16) -> Result<(), String> {
-    open_browser_url(&format!("http://127.0.0.1:{port}/"))
-}
-
 fn open_browser_url(url: &str) -> Result<(), String> {
+    let Some((safe_url, _)) = parse_loopback_harness_url(url) else {
+        return Err("refusing to open a non-loopback HTTP Harness URL".to_owned());
+    };
+    if safe_url != url {
+        return Err("refusing to open a non-canonical Harness URL".to_owned());
+    }
     #[cfg(windows)]
     {
-        let status = StdCommand::new("cmd")
-            .args(["/C", "start", "", url])
+        // Pass the canonical URL as one argument to Explorer. This avoids the
+        // cmd.exe command parser used by the legacy `start` opener.
+        let status = StdCommand::new("explorer.exe")
+            .arg(url)
             .status()
             .map_err(|error| format!("failed to invoke the system browser: {error}"))?;
         if !status.success() {
@@ -778,7 +743,7 @@ fn open_browser_url(url: &str) -> Result<(), String> {
     Ok(())
 }
 
-fn build_console_router(controller: ConsoleController, console_dir: PathBuf) -> Router {
+fn build_api_router(controller: ConsoleController) -> Router {
     Router::new()
         .route("/launcher/status", get(console_status))
         .route(
@@ -790,7 +755,6 @@ fn build_console_router(controller: ConsoleController, console_dir: PathBuf) -> 
             get(console_harness_status).post(console_harness_control),
         )
         .route("/launcher/logs", get(console_logs))
-        .fallback_service(ServeDir::new(console_dir).append_index_html_on_directories(true))
         .with_state(controller)
 }
 
@@ -975,6 +939,24 @@ fn parse_loopback_harness_url(raw: &str) -> Option<(String, Option<String>)> {
         || url.as_str().chars().any(char::is_control)
     {
         return None;
+    }
+    if url
+        .query_pairs()
+        .any(|(key, value)| key.is_empty() || value.is_empty())
+    {
+        return None;
+    }
+    if let Some(fragment) = url.fragment() {
+        if fragment.is_empty()
+            || fragment.split('&').any(|part| {
+                let Some((key, value)) = part.split_once('=') else {
+                    return true;
+                };
+                key.is_empty() || value.is_empty()
+            })
+        {
+            return None;
+        }
     }
     let token = url
         .query_pairs()
@@ -1875,17 +1857,18 @@ fn print_help() {
 Usage:
   nexus-launcher start [--data-dir PATH] [--port PORT] [--agent PATH] [--wait-secs SECONDS] [--json]
   nexus-launcher run|foreground [--data-dir PATH] [--port PORT] [--agent PATH] [--wait-secs SECONDS]
-  nexus-launcher console [--data-dir PATH] [--port PORT] [--agent PATH] [--console-dir PATH] [--console-port PORT] [--wait-secs SECONDS] [--no-open|--open]
+  nexus-launcher api [--data-dir PATH] [--port PORT] [--agent PATH] [--console-port PORT] [--wait-secs SECONDS]
+  nexus-launcher console [same options as api; compatibility alias, no HTML]
   nexus-launcher stop [--data-dir PATH] [--port PORT] [--json]
   nexus-launcher status [--data-dir PATH] [--port PORT] [--json]
   nexus-launcher logs [--data-dir PATH] [--json]
 
-With no command, the launcher enters `console`. The Console host starts or
-reconnects to the loopback Agent, starts a configured Harness, serves the
-replaceable WebShell on the configured loopback Console port, and supervises
-Agent availability. The Console can open the latest loopback Harness
-authentication URL observed in the bounded Harness log tail and display its
-token without reading `$HOME/.dsh` or changing Harness source.
+With no command, the launcher enters `api`. The headless Launcher API starts or
+reconnects to the loopback Agent, starts a configured Harness, binds the
+configured loopback API port, and supervises Agent availability. It never
+serves HTML or opens a browser. The native Tauri shell can open the latest
+loopback Harness authentication URL observed in the bounded Harness log tail
+and display its token without reading `$HOME/.dsh` or changing Harness source.
 `start`/`run`/`stop`/`status`/`logs` remain script and recovery fallbacks. The
 Agent remains the owner of Harness, profile, checkpoint, release, update, and
 diagnostic business behavior.
@@ -1896,9 +1879,9 @@ the data root before that file is loaded, so it is intentionally not a field
 inside launcher.json. The file is separate from the Agent-owned `config.json`.
 
 Environment: NEXUS_DATA_DIR, NEXUS_AGENT_PORT, NEXUS_AGENT_BIN,
-NEXUS_CONSOLE_DIR, NEXUS_CONSOLE_PORT, NEXUS_LAUNCHER_WAIT_SECS,
-NEXUS_CONSOLE_OPEN. `--open` and `--no-open` override the configured browser
-preference. `GET /launcher/harness` returns the latest safe Harness URL/token;
+NEXUS_CONSOLE_PORT, NEXUS_LAUNCHER_WAIT_SECS. Legacy console directory/browser
+options are accepted for script compatibility but ignored. `GET /launcher/harness`
+returns the latest safe Harness URL/token;
 `POST /launcher/harness` with `{{"action":"open"}}` opens it in the system
 browser.
 
@@ -1968,16 +1951,12 @@ mod tests {
         .expect("console arguments parse")
         .expect("console options are present");
         assert_eq!(options.command, LauncherCommand::Console);
-        assert_eq!(
-            options.console_dir,
-            Some(PathBuf::from("E:\\git\\dsh-nexus\\apps\\nexus-console"))
-        );
-        assert!(options.no_open);
+        assert_eq!(options.console_port, DEFAULT_CONSOLE_PORT);
         let _ = fs::remove_dir_all(root);
     }
 
     #[test]
-    fn no_command_defaults_to_console_host() {
+    fn no_command_defaults_to_headless_api() {
         let root = std::env::temp_dir().join(format!(
             "nexus-launcher-default-{}-{}",
             process::id(),
@@ -1990,8 +1969,7 @@ mod tests {
         ])
         .expect("empty arguments parse")
         .expect("console options are present");
-        assert_eq!(options.command, LauncherCommand::Console);
-        assert!(!options.no_open);
+        assert_eq!(options.command, LauncherCommand::Api);
         let _ = fs::remove_dir_all(root);
     }
 
@@ -2027,13 +2005,8 @@ mod tests {
             configured.agent_program,
             Some(PathBuf::from("configured-agent"))
         );
-        assert_eq!(
-            configured.console_dir,
-            Some(PathBuf::from("configured-console"))
-        );
         assert_eq!(configured.console_port, 3191);
         assert_eq!(configured.wait_secs, 9);
-        assert!(configured.no_open);
 
         let overridden = parse_args_from([
             "console",
@@ -2055,10 +2028,8 @@ mod tests {
         .expect("override options are present");
         assert_eq!(overridden.config.port, 3290);
         assert_eq!(overridden.agent_program, Some(PathBuf::from("cli-agent")));
-        assert_eq!(overridden.console_dir, Some(PathBuf::from("cli-console")));
         assert_eq!(overridden.console_port, 3291);
         assert_eq!(overridden.wait_secs, 11);
-        assert!(!overridden.no_open);
         let _ = fs::remove_dir_all(root);
     }
 
@@ -2095,6 +2066,8 @@ mod tests {
             .is_some_and(|source| source.ends_with("harness.stdout.log")));
         assert!(parse_loopback_harness_url("https://127.0.0.1:3080/?token=x").is_none());
         assert!(parse_loopback_harness_url("http://example.com/?token=x").is_none());
+        assert!(parse_loopback_harness_url("http://127.0.0.1:3080/?token=x&calc.exe").is_none());
+        assert!(open_browser_url("http://127.0.0.1:3080/?token=x&calc.exe").is_err());
         let _ = fs::remove_dir_all(root);
     }
 

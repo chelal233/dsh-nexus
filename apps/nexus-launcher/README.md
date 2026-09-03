@@ -1,0 +1,88 @@
+# Nexus Launcher
+
+Native Tauri 2 operator shell for the independent Nexus Agent and immutable
+external Harness runtime.
+
+## Runtime boundary
+
+The visible UI is a React and TypeScript application. It never calls the
+Agent with browser `fetch`, so the UI does not depend on CORS or on a custom
+`tauri://` origin. Tauri Rust commands validate a fixed loopback route
+allowlist and proxy `GET` and `POST` requests to the headless Launcher API.
+The only state owned here is window and tray state. Agent business state,
+Harness supervision, profiles, checkpoints, releases, updates, and
+diagnostics remain in the separate Rust Agent.
+
+On startup the native side probes and, when possible, starts
+`nexus-launcher api --no-open`. Helper resolution is ordered as follows:
+
+1. `NEXUS_LAUNCHER_BIN` when it names an existing file;
+2. a `nexus-launcher` executable beside the native application;
+3. `target/debug` and `target/release` candidates found near the application
+   or current directory.
+
+If no helper is available, the UI keeps the error visible and reports the
+exact configuration action. A separately started helper can still be reused
+when it responds on the configured loopback port.
+
+## Development
+
+Install the frontend dependencies and run a native development window:
+
+```text
+pnpm install
+pnpm tauri dev
+```
+
+The local Tauri CLI is provided by `@tauri-apps/cli`; a globally installed
+`cargo-tauri` command is not required. `pnpm exec tauri` is the equivalent
+explicit invocation when the CLI is not on PATH.
+
+Useful checks:
+
+```text
+pnpm typecheck
+pnpm build
+pnpm tauri build
+```
+
+The frontend dev server is only a development asset server. Production
+packaging embeds the built assets through Tauri. The Rust helper remains a
+separate binary and is supplied through `NEXUS_LAUNCHER_BIN` or a release
+layout; the app does not vendor or modify Harness source.
+
+## Installer boundary
+
+The current NSIS/MSI configuration packages the native GUI and its assets, but
+it does not yet produce a self-contained sidecar installer for the separate
+headless `nexus-launcher` helper. This is a deliberate release boundary until
+the signing and upgrade pipeline can ship both binaries atomically. Before
+launching an installed build, place the matching helper beside the GUI or set
+an explicit path, for example in PowerShell:
+
+```text
+$env:NEXUS_LAUNCHER_BIN = 'C:\Program Files\Nexus Launcher\nexus-launcher.exe'
+$env:NEXUS_CONSOLE_PORT = '3091'
+```
+
+Revisit sidecar packaging when the release pipeline has a signed helper
+artifact and an atomic upgrade test covering helper and GUI version pairing.
+
+## Native behavior
+
+- Closing the main window hides it to the system tray. The tray menu can show
+  the window or quit the native shell.
+- The single-instance plugin focuses the existing window when a second launch
+  is attempted.
+- Desktop notifications are used for close-to-tray feedback.
+- The official global-shortcut plugin registers Ctrl+Shift+N to restore the
+  window. If a platform cannot register that shortcut, the native window and
+  tray menu remain usable.
+- Settings offers System, Light, and Dark themes. The selected mode is stored
+  in local storage and System follows operating-system preference changes.
+
+The Harness page only embeds a validated loopback HTTP URL returned by
+`GET /launcher/harness`. Its token is masked by default and is read from a
+bounded Nexus-owned log tail. The system-browser button calls
+`POST /launcher/harness` with `{"action":"open"}`, which keeps URL validation
+and external opening in the Rust Launcher API.
