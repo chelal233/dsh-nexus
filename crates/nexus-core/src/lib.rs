@@ -10,8 +10,8 @@ use std::{
 
 use nexus_protocol::{
     decode_json, encode_json, AgentLifecycleState, AgentStatePayload, CheckpointManifest,
-    DiagnosticsBundle, DiagnosticsFile, HarnessRuntimeInfo, HarnessState, NexusStateSummary,
-    ReleaseManifest, UpdateRuntimeInfo, UpdateState,
+    DiagnosticsBundle, DiagnosticsFile, HarnessConfigPayload, HarnessRuntimeInfo, HarnessState,
+    NexusStateSummary, ReleaseManifest, UpdateConfigPayload, UpdateRuntimeInfo, UpdateState,
 };
 use serde::{Deserialize, Serialize};
 
@@ -1640,8 +1640,8 @@ mod tests {
 
     use super::{
         is_within, load_harness_launch_spec, read_runtime_metadata, write_runtime_metadata,
-        AgentState, CheckpointStore, DiagnosticsStore, HarnessLaunchSpec, NexusConfig, NexusPaths,
-        NexusRuntimeMetadata, ProfileStore, ReleaseStore,
+        AgentState, CheckpointStore, ConfigStore, DiagnosticsStore, HarnessLaunchSpec, NexusConfig,
+        NexusConfigFile, NexusPaths, NexusRuntimeMetadata, ProfileStore, ReleaseStore, UpdateSpec,
     };
 
     #[test]
@@ -2008,6 +2008,48 @@ mod tests {
         let _ = fs::remove_dir_all(root);
     }
 
+    #[test]
+    fn config_store_round_trips_nexus_owned_specs_atomically() {
+        let root = unique_test_root("config-store");
+        let paths = NexusPaths::from_root(root.clone());
+        let store = ConfigStore::new(paths.clone());
+        assert_eq!(
+            store.load().expect("missing config defaults"),
+            NexusConfigFile::default()
+        );
+
+        let document = NexusConfigFile {
+            harness: Some(HarnessLaunchSpec {
+                program: PathBuf::from("bin/harness"),
+                args: vec!["--profile".to_owned(), "{profile}".to_owned()],
+                working_dir: Some(PathBuf::from("runtime")),
+                readiness_url: Some("http://127.0.0.1:3080/health".to_owned()),
+                readiness_timeout_secs: Some(5),
+            }),
+            update: Some(UpdateSpec {
+                source: "file:///fixtures/harness".to_owned(),
+                ref_name: "main".to_owned(),
+                git_program: PathBuf::from("git"),
+                build_program: None,
+                build_args: Vec::new(),
+                verify_program: None,
+                verify_args: Vec::new(),
+                timeout_secs: Some(30),
+            }),
+        };
+
+        store.write(&document).expect("config writes");
+        assert!(paths.config_file.exists());
+        assert_eq!(store.load().expect("config reloads"), document);
+        assert!(!root.join(".dsh").exists());
+
+        let mut invalid = document.clone();
+        invalid.harness.as_mut().expect("harness exists").program = PathBuf::from("bad\nprogram");
+        assert!(store.write(&invalid).is_err());
+        assert_eq!(store.load().expect("invalid write leaves config"), document);
+        let _ = fs::remove_dir_all(root);
+    }
+
     fn unique_test_root(label: &str) -> PathBuf {
         std::env::temp_dir().join(format!(
             "nexus-core-{label}-{}-{}",
@@ -2042,6 +2084,71 @@ impl HarnessLaunchSpec {
             readiness_url: None,
             readiness_timeout_secs: None,
         }
+    }
+
+    pub fn validate(&self) -> io::Result<()> {
+        if self.program.as_os_str().is_empty()
+            || self.program.to_string_lossy().chars().any(char::is_control)
+        {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "Harness program must be non-empty and contain no control characters",
+            ));
+        }
+        if let Some(working_dir) = &self.working_dir {
+            if working_dir.to_string_lossy().chars().any(char::is_control) {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    "Harness working_dir contains a control character",
+                ));
+            }
+        }
+        validate_launch_args(&self.args, "Harness arguments")?;
+        if let Some(readiness_url) = &self.readiness_url {
+            if readiness_url.is_empty()
+                || readiness_url.len() > MAX_UPDATE_SOURCE_LEN
+                || readiness_url.chars().any(char::is_control)
+            {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    "Harness readiness_url is empty, too long, or contains a control character",
+                ));
+            }
+        }
+        if let Some(timeout) = self.readiness_timeout_secs {
+            if timeout == 0 || timeout > 86_400 {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    "Harness readiness timeout must be between 1 and 86400 seconds",
+                ));
+            }
+        }
+        Ok(())
+    }
+
+    pub fn to_payload(&self) -> HarnessConfigPayload {
+        HarnessConfigPayload {
+            program: self.program.to_string_lossy().into_owned(),
+            args: self.args.clone(),
+            working_dir: self
+                .working_dir
+                .as_ref()
+                .map(|path| path.to_string_lossy().into_owned()),
+            readiness_url: self.readiness_url.clone(),
+            readiness_timeout_secs: self.readiness_timeout_secs,
+        }
+    }
+
+    pub fn from_payload(payload: HarnessConfigPayload) -> io::Result<Self> {
+        let spec = Self {
+            program: PathBuf::from(payload.program),
+            args: payload.args,
+            working_dir: payload.working_dir.map(PathBuf::from),
+            readiness_url: payload.readiness_url,
+            readiness_timeout_secs: payload.readiness_timeout_secs,
+        };
+        spec.validate()?;
+        Ok(spec)
     }
 
     /// Render the explicitly configured profile placeholder without inferring
@@ -2083,6 +2190,24 @@ impl HarnessLaunchSpec {
             release_root,
         )?))
     }
+}
+
+fn validate_launch_args(args: &[String], label: &str) -> io::Result<()> {
+    if args.len() > 128 {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!("{label} contain too many entries"),
+        ));
+    }
+    if args.iter().any(|argument| {
+        argument.len() > MAX_UPDATE_TEXT_LEN || argument.chars().any(char::is_control)
+    }) {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!("{label} contain an invalid entry"),
+        ));
+    }
+    Ok(())
 }
 
 fn render_launch_text(
@@ -2174,6 +2299,40 @@ impl UpdateSpec {
                     .replace("{ref}", &self.ref_name)
             })
             .collect()
+    }
+
+    pub fn to_payload(&self) -> UpdateConfigPayload {
+        UpdateConfigPayload {
+            source: self.source.clone(),
+            ref_name: self.ref_name.clone(),
+            git_program: self.git_program.to_string_lossy().into_owned(),
+            build_program: self
+                .build_program
+                .as_ref()
+                .map(|path| path.to_string_lossy().into_owned()),
+            build_args: self.build_args.clone(),
+            verify_program: self
+                .verify_program
+                .as_ref()
+                .map(|path| path.to_string_lossy().into_owned()),
+            verify_args: self.verify_args.clone(),
+            timeout_secs: self.timeout_secs,
+        }
+    }
+
+    pub fn from_payload(payload: UpdateConfigPayload) -> io::Result<Self> {
+        let spec = Self {
+            source: payload.source,
+            ref_name: payload.ref_name,
+            git_program: PathBuf::from(payload.git_program),
+            build_program: payload.build_program.map(PathBuf::from),
+            build_args: payload.build_args,
+            verify_program: payload.verify_program.map(PathBuf::from),
+            verify_args: payload.verify_args,
+            timeout_secs: payload.timeout_secs,
+        };
+        spec.validate()?;
+        Ok(spec)
     }
 }
 
@@ -2290,6 +2449,61 @@ pub struct NexusConfigFile {
     pub update: Option<UpdateSpec>,
 }
 
+/// Nexus-owned configuration writer. It owns only `config.json`; Harness
+/// source, working directories, and `$HOME/.dsh` are never modified here.
+#[derive(Clone)]
+pub struct ConfigStore {
+    paths: NexusPaths,
+    write_gate: Arc<Mutex<()>>,
+}
+
+impl ConfigStore {
+    pub fn new(paths: NexusPaths) -> Self {
+        Self {
+            paths,
+            write_gate: Arc::new(Mutex::new(())),
+        }
+    }
+
+    pub fn paths(&self) -> &NexusPaths {
+        &self.paths
+    }
+
+    pub fn load(&self) -> io::Result<NexusConfigFile> {
+        let _guard = self.lock_gate()?;
+        if !self.paths.config_file.exists() {
+            return Ok(NexusConfigFile::default());
+        }
+        let bytes = fs::read(&self.paths.config_file)?;
+        let document: NexusConfigFile = decode_json(&bytes).map_err(invalid_data)?;
+        validate_config_document(&document)?;
+        Ok(document)
+    }
+
+    pub fn write(&self, document: &NexusConfigFile) -> io::Result<()> {
+        validate_config_document(document)?;
+        let _guard = self.lock_gate()?;
+        self.paths.ensure_directories()?;
+        write_json_atomic(&self.paths.root, &self.paths.config_file, document)
+    }
+
+    fn lock_gate(&self) -> io::Result<std::sync::MutexGuard<'_, ()>> {
+        self.write_gate
+            .lock()
+            .map_err(|_| io::Error::other("config lock is poisoned"))
+    }
+}
+
+fn validate_config_document(document: &NexusConfigFile) -> io::Result<()> {
+    if let Some(harness) = &document.harness {
+        harness.validate()?;
+    }
+    if let Some(update) = &document.update {
+        update.validate()?;
+    }
+    Ok(())
+}
+
 /// Load the optional external Harness command from Nexus-owned configuration
 /// and then apply explicit environment overrides. A missing program is a
 /// valid, intentional control-plane-only configuration.
@@ -2333,6 +2547,7 @@ pub fn load_harness_launch_spec(paths: &NexusPaths) -> io::Result<Option<Harness
         configured.readiness_timeout_secs = Some(timeout);
     }
 
+    configured.validate()?;
     Ok(Some(configured))
 }
 

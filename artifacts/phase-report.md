@@ -1,46 +1,48 @@
-# Phase 7 report: bounded diagnostics collection
+# Phase 8 report: Nexus-owned configuration management
 
 ## Worktree and scope
 
 - Task: `nexus-bootstrap`
-- Phase: `diagnostics`
-- Worktree: `E:\git\dsh-nexus-diagnostics`
-- Branch: `codex/nexus-bootstrap/diagnostics`
-- Base: `bb9df16f1cf6d9b99c857f3292ccdd622b51d364`
-- Scope: v1 diagnostics protocol, Nexus core store, Agent/CLI routes, docs,
-  and this report.
-- Exclusions: no Harness source or `.dsh` traversal, no production data,
-  deployment, or UI shell.
+- Phase: `config-management`
+- Worktree: `E:\git\dsh-nexus-config-config`
+- Scope: typed v1 configuration protocol, atomic Nexus config store, Agent
+  config API, CLI config commands, credential-safe response redaction, tests,
+  and documentation.
+- Exclusions: no Harness source/package/lockfile/build changes, no `.dsh`
+  traversal, no production data, deployment, or native UI build.
 
 ## Delivered
 
-- Added `DiagnosticsStore` with a Nexus-only allowlist: runtime state,
-  profiles, release pointers, update state, and text logs. It never reads the
-  process environment, Harness working/data directories, or `$HOME/.dsh`.
-- Added bounded collection (`64` files; metadata capped at `512 KiB`, logs at
-  `256 KiB`) with binary omission, truncation markers, safe filenames, and
-  create-new/sync writes into `diagnostics/<id>/files/`.
-- Added conservative line redaction for credential-shaped log fields
-  (`password`, token, authorization, cookie, private key, and related markers)
-  before a bundle is published. The response exposes local path and metadata,
-  not raw file contents.
-- Added durable bundle manifests and `GET|POST /v1/diagnostics`; extended
-  `nexusctl diagnostics status|collect` with optional notes and JSON output.
+- Added `HarnessConfigPayload`, `UpdateConfigPayload`, and explicit
+  `ConfigAction`/`ConfigCommand`/`ConfigResponse` wire types.
+- Added `ConfigStore` for validated, same-directory atomic writes to the
+  Nexus-owned `config.json`; missing configuration remains a valid empty
+  document.
+- Added `GET|POST /v1/config` with status, set, and clear operations. Harness
+  changes are rejected while the supervised child is starting/running; update
+  changes are rejected while an update job is running.
+- Added `nexusctl config status`, `config clear-harness`, and
+  `config clear-update`; JSON output is available for GUI/WebShell clients.
+- Responses preserve useful flag names while redacting sensitive argument
+  values, including `--api-key value` and `--token=value` forms.
+- Added round-trip/atomicity coverage and a release-binary API/CLI smoke script
+  at `E:\git\dsh-nexus-controller-artifacts\config-management\config-smoke.ps1`.
 
 ## Verification
 
-- `cargo fmt --all -- --check` — pass.
-- `cargo test --workspace --locked` — 28 tests passed, 0 failed.
-- `cargo build --workspace --locked --release` — pass.
+- `cargo fmt --all` — pass.
+- `cargo test --workspace --locked` — 30 tests passed, 0 failed.
+- `cargo build --workspace --release --locked` — pass.
 - `git diff --check` — pass.
-- Runtime smoke returned `COLLECT_STATUS=201`, created a bundle with three
-  allowlisted files, redacted an authorization line, reported
-  `SECRET_PRESENT=False`, returned it from status, and shut down the Agent with
-  `AGENT_EXITED=True`.
+- Release-binary config smoke — pass: Agent health, empty initial config,
+  redacted Harness secret, durable Harness/update writes, `nexusctl config
+  status --json`, clears, and graceful Agent shutdown.
 
 ## Boundaries carried forward
 
-Diagnostics are intentionally a local, bounded handoff primitive rather than
-a general archive or cloud uploader. Tauri/Electron, authentication, update
-auto-policy, plugin activation, and any remote export remain replaceable layers
-over the headless Agent protocol.
+`config.json` is Nexus-owned and does not replace Harness' `$HOME/.dsh` data.
+The API validates and coordinates; it does not infer Harness flags, edit the
+upstream tree, or silently restart processes. Tauri/Electron remains a
+replaceable client of the loopback v1 protocol. A native UI and resident
+launcher are the next implementation slice; their absence does not reduce the
+headless Agent's functionality.

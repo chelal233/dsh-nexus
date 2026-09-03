@@ -10,17 +10,18 @@ use axum::{
     Json, Router,
 };
 use nexus_core::{
-    AgentState, CheckpointStore, DiagnosticsStore, NexusConfig, NexusStateSnapshot, ProfileCatalog,
-    ProfileStore, ReleaseCatalog, ReleaseStore, RuntimeMetadataStore, DEFAULT_PROFILE,
+    AgentState, CheckpointStore, ConfigStore, DiagnosticsStore, HarnessLaunchSpec, NexusConfig,
+    NexusConfigFile, NexusStateSnapshot, ProfileCatalog, ProfileStore, ReleaseCatalog,
+    ReleaseStore, RuntimeMetadataStore, UpdateSpec, DEFAULT_PROFILE,
 };
 use nexus_protocol::{
     AgentLifecycleState, CheckpointAction, CheckpointCommand, CheckpointCreateResponse,
-    CheckpointListResponse, CheckpointRestoreResponse, DiagnosticsAction, DiagnosticsCommand,
-    DiagnosticsResponse, ErrorResponse, HarnessAction, HarnessCommand, HarnessResponse,
-    HarnessRuntimeInfo, HealthResponse, LifecycleAccepted, LifecycleAction, LifecycleCommand,
-    ProfileAction, ProfileCommand, ProfileListResponse, ProfileSelectResponse, ReleaseAction,
-    ReleaseCommand, ReleaseListResponse, StateResponse, UpdateAction, UpdateCommand,
-    UpdateResponse,
+    CheckpointListResponse, CheckpointRestoreResponse, ConfigAction, ConfigCommand, ConfigResponse,
+    DiagnosticsAction, DiagnosticsCommand, DiagnosticsResponse, ErrorResponse, HarnessAction,
+    HarnessCommand, HarnessResponse, HarnessRuntimeInfo, HealthResponse, LifecycleAccepted,
+    LifecycleAction, LifecycleCommand, ProfileAction, ProfileCommand, ProfileListResponse,
+    ProfileSelectResponse, ReleaseAction, ReleaseCommand, ReleaseListResponse, StateResponse,
+    UpdateAction, UpdateCommand, UpdateResponse, UpdateState,
 };
 use tokio::{
     net::TcpListener,
@@ -41,6 +42,7 @@ struct AppState {
     checkpoints: CheckpointStore,
     releases: ReleaseStore,
     diagnostics: DiagnosticsStore,
+    config: ConfigStore,
     updater: UpdateExecutor,
     supervisor: HarnessSupervisor,
     shutdown: watch::Sender<bool>,
@@ -57,6 +59,7 @@ pub async fn run(config: NexusConfig) -> io::Result<()> {
     let releases = ReleaseStore::new(paths.clone());
     let release_catalog = releases.load()?;
     let diagnostics = DiagnosticsStore::new(paths.clone());
+    let config_store = ConfigStore::new(paths.clone());
     let updater = UpdateExecutor::new(paths.clone(), releases.clone());
     let _ = updater.recover_unattached()?;
     let supervisor = HarnessSupervisor::new(paths.clone())?;
@@ -76,6 +79,7 @@ pub async fn run(config: NexusConfig) -> io::Result<()> {
         checkpoints,
         releases,
         diagnostics,
+        config: config_store,
         updater,
         supervisor: supervisor.clone(),
         shutdown,
@@ -123,6 +127,7 @@ fn build_router(state: AppState) -> Router {
             "/v1/diagnostics",
             get(diagnostics_status).post(diagnostics_control),
         )
+        .route("/v1/config", get(config_status).post(config_control))
         .route("/v1/lifecycle", post(lifecycle))
         .route("/v1/shutdown", post(shutdown))
         .with_state(state)
@@ -529,6 +534,192 @@ async fn diagnostics_control(
                 .into_response(),
             Err(error) => data_error_response(error, "diagnostics_collect_failed"),
         },
+    }
+}
+
+async fn config_status(State(state): State<AppState>) -> axum::response::Response {
+    match state.config.load() {
+        Ok(document) => (StatusCode::OK, Json(config_response(document))).into_response(),
+        Err(error) => data_error_response(error, "config_unavailable"),
+    }
+}
+
+async fn config_control(
+    State(state): State<AppState>,
+    Json(command): Json<ConfigCommand>,
+) -> axum::response::Response {
+    match command.action {
+        ConfigAction::Status => config_status(State(state)).await,
+        ConfigAction::SetHarness => {
+            let Some(payload) = command.harness else {
+                return data_error_response(
+                    io::Error::new(
+                        io::ErrorKind::InvalidInput,
+                        "harness configuration is required",
+                    ),
+                    "config_invalid",
+                );
+            };
+            let harness = match HarnessLaunchSpec::from_payload(payload) {
+                Ok(harness) => harness,
+                Err(error) => return data_error_response(error, "config_invalid"),
+            };
+            if let Err(response) = ensure_harness_stopped(&state).await {
+                return response;
+            }
+            let mut document = match state.config.load() {
+                Ok(document) => document,
+                Err(error) => return data_error_response(error, "config_unavailable"),
+            };
+            document.harness = Some(harness);
+            write_config_response(&state, document)
+        }
+        ConfigAction::ClearHarness => {
+            if let Err(response) = ensure_harness_stopped(&state).await {
+                return response;
+            }
+            let mut document = match state.config.load() {
+                Ok(document) => document,
+                Err(error) => return data_error_response(error, "config_unavailable"),
+            };
+            document.harness = None;
+            write_config_response(&state, document)
+        }
+        ConfigAction::SetUpdate => {
+            let Some(payload) = command.update else {
+                return data_error_response(
+                    io::Error::new(
+                        io::ErrorKind::InvalidInput,
+                        "update configuration is required",
+                    ),
+                    "config_invalid",
+                );
+            };
+            let update = match UpdateSpec::from_payload(payload) {
+                Ok(update) => update,
+                Err(error) => return data_error_response(error, "config_invalid"),
+            };
+            if let Err(response) = ensure_update_idle(&state) {
+                return response;
+            }
+            let mut document = match state.config.load() {
+                Ok(document) => document,
+                Err(error) => return data_error_response(error, "config_unavailable"),
+            };
+            document.update = Some(update);
+            write_config_response(&state, document)
+        }
+        ConfigAction::ClearUpdate => {
+            if let Err(response) = ensure_update_idle(&state) {
+                return response;
+            }
+            let mut document = match state.config.load() {
+                Ok(document) => document,
+                Err(error) => return data_error_response(error, "config_unavailable"),
+            };
+            document.update = None;
+            write_config_response(&state, document)
+        }
+    }
+}
+
+fn config_response(document: NexusConfigFile) -> ConfigResponse {
+    ConfigResponse::new(
+        document.harness.map(|harness| {
+            let mut payload = harness.to_payload();
+            payload.args = redact_config_args(payload.args);
+            payload
+        }),
+        document.update.map(|update| {
+            let mut payload = update.to_payload();
+            payload.build_args = redact_config_args(payload.build_args);
+            payload.verify_args = redact_config_args(payload.verify_args);
+            payload
+        }),
+    )
+}
+
+fn redact_config_args(values: Vec<String>) -> Vec<String> {
+    let mut redacted = Vec::with_capacity(values.len());
+    let mut redact_next = false;
+    for value in values {
+        if redact_next {
+            redacted.push("[REDACTED]".to_owned());
+            redact_next = false;
+            continue;
+        }
+
+        if let Some((name, _)) = value.split_once('=') {
+            if is_sensitive_config_value(name) {
+                redacted.push(format!("{name}=[REDACTED]"));
+                continue;
+            }
+        }
+
+        if is_sensitive_config_value(&value) {
+            if value.starts_with('-') {
+                redacted.push(value);
+                redact_next = true;
+            } else {
+                redacted.push("[REDACTED]".to_owned());
+            }
+        } else {
+            redacted.push(value);
+        }
+    }
+    redacted
+}
+
+fn is_sensitive_config_value(value: &str) -> bool {
+    let lower = value.to_ascii_lowercase();
+    [
+        "password",
+        "passwd",
+        "secret",
+        "authorization",
+        "api_key",
+        "apikey",
+        "access_token",
+        "refresh_token",
+        "cookie",
+        "private_key",
+    ]
+    .iter()
+    .any(|marker| lower.contains(marker))
+}
+
+fn write_config_response(state: &AppState, document: NexusConfigFile) -> axum::response::Response {
+    match state.config.write(&document) {
+        Ok(()) => (StatusCode::OK, Json(config_response(document))).into_response(),
+        Err(error) => data_error_response(error, "config_write_failed"),
+    }
+}
+
+async fn ensure_harness_stopped(state: &AppState) -> Result<(), axum::response::Response> {
+    let harness = sync_harness_state(state).await;
+    if matches!(
+        harness.state,
+        nexus_protocol::HarnessState::Starting | nexus_protocol::HarnessState::Running
+    ) {
+        Err(api_error_response(
+            StatusCode::CONFLICT,
+            "config_change_conflict",
+            "cannot change Harness launch configuration while Harness is running; stop Harness first",
+        ))
+    } else {
+        Ok(())
+    }
+}
+
+fn ensure_update_idle(state: &AppState) -> Result<(), axum::response::Response> {
+    match state.updater.status() {
+        Ok(update) if update.state == UpdateState::Running => Err(api_error_response(
+            StatusCode::CONFLICT,
+            "config_change_conflict",
+            "cannot change update configuration while an update is running",
+        )),
+        Ok(_) => Ok(()),
+        Err(error) => Err(update_error_response(error)),
     }
 }
 

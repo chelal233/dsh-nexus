@@ -632,15 +632,92 @@ impl DiagnosticsResponse {
     }
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct HarnessConfigPayload {
+    pub program: String,
+    #[serde(default)]
+    pub args: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub working_dir: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub readiness_url: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub readiness_timeout_secs: Option<u64>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct UpdateConfigPayload {
+    pub source: String,
+    #[serde(default)]
+    pub ref_name: String,
+    #[serde(default)]
+    pub git_program: String,
+    #[serde(default)]
+    pub build_program: Option<String>,
+    #[serde(default)]
+    pub build_args: Vec<String>,
+    #[serde(default)]
+    pub verify_program: Option<String>,
+    #[serde(default)]
+    pub verify_args: Vec<String>,
+    #[serde(default)]
+    pub timeout_secs: Option<u64>,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ConfigAction {
+    Status,
+    SetHarness,
+    ClearHarness,
+    SetUpdate,
+    ClearUpdate,
+}
+
+impl Default for ConfigAction {
+    fn default() -> Self {
+        Self::Status
+    }
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ConfigCommand {
+    pub action: ConfigAction,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub harness: Option<HarnessConfigPayload>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub update: Option<UpdateConfigPayload>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ConfigResponse {
+    pub api_version: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub harness: Option<HarnessConfigPayload>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub update: Option<UpdateConfigPayload>,
+}
+
+impl ConfigResponse {
+    pub fn new(harness: Option<HarnessConfigPayload>, update: Option<UpdateConfigPayload>) -> Self {
+        Self {
+            api_version: API_VERSION.to_owned(),
+            harness,
+            update,
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
         AgentLifecycleState, CheckpointCreateRequest, CheckpointCreateResponse, CheckpointManifest,
-        CheckpointRestoreRequest, DiagnosticsAction, DiagnosticsCommand, DiagnosticsResponse,
-        HarnessAction, HarnessCommand, HarnessResponse, HarnessRuntimeInfo, HarnessState,
-        LifecycleAction, LifecycleCommand, NexusStateSummary, ProfileListResponse,
-        ProfileSelectRequest, ReleaseAction, ReleaseCommand, ReleaseListResponse, ReleaseManifest,
-        UpdateAction, UpdateCommand, UpdateResponse, UpdateRuntimeInfo,
+        CheckpointRestoreRequest, ConfigAction, ConfigCommand, ConfigResponse, DiagnosticsAction,
+        DiagnosticsCommand, DiagnosticsResponse, HarnessAction, HarnessCommand,
+        HarnessConfigPayload, HarnessResponse, HarnessRuntimeInfo, HarnessState, LifecycleAction,
+        LifecycleCommand, NexusStateSummary, ProfileListResponse, ProfileSelectRequest,
+        ReleaseAction, ReleaseCommand, ReleaseListResponse, ReleaseManifest, UpdateAction,
+        UpdateCommand, UpdateResponse, UpdateRuntimeInfo,
     };
 
     #[test]
@@ -806,5 +883,29 @@ mod tests {
         assert!(response_json["bundles"]
             .as_array()
             .is_some_and(Vec::is_empty));
+    }
+
+    #[test]
+    fn config_protocol_round_trips_explicit_mutation_actions() {
+        let command = ConfigCommand {
+            action: ConfigAction::SetHarness,
+            harness: Some(HarnessConfigPayload {
+                program: "harness".to_owned(),
+                args: vec!["--profile".to_owned(), "{profile}".to_owned()],
+                working_dir: None,
+                readiness_url: None,
+                readiness_timeout_secs: None,
+            }),
+            update: None,
+        };
+        let json = serde_json::to_value(command).expect("config command serializes");
+        assert_eq!(json["action"], "set_harness");
+        assert_eq!(json["harness"]["args"][1], "{profile}");
+
+        let response = ConfigResponse::new(None, None);
+        assert_eq!(
+            serde_json::to_value(response).expect("config response serializes")["api_version"],
+            "v1"
+        );
     }
 }

@@ -3,10 +3,11 @@ use std::{env, net::SocketAddr, process};
 use nexus_core::{NexusConfig, DEFAULT_AGENT_PORT};
 use nexus_protocol::{
     CheckpointAction, CheckpointCommand, CheckpointCreateResponse, CheckpointListResponse,
-    CheckpointRestoreResponse, DiagnosticsAction, DiagnosticsCommand, DiagnosticsResponse,
-    ErrorResponse, HarnessAction, HarnessCommand, HarnessResponse, ProfileAction, ProfileCommand,
-    ProfileListResponse, ProfileSelectResponse, ReleaseAction, ReleaseCommand, ReleaseListResponse,
-    StateResponse, UpdateAction, UpdateCommand, UpdateResponse,
+    CheckpointRestoreResponse, ConfigAction, ConfigCommand, ConfigResponse, DiagnosticsAction,
+    DiagnosticsCommand, DiagnosticsResponse, ErrorResponse, HarnessAction, HarnessCommand,
+    HarnessResponse, ProfileAction, ProfileCommand, ProfileListResponse, ProfileSelectResponse,
+    ReleaseAction, ReleaseCommand, ReleaseListResponse, StateResponse, UpdateAction, UpdateCommand,
+    UpdateResponse,
 };
 
 #[derive(Debug)]
@@ -31,6 +32,7 @@ enum Command {
     ),
     Update(UpdateAction, Option<String>, Option<String>),
     Diagnostics(DiagnosticsAction, Option<String>),
+    Config(ConfigAction),
 }
 
 #[tokio::main]
@@ -200,6 +202,18 @@ fn parse_args() -> Result<Option<Options>, String> {
                 };
                 command = Some(Command::Diagnostics(action, None));
             }
+            "config" if command.is_none() => {
+                let action = args.next().ok_or_else(|| {
+                    "config requires status, clear-harness, or clear-update".to_owned()
+                })?;
+                let action = match action.to_string_lossy().as_ref() {
+                    "status" => ConfigAction::Status,
+                    "clear-harness" => ConfigAction::ClearHarness,
+                    "clear-update" => ConfigAction::ClearUpdate,
+                    value => return Err(format!("unknown config action: {value}")),
+                };
+                command = Some(Command::Config(action));
+            }
             "--json" => json = true,
             "--note" => {
                 let note = args
@@ -256,7 +270,7 @@ fn parse_args() -> Result<Option<Options>, String> {
 
     let Some(command) = command else {
         return Err(
-            "a command is required (supported: status, harness, profile, checkpoint, release, update, diagnostics)".to_owned(),
+            "a command is required (supported: status, harness, profile, checkpoint, release, update, diagnostics, config)".to_owned(),
         );
     };
 
@@ -362,6 +376,21 @@ async fn run(options: Options) -> Result<(), String> {
             .json(&DiagnosticsCommand {
                 action: *action,
                 note: note.clone(),
+            })
+            .send()
+            .await
+            .map_err(|error| format!("agent is unavailable: {error}"))?,
+        Command::Config(ConfigAction::Status) => client
+            .get(format!("http://{address}/v1/config"))
+            .send()
+            .await
+            .map_err(|error| format!("agent is unavailable: {error}"))?,
+        Command::Config(action) => client
+            .post(format!("http://{address}/v1/config"))
+            .json(&ConfigCommand {
+                action: *action,
+                harness: None,
+                update: None,
             })
             .send()
             .await
@@ -574,6 +603,36 @@ async fn run(options: Options) -> Result<(), String> {
                 }
             }
         }
+        Command::Config(_) => {
+            let config: ConfigResponse = serde_json::from_str(&body)
+                .map_err(|error| format!("invalid agent response: {error}"))?;
+            if options.json {
+                print_json_value(
+                    &serde_json::to_value(&config).map_err(|error| error.to_string())?,
+                )?;
+            } else {
+                match config.harness {
+                    Some(harness) => {
+                        println!("harness_configured: yes");
+                        println!("harness_program: {}", harness.program);
+                        println!("harness_args: {}", harness.args.len());
+                        println!(
+                            "harness_working_dir: {}",
+                            harness.working_dir.as_deref().unwrap_or("<default>")
+                        );
+                    }
+                    None => println!("harness_configured: no"),
+                }
+                match config.update {
+                    Some(update) => {
+                        println!("update_configured: yes");
+                        println!("update_source: {}", update.source);
+                        println!("update_ref: {}", update.ref_name);
+                    }
+                    None => println!("update_configured: no"),
+                }
+            }
+        }
     }
 
     Ok(())
@@ -648,6 +707,8 @@ Usage:
   nexusctl update install [ID VERSION] [--json] [--port PORT]
   nexusctl diagnostics status [--json] [--port PORT]
   nexusctl diagnostics collect [--note TEXT] [--json] [--port PORT]
+  nexusctl config status [--json] [--port PORT]
+  nexusctl config clear-harness|clear-update [--json] [--port PORT]
 
 Queries and controls the loopback Nexus Agent API."#
     );

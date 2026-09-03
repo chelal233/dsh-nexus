@@ -1,6 +1,6 @@
 # Nexus architecture baseline
 
-Status: Phase 7 diagnostics collection (headless MVP)
+Status: Phase 8 Nexus-owned configuration management (headless MVP)
 
 ## Purpose
 
@@ -48,7 +48,7 @@ nexus-protocol  versioned JSON wire types (v1)
        ^
 nexus-core      paths, configuration, and state model
        ^
-nexus-agent     foreground loopback HTTP server, HarnessSupervisor, updater, diagnostics
+nexus-agent     foreground loopback HTTP server, HarnessSupervisor, updater, diagnostics, config
        ^
 nexusctl        CLI client (`status`, `harness`, `profile`, `checkpoint`, `release`, `update`)
 ```
@@ -83,6 +83,13 @@ The Agent exposes:
   `diagnostics/<id>/` directory, redacting common credential-bearing lines and
   omitting binary payloads. It never traverses `$HOME/.dsh`, Harness data, or
   the process environment.
+- `GET|POST /v1/config` — inspect or mutate the Nexus-owned Harness launch and
+  external update specifications. Mutations validate all paths, arguments,
+  refs, and URLs before an atomic write to `config.json`; changing Harness
+  configuration while it is running, or update configuration while an update
+  job is running, returns a conflict instead of interrupting either process.
+  Responses redact credential-shaped argument values, while the on-disk Nexus
+  configuration remains the caller-owned source of truth.
 
 The Harness response always includes a `state` and may include `pid`,
 `exit_code`, `error`, and timestamps. A missing `harness.program` is a normal
@@ -210,6 +217,13 @@ interpolation is performed. Source URLs with embedded credentials, unsafe refs,
 control characters, and unbounded argument lists are rejected. A job is
 serialized per Agent and stale `running` state is converted to a durable
 failure after an Agent restart because Nexus cannot attach to an old child.
+
+The configuration API uses the same v1 protocol as the CLI. `nexusctl config
+status` shows a redacted summary, while `nexusctl config clear-harness` and
+`nexusctl config clear-update` remove one owned section after the corresponding
+runtime has stopped/returned idle. Setting sections is currently an API-level
+operation so a future Tauri, Electron, browser, or script frontend can supply
+typed forms without taking ownership of persistence or process coordination.
 
 ## Current scope and exclusions
 
