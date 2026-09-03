@@ -230,12 +230,14 @@ typed forms without taking ownership of persistence or process coordination.
 `nexus-launcher` is a thin process boundary around the Agent. `start` resolves
 the sibling `nexus-agent` (or an explicit `--agent`/`NEXUS_AGENT_BIN`), creates a
 recoverable lock and launch record below `run/`, redirects Agent logs into the
-Nexus `logs/` directory, and waits for loopback health before returning. `run`
-keeps the Agent attached in the foreground and turns Ctrl+C into the same
-graceful shutdown request. `stop` only calls the Agent shutdown endpoint and
-waits for the listener to disappear; it never kills an arbitrary PID. A lock
-older than the bounded stale interval is recoverable only after a fresh health
-probe confirms that no Agent is serving the configured port.
+Nexus `logs/` directory, and waits for loopback health (or the just-created
+Agent listening marker) before returning. `run` keeps the Agent attached in the
+foreground, turns Ctrl+C into the same graceful shutdown request, and polls a
+non-blocking child handle so an external `stop` cannot strand the launcher on a
+platform process-notification edge case. `stop` only calls the Agent shutdown
+endpoint and waits for the listener to disappear; it never kills an arbitrary
+PID. A lock older than the bounded stale interval is recoverable only after a
+fresh health probe confirms that no Agent is serving the configured port.
 
 The static Console lives under `apps/nexus-console/`. It validates that its API
 base is loopback-only, renders Agent/Harness/profile/release/update/checkpoint/

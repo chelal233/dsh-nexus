@@ -8,7 +8,7 @@
 use std::{
     env,
     fs::{self, OpenOptions},
-    io::{self, Write},
+    io::{self, Read, Seek, SeekFrom, Write},
     path::{Path, PathBuf},
     process::{self, Command as StdCommand, Stdio},
     time::{Duration, SystemTime, UNIX_EPOCH},
@@ -20,7 +20,7 @@ use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use tokio::{
     process::{Child, Command as TokioCommand},
-    time::{sleep, timeout, Instant},
+    time::{sleep, Instant},
 };
 
 const DEFAULT_WAIT_SECS: u64 = 20;
@@ -271,6 +271,7 @@ async fn ensure_agent_started(
 
     let agent_program = resolve_agent_program(options.agent_program.as_deref())?;
     let detached = options.command == LauncherCommand::Start;
+    let log_offset = agent_log_len(paths);
     let (mut child, pid) = spawn_agent(&agent_program, &options.config, paths, detached)
         .map_err(|error| format!("cannot start Agent: {error}"))?;
     if let Err(error) = write_launch_record(
@@ -290,7 +291,23 @@ async fn ensure_agent_started(
         return Err(format!("cannot persist Agent launch record: {error}"));
     }
 
-    if let Err(error) = wait_for_health(client, options.config.port, options.wait_secs).await {
+    // Use a fresh HTTP client after process creation. A client that attempted
+    // a connection before the listener existed can retain a Windows TCP
+    // refusal while another local WebShell is polling the same port.
+    let startup_client = Client::builder()
+        .connect_timeout(Duration::from_secs(5))
+        .timeout(Duration::from_secs(6))
+        .build()
+        .map_err(|error| format!("cannot initialize Agent health client: {error}"))?;
+    if let Err(error) = wait_for_health(
+        &startup_client,
+        options.config.port,
+        options.wait_secs,
+        paths,
+        log_offset,
+    )
+    .await
+    {
         kill_agent_pid(pid).await;
         if let Some(child) = child.as_mut() {
             let _ = child.kill().await;
@@ -708,10 +725,37 @@ async fn probe_health(client: &Client, port: u16) -> Result<Option<HealthRespons
         .map_err(|error| format!("invalid Agent health response: {error}"))
 }
 
-async fn wait_for_health(client: &Client, port: u16, wait_secs: u64) -> Result<(), String> {
+fn agent_log_len(paths: &NexusPaths) -> u64 {
+    fs::metadata(paths.logs_dir.join("agent.stdout.log"))
+        .map(|metadata| metadata.len())
+        .unwrap_or(0)
+}
+
+fn agent_log_ready(paths: &NexusPaths, offset: u64) -> bool {
+    let path = paths.logs_dir.join("agent.stdout.log");
+    let Ok(mut file) = fs::File::open(path) else {
+        return false;
+    };
+    if file.seek(SeekFrom::Start(offset)).is_err() {
+        return false;
+    }
+    let mut text = String::new();
+    file.read_to_string(&mut text).is_ok() && text.contains("nexus agent listening")
+}
+
+async fn wait_for_health(
+    client: &Client,
+    port: u16,
+    wait_secs: u64,
+    paths: &NexusPaths,
+    log_offset: u64,
+) -> Result<(), String> {
     let deadline = Instant::now() + Duration::from_secs(wait_secs);
     let mut last_error = None;
     loop {
+        if agent_log_ready(paths, log_offset) {
+            return Ok(());
+        }
         match probe_health(client, port).await {
             Ok(Some(response)) if response.status == HealthStatus::Ok => return Ok(()),
             Ok(_) => {}
@@ -782,59 +826,70 @@ async fn run_foreground(
         .take()
         .ok_or_else(|| "foreground Agent start did not return a child handle".to_owned())?;
     print_started(options, Some(owned.pid), paths, false);
+    let mut down_polls = 0u8;
     loop {
         tokio::select! {
-            result = child.wait() => {
-                let status = result.map_err(|error| format!("failed waiting for Agent: {error}"))?;
-                remove_launch_record(paths);
-                println!("agent exited: {status}");
-                return Ok(());
-            }
             result = tokio::signal::ctrl_c() => {
                 result.map_err(|error| format!("cannot listen for Ctrl+C: {error}"))?;
                 request_shutdown(client, options.config.port).await?;
-                if timeout(
-                    Duration::from_secs(DEFAULT_STOP_WAIT_SECS),
-                    child.wait(),
-                )
-                .await
-                .is_err()
-                {
-                    kill_agent_pid(owned.pid).await;
-                    let _ = child.kill().await;
-                    let _ = child.wait().await;
+                let deadline = Instant::now() + Duration::from_secs(DEFAULT_STOP_WAIT_SECS);
+                loop {
+                    if let Ok(Some(_)) = child.try_wait() {
+                        break;
+                    }
+                    if Instant::now() >= deadline {
+                        let _ = child.start_kill();
+                        break;
+                    }
+                    sleep(Duration::from_millis(200)).await;
                 }
                 remove_launch_record(paths);
                 println!("agent stopped");
                 return Ok(());
             }
             _ = sleep(Duration::from_secs(1)) => {
-                if matches!(probe_health(client, options.config.port).await, Ok(None)) {
-                    if let Ok(Some(status)) = child.try_wait() {
-                        remove_launch_record(paths);
-                        println!("agent exited: {status}");
-                        return Ok(());
-                    }
+                if let Ok(Some(status)) = child.try_wait() {
+                    remove_launch_record(paths);
+                    println!("agent exited: {status}");
+                    return Ok(());
+                }
 
-                    // The Windows process driver can occasionally miss the
-                    // completion notification for a child that has already
-                    // closed its HTTP listener. Reap it for a bounded period,
-                    // then terminate only the exact recorded PID so a
-                    // foreground launcher cannot remain stuck indefinitely.
-                    if timeout(
-                        Duration::from_secs(DEFAULT_STOP_WAIT_SECS),
-                        child.wait(),
-                    )
-                    .await
-                    .is_err()
-                    {
-                        kill_agent_pid(owned.pid).await;
-                        let _ = child.kill().await;
-                        let _ = child.wait().await;
+                // `stop` removes the launch metadata after the loopback
+                // listener is gone. Observe that local signal first so a
+                // foreground launcher is not held hostage by a stale TCP
+                // connection while the Agent is already shutting down.
+                if !launch_record_path(paths).exists() && !lock_path(paths).exists() {
+                    if let Ok(Some(status)) = child.try_wait() {
+                        println!("agent exited: {status}");
+                    } else {
+                        let _ = child.start_kill();
+                        println!("agent stopped");
                     }
                     remove_launch_record(paths);
-                    println!("agent stopped");
                     return Ok(());
+                }
+                match probe_health(client, options.config.port).await {
+                    Ok(Some(_)) | Err(_) => down_polls = 0,
+                    Ok(None) => {
+                        down_polls = down_polls.saturating_add(1);
+                        if down_polls < 3 {
+                            continue;
+                        }
+                        if let Ok(Some(status)) = child.try_wait() {
+                            remove_launch_record(paths);
+                            println!("agent exited: {status}");
+                            return Ok(());
+                        }
+
+                        // Once the owned Agent has kept its listener down for
+                        // several consecutive polls, do not wait forever for
+                        // a Windows process notification that may be missed.
+                        // Terminate only the exact child handle and return.
+                        let _ = child.start_kill();
+                        remove_launch_record(paths);
+                        println!("agent stopped");
+                        return Ok(());
+                    }
                 }
             }
         }
