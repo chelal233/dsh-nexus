@@ -1,6 +1,6 @@
 # Nexus architecture baseline
 
-Status: Phase 5 external update executor (headless MVP)
+Status: Phase 6 release-aware Harness launch (headless MVP)
 
 ## Purpose
 
@@ -145,6 +145,16 @@ accepted):
 }
 ```
 
+Harness launch fields may opt into the active immutable release slot with the
+placeholders `{release}` (the safe slot ID) and `{release_root}` (the
+canonical `releases/<id>` directory). `{profile}` remains available for the
+explicit profile name. For example, `program: "{release_root}/bin/harness"`
+and `working_dir: "{release_root}"` make the selected release the executable
+without changing the upstream tree. If a release placeholder is configured
+while no release is current, start fails with a configuration error instead of
+falling back to an arbitrary directory. Static program paths continue to work
+unchanged.
+
 The fields can be overridden explicitly for development and tests with
 `NEXUS_HARNESS_PROGRAM`, `NEXUS_HARNESS_ARGS` (JSON array or whitespace
 separated), `NEXUS_HARNESS_WORKING_DIR`, `NEXUS_HARNESS_READINESS_URL`, and
@@ -196,7 +206,8 @@ plugin marketplaces, recommendations, advertising, cloud sync, remote control,
 or authentication. The replaceable UI can be added later against the v1 Agent
 protocol. Release registration/promotion remain explicit metadata operations;
 the update executor installs a verified immutable slot but does not silently
-change the active pointer or start Harness. A future apply operation must keep
-promotion stopped/atomic and bind the selected slot through an explicit launch
-spec. Profile selection does not claim to understand Harness internals, and
-checkpoint restore remains metadata-only.
+change the active pointer or start Harness. Once a slot is explicitly promoted,
+the supervisor resolves `{release_root}` from the catalog and performs launch
+from that canonical directory; it never guesses a release from the process
+working directory. Profile selection does not claim to understand Harness
+internals, and checkpoint restore remains metadata-only.

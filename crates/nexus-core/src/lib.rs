@@ -601,6 +601,29 @@ impl ReleaseStore {
         &self.paths
     }
 
+    /// Resolve a registered release to its canonical immutable slot directory.
+    /// The manifest must be present in the catalog before a caller can use the
+    /// path for process launch, which prevents pointers to partial candidates.
+    pub fn release_root(&self, id: &str) -> io::Result<PathBuf> {
+        validate_release_id(id)?;
+        let catalog = self.load()?;
+        if catalog.find(id).is_none() {
+            return Err(io::Error::new(
+                io::ErrorKind::NotFound,
+                format!("release {id} was not found"),
+            ));
+        }
+        let releases_root = fs::canonicalize(&self.paths.releases_dir)?;
+        let slot = fs::canonicalize(self.slot_dir(id)?)?;
+        if slot == releases_root || !is_within(&releases_root, &slot) || !slot.is_dir() {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "registered release resolves outside the Nexus release root",
+            ));
+        }
+        Ok(slot)
+    }
+
     pub fn load(&self) -> io::Result<ReleaseCatalog> {
         let _guard = self.lock_gate()?;
         self.load_unlocked()
@@ -1343,8 +1366,8 @@ mod tests {
 
     use super::{
         is_within, load_harness_launch_spec, read_runtime_metadata, write_runtime_metadata,
-        AgentState, CheckpointStore, NexusConfig, NexusPaths, NexusRuntimeMetadata, ProfileStore,
-        ReleaseStore,
+        AgentState, CheckpointStore, HarnessLaunchSpec, NexusConfig, NexusPaths,
+        NexusRuntimeMetadata, ProfileStore, ReleaseStore,
     };
 
     #[test]
@@ -1633,6 +1656,50 @@ mod tests {
         let _ = fs::remove_dir_all(root);
     }
 
+    #[test]
+    fn release_root_and_launch_context_are_explicit_and_contained() {
+        let root = unique_test_root("release-context");
+        let paths = NexusPaths::from_root(root.clone());
+        let store = ReleaseStore::new(paths.clone());
+        store
+            .register("harness-rc1", "rc.1", None, None)
+            .expect("release registers");
+        let release_root = store
+            .release_root("harness-rc1")
+            .expect("release root resolves");
+        assert!(release_root.ends_with(Path::new("releases").join("harness-rc1")));
+
+        let mut spec = HarnessLaunchSpec::new(PathBuf::from("{release_root}/bin/harness"));
+        spec.args = vec![
+            "--profile".to_owned(),
+            "{profile}".to_owned(),
+            "--release".to_owned(),
+            "{release}".to_owned(),
+        ];
+        let program = spec
+            .render_path_for_context(
+                &spec.program,
+                "web.dark",
+                Some("harness-rc1"),
+                Some(&release_root),
+            )
+            .expect("program renders");
+        assert!(program
+            .to_string_lossy()
+            .contains(&*release_root.to_string_lossy()));
+        assert!(program
+            .to_string_lossy()
+            .replace('/', "\\")
+            .ends_with("bin\\harness"));
+        assert_eq!(
+            spec.render_args_for_context("web.dark", Some("harness-rc1"), Some(&release_root))
+                .expect("arguments render"),
+            vec!["--profile", "web.dark", "--release", "harness-rc1"]
+        );
+        assert!(spec.render_args_for_context("web", None, None).is_err());
+        let _ = fs::remove_dir_all(root);
+    }
+
     fn unique_test_root(label: &str) -> PathBuf {
         std::env::temp_dir().join(format!(
             "nexus-core-{label}-{}-{}",
@@ -1677,6 +1744,65 @@ impl HarnessLaunchSpec {
             .map(|argument| argument.replace("{profile}", profile))
             .collect()
     }
+
+    /// Render only placeholders explicitly supplied by Nexus. A release-aware
+    /// launch is opt-in: static Harness commands continue to work when no
+    /// release has been selected, while `{release}`/`{release_root}` fail
+    /// clearly instead of silently launching the wrong tree.
+    pub fn render_args_for_context(
+        &self,
+        profile: &str,
+        release_id: Option<&str>,
+        release_root: Option<&Path>,
+    ) -> io::Result<Vec<String>> {
+        self.args
+            .iter()
+            .map(|argument| render_launch_text(argument, profile, release_id, release_root))
+            .collect()
+    }
+
+    pub fn render_path_for_context(
+        &self,
+        path: &Path,
+        profile: &str,
+        release_id: Option<&str>,
+        release_root: Option<&Path>,
+    ) -> io::Result<PathBuf> {
+        Ok(PathBuf::from(render_launch_text(
+            &path.to_string_lossy(),
+            profile,
+            release_id,
+            release_root,
+        )?))
+    }
+}
+
+fn render_launch_text(
+    value: &str,
+    profile: &str,
+    release_id: Option<&str>,
+    release_root: Option<&Path>,
+) -> io::Result<String> {
+    let mut rendered = value.replace("{profile}", profile);
+    if rendered.contains("{release}") {
+        let Some(release_id) = release_id else {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "Harness launch uses {release} but no current release is selected",
+            ));
+        };
+        rendered = rendered.replace("{release}", release_id);
+    }
+    if rendered.contains("{release_root}") {
+        let Some(release_root) = release_root else {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "Harness launch uses {release_root} but no current release is selected",
+            ));
+        };
+        rendered = rendered.replace("{release_root}", &release_root.to_string_lossy());
+    }
+    Ok(rendered)
 }
 
 /// Monotonic-enough timestamp helper for naming disposable update

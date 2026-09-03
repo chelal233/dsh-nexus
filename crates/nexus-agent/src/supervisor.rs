@@ -10,7 +10,7 @@ use std::{
 
 use nexus_core::{
     load_harness_launch_spec, unix_time_seconds, validate_profile_name, HarnessLaunchSpec,
-    NexusPaths, RuntimeMetadataStore, DEFAULT_PROFILE,
+    NexusPaths, ReleaseStore, RuntimeMetadataStore, DEFAULT_PROFILE,
 };
 use nexus_protocol::{HarnessRuntimeInfo, HarnessState};
 use tokio::{
@@ -68,6 +68,7 @@ struct SupervisorInner {
 pub struct HarnessSupervisor {
     paths: NexusPaths,
     store: RuntimeMetadataStore,
+    releases: ReleaseStore,
     inner: Arc<Mutex<SupervisorInner>>,
     graceful_wait: Duration,
 }
@@ -85,9 +86,11 @@ impl HarnessSupervisor {
             .read()?
             .map(|metadata| metadata.harness)
             .unwrap_or_else(HarnessRuntimeInfo::detached);
+        let releases = ReleaseStore::new(paths.clone());
         Ok(Self {
             paths,
             store,
+            releases,
             inner: Arc::new(Mutex::new(SupervisorInner {
                 child: None,
                 runtime,
@@ -166,6 +169,29 @@ impl HarnessSupervisor {
             .map_err(HarnessSupervisorError::Configuration)?
             .filter(|spec| !spec.program.as_os_str().is_empty())
             .ok_or(HarnessSupervisorError::NotConfigured)?;
+        let release_catalog = self
+            .releases
+            .load()
+            .map_err(HarnessSupervisorError::Configuration)?;
+        let release_id = release_catalog.current_release.as_deref();
+        let release_root = release_id
+            .map(|id| self.releases.release_root(id))
+            .transpose()
+            .map_err(HarnessSupervisorError::Configuration)?;
+        let program = spec
+            .render_path_for_context(&spec.program, profile, release_id, release_root.as_deref())
+            .map_err(HarnessSupervisorError::Configuration)?;
+        let arguments = spec
+            .render_args_for_context(profile, release_id, release_root.as_deref())
+            .map_err(HarnessSupervisorError::Configuration)?;
+        let working_dir = spec
+            .working_dir
+            .as_deref()
+            .map(|path| {
+                spec.render_path_for_context(path, profile, release_id, release_root.as_deref())
+            })
+            .transpose()
+            .map_err(HarnessSupervisorError::Configuration)?;
         self.paths
             .ensure_directories()
             .map_err(HarnessSupervisorError::Configuration)?;
@@ -187,13 +213,13 @@ impl HarnessSupervisor {
                 .map_err(HarnessSupervisorError::Spawn)?;
             let stderr = open_log(&self.paths.logs_dir, "harness.stderr.log")
                 .map_err(HarnessSupervisorError::Spawn)?;
-            let mut command = Command::new(&spec.program);
+            let mut command = Command::new(&program);
             command
-                .args(spec.render_args_for_profile(profile))
+                .args(&arguments)
                 .stdin(Stdio::null())
                 .stdout(Stdio::from(stdout))
                 .stderr(Stdio::from(stderr));
-            if let Some(working_dir) = &spec.working_dir {
+            if let Some(working_dir) = &working_dir {
                 command.current_dir(working_dir);
             }
 
