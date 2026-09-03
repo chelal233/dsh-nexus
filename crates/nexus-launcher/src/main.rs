@@ -281,7 +281,7 @@ where
         .unwrap_or(DEFAULT_CONSOLE_PORT);
     let mut wait_secs = launcher_config
         .wait_secs
-        .or_else(|| env_wait_secs())
+        .or_else(env_wait_secs)
         .unwrap_or(DEFAULT_WAIT_SECS);
     let mut no_open = !launcher_config
         .open_browser
@@ -482,6 +482,11 @@ async fn run(options: Options) -> Result<(), String> {
         .timeout(Duration::from_secs(6))
         .build()
         .map_err(|error| format!("cannot initialize HTTP client: {error}"))?;
+
+    // Keep the Agent's browser CORS allowlist aligned with the Console host.
+    // The variable is inherited by a newly spawned Agent; an already-running
+    // Agent must have been started with the same launcher configuration.
+    env::set_var(CONSOLE_PORT_ENV, options.console_port.to_string());
 
     match options.command {
         LauncherCommand::Start => {

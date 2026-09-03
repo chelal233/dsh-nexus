@@ -1,6 +1,6 @@
 # Nexus architecture baseline
 
-Status: Phase 11 launcher configuration and Harness access
+Status: Phase 12 launcher configuration, Harness access, and configurable Console CORS
 
 ## Purpose
 
@@ -289,9 +289,11 @@ typed forms without taking ownership of persistence or process coordination.
 the no-argument/double-click mode) resolves the sibling `nexus-agent` (or an
 explicit `--agent`/`NEXUS_AGENT_BIN`), creates a recoverable lock and launch
 record below `run/`, redirects Agent logs into the Nexus `logs/` directory,
-waits for loopback health, serves `apps/nexus-console/` on
-`127.0.0.1:3091`, and exposes local `/launcher/*` controls for the UI. It
-starts a configured Harness after Agent is healthy and watches Agent so a
+waits for loopback health, serves `apps/nexus-console/` on the configured
+loopback Console port (`127.0.0.1:3091` by default), and exposes local
+`/launcher/*` controls for the UI. It passes `NEXUS_CONSOLE_PORT` to a newly
+spawned Agent so the Agent's browser CORS allowlist matches the configured
+Console port. It starts a configured Harness after Agent is healthy and watches Agent so a
 crash can be recovered without another manual command. Agent is always a
 separate operating-system process: stopping the Console host does not
 implicitly stop Agent. Use the UI's explicit stop action or
@@ -336,7 +338,7 @@ Rust host is available via
 `nexus-launcher console`; a dependency-free static WebShell view is included
 under `apps/nexus-console/`, while native packaging remains a separate
 follow-up slice against the launcher/Agent protocols. Browser access is limited
-to the fixed local CORS origins documented above. Release registration/promotion remain
+to loopback origins on the configured Console port. Release registration/promotion remain
 explicit metadata operations;
 the update executor installs a verified immutable slot but does not silently
 change the active pointer or start Harness. Once a slot is explicitly promoted,

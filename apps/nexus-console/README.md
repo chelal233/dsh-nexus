@@ -80,8 +80,10 @@ disabled by behavior (they explain how to start the real host). A future Tauri
 or Electron shell should load the same view or replace it while keeping
 `nexus-launcher`/Agent as the source of truth.
 
-The Agent allows browser requests from the fixed local Console origins
-`http://127.0.0.1:3091`, `http://localhost:3091`, and
-`http://[::1]:3091`. Keep the static server on port `3091`; a different port
-is intentionally rejected by the loopback CORS policy. The Agent remains bound
-to loopback and never enables wildcard or credentialed remote access.
+The Agent allows browser requests from loopback Console origins on the
+configured Console port (`3091` by default): `127.0.0.1`, `localhost`, and
+`[::1]`. `nexus-launcher` passes `NEXUS_CONSOLE_PORT` to a newly spawned Agent
+so a `launcher.json`/CLI Console port works end to end. A directly started
+Agent uses the default unless its environment sets the same variable. The
+Agent remains bound to loopback and never enables wildcard or credentialed
+remote access.

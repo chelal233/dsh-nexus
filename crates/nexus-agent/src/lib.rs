@@ -1,6 +1,6 @@
 //! Headless Nexus control-plane process.
 
-use std::{io, sync::Arc};
+use std::{env, io, sync::Arc};
 
 use axum::{
     extract::{Request, State},
@@ -43,11 +43,8 @@ mod updater;
 pub use supervisor::{HarnessSupervisor, HarnessSupervisorError};
 pub use updater::{UpdateExecutor, UpdateExecutorError};
 
-const LOCAL_CONSOLE_ORIGINS: &[&str] = &[
-    "http://127.0.0.1:3091",
-    "http://localhost:3091",
-    "http://[::1]:3091",
-];
+const DEFAULT_CONSOLE_PORT: u16 = 3091;
+const CONSOLE_PORT_ENV: &str = "NEXUS_CONSOLE_PORT";
 const CORS_ALLOWED_METHODS: &str = "GET, POST";
 const CORS_ALLOWED_HEADERS: &str = "content-type, accept";
 const CORS_MAX_AGE_SECS: &str = "300";
@@ -152,9 +149,11 @@ fn build_router(state: AppState) -> Router {
         .with_state(state)
 }
 
-/// Allow only the fixed local origin used by the dependency-free WebShell.
-/// The Agent remains loopback-only; this middleware does not enable remote
-/// origins or credentialed browser requests.
+/// Allow only the configured local origin used by the dependency-free
+/// WebShell. The Agent remains loopback-only; this middleware does not enable
+/// remote origins or credentialed browser requests. Launcher sets
+/// `NEXUS_CONSOLE_PORT` before spawning the Agent when a non-default Console
+/// port is configured.
 async fn local_console_cors(request: Request, next: Next) -> Response {
     let origin = request
         .headers()
@@ -184,7 +183,47 @@ async fn local_console_cors(request: Request, next: Next) -> Response {
 }
 
 fn is_allowed_console_origin(origin: &str) -> bool {
-    LOCAL_CONSOLE_ORIGINS.contains(&origin)
+    is_allowed_console_origin_for_port(origin, configured_console_port())
+}
+
+fn configured_console_port() -> u16 {
+    env::var(CONSOLE_PORT_ENV)
+        .ok()
+        .and_then(|value| value.parse::<u16>().ok())
+        .filter(|port| *port != 0)
+        .unwrap_or(DEFAULT_CONSOLE_PORT)
+}
+
+fn is_allowed_console_origin_for_port(origin: &str, expected_port: u16) -> bool {
+    if expected_port == 0 {
+        return false;
+    }
+    let Some(authority) = origin.strip_prefix("http://") else {
+        return false;
+    };
+    if authority.is_empty() || authority.contains(['/', '?', '#', '@']) || authority.ends_with('.')
+    {
+        return false;
+    }
+    let (host, port) = if let Some(rest) = authority.strip_prefix('[') {
+        let Some((host, suffix)) = rest.split_once(']') else {
+            return false;
+        };
+        let Some(port) = suffix.strip_prefix(':') else {
+            return false;
+        };
+        (host, port)
+    } else {
+        let Some((host, port)) = authority.rsplit_once(':') else {
+            return false;
+        };
+        (host, port)
+    };
+    let Ok(port) = port.parse::<u16>() else {
+        return false;
+    };
+    port == expected_port && matches!(host, "127.0.0.1" | "::1")
+        || port == expected_port && host.eq_ignore_ascii_case("localhost")
 }
 
 fn is_allowed_cors_method(method: &str) -> bool {
@@ -978,16 +1017,44 @@ async fn wait_for_shutdown(mut receiver: watch::Receiver<bool>) {
 
 #[cfg(test)]
 mod cors_tests {
-    use super::{are_allowed_cors_headers, is_allowed_console_origin, is_allowed_cors_method};
+    use super::{
+        are_allowed_cors_headers, is_allowed_console_origin_for_port, is_allowed_cors_method,
+    };
 
     #[test]
-    fn allows_only_the_fixed_local_console_origins() {
-        assert!(is_allowed_console_origin("http://127.0.0.1:3091"));
-        assert!(is_allowed_console_origin("http://localhost:3091"));
-        assert!(is_allowed_console_origin("http://[::1]:3091"));
-        assert!(!is_allowed_console_origin("http://127.0.0.1:3092"));
-        assert!(!is_allowed_console_origin("https://127.0.0.1:3091"));
-        assert!(!is_allowed_console_origin("http://192.168.1.10:3091"));
+    fn allows_only_the_configured_local_console_port() {
+        assert!(is_allowed_console_origin_for_port(
+            "http://127.0.0.1:3191",
+            3191
+        ));
+        assert!(is_allowed_console_origin_for_port(
+            "http://localhost:3191",
+            3191
+        ));
+        assert!(is_allowed_console_origin_for_port(
+            "http://[::1]:3191",
+            3191
+        ));
+        assert!(!is_allowed_console_origin_for_port(
+            "http://127.0.0.1:3091",
+            3191
+        ));
+        assert!(!is_allowed_console_origin_for_port(
+            "https://127.0.0.1:3191",
+            3191
+        ));
+        assert!(!is_allowed_console_origin_for_port(
+            "http://192.168.1.10:3191",
+            3191
+        ));
+        assert!(!is_allowed_console_origin_for_port(
+            "http://127.0.0.1:3191/",
+            3191
+        ));
+        assert!(!is_allowed_console_origin_for_port(
+            "http://127.0.0.1:3191@localhost",
+            3191
+        ));
     }
 
     #[test]
