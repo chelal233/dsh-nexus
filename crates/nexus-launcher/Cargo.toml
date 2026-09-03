@@ -10,12 +10,14 @@ name = "nexus-launcher"
 path = "src/main.rs"
 
 [dependencies]
+axum.workspace = true
 nexus-core = { path = "../nexus-core" }
 nexus-protocol = { path = "../nexus-protocol" }
 reqwest.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 tokio.workspace = true
+tower-http.workspace = true
 
 [target.'cfg(windows)'.dependencies]
 windows-sys.workspace = true

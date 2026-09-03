@@ -22,6 +22,7 @@
           <input id="api-base" value="http://127.0.0.1:3090" spellcheck="false" />
           <button class="button primary" data-action="refresh">刷新</button>
           <span id="connection-state" class="pill muted">未连接</span>
+          <span id="launcher-state" class="pill muted">未检测</span>
         </div>
       </header>
 
@@ -31,7 +32,7 @@
             <p class="eyebrow">REPLACEABLE WEBSHELL</p>
             <h2>Agent 是核心，界面只是一个客户端。</h2>
             <p class="hero-copy">
-              这个静态 Console 只调用 loopback v1 API。生命周期、Harness、profile、checkpoint、release、更新和诊断均由 Rust Agent 持有。
+              Console 是可替换的界面层。通过 nexus-launcher 托管时，它还可以控制 Agent 的启动、停止和重启；Harness、profile、checkpoint、release、更新和诊断仍由 Rust Agent 持有。
             </p>
           </div>
           <div class="hero-actions">
@@ -55,6 +56,9 @@
             <div><dt>API</dt><dd id="agent-api-version">—</dd></div>
           </dl>
           <div class="button-row">
+            <button class="button primary" data-action="agent-start">启动 Agent</button>
+            <button class="button" data-action="agent-restart">重启 Agent</button>
+            <button class="button danger" data-action="agent-stop">停止 Agent</button>
             <button class="button" data-action="harness-start">启动 Harness</button>
             <button class="button" data-action="harness-stop">停止 Harness</button>
             <button class="button" data-action="harness-restart">重启 Harness</button>

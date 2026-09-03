@@ -1,12 +1,13 @@
 # Nexus architecture baseline
 
-Status: Phase 9 launcher bootstrap and replaceable static WebShell foundation
+Status: Phase 10 single-entry launcher host and replaceable Console foundation
 
 ## Purpose
 
 Nexus is a headless control plane around the standalone DeepSeek Harness. The
 implementation provides a Rust Agent, a versioned local protocol, a CLI, and
-a thin launcher boundary. It does not modify or vendor Harness source code.
+a launcher host that can also serve the replaceable Console UI. It does not
+modify or vendor Harness source code.
 
 ## Non-negotiable boundaries
 
@@ -33,13 +34,23 @@ Harness process. Harness remains an immutable, replaceable upstream binary;
 Nexus starts it only when a caller requests it and never auto-starts it during
 Agent boot.
 
-### Console/WebShell is replaceable
+### Launcher is the host; Console/WebShell is replaceable
 
-Tauri is not a business layer. A future Tauri Console/WebShell may provide
-windows, tray behavior, notifications, and a Harness Web view, but it must
-consume the Agent protocol rather than own lifecycle state or write runtime
-files directly. Electron, a browser, or a script can replace it without
-changing Agent behavior.
+`nexus-launcher` is the user-facing host/runtime boundary. Its Console mode
+starts or reconnects to Agent, starts a configured Harness, serves the local
+WebShell, supervises Agent availability, and is the future home for tray,
+notifications, and single-instance behavior. It must remain usable without a
+GUI through its command line and loopback endpoints.
+
+`nexus-console` is only a view/client layer. A future Tauri or Electron shell
+should load this UI (or a replacement UI) and call the launcher's local API;
+it must not own lifecycle state, write Nexus files directly, or become a
+Harness dependency. A browser, script, or another native toolkit can replace
+that shell without changing Agent business behavior.
+
+A dedicated native shell for the Harness Web view, if ever useful, is a
+separate optional component. It is not the launcher, it does not replace the
+Agent, and its failure must not remove the headless control path.
 
 ## Components
 
@@ -51,9 +62,28 @@ nexus-core      paths, configuration, and state model
 nexus-agent     foreground loopback HTTP server, HarnessSupervisor, updater, diagnostics, config
        ^
 nexusctl        CLI client (`status`, `harness`, `profile`, `checkpoint`, `release`, `update`, `config`)
-nexus-launcher  process bootstrap (`start`, `run`, `stop`, `status`, `logs`)
-apps/nexus-console  dependency-free replaceable WebShell client
+nexus-launcher  host/runtime (`console`) plus process fallback commands
+apps/nexus-console  dependency-free replaceable WebShell view/client
+optional native shell  Tauri/Electron container for launcher Console API
 ```
+
+### Process model
+
+These are separate processes with different responsibilities:
+
+- `nexus-launcher.exe` is the long-lived host/console process. It starts or
+  reconnects to Agent, serves the view, and supervises availability.
+- `nexus-agent.exe` is the independent long-lived control-plane process. It
+  listens on port 3090 and owns Nexus state and Harness supervision; Launcher
+  never embeds its event loop or business state.
+- `nexusctl.exe` is a short-lived command client. It sends HTTP requests to
+  Agent and exits; it is not a daemon and does not host Agent.
+- The configured Harness runtime is another process started and supervised by
+  Agent. It remains an immutable upstream runtime.
+
+Stopping the Console host therefore does not implicitly stop Agent. An
+explicit Launcher/UI stop request is required when the independent Agent
+process should end.
 
 The Agent exposes:
 
@@ -227,35 +257,45 @@ runtime has stopped/returned idle. Setting sections is currently an API-level
 operation so a future Tauri, Electron, browser, or script frontend can supply
 typed forms without taking ownership of persistence or process coordination.
 
-`nexus-launcher` is a thin process boundary around the Agent. `start` resolves
-the sibling `nexus-agent` (or an explicit `--agent`/`NEXUS_AGENT_BIN`), creates a
-recoverable lock and launch record below `run/`, redirects Agent logs into the
-Nexus `logs/` directory, and waits for loopback health (or the just-created
-Agent listening marker) before returning. `run` keeps the Agent attached in the
-foreground, turns Ctrl+C into the same graceful shutdown request, and polls a
-non-blocking child handle so an external `stop` cannot strand the launcher on a
-platform process-notification edge case. `stop` only calls the Agent shutdown
-endpoint and waits for the listener to disappear; it never kills an arbitrary
-PID. A lock older than the bounded stale interval is recoverable only after a
-fresh health probe confirms that no Agent is serving the configured port.
+`nexus-launcher` is the host/runtime boundary around the Agent. `console` (also
+the no-argument/double-click mode) resolves the sibling `nexus-agent` (or an
+explicit `--agent`/`NEXUS_AGENT_BIN`), creates a recoverable lock and launch
+record below `run/`, redirects Agent logs into the Nexus `logs/` directory,
+waits for loopback health, serves `apps/nexus-console/` on
+`127.0.0.1:3091`, and exposes local `/launcher/*` controls for the UI. It
+starts a configured Harness after Agent is healthy and watches Agent so a
+crash can be recovered without another manual command. Agent is always a
+separate operating-system process: stopping the Console host does not
+implicitly stop Agent. Use the UI's explicit stop action or
+`nexus-launcher stop` when Agent should end.
 
-The static Console lives under `apps/nexus-console/`. It validates that its API
+`start`, `run`, `stop`, `status`, and `logs` remain script/recovery fallbacks.
+They keep the existing guarantees: `start` returns only after health, `run`
+keeps Agent attached in the foreground, and `stop` calls the Agent shutdown
+endpoint and waits for the listener to disappear rather than killing an
+arbitrary PID. A lock older than the bounded stale interval is recoverable only
+after a fresh health probe confirms that no Agent is serving the configured
+port.
+
+The Console view lives under `apps/nexus-console/`. It validates that its API
 base is loopback-only, renders Agent/Harness/profile/release/update/checkpoint/
-diagnostic/config status, and sends explicit v1 actions. It stores no runtime
-state and has no dependency on Tauri or Electron. A native shell can load the
-same assets, or a browser can use the fixed local origins
-`http://127.0.0.1:3091`, `http://localhost:3091`, and `http://[::1]:3091`.
-The Agent handles their `OPTIONS` preflight and returns narrowly scoped CORS
-headers; it never enables wildcard or credentialed remote access.
+diagnostic/config status, and sends explicit v1 actions. When served by
+`nexus-launcher console`, it also uses `/launcher/status` and
+`/launcher/agent` for Agent lifecycle controls. If those routes are absent,
+the page deliberately degrades to a read/action client for a separately
+started Agent; this is the development-only Python static preview path. The
+view stores no runtime state and has no dependency on Tauri or Electron. A
+native shell can load the same assets or replace them entirely.
 
 ## Current scope and exclusions
 
-This headless MVP does not add native Tauri/Electron packaging, Harness source
+This phase does not add native Tauri/Electron packaging, Harness source
 dependencies, plugin marketplaces, recommendations, advertising, cloud sync,
-remote control, or authentication. A dependency-free static WebShell foundation
-is included under `apps/nexus-console/`; native packaging remains a separate
-follow-up slice against the v1 Agent protocol. Browser access is limited to the
-fixed local CORS origins documented above. Release registration/promotion remain
+remote control, or authentication. The single-entry Rust host is available via
+`nexus-launcher console`; a dependency-free static WebShell view is included
+under `apps/nexus-console/`, while native packaging remains a separate
+follow-up slice against the launcher/Agent protocols. Browser access is limited
+to the fixed local CORS origins documented above. Release registration/promotion remain
 explicit metadata operations;
 the update executor installs a verified immutable slot but does not silently
 change the active pointer or start Harness. Once a slot is explicitly promoted,

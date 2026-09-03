@@ -1,39 +1,55 @@
-//! Small, replaceable process launcher for the headless Nexus Agent.
+//! Single-entry host for the headless Nexus Agent and replaceable Console.
 //!
-//! The launcher owns only process bootstrap metadata under Nexus' `run/`
-//! directory. It does not own Harness state, profile data, release pointers,
-//! or business logic; those remain in the Agent and are reachable through its
-//! loopback v1 API.
+//! The launcher owns process bootstrap metadata and the Console host boundary
+//! under Nexus' `run/` directory. It does not own Harness state, profile data,
+//! release pointers, or business logic; those remain in the Agent and are
+//! reachable through its loopback v1 API.
 
 use std::{
     env,
     fs::{self, OpenOptions},
     io::{self, Read, Seek, SeekFrom, Write},
+    net::{IpAddr, Ipv4Addr, SocketAddr},
     path::{Path, PathBuf},
     process::{self, Command as StdCommand, Stdio},
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
-use nexus_core::{NexusConfig, NexusPaths};
-use nexus_protocol::{HealthResponse, HealthStatus, StateResponse};
+use axum::{
+    extract::State,
+    http::StatusCode,
+    response::{IntoResponse, Response},
+    routing::get,
+    Json, Router,
+};
+use nexus_core::{load_harness_launch_spec, NexusConfig, NexusPaths};
+use nexus_protocol::{HarnessAction, HarnessCommand, HealthResponse, HealthStatus, StateResponse};
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
+use serde_json::{json, Value};
 use tokio::{
+    net::TcpListener,
     process::{Child, Command as TokioCommand},
+    sync::Mutex,
     time::{sleep, Instant},
 };
+use tower_http::services::ServeDir;
 
 const DEFAULT_WAIT_SECS: u64 = 20;
 const DEFAULT_STOP_WAIT_SECS: u64 = 15;
 const LOCK_STALE_AFTER_SECS: u64 = 30;
+const DEFAULT_CONSOLE_PORT: u16 = 3091;
 const AGENT_BINARY_ENV: &str = "NEXUS_AGENT_BIN";
+const CONSOLE_DIR_ENV: &str = "NEXUS_CONSOLE_DIR";
 
 #[derive(Debug, Clone)]
 struct Options {
     command: LauncherCommand,
     config: NexusConfig,
     agent_program: Option<PathBuf>,
+    console_dir: Option<PathBuf>,
     wait_secs: u64,
+    no_open: bool,
     json: bool,
 }
 
@@ -41,9 +57,49 @@ struct Options {
 enum LauncherCommand {
     Start,
     Run,
+    Console,
     Stop,
     Status,
     Logs,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+struct ConsoleStatus {
+    running: bool,
+    desired_agent_running: bool,
+    agent_api: String,
+    console_url: String,
+    data_root: String,
+    agent_pid: Option<u32>,
+    agent_program: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct ConsoleAgentCommand {
+    action: ConsoleAgentAction,
+}
+
+#[derive(Debug, Clone, Copy, Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum ConsoleAgentAction {
+    Start,
+    Stop,
+    Restart,
+    Status,
+}
+
+#[derive(Clone)]
+struct ConsoleController {
+    options: Options,
+    paths: NexusPaths,
+    client: Client,
+    state: std::sync::Arc<Mutex<ConsoleRuntimeState>>,
+    operation: std::sync::Arc<Mutex<()>>,
+}
+
+#[derive(Debug, Clone)]
+struct ConsoleRuntimeState {
+    desired_agent_running: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -98,17 +154,28 @@ async fn main() {
 }
 
 fn parse_args() -> Result<Option<Options>, String> {
+    parse_args_from(env::args_os().skip(1))
+}
+
+fn parse_args_from<I, S>(arguments: I) -> Result<Option<Options>, String>
+where
+    I: IntoIterator<Item = S>,
+    S: Into<std::ffi::OsString>,
+{
     let mut config = NexusConfig::from_env();
     let mut command = None;
     let mut agent_program = None;
+    let mut console_dir = None;
     let mut wait_secs = DEFAULT_WAIT_SECS;
+    let mut no_open = false;
     let mut json = false;
-    let mut args = env::args_os().skip(1);
+    let mut args = arguments.into_iter().map(Into::into);
 
     while let Some(argument) = args.next() {
         match argument.to_string_lossy().as_ref() {
             "start" if command.is_none() => command = Some(LauncherCommand::Start),
             "run" | "foreground" if command.is_none() => command = Some(LauncherCommand::Run),
+            "console" if command.is_none() => command = Some(LauncherCommand::Console),
             "stop" if command.is_none() => command = Some(LauncherCommand::Stop),
             "status" if command.is_none() => command = Some(LauncherCommand::Status),
             "logs" if command.is_none() => command = Some(LauncherCommand::Logs),
@@ -142,6 +209,21 @@ fn parse_args() -> Result<Option<Options>, String> {
                 }
                 agent_program = Some(path);
             }
+            "--console-dir" => {
+                let value = args
+                    .next()
+                    .ok_or_else(|| "--console-dir requires PATH".to_owned())?;
+                let path = PathBuf::from(value);
+                if path.as_os_str().is_empty()
+                    || path.to_string_lossy().chars().any(char::is_control)
+                {
+                    return Err(
+                        "--console-dir must be a non-empty path without control characters"
+                            .to_owned(),
+                    );
+                }
+                console_dir = Some(path);
+            }
             "--wait-secs" => {
                 let value = args
                     .next()
@@ -153,6 +235,7 @@ fn parse_args() -> Result<Option<Options>, String> {
                     .filter(|seconds| (1..=300).contains(seconds))
                     .ok_or_else(|| "--wait-secs must be between 1 and 300".to_owned())?;
             }
+            "--no-open" => no_open = true,
             "--json" => json = true,
             "--help" | "-h" => {
                 print_help();
@@ -162,15 +245,18 @@ fn parse_args() -> Result<Option<Options>, String> {
         }
     }
 
-    let Some(command) = command else {
-        return Err("a command is required (start, run, stop, status, or logs)".to_owned());
-    };
+    // Double-clicking the launcher is the user-facing path. Keep the explicit
+    // subcommand for scripts while making no-argument invocation enter the
+    // same Console host.
+    let command = command.unwrap_or(LauncherCommand::Console);
 
     Ok(Some(Options {
         command,
         config,
         agent_program,
+        console_dir,
         wait_secs,
+        no_open,
         json,
     }))
 }
@@ -222,6 +308,7 @@ async fn run(options: Options) -> Result<(), String> {
             };
             run_foreground(owned, &options, &paths, &client).await?;
         }
+        LauncherCommand::Console => run_console(&options, &paths, &client).await?,
         LauncherCommand::Stop => stop_agent(&options, &paths, &client).await?,
         LauncherCommand::Status => status_agent(&options, &paths, &client).await?,
         LauncherCommand::Logs => print_logs(&options, &paths),
@@ -233,6 +320,267 @@ async fn run(options: Options) -> Result<(), String> {
 enum EnsureResult {
     AlreadyRunning,
     Owned(OwnedAgent),
+}
+
+impl ConsoleController {
+    fn new(options: Options, paths: NexusPaths, client: Client) -> Self {
+        Self {
+            options,
+            paths,
+            client,
+            state: std::sync::Arc::new(Mutex::new(ConsoleRuntimeState {
+                desired_agent_running: true,
+            })),
+            operation: std::sync::Arc::new(Mutex::new(())),
+        }
+    }
+
+    async fn start_agent(&self) -> Result<ConsoleStatus, String> {
+        let _operation = self.operation.lock().await;
+        self.start_agent_locked().await?;
+        Ok(self.status().await)
+    }
+
+    async fn start_agent_locked(&self) -> Result<(), String> {
+        let mut options = self.options.clone();
+        options.command = LauncherCommand::Start;
+        let result = ensure_agent_started(&options, &self.paths, &self.client).await?;
+        match result {
+            EnsureResult::AlreadyRunning => {}
+            EnsureResult::Owned(mut owned) => {
+                owned.lock.retain();
+                drop(owned.child);
+            }
+        }
+        {
+            let mut state = self.state.lock().await;
+            state.desired_agent_running = true;
+        }
+
+        // A console launch is the user-facing one-shot path. A missing Harness
+        // configuration is intentionally non-fatal: the control plane remains
+        // available so the user can configure it from the Console.
+        self.start_harness_if_configured().await;
+        Ok(())
+    }
+
+    async fn stop_agent(&self) -> Result<ConsoleStatus, String> {
+        let _operation = self.operation.lock().await;
+        {
+            let mut state = self.state.lock().await;
+            state.desired_agent_running = false;
+        }
+        let result = stop_agent(&self.options, &self.paths, &self.client).await;
+        result?;
+        Ok(self.status().await)
+    }
+
+    async fn restart_agent(&self) -> Result<ConsoleStatus, String> {
+        let _operation = self.operation.lock().await;
+        {
+            let mut state = self.state.lock().await;
+            state.desired_agent_running = true;
+        }
+        stop_agent(&self.options, &self.paths, &self.client).await?;
+        self.start_agent_locked().await?;
+        Ok(self.status().await)
+    }
+
+    async fn status(&self) -> ConsoleStatus {
+        let health = probe_health(&self.client, self.options.config.port)
+            .await
+            .ok()
+            .flatten();
+        let record = read_launch_record(&self.paths);
+        let state = self.state.lock().await.clone();
+        let (agent_pid, agent_program) = if health.is_some() {
+            record
+                .map(|record| (Some(record.pid), Some(record.agent_program)))
+                .unwrap_or((None, None))
+        } else {
+            (None, None)
+        };
+        ConsoleStatus {
+            running: health.is_some(),
+            desired_agent_running: state.desired_agent_running,
+            agent_api: format!("http://127.0.0.1:{}", self.options.config.port),
+            console_url: format!("http://127.0.0.1:{DEFAULT_CONSOLE_PORT}/"),
+            data_root: self.paths.root.display().to_string(),
+            agent_pid,
+            agent_program,
+        }
+    }
+
+    async fn start_harness_if_configured(&self) {
+        if !matches!(load_harness_launch_spec(&self.paths), Ok(Some(_))) {
+            return;
+        }
+        let response = self
+            .client
+            .post(format!(
+                "http://127.0.0.1:{}/v1/harness",
+                self.options.config.port
+            ))
+            .json(&HarnessCommand {
+                action: HarnessAction::Start,
+            })
+            .send()
+            .await;
+        if let Ok(response) = response {
+            let status = response.status();
+            if !status.is_success() && status != reqwest::StatusCode::CONFLICT {
+                eprintln!("nexus-launcher: Console auto-start Harness returned HTTP {status}");
+            }
+        }
+    }
+
+    async fn watchdog(self) {
+        loop {
+            sleep(Duration::from_secs(1)).await;
+            let desired = self.state.lock().await.desired_agent_running;
+            if desired && !is_agent_healthy(&self.client, self.options.config.port).await {
+                let _ = self.start_agent().await;
+            }
+        }
+    }
+}
+
+async fn run_console(options: &Options, paths: &NexusPaths, client: &Client) -> Result<(), String> {
+    let controller = ConsoleController::new(options.clone(), paths.clone(), client.clone());
+    let console_dir = resolve_console_dir(options.console_dir.as_deref())?;
+    let listener = TcpListener::bind(console_bind_addr())
+        .await
+        .map_err(|error| format!("cannot bind Console at {DEFAULT_CONSOLE_PORT}: {error}"))?;
+    controller.start_agent().await?;
+    let app = build_console_router(controller.clone(), console_dir);
+    println!(
+        "nexus console: http://127.0.0.1:{DEFAULT_CONSOLE_PORT}/ (Agent {})",
+        controller.status().await.agent_api
+    );
+    if !options.no_open {
+        open_console_browser();
+    }
+
+    let watchdog = tokio::spawn(controller.clone().watchdog());
+    let server = axum::serve(listener, app);
+    let server_result = tokio::select! {
+        result = server => result.map_err(|error| format!("Console server failed: {error}")),
+        signal = tokio::signal::ctrl_c() => {
+            signal.map_err(|error| format!("cannot listen for Ctrl+C: {error}"))?;
+            println!("nexus console stopped; Agent remains running (use `nexus-launcher stop` to stop it)");
+            Ok(())
+        }
+    };
+    watchdog.abort();
+    server_result
+}
+
+fn console_bind_addr() -> SocketAddr {
+    SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), DEFAULT_CONSOLE_PORT)
+}
+
+fn resolve_console_dir(explicit: Option<&Path>) -> Result<PathBuf, String> {
+    let mut candidates = Vec::new();
+    if let Some(path) = explicit {
+        candidates.push(path.to_owned());
+    }
+    if let Some(path) = env::var_os(CONSOLE_DIR_ENV).filter(|value| !value.is_empty()) {
+        candidates.push(PathBuf::from(path));
+    }
+    if let Ok(executable) = env::current_exe() {
+        if let Some(parent) = executable.parent() {
+            candidates.push(parent.join("console"));
+            let mut ancestor = Some(parent);
+            for _ in 0..4 {
+                if let Some(path) = ancestor {
+                    candidates.push(path.join("apps").join("nexus-console"));
+                    ancestor = path.parent();
+                }
+            }
+        }
+    }
+    if let Ok(current) = env::current_dir() {
+        candidates.push(current.join("apps").join("nexus-console"));
+    }
+
+    candidates
+        .into_iter()
+        .find(|path| path.join("index.html").is_file())
+        .map(|path| fs::canonicalize(&path).unwrap_or(path))
+        .ok_or_else(|| {
+            format!(
+                "Console files were not found; pass --console-dir PATH or set {CONSOLE_DIR_ENV}"
+            )
+        })
+}
+
+fn open_console_browser() {
+    let url = format!("http://127.0.0.1:{DEFAULT_CONSOLE_PORT}/");
+    #[cfg(windows)]
+    {
+        let _ = StdCommand::new("cmd")
+            .args(["/C", "start", "", &url])
+            .status();
+    }
+    #[cfg(target_os = "macos")]
+    {
+        let _ = StdCommand::new("open").arg(&url).status();
+    }
+    #[cfg(all(unix, not(target_os = "macos")))]
+    {
+        let _ = StdCommand::new("xdg-open").arg(&url).status();
+    }
+}
+
+fn build_console_router(controller: ConsoleController, console_dir: PathBuf) -> Router {
+    Router::new()
+        .route("/launcher/status", get(console_status))
+        .route(
+            "/launcher/agent",
+            get(console_agent_status).post(console_agent_control),
+        )
+        .route("/launcher/logs", get(console_logs))
+        .fallback_service(ServeDir::new(console_dir).append_index_html_on_directories(true))
+        .with_state(controller)
+}
+
+async fn console_status(State(controller): State<ConsoleController>) -> Json<ConsoleStatus> {
+    Json(controller.status().await)
+}
+
+async fn console_agent_status(State(controller): State<ConsoleController>) -> Json<ConsoleStatus> {
+    Json(controller.status().await)
+}
+
+async fn console_agent_control(
+    State(controller): State<ConsoleController>,
+    Json(command): Json<ConsoleAgentCommand>,
+) -> Response {
+    let result = match command.action {
+        ConsoleAgentAction::Start => controller.start_agent().await,
+        ConsoleAgentAction::Stop => controller.stop_agent().await,
+        ConsoleAgentAction::Restart => controller.restart_agent().await,
+        ConsoleAgentAction::Status => Ok(controller.status().await),
+    };
+    match result {
+        Ok(status) => (StatusCode::OK, Json(json!(status))).into_response(),
+        Err(error) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({"ok": false, "message": error})),
+        )
+            .into_response(),
+    }
+}
+
+async fn console_logs(State(controller): State<ConsoleController>) -> Json<Value> {
+    Json(json!({
+        "data_root": controller.paths.root.display().to_string(),
+        "agent_stdout": controller.paths.logs_dir.join("agent.stdout.log"),
+        "agent_stderr": controller.paths.logs_dir.join("agent.stderr.log"),
+        "harness_stdout": controller.paths.logs_dir.join("harness.stdout.log"),
+        "harness_stderr": controller.paths.logs_dir.join("harness.stderr.log"),
+        "launch_record": launch_record_path(&controller.paths),
+    }))
 }
 
 async fn ensure_agent_started(
@@ -1106,16 +1454,20 @@ fn print_help() {
 Usage:
   nexus-launcher start [--data-dir PATH] [--port PORT] [--agent PATH] [--wait-secs SECONDS] [--json]
   nexus-launcher run|foreground [--data-dir PATH] [--port PORT] [--agent PATH] [--wait-secs SECONDS]
+  nexus-launcher console [--data-dir PATH] [--port PORT] [--agent PATH] [--console-dir PATH] [--wait-secs SECONDS] [--no-open]
   nexus-launcher stop [--data-dir PATH] [--port PORT] [--json]
   nexus-launcher status [--data-dir PATH] [--port PORT] [--json]
   nexus-launcher logs [--data-dir PATH] [--json]
 
-`start` detaches a sibling `nexus-agent`; `run` owns it in the foreground and
-stops it gracefully on Ctrl+C. The Agent remains the only owner of Harness,
-profile, checkpoint, release, update, and diagnostics behavior. The launcher
-binds no network listener and talks to loopback only.
+With no command, the launcher enters `console`. The Console host starts or
+reconnects to the loopback Agent, starts a configured Harness, serves the
+replaceable WebShell on 127.0.0.1:3091, and supervises Agent availability.
+`start`/`run`/`stop`/`status`/`logs` remain script and recovery fallbacks. The
+Agent remains the owner of Harness, profile, checkpoint, release, update, and
+diagnostic business behavior.
 
-Environment: NEXUS_DATA_DIR, NEXUS_AGENT_PORT, NEXUS_AGENT_BIN."#
+Environment: NEXUS_DATA_DIR, NEXUS_AGENT_PORT, NEXUS_AGENT_BIN,
+NEXUS_CONSOLE_DIR."#
     );
 }
 
@@ -1161,5 +1513,49 @@ mod tests {
         // stable for scripts.
         assert_eq!(DEFAULT_WAIT_SECS, 20);
         assert_eq!(LOCK_STALE_AFTER_SECS, 30);
+    }
+
+    #[test]
+    fn console_command_accepts_console_directory_and_disable_open() {
+        let options = parse_args_from([
+            "console",
+            "--console-dir",
+            "E:\\git\\dsh-nexus\\apps\\nexus-console",
+            "--no-open",
+        ])
+        .expect("console arguments parse")
+        .expect("console options are present");
+        assert_eq!(options.command, LauncherCommand::Console);
+        assert_eq!(
+            options.console_dir,
+            Some(PathBuf::from("E:\\git\\dsh-nexus\\apps\\nexus-console"))
+        );
+        assert!(options.no_open);
+    }
+
+    #[test]
+    fn no_command_defaults_to_console_host() {
+        let options = parse_args_from(std::iter::empty::<&str>())
+            .expect("empty arguments parse")
+            .expect("console options are present");
+        assert_eq!(options.command, LauncherCommand::Console);
+        assert!(!options.no_open);
+    }
+
+    #[test]
+    fn console_status_is_json_safe() {
+        let status = ConsoleStatus {
+            running: true,
+            desired_agent_running: true,
+            agent_api: "http://127.0.0.1:3090".to_owned(),
+            console_url: "http://127.0.0.1:3091/".to_owned(),
+            data_root: "D:\\dsh-local\\nexus-data".to_owned(),
+            agent_pid: Some(42),
+            agent_program: Some("nexus-agent.exe".to_owned()),
+        };
+        let encoded = serde_json::to_value(status).expect("console status serializes");
+        assert_eq!(encoded["running"], true);
+        assert_eq!(encoded["agent_pid"], 42);
+        assert_eq!(encoded["console_url"], "http://127.0.0.1:3091/");
     }
 }

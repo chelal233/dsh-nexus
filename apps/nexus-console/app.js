@@ -1,6 +1,7 @@
 const DEFAULT_API = "http://127.0.0.1:3090";
 const apiInput = document.querySelector("#api-base");
 const activity = document.querySelector("#activity-log");
+let launcherAvailable = false;
 
 const savedApi = localStorage.getItem("nexus.console.api") || DEFAULT_API;
 apiInput.value = savedApi;
@@ -37,6 +38,25 @@ async function request(path, options = {}) {
     init.body = JSON.stringify(options.body);
   }
   const response = await fetch(`${apiBase()}${path}`, init);
+  const text = await response.text();
+  let body = null;
+  if (text) {
+    try { body = JSON.parse(text); } catch { body = text; }
+  }
+  if (!response.ok) {
+    const message = body?.message || `${response.status} ${response.statusText}`;
+    throw new Error(message);
+  }
+  return body;
+}
+
+async function launcherRequest(path, options = {}) {
+  const init = { ...options, headers: { ...(options.headers || {}) } };
+  if (options.body && typeof options.body !== "string") {
+    init.headers["content-type"] = "application/json";
+    init.body = JSON.stringify(options.body);
+  }
+  const response = await fetch(`${window.location.origin}${path}`, init);
   const text = await response.text();
   let body = null;
   if (text) {
@@ -92,7 +112,31 @@ function formatUnix(value) {
   return new Date(Number(value) * 1000).toLocaleString();
 }
 
+async function refreshLauncher() {
+  try {
+    const status = await launcherRequest("/launcher/status");
+    launcherAvailable = true;
+    const label = status.running
+      ? "Launcher · Agent 运行"
+      : status.desired_agent_running
+        ? "Launcher · Agent 启动中"
+        : "Launcher · Agent 已停止";
+    setPill("#launcher-state", label, status.running ? "good" : "muted");
+    if (status.agent_api && apiInput.value === DEFAULT_API) {
+      apiInput.value = status.agent_api;
+    }
+    return status;
+  } catch (error) {
+    const wasAvailable = launcherAvailable;
+    launcherAvailable = false;
+    setPill("#launcher-state", "静态预览", "muted");
+    if (wasAvailable) log(`Launcher 主机不可用：${error.message}`, true);
+    return null;
+  }
+}
+
 async function refresh() {
+  await refreshLauncher();
   setPill("#connection-state", "连接中", "muted");
   const results = await Promise.allSettled([
     request("/v1/health"),
@@ -160,10 +204,25 @@ async function act(label, path, body) {
   }
 }
 
+async function launcherAct(label, action) {
+  if (!launcherAvailable) {
+    log(`${label}：当前是静态预览，请使用 nexus-launcher console 启动宿主`, true);
+    return;
+  }
+  try {
+    await launcherRequest("/launcher/agent", { method: "POST", body: { action } });
+    log(`${label}：完成`);
+    await refresh();
+  } catch (error) {
+    log(`${label}：${error.message}`, true);
+  }
+}
+
 document.addEventListener("click", event => {
   const action = event.target.closest("[data-action]")?.dataset.action;
   if (!action) return;
   if (action === "refresh") refresh();
+  if (action.startsWith("agent-")) launcherAct(`Agent ${action.slice(6)}`, action.slice(6));
   if (action.startsWith("harness-")) act(`Harness ${action.slice(8)}`, "/v1/harness", { action: action.slice(8) });
   if (action === "profile-select") {
     const profile = document.querySelector("#profile-name").value.trim();
