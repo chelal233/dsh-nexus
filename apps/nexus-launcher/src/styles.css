@@ -63,7 +63,7 @@ button:focus-visible, input:focus-visible, select:focus-visible { outline: 2px s
 .metric span, .metric small { display: block; color: var(--muted); font-size: 10px; }
 .metric strong { display: block; overflow: hidden; margin: 10px 0 5px; color: var(--accent-strong); font-size: 18px; font-weight: 650; text-overflow: ellipsis; white-space: nowrap; }
 .metric small { overflow: hidden; color: var(--subtle); text-overflow: ellipsis; white-space: nowrap; }
-.grid-two { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 13px; margin-bottom: 13px; }
+.grid-two { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); align-items: start; gap: 13px; margin-bottom: 13px; }
 .panel { min-width: 0; border: 1px solid var(--line); border-radius: 14px; padding: 19px; background: linear-gradient(145deg, rgba(22, 35, 44, 0.82), rgba(17, 27, 35, 0.72)); box-shadow: var(--shadow); }
 .panel + .panel { margin-top: 0; }
 .panel-header { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 17px; }
