@@ -39,6 +39,7 @@ const ALLOWED_ROUTES: &[&str] = &[
     "/v1/state",
     "/v1/harness",
     "/v1/harness/ui",
+    "/v1/harness/discover",
     "/v1/profiles",
     "/v1/checkpoints",
     "/v1/releases",
@@ -443,6 +444,7 @@ mod tests {
     fn native_routes_are_direct_agent_routes() {
         assert!(is_allowed_route("/v1/health"));
         assert!(is_allowed_route("/v1/harness/ui"));
+        assert!(is_allowed_route("/v1/harness/discover"));
         assert!(is_allowed_route("/v1/agent"));
         assert!(!is_allowed_route("/v1/health?url=https://example.com"));
     }

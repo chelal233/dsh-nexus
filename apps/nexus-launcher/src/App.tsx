@@ -74,6 +74,7 @@ type ModuleId =
   | "settings";
 
 type ThemeMode = "system" | "light" | "dark";
+type HarnessLaunchMode = "direct" | "node";
 
 type ModuleDefinition = {
   id: ModuleId;
@@ -327,7 +328,9 @@ function isLoopbackUrl(value: string | undefined): value is string {
 }
 
 type HarnessConfigDraft = {
+  mode: HarnessLaunchMode;
   program: string;
+  entry: string;
   args: string;
   workingDir: string;
   readinessUrl: string;
@@ -337,7 +340,9 @@ type HarnessConfigDraft = {
 };
 
 const emptyHarnessDraft: HarnessConfigDraft = {
+  mode: "direct",
   program: "",
+  entry: "",
   args: "",
   workingDir: "",
   readinessUrl: "",
@@ -346,19 +351,82 @@ const emptyHarnessDraft: HarnessConfigDraft = {
   replaceRedactedArgs: false,
 };
 
-function harnessDraftFromConfig(config: JsonObject): HarnessConfigDraft {
+export function harnessDraftFromConfig(config: JsonObject): HarnessConfigDraft {
   const harness = nestedValue(config, "harness");
   const args = arrayValue(harness, "args").filter((item): item is string => typeof item === "string");
   const argsRedacted = args.some((item) => item.includes("[REDACTED]"));
+  const mode = harnessLaunchMode(harness);
+  const configuredEntry = stringValue(harness, "entry") || "";
+  const entry = mode === "node" ? configuredEntry || args[0] || "" : "";
+  const visibleArgs = mode === "node" && !configuredEntry ? args.slice(1) : args;
   return {
+    mode,
     program: stringValue(harness, "program") || "",
-    args: args.join("\n"),
+    entry,
+    args: visibleArgs.join("\n"),
     workingDir: stringValue(harness, "working_dir") || "",
     readinessUrl: stringValue(harness, "readiness_url") || "",
     timeout: numberValue(harness, "readiness_timeout_secs")?.toString() || "",
     argsRedacted,
     replaceRedactedArgs: false,
   };
+}
+
+function harnessLaunchMode(value: unknown): HarnessLaunchMode {
+  const mode = stringValue(value, "mode")?.toLowerCase();
+  return mode === "node" ? "node" : "direct";
+}
+
+export type HarnessCandidate = {
+  id: string;
+  mode: HarnessLaunchMode;
+  program: string;
+  entry: string;
+  args: string[];
+  workingDir: string;
+  readinessUrl: string;
+  version: string;
+  source: string;
+  displayName: string;
+};
+
+export function harnessCandidates(value: unknown): HarnessCandidate[] {
+  const response = asObject(value);
+  const nested = nestedValue(response, "harness");
+  const items = arrayValue(response, "candidates").length
+    ? arrayValue(response, "candidates")
+    : arrayValue(nested, "candidates");
+  return items.filter(isObject).map((item, index) => {
+    const rawMode = stringValue(item, "mode") || stringValue(item, "kind") || stringValue(item, "type");
+    const mode: HarnessLaunchMode = rawMode?.toLowerCase().includes("node") ? "node" : "direct";
+    const rawArgs = arrayValue(item, "args").filter((arg): arg is string => typeof arg === "string");
+    const configuredEntry = stringValue(item, "entry") || stringValue(item, "entry_point") || "";
+    const entry = mode === "node" ? configuredEntry || rawArgs[0] || "" : "";
+    const args = mode === "node" && !configuredEntry ? rawArgs.slice(1) : rawArgs;
+    const program = stringValue(item, "program")
+      || stringValue(item, "executable")
+      || stringValue(item, "node_executable")
+      || "";
+    const workingDir = stringValue(item, "working_dir") || stringValue(item, "project_dir") || "";
+    const readinessUrl = stringValue(item, "readiness_url") || "";
+    const id = stringValue(item, "id") || `${mode}:${program}:${entry}:${index}`;
+    return {
+      id,
+      mode,
+      program,
+      entry,
+      args,
+      workingDir,
+      readinessUrl,
+      version: stringValue(item, "version") || "",
+      source: stringValue(item, "source") || "",
+      displayName: stringValue(item, "display_name") || stringValue(item, "name") || program || id,
+    };
+  }).filter((candidate) => candidate.program.length > 0);
+}
+
+function candidateModeLabel(mode: HarnessLaunchMode, t: Translator): string {
+  return mode === "node" ? t("Node runtime") : t("Direct executable");
 }
 
 async function proxyRequest<T = JsonObject>(
@@ -894,6 +962,57 @@ function DiagnosticsView({ snapshot, busyAction, runAction }: ViewProps) {
   return <><PageIntro kicker={t("Observability / Diagnostics")} title={t("Diagnostics")} detail={t("Bundles are bounded, redacted, and limited to Nexus-owned metadata and text logs.")} /><Panel title={t("Diagnostic bundles")} icon={<TerminalWindow size={18} />}><div className="panel-toolbar"><span className="toolbar-count">{t("{count} bundles", { count: items.length })}</span><ActionButton tone="primary" disabled={controlsDisabled} onClick={() => void runAction(t("Diagnostic collection"), "/v1/diagnostics", { action: "collect", note: t("Native launcher collection") })}><TerminalWindow size={16} />{t("Collect diagnostics")}</ActionButton></div><DataList items={items} emptyTitle={t("No diagnostic bundles")} emptyDetail={t("Collect a bounded bundle when a runtime issue needs review.")} render={(item) => <><div><strong>{stringValue(item, "id") || t("Bundle")}</strong><span>{t("{count} files", { count: arrayValue(item, "files").length })}</span></div><span className="row-meta">{formatTimestamp(numberValue(item, "created_at_unix"), t("Not available"))}</span></>} /></Panel></>;
 }
 
+function HarnessDiscoveryPanel({
+  value,
+  loading,
+  error,
+  disabled,
+  selectedId,
+  onDetect,
+  onSelect,
+}: {
+  value: JsonObject | null;
+  loading: boolean;
+  error: string | null;
+  disabled: boolean;
+  selectedId: string | undefined;
+  onDetect: () => void;
+  onSelect: (candidate: HarnessCandidate) => void;
+}) {
+  const { t } = useI18n();
+  const candidates = harnessCandidates(value);
+  return <div className="form-field full">
+    <div className="panel-toolbar">
+      <strong>{t("Automatic detection")}</strong>
+      <button type="button" className="button" onClick={onDetect} disabled={disabled || loading}>
+        {loading ? <Pulse size={16} className="spin" /> : <ArrowClockwise size={16} />}
+        {loading ? t("Detecting Harness installations...") : t("Detect Harness")}
+      </button>
+    </div>
+    <p className="field-help">{t("Automatic detection is preferred. Select a detected Harness or use manual configuration below.")}</p>
+    {error && <div className="form-error" role="alert"><WarningCircle size={16} />{t("Harness detection failed: {message}", { message: compactError(error) })}</div>}
+    {loading && !candidates.length ? <div className="state-card loading-state" role="status" aria-live="polite"><Pulse size={20} className="spin" /><div><strong>{t("Detecting Harness installations...")}</strong><span>{t("Run a scan to refresh the local candidate list.")}</span></div></div> : candidates.length ? <>
+      <span className="field-label">{t("Detected candidates")}</span>
+      <div className="data-list" role="list">
+        {candidates.map((candidate) => <div className="data-row" key={candidate.id} role="listitem">
+          <div>
+            <strong>{candidate.displayName}</strong>
+            <span>{candidateModeLabel(candidate.mode, t)}</span>
+            {candidate.version && <span>{candidate.version}</span>}
+            <span>{t("Path")}: {candidate.program}</span>
+            {candidate.mode === "node" && candidate.entry && <span>{t("Entry")}: {candidate.entry}</span>}
+            {candidate.workingDir && <span>{t("Working directory")}: {candidate.workingDir}</span>}
+            {candidate.source && <span>{t("Search source")}: {candidate.source}</span>}
+          </div>
+          <button type="button" className={`button ${selectedId === candidate.id ? "primary" : "subtle"}`} onClick={() => onSelect(candidate)} disabled={disabled} aria-pressed={selectedId === candidate.id}>
+            {selectedId === candidate.id ? t("Selected") : t("Use this Harness")}
+          </button>
+        </div>)}
+      </div>
+    </> : value !== null && <EmptyState title={t("No Harness candidates found")} detail={t("No installation was found in the bounded local search paths. You can still specify a path or command manually.")} />}
+  </div>;
+}
+
 function SettingsView({ snapshot, themeMode, setThemeMode, busyAction, runAction }: ViewProps) {
   const { locale, setLocale, t } = useI18n();
   const config = asObject(snapshot.config);
@@ -908,6 +1027,10 @@ function SettingsView({ snapshot, themeMode, setThemeMode, busyAction, runAction
   const [draft, setDraft] = useState<HarnessConfigDraft>(() => harnessDraftFromConfig(config));
   const [draftDirty, setDraftDirty] = useState(false);
   const [formError, setFormError] = useState<string | null>(null);
+  const [discovery, setDiscovery] = useState<JsonObject | null>(null);
+  const [discoveryLoading, setDiscoveryLoading] = useState(false);
+  const [discoveryError, setDiscoveryError] = useState<string | null>(null);
+  const [selectedCandidateId, setSelectedCandidateId] = useState<string | undefined>(undefined);
 
   useEffect(() => {
     if (!draftDirty) {
@@ -921,6 +1044,75 @@ function SettingsView({ snapshot, themeMode, setThemeMode, busyAction, runAction
     setDraftDirty(true);
     setFormError(null);
   };
+
+  const updateLaunchMode = (mode: HarnessLaunchMode) => {
+    setDraft((current) => {
+      if (current.mode === mode) return current;
+      const args = current.args
+        .split(/\r?\n/)
+        .map((value) => value.trim())
+        .filter(Boolean);
+      if (mode === "node") {
+        return {
+          ...current,
+          mode,
+          entry: current.entry || args.shift() || "",
+          args: args.join("\n"),
+        };
+      }
+      return {
+        ...current,
+        mode,
+        entry: "",
+        args: [current.entry, ...args].filter(Boolean).join("\n"),
+      };
+    });
+    setDraftDirty(true);
+    setFormError(null);
+  };
+
+  const applyCandidate = useCallback((candidate: HarnessCandidate) => {
+    setDraft((current) => ({
+      ...current,
+      mode: candidate.mode,
+      program: candidate.program,
+      entry: candidate.entry,
+      args: candidate.args.join("\n"),
+      workingDir: candidate.workingDir,
+      readinessUrl: candidate.readinessUrl,
+      argsRedacted: false,
+      replaceRedactedArgs: false,
+    }));
+    setDraftDirty(true);
+    setSelectedCandidateId(candidate.id);
+    setFormError(null);
+    setEditingHarness(true);
+  }, []);
+
+  const detectHarness = useCallback(async () => {
+    setDiscoveryLoading(true);
+    setDiscoveryError(null);
+    try {
+      const result = await proxyRequest<JsonObject>("/v1/harness/discover");
+      const candidates = harnessCandidates(result);
+      setDiscovery(result);
+      // A single unconfigured result is safe to pre-fill, but saving remains
+      // an explicit user action. Multiple results stay visible for selection.
+      if (!hasHarnessConfig && !draftDirty && candidates.length === 1) {
+        applyCandidate(candidates[0]);
+      }
+    } catch (cause) {
+      setDiscovery({ candidates: [] });
+      setDiscoveryError(errorMessage(cause));
+    } finally {
+      setDiscoveryLoading(false);
+    }
+  }, [applyCandidate, draftDirty, hasHarnessConfig]);
+
+  useEffect(() => {
+    if (!editingHarness || snapshot.startup?.available !== true || discovery !== null || discoveryLoading) return;
+    void detectHarness();
+  }, [detectHarness, discovery, discoveryLoading, editingHarness, snapshot.startup?.available]);
 
   const openEditor = () => {
     setDraft(harnessDraftFromConfig(config));
@@ -936,6 +1128,11 @@ function SettingsView({ snapshot, themeMode, setThemeMode, busyAction, runAction
     const program = draft.program.trim();
     if (!program) {
       setFormError(t("A program path is required."));
+      return;
+    }
+    const entry = draft.entry.trim();
+    if (draft.mode === "node" && !entry) {
+      setFormError(t("A Harness entry is required for Node mode."));
       return;
     }
     const readinessUrl = draft.readinessUrl.trim();
@@ -957,13 +1154,15 @@ function SettingsView({ snapshot, themeMode, setThemeMode, busyAction, runAction
       setFormError(t("Existing sensitive arguments are hidden. Enable replacement before saving."));
       return;
     }
-    const args = draft.args
+    const additionalArgs = draft.args
       .split(/\r?\n/)
       .map((value) => value.trim())
       .filter(Boolean);
+    const args = draft.mode === "node" ? [entry, ...additionalArgs] : additionalArgs;
     const saved = await runAction(t("Save Harness configuration"), "/v1/config", {
       action: "set_harness",
       harness: {
+        mode: draft.mode,
         program,
         args,
         working_dir: draft.workingDir.trim() || null,
@@ -975,6 +1174,7 @@ function SettingsView({ snapshot, themeMode, setThemeMode, busyAction, runAction
       setDraftDirty(false);
       setEditingHarness(false);
       setFormError(null);
+      setSelectedCandidateId(undefined);
     }
   };
 
@@ -986,8 +1186,16 @@ function SettingsView({ snapshot, themeMode, setThemeMode, busyAction, runAction
       setDraftDirty(false);
       setEditingHarness(true);
       setFormError(null);
+      setSelectedCandidateId(undefined);
+      setDiscovery(null);
     }
   };
+
+  const configuredMode = harnessLaunchMode(harness);
+  const configuredArgs = arrayValue(harness, "args").filter((item): item is string => typeof item === "string");
+  const configuredEntry = configuredMode === "node"
+    ? stringValue(harness, "entry") || configuredArgs[0] || t("Not configured")
+    : undefined;
 
   return <>
     <PageIntro kicker={t("System / Settings")} title={t("Settings")} detail={t("Configuration remains Agent-owned. This view intentionally exposes metadata, not credentials or raw environment values.")} />
@@ -1007,17 +1215,21 @@ function SettingsView({ snapshot, themeMode, setThemeMode, busyAction, runAction
       <Panel title={t("Harness configuration")} icon={<Gear size={18} />}>
         <p className="panel-description">{t("Configure the external Harness here. Editing config.json is only a fallback.")}</p>
         {!editingHarness && hasHarnessConfig ? <>
-          <dl className="detail-list"><div><dt>{t("Program")}</dt><dd>{stringValue(harness, "program") || t("Not configured")}</dd></div><div><dt>{t("Working directory")}</dt><dd>{stringValue(harness, "working_dir") || t("Default")}</dd></div><div><dt>{t("Readiness URL")}</dt><dd>{isLoopbackUrl(stringValue(harness, "readiness_url")) ? stringValue(harness, "readiness_url") : t("Not shown")}</dd></div></dl>
+          <dl className="detail-list"><div><dt>{t("Launch mode")}</dt><dd>{candidateModeLabel(configuredMode, t)}</dd></div><div><dt>{configuredMode === "node" ? t("Node executable") : t("Program")}</dt><dd>{stringValue(harness, "program") || t("Not configured")}</dd></div>{configuredMode === "node" && <div><dt>{t("Harness entry")}</dt><dd>{configuredEntry}</dd></div>}<div><dt>{t("Working directory")}</dt><dd>{stringValue(harness, "working_dir") || t("Default")}</dd></div><div><dt>{t("Readiness URL")}</dt><dd>{isLoopbackUrl(stringValue(harness, "readiness_url")) ? stringValue(harness, "readiness_url") : t("Not shown")}</dd></div></dl>
           <div className="form-actions"><button type="button" className="button" disabled={configControlsDisabled} onClick={openEditor}>{t("Edit configuration")}</button><button type="button" className="button danger" disabled={configControlsDisabled} onClick={() => void clearHarness()}>{t("Clear configuration")}</button></div>
         </> : <form className="config-form" onSubmit={(event) => void saveHarness(event)}>
+          <HarnessDiscoveryPanel value={discovery} loading={discoveryLoading} error={discoveryError} disabled={configControlsDisabled} selectedId={selectedCandidateId} onDetect={() => void detectHarness()} onSelect={applyCandidate} />
+          <div className="panel-toolbar"><strong>{t("Manual configuration")}</strong></div>
           <div className="form-grid">
-            <label className="form-field full"><span className="field-label">{t("Program")}</span><input className="form-input" value={draft.program} onChange={(event) => updateDraft("program", event.target.value)} placeholder={t("Program path or command")} disabled={configControlsDisabled} required /></label>
-            <label className="form-field"><span className="field-label">{t("Working directory")} <em>{t("Optional")}</em></span><input className="form-input" value={draft.workingDir} onChange={(event) => updateDraft("workingDir", event.target.value)} placeholder={t("Agent default")} disabled={configControlsDisabled} /></label>
+            <label className="form-field full"><span className="field-label">{t("Launch mode")}</span><select className="theme-select" value={draft.mode} onChange={(event) => updateLaunchMode(event.target.value as HarnessLaunchMode)} disabled={configControlsDisabled}><option value="direct">{t("Direct executable")}</option><option value="node">{t("Node runtime")}</option></select><span className="field-help">{t("Select how the external Harness is started. Direct runs the executable or command; Node runs the selected entry through the Node runtime.")}</span></label>
+            <label className="form-field full"><span className="field-label">{draft.mode === "node" ? t("Node executable") : t("Program")}</span><input className="form-input" value={draft.program} onChange={(event) => updateDraft("program", event.target.value)} placeholder={draft.mode === "node" ? t("Node executable path or command") : t("Program path or command")} disabled={configControlsDisabled} required /></label>
+            {draft.mode === "node" && <label className="form-field full"><span className="field-label">{t("Harness entry")}</span><input className="form-input" value={draft.entry} onChange={(event) => updateDraft("entry", event.target.value)} placeholder={t("Harness entry script or package")} disabled={configControlsDisabled} required /></label>}
+            <label className="form-field"><span className="field-label">{draft.mode === "node" ? t("Node project directory") : t("Working directory")} <em>{t("Optional")}</em></span><input className="form-input" value={draft.workingDir} onChange={(event) => updateDraft("workingDir", event.target.value)} placeholder={t("Agent default")} disabled={configControlsDisabled} /></label>
             <label className="form-field"><span className="field-label">{t("Readiness timeout (seconds)")} <em>{t("Optional")}</em></span><input className="form-input" inputMode="numeric" value={draft.timeout} onChange={(event) => updateDraft("timeout", event.target.value)} placeholder={t("Agent default")} disabled={configControlsDisabled} /></label>
             <label className="form-field full"><span className="field-label">{t("Readiness URL")} <em>{t("Optional")}</em></span><input className="form-input" type="url" value={draft.readinessUrl} onChange={(event) => updateDraft("readinessUrl", event.target.value)} placeholder="http://127.0.0.1:3080/" disabled={configControlsDisabled} /></label>
-            <label className="form-field full"><span className="field-label">{t("Arguments")}</span><textarea className="form-textarea" value={draft.args} onChange={(event) => updateDraft("args", event.target.value)} placeholder={t("One argument per line. Use {profile}, {release}, or {release_root} when needed.")} disabled={configControlsDisabled || (draft.argsRedacted && !draft.replaceRedactedArgs)} /></label>
+            <label className="form-field full"><span className="field-label">{draft.mode === "node" ? t("Node arguments") : t("Arguments")}</span><textarea className="form-textarea" value={draft.args} onChange={(event) => updateDraft("args", event.target.value)} placeholder={draft.mode === "node" ? t("Arguments passed to the Node Harness entry, one per line. Use {profile}, {release}, or {release_root} when needed.") : t("One argument per line. Use {profile}, {release}, or {release_root} when needed.")} disabled={configControlsDisabled || (draft.argsRedacted && !draft.replaceRedactedArgs)} /></label>
           </div>
-          <p className="field-help">{t("One argument per line. Use {profile}, {release}, or {release_root} when needed.")}</p>
+          <p className="field-help">{draft.mode === "node" ? t("Arguments passed to the Node Harness entry, one per line. Use {profile}, {release}, or {release_root} when needed.") : t("One argument per line. Use {profile}, {release}, or {release_root} when needed.")}</p>
           {draft.argsRedacted && <label className="form-check"><input type="checkbox" checked={draft.replaceRedactedArgs} onChange={(event) => updateDraft("replaceRedactedArgs", event.target.checked)} disabled={configControlsDisabled} /><span>{t("Replace hidden arguments")}</span></label>}
           {formError && <div className="form-error" role="alert"><WarningCircle size={16} />{formError}</div>}
           {harnessState === "running" && <p className="field-help" role="status">{t("Stop Harness before changing its launch configuration.")}</p>}
