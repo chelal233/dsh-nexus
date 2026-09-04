@@ -10,8 +10,9 @@ use std::{
 
 use nexus_protocol::{
     decode_json, encode_json, AgentLifecycleState, AgentStatePayload, CheckpointManifest,
-    DiagnosticsBundle, DiagnosticsFile, HarnessConfigPayload, HarnessRuntimeInfo, HarnessState,
-    NexusStateSummary, ReleaseManifest, UpdateConfigPayload, UpdateRuntimeInfo, UpdateState,
+    DiagnosticsBundle, DiagnosticsFile, HarnessCheckpointState, HarnessConfigPayload,
+    HarnessRuntimeInfo, HarnessState, ReleaseManifest, UpdateConfigPayload, UpdateRuntimeInfo,
+    UpdateState,
 };
 use serde::{Deserialize, Serialize};
 
@@ -20,6 +21,7 @@ pub const DEFAULT_PROFILE: &str = "web";
 pub const MAX_PROFILE_NAME_LEN: usize = 64;
 pub const PROFILE_SCHEMA_VERSION: u32 = 1;
 pub const CHECKPOINT_SCHEMA_VERSION: u32 = 1;
+pub const CHECKPOINT_RESTORE_SCHEMA_VERSION: u32 = 1;
 pub const RELEASE_SCHEMA_VERSION: u32 = 1;
 pub const MAX_RELEASE_ID_LEN: usize = 128;
 pub const MAX_RELEASE_VERSION_LEN: usize = 128;
@@ -51,6 +53,7 @@ pub const UPDATE_VERIFY_PROGRAM_ENV: &str = "NEXUS_UPDATE_VERIFY_PROGRAM";
 pub const UPDATE_VERIFY_ARGS_ENV: &str = "NEXUS_UPDATE_VERIFY_ARGS";
 pub const UPDATE_TIMEOUT_ENV: &str = "NEXUS_UPDATE_TIMEOUT_SECS";
 pub const RUNTIME_SCHEMA_VERSION: u32 = 1;
+pub const HARNESS_LOG_SESSION_SCHEMA_VERSION: u32 = 2;
 
 /// Runtime configuration intentionally binds only to loopback.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -333,8 +336,9 @@ impl ProfileStore {
 /// Alias used by integrations that call the on-disk object a profile catalog.
 pub type ProfileCatalogStore = ProfileStore;
 
-/// Nexus-only state captured in a checkpoint manifest.
-pub type NexusStateSnapshot = NexusStateSummary;
+/// Harness selection captured in a checkpoint manifest. The alias is retained
+/// for source compatibility, but it no longer contains Agent or runtime state.
+pub type NexusStateSnapshot = HarnessCheckpointState;
 
 /// Durable manifests stored below the Nexus-owned `checkpoints/` directory.
 #[derive(Clone)]
@@ -363,10 +367,19 @@ impl CheckpointStore {
         state: NexusStateSnapshot,
     ) -> io::Result<CheckpointManifest> {
         validate_profile_name(profile)?;
+        if let Some(release) = release.as_deref() {
+            validate_release_id(release)?;
+        }
         if state.profile != profile {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidInput,
                 "checkpoint state profile does not match manifest profile",
+            ));
+        }
+        if state.release != release {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "checkpoint state release does not match manifest release",
             ));
         }
         if let Some(note) = note.as_ref() {
@@ -502,12 +515,210 @@ pub fn validate_checkpoint_id(id: &str) -> io::Result<()> {
     Ok(())
 }
 
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum CheckpointRestorePhase {
+    Prepared,
+    Committed,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct CheckpointRestoreIntent {
+    pub checkpoint_id: String,
+    pub previous_profiles: ProfileCatalog,
+    pub previous_current_release: Option<String>,
+    pub previous_last_known_good: Option<String>,
+    pub target_profiles: ProfileCatalog,
+    pub target_current_release: Option<String>,
+    pub target_last_known_good: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct CheckpointRestoreJournal {
+    pub schema_version: u32,
+    pub phase: CheckpointRestorePhase,
+    pub intent: CheckpointRestoreIntent,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+struct CheckpointRestoreJournalDocument {
+    #[serde(default = "default_checkpoint_restore_schema")]
+    schema_version: u32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pending: Option<CheckpointRestoreJournal>,
+}
+
+fn default_checkpoint_restore_schema() -> u32 {
+    CHECKPOINT_RESTORE_SCHEMA_VERSION
+}
+
+#[derive(Clone)]
+pub struct CheckpointRestoreJournalStore {
+    paths: NexusPaths,
+    write_gate: Arc<Mutex<()>>,
+}
+
+impl CheckpointRestoreJournalStore {
+    pub fn new(paths: NexusPaths) -> Self {
+        Self {
+            paths,
+            write_gate: Arc::new(Mutex::new(())),
+        }
+    }
+
+    pub fn load(&self) -> io::Result<Option<CheckpointRestoreJournal>> {
+        let _guard = self.lock_gate()?;
+        self.load_unlocked()
+    }
+
+    pub fn begin(&self, intent: CheckpointRestoreIntent) -> io::Result<()> {
+        validate_checkpoint_restore_intent(&intent)?;
+        let _guard = self.lock_gate()?;
+        if self.load_unlocked()?.is_some() {
+            return Err(io::Error::new(
+                io::ErrorKind::AlreadyExists,
+                "a checkpoint restore transaction is already pending",
+            ));
+        }
+        self.write_unlocked(Some(CheckpointRestoreJournal {
+            schema_version: CHECKPOINT_RESTORE_SCHEMA_VERSION,
+            phase: CheckpointRestorePhase::Prepared,
+            intent,
+        }))
+    }
+
+    pub fn mark_committed(&self, intent: &CheckpointRestoreIntent) -> io::Result<()> {
+        let _guard = self.lock_gate()?;
+        let Some(mut journal) = self.load_unlocked()? else {
+            return Err(io::Error::new(
+                io::ErrorKind::NotFound,
+                "checkpoint restore journal is missing",
+            ));
+        };
+        if journal.phase != CheckpointRestorePhase::Prepared || journal.intent != *intent {
+            return Err(invalid_data(
+                "checkpoint restore journal changed before commit",
+            ));
+        }
+        journal.phase = CheckpointRestorePhase::Committed;
+        self.write_unlocked(Some(journal))
+    }
+
+    pub fn clear(
+        &self,
+        phase: CheckpointRestorePhase,
+        intent: &CheckpointRestoreIntent,
+    ) -> io::Result<()> {
+        let _guard = self.lock_gate()?;
+        let Some(journal) = self.load_unlocked()? else {
+            return Ok(());
+        };
+        if journal.phase != phase || journal.intent != *intent {
+            return Err(invalid_data(
+                "checkpoint restore journal changed before clear",
+            ));
+        }
+        self.write_unlocked(None)
+    }
+
+    fn load_unlocked(&self) -> io::Result<Option<CheckpointRestoreJournal>> {
+        let path = self.paths.run_dir.join("checkpoint-restore.json");
+        if !path.exists() {
+            return Ok(None);
+        }
+        let bytes = fs::read(path)?;
+        let document: CheckpointRestoreJournalDocument =
+            decode_json(&bytes).map_err(invalid_data)?;
+        if document.schema_version != CHECKPOINT_RESTORE_SCHEMA_VERSION {
+            return Err(invalid_data(
+                "unsupported checkpoint restore journal schema",
+            ));
+        }
+        if let Some(journal) = document.pending.as_ref() {
+            if journal.schema_version != CHECKPOINT_RESTORE_SCHEMA_VERSION {
+                return Err(invalid_data("unsupported checkpoint restore entry schema"));
+            }
+            validate_checkpoint_restore_intent(&journal.intent)?;
+        }
+        Ok(document.pending)
+    }
+
+    fn write_unlocked(&self, pending: Option<CheckpointRestoreJournal>) -> io::Result<()> {
+        self.paths.ensure_directories()?;
+        let document = CheckpointRestoreJournalDocument {
+            schema_version: CHECKPOINT_RESTORE_SCHEMA_VERSION,
+            pending,
+        };
+        write_json_atomic(
+            &self.paths.run_dir,
+            &self.paths.run_dir.join("checkpoint-restore.json"),
+            &document,
+        )
+    }
+
+    fn lock_gate(&self) -> io::Result<std::sync::MutexGuard<'_, ()>> {
+        self.write_gate
+            .lock()
+            .map_err(|_| io::Error::other("checkpoint restore journal lock is poisoned"))
+    }
+}
+
+fn validate_checkpoint_restore_intent(intent: &CheckpointRestoreIntent) -> io::Result<()> {
+    validate_checkpoint_id(&intent.checkpoint_id)?;
+    let mut previous_profiles = intent.previous_profiles.clone();
+    previous_profiles.normalize()?;
+    if previous_profiles != intent.previous_profiles {
+        return Err(invalid_data(
+            "previous checkpoint profile catalog is not normalized",
+        ));
+    }
+    let mut target_profiles = intent.target_profiles.clone();
+    target_profiles.normalize()?;
+    if target_profiles != intent.target_profiles {
+        return Err(invalid_data(
+            "target checkpoint profile catalog is not normalized",
+        ));
+    }
+    for id in [
+        intent.previous_current_release.as_deref(),
+        intent.previous_last_known_good.as_deref(),
+        intent.target_current_release.as_deref(),
+        intent.target_last_known_good.as_deref(),
+    ]
+    .into_iter()
+    .flatten()
+    {
+        validate_release_id(id)?;
+    }
+    if intent.previous_current_release.is_some()
+        && intent.previous_current_release == intent.previous_last_known_good
+    {
+        return Err(invalid_data(
+            "previous checkpoint release pointers are equal",
+        ));
+    }
+    if intent.target_current_release.is_some()
+        && intent.target_current_release == intent.target_last_known_good
+    {
+        return Err(invalid_data("target checkpoint release pointers are equal"));
+    }
+    Ok(())
+}
+
 fn validate_checkpoint_manifest(manifest: &CheckpointManifest) -> io::Result<()> {
     validate_checkpoint_id(&manifest.id)?;
     validate_profile_name(&manifest.profile)?;
+    if let Some(release) = manifest.release.as_deref() {
+        validate_release_id(release)?;
+    }
     if manifest.state.profile != manifest.profile {
         return Err(invalid_data(
             "checkpoint state profile does not match profile",
+        ));
+    }
+    if manifest.state.release != manifest.release {
+        return Err(invalid_data(
+            "checkpoint state release does not match release",
         ));
     }
     Ok(())
@@ -615,7 +826,12 @@ impl ReleaseStore {
     /// path for process launch, which prevents pointers to partial candidates.
     pub fn release_root(&self, id: &str) -> io::Result<PathBuf> {
         validate_release_id(id)?;
-        let catalog = self.load()?;
+        let _guard = self.lock_gate()?;
+        let catalog = self.load_unlocked()?;
+        self.release_root_unlocked(id, &catalog)
+    }
+
+    fn release_root_unlocked(&self, id: &str, catalog: &ReleaseCatalog) -> io::Result<PathBuf> {
         if catalog.find(id).is_none() {
             return Err(io::Error::new(
                 io::ErrorKind::NotFound,
@@ -769,6 +985,86 @@ impl ReleaseStore {
             if let Some(previous) = catalog.current_release.replace(id.to_owned()) {
                 catalog.last_known_good = Some(previous);
             }
+            self.write_pointers(&catalog)?;
+        }
+        Ok(catalog)
+    }
+
+    /// Atomically restore the release selection captured by a checkpoint.
+    /// A selected release must still be a registered, contained slot. A
+    /// checkpoint without a release clears the current pointer. The prior
+    /// current release remains the reversible last-known-good selection.
+    pub fn restore_checkpoint_release(
+        &self,
+        release_id: Option<&str>,
+    ) -> io::Result<ReleaseCatalog> {
+        if let Some(id) = release_id {
+            validate_release_id(id)?;
+        }
+        let _guard = self.lock_gate()?;
+        let mut catalog = self.load_unlocked()?;
+        self.apply_checkpoint_release(&mut catalog, release_id)?;
+        self.write_pointers(&catalog)?;
+        Ok(catalog)
+    }
+
+    /// Validate and calculate the release pointers a checkpoint restore would
+    /// publish without changing durable state. This lets callers durably
+    /// record a complete transaction intent before the first metadata write.
+    pub fn plan_checkpoint_release(&self, release_id: Option<&str>) -> io::Result<ReleaseCatalog> {
+        if let Some(id) = release_id {
+            validate_release_id(id)?;
+        }
+        let _guard = self.lock_gate()?;
+        let mut catalog = self.load_unlocked()?;
+        self.apply_checkpoint_release(&mut catalog, release_id)?;
+        Ok(catalog)
+    }
+
+    fn apply_checkpoint_release(
+        &self,
+        catalog: &mut ReleaseCatalog,
+        release_id: Option<&str>,
+    ) -> io::Result<()> {
+        if let Some(id) = release_id {
+            self.release_root_unlocked(id, catalog)?;
+        }
+        let restored = release_id.map(str::to_owned);
+        if catalog.current_release != restored {
+            let previous = std::mem::replace(&mut catalog.current_release, restored);
+            if let Some(previous) = previous {
+                catalog.last_known_good = Some(previous);
+            } else if catalog.last_known_good == catalog.current_release {
+                catalog.last_known_good = None;
+            }
+            catalog.normalize()?;
+        }
+        Ok(())
+    }
+
+    /// Restore an exact pair of release pointers after a larger metadata
+    /// transaction fails. Both optional targets must still resolve to safe,
+    /// registered immutable slots before either pointer is published.
+    pub fn restore_release_pointers(
+        &self,
+        current_release: Option<&str>,
+        last_known_good: Option<&str>,
+    ) -> io::Result<ReleaseCatalog> {
+        for id in [current_release, last_known_good].into_iter().flatten() {
+            validate_release_id(id)?;
+        }
+        let _guard = self.lock_gate()?;
+        let mut catalog = self.load_unlocked()?;
+        for id in [current_release, last_known_good].into_iter().flatten() {
+            self.release_root_unlocked(id, &catalog)?;
+        }
+        let current_release = current_release.map(str::to_owned);
+        let last_known_good = last_known_good.map(str::to_owned);
+        if catalog.current_release != current_release || catalog.last_known_good != last_known_good
+        {
+            catalog.current_release = current_release;
+            catalog.last_known_good = last_known_good;
+            catalog.normalize()?;
             self.write_pointers(&catalog)?;
         }
         Ok(catalog)
@@ -946,7 +1242,18 @@ fn write_json_atomic<T: Serialize>(root: &Path, destination: &Path, value: &T) -
         file.write_all(&bytes)?;
         file.sync_all()?;
         drop(file);
-        atomic_replace(&temp_path, destination)
+        atomic_replace(&temp_path, destination)?;
+        // On Unix, fsync the containing directory after rename so the name
+        // itself is durable across a crash, not just the temporary file's
+        // contents. Windows' replace operation provides the platform-specific
+        // durability boundary and does not support opening directories this
+        // way.
+        #[cfg(unix)]
+        {
+            let directory = destination.parent().unwrap_or(root);
+            fs::File::open(directory)?.sync_all()?;
+        }
+        Ok(())
     })();
     if write_result.is_err() {
         let _ = fs::remove_file(&temp_path);
@@ -1091,6 +1398,262 @@ pub struct NexusRuntimeMetadata {
     pub updated_at_unix: u64,
 }
 
+/// Durable boundary that separates authentication URLs emitted by different
+/// Harness runs while retaining the append-only Nexus logs.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct HarnessLogSession {
+    pub schema_version: u32,
+    pub run_id: String,
+    pub generation: u64,
+    pub stdout_watermark: u64,
+    pub stderr_watermark: u64,
+    pub stdout_file_identity: String,
+    pub stderr_file_identity: String,
+    /// Safe filenames below Nexus' logs directory. Fresh Harness launches use
+    /// fresh files, preventing copy-truncate of an earlier run from reviving
+    /// an earlier authentication token.
+    #[serde(default = "legacy_stdout_log_name")]
+    pub stdout_log_name: String,
+    #[serde(default = "legacy_stderr_log_name")]
+    pub stderr_log_name: String,
+    /// Set before process creation and retained for the active/recovering run.
+    /// It is cleared only after Nexus proves the run terminated, so an Agent
+    /// restart cannot treat an uncertain descendant as permission to spawn a
+    /// duplicate Harness.
+    #[serde(default)]
+    pub launch_pending: bool,
+    pub created_at_unix: u64,
+}
+
+impl HarnessLogSession {
+    pub fn new(
+        run_id: String,
+        generation: u64,
+        stdout_watermark: u64,
+        stderr_watermark: u64,
+        stdout_file_identity: String,
+        stderr_file_identity: String,
+        stdout_log_name: String,
+        stderr_log_name: String,
+        launch_pending: bool,
+        created_at_unix: u64,
+    ) -> Self {
+        Self {
+            schema_version: HARNESS_LOG_SESSION_SCHEMA_VERSION,
+            run_id,
+            generation,
+            stdout_watermark,
+            stderr_watermark,
+            stdout_file_identity,
+            stderr_file_identity,
+            stdout_log_name,
+            stderr_log_name,
+            launch_pending,
+            created_at_unix,
+        }
+    }
+
+    pub fn is_current_schema(&self) -> bool {
+        self.schema_version == HARNESS_LOG_SESSION_SCHEMA_VERSION
+    }
+}
+
+#[derive(Clone)]
+pub struct HarnessLogSessionStore {
+    paths: NexusPaths,
+}
+
+impl HarnessLogSessionStore {
+    pub fn new(paths: NexusPaths) -> Self {
+        Self { paths }
+    }
+
+    pub fn path(&self) -> PathBuf {
+        self.paths.run_dir.join("harness-log-session.json")
+    }
+
+    pub fn read(&self) -> io::Result<Option<HarnessLogSession>> {
+        let path = self.path();
+        if !path.exists() {
+            return Ok(None);
+        }
+        let bytes = fs::read(path)?;
+        let session: HarnessLogSession = decode_json(&bytes).map_err(invalid_data)?;
+        if !matches!(
+            session.schema_version,
+            1 | HARNESS_LOG_SESSION_SCHEMA_VERSION
+        ) || session.run_id.is_empty()
+            || session.run_id.len() > 128
+            || session.run_id.chars().any(char::is_control)
+            || !valid_log_file_identity(&session.stdout_file_identity)
+            || !valid_log_file_identity(&session.stderr_file_identity)
+            || !valid_log_name(&session.stdout_log_name)
+            || !valid_log_name(&session.stderr_log_name)
+        {
+            return Err(invalid_data("invalid Harness log session marker"));
+        }
+        Ok(Some(session))
+    }
+
+    pub fn write(&self, session: &HarnessLogSession) -> io::Result<()> {
+        if session.schema_version != HARNESS_LOG_SESSION_SCHEMA_VERSION
+            || session.run_id.is_empty()
+            || session.run_id.len() > 128
+            || session.run_id.chars().any(char::is_control)
+            || !valid_log_file_identity(&session.stdout_file_identity)
+            || !valid_log_file_identity(&session.stderr_file_identity)
+            || !valid_log_name(&session.stdout_log_name)
+            || !valid_log_name(&session.stderr_log_name)
+        {
+            return Err(invalid_data("invalid Harness log session marker"));
+        }
+        write_json_atomic(&self.paths.run_dir, &self.path(), session)
+    }
+}
+
+fn legacy_stdout_log_name() -> String {
+    "harness.stdout.log".to_owned()
+}
+
+fn legacy_stderr_log_name() -> String {
+    "harness.stderr.log".to_owned()
+}
+
+fn valid_log_file_identity(value: &str) -> bool {
+    !value.is_empty() && value.len() <= 128 && !value.chars().any(char::is_control)
+}
+
+fn valid_log_name(value: &str) -> bool {
+    !value.is_empty()
+        && value.len() <= 192
+        && value != "."
+        && value != ".."
+        && !value.chars().any(char::is_control)
+        && Path::new(value)
+            .components()
+            .all(|component| matches!(component, std::path::Component::Normal(_)))
+        && Path::new(value).components().count() == 1
+}
+
+/// Canonical identity advertised by the Agent and checked by the Launcher
+/// before it adopts or stops anything already bound to the configured port.
+pub fn data_root_identity(paths: &NexusPaths) -> io::Result<String> {
+    let canonical = fs::canonicalize(&paths.root)?;
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+
+        let metadata = fs::metadata(canonical)?;
+        return Ok(format!("unix:{}:{}", metadata.dev(), metadata.ino()));
+    }
+
+    #[cfg(windows)]
+    {
+        use std::{os::windows::ffi::OsStrExt, ptr::null_mut};
+        use windows_sys::Win32::{
+            Foundation::{CloseHandle, INVALID_HANDLE_VALUE},
+            Storage::FileSystem::{
+                CreateFileW, GetFileInformationByHandle, BY_HANDLE_FILE_INFORMATION,
+                FILE_FLAG_BACKUP_SEMANTICS, FILE_READ_ATTRIBUTES, FILE_SHARE_DELETE,
+                FILE_SHARE_READ, FILE_SHARE_WRITE, OPEN_EXISTING,
+            },
+        };
+
+        let wide: Vec<u16> = canonical
+            .as_os_str()
+            .encode_wide()
+            .chain(std::iter::once(0))
+            .collect();
+        let handle = unsafe {
+            CreateFileW(
+                wide.as_ptr(),
+                FILE_READ_ATTRIBUTES,
+                FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+                null_mut(),
+                OPEN_EXISTING,
+                FILE_FLAG_BACKUP_SEMANTICS,
+                null_mut(),
+            )
+        };
+        if handle == INVALID_HANDLE_VALUE {
+            return Err(io::Error::last_os_error());
+        }
+        let mut information: BY_HANDLE_FILE_INFORMATION = unsafe { std::mem::zeroed() };
+        let succeeded = unsafe { GetFileInformationByHandle(handle, &mut information) };
+        unsafe { CloseHandle(handle) };
+        if succeeded == 0 {
+            return Err(io::Error::last_os_error());
+        }
+        let file_index =
+            ((information.nFileIndexHigh as u64) << 32) | information.nFileIndexLow as u64;
+        return Ok(format!(
+            "windows:{}:{}",
+            information.dwVolumeSerialNumber, file_index
+        ));
+    }
+
+    #[cfg(not(any(unix, windows)))]
+    {
+        let _ = canonical;
+        Err(io::Error::new(
+            io::ErrorKind::Unsupported,
+            "data-root identity is unavailable on this platform",
+        ))
+    }
+}
+
+/// Per-process opaque value used to correlate a launch record with one Agent
+/// instance. It is not a credential and is exposed only on loopback health.
+pub fn new_instance_id() -> String {
+    format!(
+        "{}-{}-{}",
+        std::process::id(),
+        unix_time_nanos(),
+        unix_time_seconds()
+    )
+}
+
+/// Stable identity of an already-open log file. It is used together with the
+/// byte watermark so a same-path replacement cannot be mistaken for the file
+/// that received the current Harness child's output.
+pub fn log_file_identity(file: &fs::File) -> io::Result<String> {
+    #[cfg(windows)]
+    {
+        use std::os::windows::io::AsRawHandle;
+        use windows_sys::Win32::Storage::FileSystem::{
+            GetFileInformationByHandle, BY_HANDLE_FILE_INFORMATION,
+        };
+
+        let mut information: BY_HANDLE_FILE_INFORMATION = unsafe { std::mem::zeroed() };
+        let succeeded =
+            unsafe { GetFileInformationByHandle(file.as_raw_handle() as _, &mut information) };
+        if succeeded == 0 {
+            return Err(io::Error::last_os_error());
+        }
+        let file_index =
+            ((information.nFileIndexHigh as u64) << 32) | information.nFileIndexLow as u64;
+        return Ok(format!(
+            "windows:{}:{}",
+            information.dwVolumeSerialNumber, file_index
+        ));
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        let metadata = file.metadata()?;
+        return Ok(format!("unix:{}:{}", metadata.dev(), metadata.ino()));
+    }
+    #[cfg(not(any(windows, unix)))]
+    {
+        let _ = file;
+        Err(io::Error::new(
+            io::ErrorKind::Unsupported,
+            "this platform cannot identify an open log file",
+        ))
+    }
+}
+
 impl NexusRuntimeMetadata {
     pub fn from_state(state: &AgentState, harness: HarnessRuntimeInfo) -> Self {
         Self {
@@ -1126,29 +1689,7 @@ pub fn write_runtime_metadata(
     metadata: &NexusRuntimeMetadata,
 ) -> io::Result<()> {
     paths.ensure_directories()?;
-    let bytes = encode_json(metadata).map_err(invalid_data)?;
-    let temp_path = paths.root.join(format!(
-        ".state.json.tmp-{}-{}",
-        std::process::id(),
-        unix_time_nanos()
-    ));
-
-    let write_result = (|| {
-        let mut file = fs::OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .open(&temp_path)?;
-        use io::Write;
-        file.write_all(&bytes)?;
-        file.sync_all()?;
-        drop(file);
-        atomic_replace(&temp_path, &paths.state_file)
-    })();
-
-    if write_result.is_err() {
-        let _ = fs::remove_file(&temp_path);
-    }
-    write_result
+    write_json_atomic(&paths.root, &paths.state_file, metadata)
 }
 
 pub fn read_runtime_metadata(paths: &NexusPaths) -> io::Result<Option<NexusRuntimeMetadata>> {
@@ -1640,8 +2181,10 @@ mod tests {
 
     use super::{
         is_within, load_harness_launch_spec, read_runtime_metadata, write_runtime_metadata,
-        AgentState, CheckpointStore, ConfigStore, DiagnosticsStore, HarnessLaunchSpec, NexusConfig,
-        NexusConfigFile, NexusPaths, NexusRuntimeMetadata, ProfileStore, ReleaseStore, UpdateSpec,
+        AgentState, CheckpointRestoreIntent, CheckpointRestoreJournalStore, CheckpointRestorePhase,
+        CheckpointStore, ConfigStore, DiagnosticsStore, HarnessLaunchSpec, HarnessLogSession,
+        HarnessLogSessionStore, NexusConfig, NexusConfigFile, NexusPaths, NexusRuntimeMetadata,
+        ProfileCatalog, ProfileStore, ReleaseStore, UpdateSpec,
     };
 
     #[test]
@@ -1743,6 +2286,53 @@ mod tests {
         let _ = fs::remove_dir_all(root);
     }
 
+    #[cfg(unix)]
+    #[test]
+    fn data_root_identity_does_not_merge_distinct_non_utf8_directories() {
+        use std::{ffi::OsString, os::unix::ffi::OsStringExt};
+
+        let parent = unique_test_root("non-utf8-root-identity");
+        let first = parent.join(OsString::from_vec(vec![b'r', 0x80]));
+        let second = parent.join(OsString::from_vec(vec![b'r', 0x81]));
+        fs::create_dir_all(&first).expect("first non-UTF8 root creates");
+        fs::create_dir_all(&second).expect("second non-UTF8 root creates");
+        let first =
+            super::data_root_identity(&NexusPaths::from_root(first)).expect("first identity reads");
+        let second = super::data_root_identity(&NexusPaths::from_root(second))
+            .expect("second identity reads");
+        assert_ne!(first, second);
+        let _ = fs::remove_dir_all(parent);
+    }
+
+    #[test]
+    fn harness_log_session_round_trips_below_run_directory() {
+        let root = unique_test_root("harness-log-session");
+        let paths = NexusPaths::from_root(root.clone());
+        let store = HarnessLogSessionStore::new(paths.clone());
+        let session = HarnessLogSession::new(
+            "run-42".to_owned(),
+            42,
+            100,
+            200,
+            "stdout-identity".to_owned(),
+            "stderr-identity".to_owned(),
+            "harness-run-42.stdout.log".to_owned(),
+            "harness-run-42.stderr.log".to_owned(),
+            true,
+            300,
+        );
+
+        store.write(&session).expect("log session writes");
+        assert_eq!(
+            store.read().expect("log session reads"),
+            Some(session.clone())
+        );
+        assert_eq!(store.path(), paths.run_dir.join("harness-log-session.json"));
+        assert!(!root.join(".dsh").exists());
+
+        let _ = fs::remove_dir_all(root);
+    }
+
     #[test]
     fn profile_store_defaults_to_web_and_persists_selected_names() {
         let root = unique_test_root("profiles");
@@ -1770,11 +2360,8 @@ mod tests {
         let paths = NexusPaths::from_root(root.clone());
         let store = CheckpointStore::new(paths.clone());
         let state = super::NexusStateSnapshot {
-            lifecycle: AgentLifecycleState::Stopped,
-            harness: HarnessState::Stopped,
             profile: "web".to_owned(),
             release: Some("r1".to_owned()),
-            updated_at_unix: 10,
         };
 
         let created = store
@@ -1791,12 +2378,71 @@ mod tests {
             .join(format!("{}.json", created.id))
             .exists());
         assert_eq!(store.list().expect("checkpoints list").len(), 1);
+        let encoded = String::from_utf8(
+            fs::read(paths.checkpoints_dir.join(format!("{}.json", created.id)))
+                .expect("checkpoint manifest reads"),
+        )
+        .expect("checkpoint manifest is UTF-8 JSON");
+        assert!(!encoded.contains("\"lifecycle\""));
+        assert!(!encoded.contains("\"harness\""));
+        assert!(!encoded.contains("\"updated_at_unix\""));
         assert_eq!(
             store
                 .read(&created.id)
                 .expect("checkpoint reads")
                 .expect("checkpoint exists"),
             created
+        );
+
+        let legacy_path = paths.checkpoints_dir.join("cp-legacy.json");
+        fs::write(
+            &legacy_path,
+            br#"{
+                "id":"cp-legacy",
+                "created_at_unix":9,
+                "profile":"web",
+                "release":"r1",
+                "state":{
+                    "lifecycle":"running",
+                    "harness":"stopped",
+                    "profile":"web",
+                    "release":"r1",
+                    "updated_at_unix":9
+                }
+            }"#,
+        )
+        .expect("legacy checkpoint writes");
+        let legacy = store
+            .read("cp-legacy")
+            .expect("legacy checkpoint reads")
+            .expect("legacy checkpoint exists");
+        assert_eq!(legacy.state.profile, "web");
+        assert_eq!(legacy.state.release.as_deref(), Some("r1"));
+        assert_eq!(store.list().expect("mixed checkpoints list").len(), 2);
+
+        fs::write(
+            paths.checkpoints_dir.join("cp-legacy-mismatch.json"),
+            br#"{
+                "id":"cp-legacy-mismatch",
+                "created_at_unix":8,
+                "profile":"web",
+                "release":"r1",
+                "state":{
+                    "lifecycle":"running",
+                    "harness":"stopped",
+                    "profile":"other",
+                    "release":"r1",
+                    "updated_at_unix":8
+                }
+            }"#,
+        )
+        .expect("mismatched legacy checkpoint writes");
+        assert_eq!(
+            store
+                .read("cp-legacy-mismatch")
+                .expect_err("legacy profile mismatch remains rejected")
+                .kind(),
+            std::io::ErrorKind::InvalidData
         );
         assert!(!root.join(".dsh").exists());
 
@@ -1857,6 +2503,125 @@ mod tests {
         assert!(store.rollback().is_ok());
         assert!(store.promote("../escape").is_err());
 
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn release_store_restores_checkpoint_release_as_authoritative_current() {
+        let root = unique_test_root("checkpoint-release");
+        let paths = NexusPaths::from_root(root.clone());
+        let store = super::ReleaseStore::new(paths);
+        store
+            .register("harness-a", "a", None, None)
+            .expect("release A registers");
+        store
+            .register("harness-b", "b", None, None)
+            .expect("release B registers");
+        store.promote("harness-a").expect("release A promotes");
+        store.promote("harness-b").expect("release B promotes");
+
+        let restored = store
+            .restore_checkpoint_release(Some("harness-a"))
+            .expect("checkpoint release restores");
+        assert_eq!(restored.current_release.as_deref(), Some("harness-a"));
+        assert_eq!(restored.last_known_good.as_deref(), Some("harness-b"));
+        assert_eq!(
+            store
+                .load()
+                .expect("restored pointers reload")
+                .current_release
+                .as_deref(),
+            Some("harness-a")
+        );
+
+        assert!(store
+            .restore_checkpoint_release(Some("../unknown"))
+            .is_err());
+        assert!(store.restore_checkpoint_release(Some("missing")).is_err());
+        assert_eq!(
+            store
+                .load()
+                .expect("failed restore keeps pointers")
+                .current_release
+                .as_deref(),
+            Some("harness-a")
+        );
+        let cleared = store
+            .restore_checkpoint_release(None)
+            .expect("checkpoint without a release restores");
+        assert_eq!(cleared.current_release, None);
+        assert_eq!(cleared.last_known_good.as_deref(), Some("harness-a"));
+        let rolled_back = store
+            .restore_release_pointers(Some("harness-a"), Some("harness-b"))
+            .expect("prior pointers restore exactly");
+        assert_eq!(rolled_back.current_release.as_deref(), Some("harness-a"));
+        assert_eq!(rolled_back.last_known_good.as_deref(), Some("harness-b"));
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn checkpoint_restore_plan_is_non_mutating_and_journal_is_two_phase() {
+        let root = unique_test_root("checkpoint-restore-journal");
+        let paths = NexusPaths::from_root(root.clone());
+        let releases = ReleaseStore::new(paths.clone());
+        releases
+            .register("harness-a", "a", None, None)
+            .expect("release A registers");
+        releases
+            .register("harness-b", "b", None, None)
+            .expect("release B registers");
+        releases.promote("harness-a").expect("release A promotes");
+        releases.promote("harness-b").expect("release B promotes");
+        let previous_releases = releases.load().expect("previous releases load");
+        let target_releases = releases
+            .plan_checkpoint_release(Some("harness-a"))
+            .expect("restore plan validates");
+        assert_eq!(
+            releases.load().expect("plan does not write"),
+            previous_releases
+        );
+
+        let profiles = ProfileStore::new(paths.clone());
+        let previous_profiles = profiles.load().expect("previous profiles load");
+        let target_profiles = ProfileCatalog::new("restored", previous_profiles.profiles.clone())
+            .expect("target profiles validate");
+        let intent = CheckpointRestoreIntent {
+            checkpoint_id: "checkpoint-a".to_owned(),
+            previous_profiles,
+            previous_current_release: previous_releases.current_release,
+            previous_last_known_good: previous_releases.last_known_good,
+            target_profiles,
+            target_current_release: target_releases.current_release,
+            target_last_known_good: target_releases.last_known_good,
+        };
+        let journal = CheckpointRestoreJournalStore::new(paths);
+        journal.begin(intent.clone()).expect("Prepared writes");
+        assert_eq!(
+            journal
+                .load()
+                .expect("Prepared loads")
+                .expect("entry")
+                .phase,
+            CheckpointRestorePhase::Prepared
+        );
+        assert!(journal.begin(intent.clone()).is_err());
+        journal.mark_committed(&intent).expect("Committed writes");
+        assert_eq!(
+            journal
+                .load()
+                .expect("Committed loads")
+                .expect("entry")
+                .phase,
+            CheckpointRestorePhase::Committed
+        );
+        assert!(journal
+            .clear(CheckpointRestorePhase::Prepared, &intent)
+            .is_err());
+        journal
+            .clear(CheckpointRestorePhase::Committed, &intent)
+            .expect("Committed clears");
+        assert!(journal.load().expect("cleared journal loads").is_none());
         let _ = fs::remove_dir_all(root);
     }
 

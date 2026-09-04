@@ -6,8 +6,10 @@
 //! reachable through its loopback v1 API.
 
 use std::{
+    collections::HashMap,
     env,
     fs::{self, OpenOptions},
+    hash::{Hash, Hasher},
     io::{self, Read, Seek, SeekFrom, Write},
     net::{IpAddr, Ipv4Addr, SocketAddr},
     path::{Path, PathBuf},
@@ -16,17 +18,28 @@ use std::{
 };
 
 use axum::{
+    body::{to_bytes, Body},
+    extract::Request,
     extract::State,
-    http::StatusCode,
+    http::{header::CONTENT_TYPE, HeaderValue, Method, StatusCode},
+    middleware::{self, Next},
     response::{IntoResponse, Response},
     routing::get,
     Json, Router,
 };
-use nexus_core::{load_harness_launch_spec, NexusConfig, NexusPaths};
-use nexus_protocol::{HarnessAction, HarnessCommand, HealthResponse, HealthStatus, StateResponse};
+use hmac::{Hmac, Mac};
+use nexus_core::{
+    data_root_identity, load_harness_launch_spec, log_file_identity, new_instance_id,
+    HarnessLogSession, HarnessLogSessionStore, NexusConfig, NexusPaths,
+};
+use nexus_protocol::{
+    HarnessAction, HarnessCommand, HarnessResponse, HarnessState, HealthResponse, HealthStatus,
+    StateResponse,
+};
 use reqwest::{Client, Url};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
+use sha2::Sha256;
 use tokio::{
     net::TcpListener,
     process::{Child, Command as TokioCommand},
@@ -36,7 +49,6 @@ use tokio::{
 
 const DEFAULT_WAIT_SECS: u64 = 20;
 const DEFAULT_STOP_WAIT_SECS: u64 = 15;
-const LOCK_STALE_AFTER_SECS: u64 = 30;
 const DEFAULT_CONSOLE_PORT: u16 = 3091;
 const DEFAULT_LAUNCHER_SCHEMA_VERSION: u32 = 1;
 const HARNESS_LOG_TAIL_BYTES: u64 = 64 * 1024;
@@ -45,8 +57,18 @@ const CONSOLE_PORT_ENV: &str = "NEXUS_CONSOLE_PORT";
 const LAUNCHER_WAIT_SECS_ENV: &str = "NEXUS_LAUNCHER_WAIT_SECS";
 const CONSOLE_OPEN_ENV: &str = "NEXUS_CONSOLE_OPEN";
 const LAUNCHER_CONFIG_FILE: &str = "launcher.json";
+const PROXY_DATA_ROOT_HEADER: &str = "x-nexus-data-root-id";
+const PROXY_INSTANCE_HEADER: &str = "x-nexus-instance-id";
+const LAUNCHER_DATA_ROOT_HEADER: &str = "x-nexus-launcher-data-root-id";
+const LAUNCHER_INSTANCE_HEADER: &str = "x-nexus-launcher-instance-id";
+const LAUNCHER_CAPABILITY_HEADER: &str = "x-nexus-launcher-capability";
+const LAUNCHER_CHALLENGE_HEADER: &str = "x-nexus-launcher-challenge";
+const LAUNCHER_PROOF_HEADER: &str = "x-nexus-launcher-proof";
+const LAUNCHER_CAPABILITY_ENV: &str = "NEXUS_LAUNCHER_CAPABILITY";
+const MAX_AGENT_PROXY_BODY_BYTES: usize = 32 * 1024;
+const MAX_AGENT_PROXY_RESPONSE_BYTES: usize = 512 * 1024;
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 struct Options {
     command: LauncherCommand,
     config: NexusConfig,
@@ -54,6 +76,8 @@ struct Options {
     console_port: u16,
     wait_secs: u64,
     json: bool,
+    launcher_instance_id: String,
+    launcher_capability: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -73,9 +97,12 @@ enum LauncherCommand {
 struct ConsoleStatus {
     running: bool,
     desired_agent_running: bool,
-    agent_api: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    agent_api: Option<String>,
     console_url: String,
     data_root: String,
+    data_root_id: String,
+    launcher_instance_id: String,
     agent_pid: Option<u32>,
     agent_program: Option<String>,
 }
@@ -146,6 +173,10 @@ fn default_launcher_schema_version() -> u32 {
 struct HarnessUiInfo {
     available: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    generation: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    run_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     url: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     token: Option<String>,
@@ -190,6 +221,10 @@ struct ConsoleController {
     client: Client,
     state: std::sync::Arc<Mutex<ConsoleRuntimeState>>,
     operation: std::sync::Arc<Mutex<()>>,
+    harness_logs: std::sync::Arc<Mutex<HarnessLogObserver>>,
+    data_root_id: String,
+    launcher_instance_id: String,
+    launcher_capability: String,
 }
 
 #[derive(Debug, Clone)]
@@ -203,31 +238,33 @@ struct LaunchRecord {
     port: u16,
     started_at_unix: u64,
     agent_program: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    agent_instance_id: Option<String>,
 }
 
 struct InstanceLock {
-    path: PathBuf,
-    remove_on_drop: bool,
-}
-
-impl InstanceLock {
-    fn retain(&mut self) {
-        self.remove_on_drop = false;
-    }
-}
-
-impl Drop for InstanceLock {
-    fn drop(&mut self) {
-        if self.remove_on_drop {
-            let _ = fs::remove_file(&self.path);
-        }
-    }
+    _file: fs::File,
 }
 
 struct OwnedAgent {
     child: Option<Child>,
-    lock: InstanceLock,
     pid: u32,
+}
+
+struct SpawnedAgent {
+    child: Option<Child>,
+    pid: u32,
+    #[cfg(windows)]
+    process_handle: Option<std::os::windows::io::OwnedHandle>,
+}
+
+#[cfg(windows)]
+impl Drop for SpawnedAgent {
+    fn drop(&mut self) {
+        if let Some(handle) = self.process_handle.take() {
+            let _ = terminate_windows_process(handle);
+        }
+    }
 }
 
 #[tokio::main]
@@ -289,6 +326,7 @@ where
         .or_else(env_open_browser)
         .unwrap_or(true);
     let mut json = false;
+    let mut launcher_instance_id = new_instance_id();
     if let Some(port) = launcher_config.agent_port {
         config.port = port;
     }
@@ -336,6 +374,15 @@ where
             "--no-open" => _legacy_no_open = true,
             "--open" => _legacy_no_open = false,
             "--json" => json = true,
+            "--launcher-instance-id" => {
+                let value = next_cli_value(&raw_args, &mut index, "--launcher-instance-id")?
+                    .into_string()
+                    .map_err(|_| "--launcher-instance-id must be valid Unicode".to_owned())?;
+                if value.is_empty() || value.len() > 192 || value.chars().any(char::is_control) {
+                    return Err("--launcher-instance-id is invalid".to_owned());
+                }
+                launcher_instance_id = value;
+            }
             value => return Err(format!("unknown argument: {value}")),
         }
         index += 1;
@@ -344,6 +391,24 @@ where
     // The native Tauri shell owns the visible window. A no-argument launcher
     // invocation therefore starts only the headless API and never serves HTML.
     let command = command.unwrap_or(LauncherCommand::Api);
+    let launcher_capability_value = env::var(LAUNCHER_CAPABILITY_ENV);
+    // Consume the native-only secret before Agent/Harness child processes are
+    // spawned so it is never propagated beyond this helper.
+    env::remove_var(LAUNCHER_CAPABILITY_ENV);
+    let launcher_capability = match launcher_capability_value {
+        Ok(value) if value.len() == 64 && value.bytes().all(|byte| byte.is_ascii_hexdigit()) => {
+            Some(value)
+        }
+        Ok(_) => {
+            return Err(format!(
+                "{LAUNCHER_CAPABILITY_ENV} must be a 64-character hexadecimal secret"
+            ))
+        }
+        Err(env::VarError::NotPresent) => None,
+        Err(env::VarError::NotUnicode(_)) => {
+            return Err(format!("{LAUNCHER_CAPABILITY_ENV} is not valid Unicode"))
+        }
+    };
 
     Ok(Some(Options {
         command,
@@ -352,6 +417,8 @@ where
         console_port,
         wait_secs,
         json,
+        launcher_instance_id,
+        launcher_capability,
     }))
 }
 
@@ -492,9 +559,8 @@ async fn run(options: Options) -> Result<(), String> {
             let result = ensure_agent_started(&options, &paths, &client).await?;
             match result {
                 EnsureResult::AlreadyRunning => print_started(&options, None, &paths, true),
-                EnsureResult::Owned(mut owned) => {
+                EnsureResult::Owned(owned) => {
                     let pid = owned.pid;
-                    owned.lock.retain();
                     drop(owned.child);
                     print_started(&options, Some(pid), &paths, false);
                 }
@@ -528,8 +594,14 @@ enum EnsureResult {
 }
 
 impl ConsoleController {
-    fn new(options: Options, paths: NexusPaths, client: Client) -> Self {
-        Self {
+    fn new(options: Options, paths: NexusPaths, client: Client) -> Result<Self, String> {
+        let data_root_id = data_root_identity(&paths)
+            .map_err(|error| format!("cannot identify Launcher data root: {error}"))?;
+        let launcher_instance_id = options.launcher_instance_id.clone();
+        let launcher_capability = options.launcher_capability.clone().ok_or_else(|| {
+            "Launcher API requires a private capability supplied by the native owner".to_owned()
+        })?;
+        Ok(Self {
             options,
             paths,
             client,
@@ -537,7 +609,11 @@ impl ConsoleController {
                 desired_agent_running: true,
             })),
             operation: std::sync::Arc::new(Mutex::new(())),
-        }
+            harness_logs: std::sync::Arc::new(Mutex::new(HarnessLogObserver::default())),
+            data_root_id,
+            launcher_instance_id,
+            launcher_capability,
+        })
     }
 
     async fn start_agent(&self) -> Result<ConsoleStatus, String> {
@@ -552,8 +628,7 @@ impl ConsoleController {
         let result = ensure_agent_started(&options, &self.paths, &self.client).await?;
         match result {
             EnsureResult::AlreadyRunning => {}
-            EnsureResult::Owned(mut owned) => {
-                owned.lock.retain();
+            EnsureResult::Owned(owned) => {
                 drop(owned.child);
             }
         }
@@ -592,14 +667,18 @@ impl ConsoleController {
     }
 
     async fn status(&self) -> ConsoleStatus {
-        let health = probe_health(&self.client, self.options.config.port)
+        let health = probe_health(&self.client, self.options.config.port, &self.paths)
             .await
             .ok()
-            .flatten();
+            .flatten()
+            .filter(|health| health.status == HealthStatus::Ok);
         let record = read_launch_record(&self.paths);
         let state = self.state.lock().await.clone();
-        let (agent_pid, agent_program) = if health.is_some() {
+        let (agent_pid, agent_program) = if let Some(health) = health.as_ref() {
             record
+                .filter(|record| {
+                    record.agent_instance_id.as_deref() == Some(health.instance_id.as_str())
+                })
                 .map(|record| (Some(record.pid), Some(record.agent_program)))
                 .unwrap_or((None, None))
         } else {
@@ -608,20 +687,148 @@ impl ConsoleController {
         ConsoleStatus {
             running: health.is_some(),
             desired_agent_running: state.desired_agent_running,
-            agent_api: format!("http://127.0.0.1:{}", self.options.config.port),
+            agent_api: health
+                .as_ref()
+                .map(|_| format!("http://127.0.0.1:{}", self.options.config.port)),
             console_url: format!("http://127.0.0.1:{}/", self.options.console_port),
             data_root: self.paths.root.display().to_string(),
+            data_root_id: self.data_root_id.clone(),
+            launcher_instance_id: self.launcher_instance_id.clone(),
             agent_pid,
             agent_program,
         }
     }
 
-    fn harness_ui(&self) -> HarnessUiInfo {
-        read_harness_ui_info(&self.paths)
+    async fn harness_ui(&self) -> HarnessUiInfo {
+        let first = match self.fetch_harness_observation().await {
+            Ok(response)
+                if response.harness.state == HarnessState::Running
+                    && response.harness.pid.is_some() =>
+            {
+                response
+            }
+            Ok(response) if response.harness.state == HarnessState::Running => {
+                let mut observer = self.harness_logs.lock().await;
+                observer.invalidate();
+                return unavailable_harness_ui_info(
+                    &self.paths,
+                    "Harness is running without an Agent-owned process identity; token-session continuity cannot be proven"
+                        .to_owned(),
+                );
+            }
+            Ok(response) => {
+                let mut observer = self.harness_logs.lock().await;
+                observer.invalidate();
+                return unavailable_harness_ui_info(
+                    &self.paths,
+                    format!(
+                        "Harness is {:?}; a current authentication token is not available",
+                        response.harness.state
+                    ),
+                );
+            }
+            Err(error) => {
+                let mut observer = self.harness_logs.lock().await;
+                observer.invalidate();
+                return unavailable_harness_ui_info(&self.paths, error);
+            }
+        };
+        let session = match HarnessLogSessionStore::new(self.paths.clone()).read() {
+            Ok(Some(session)) => session,
+            Ok(None) => {
+                let mut observer = self.harness_logs.lock().await;
+                observer.invalidate();
+                return unavailable_harness_ui_info(
+                    &self.paths,
+                    "Harness log session marker is not available; restart Harness to establish a safe token boundary"
+                        .to_owned(),
+                );
+            }
+            Err(error) => {
+                let mut observer = self.harness_logs.lock().await;
+                observer.invalidate();
+                return unavailable_harness_ui_info(
+                    &self.paths,
+                    format!("Harness log session marker is invalid: {error}"),
+                );
+            }
+        };
+        if !harness_observation_matches_session(&first, &session) {
+            let mut observer = self.harness_logs.lock().await;
+            observer.invalidate();
+            return unavailable_harness_ui_info(
+                &self.paths,
+                "Agent Harness observation does not match the durable log session marker"
+                    .to_owned(),
+            );
+        }
+        let second = match self.fetch_harness_observation().await {
+            Ok(response) => response,
+            Err(error) => {
+                let mut observer = self.harness_logs.lock().await;
+                observer.invalidate();
+                return unavailable_harness_ui_info(&self.paths, error);
+            }
+        };
+        if first != second
+            || second.harness.state != HarnessState::Running
+            || second.harness.pid.is_none()
+            || !harness_observation_matches_session(&second, &session)
+        {
+            let mut observer = self.harness_logs.lock().await;
+            observer.invalidate();
+            return unavailable_harness_ui_info(
+                &self.paths,
+                "Harness changed state while its token was being observed; refresh after it is running"
+                    .to_owned(),
+            );
+        }
+        let info = {
+            let mut observer = self.harness_logs.lock().await;
+            read_harness_ui_info_with_observer(&self.paths, &mut observer, Some(&session))
+        };
+        let final_session = HarnessLogSessionStore::new(self.paths.clone()).read();
+        let final_observation = self.fetch_harness_observation().await;
+        if !matches!(final_session, Ok(Some(ref current)) if current == &session)
+            || !matches!(final_observation, Ok(ref current) if current == &second && current.harness.pid.is_some())
+        {
+            let mut observer = self.harness_logs.lock().await;
+            observer.invalidate();
+            return unavailable_harness_ui_info(
+                &self.paths,
+                "Harness changed state while its token was being observed; refresh after it is running"
+                    .to_owned(),
+            );
+        }
+        info
     }
 
-    fn open_harness(&self) -> Result<HarnessUiInfo, String> {
-        let info = self.harness_ui();
+    async fn fetch_harness_observation(&self) -> Result<HarnessResponse, String> {
+        let response = verified_agent_request(
+            &self.client,
+            self.options.config.port,
+            &self.paths,
+            Method::GET,
+            "/v1/harness",
+        )
+        .await?
+        .send()
+        .await
+        .map_err(|error| format!("Agent Harness status is unavailable: {error}"))?;
+        if !response.status().is_success() {
+            return Err(format!(
+                "Agent Harness status returned HTTP {}",
+                response.status()
+            ));
+        }
+        response
+            .json::<HarnessResponse>()
+            .await
+            .map_err(|error| format!("Agent Harness status is invalid: {error}"))
+    }
+
+    async fn open_harness(&self) -> Result<HarnessUiInfo, String> {
+        let info = self.harness_ui().await;
         let Some(url) = info.url.as_deref() else {
             return Err(info.message.unwrap_or_else(|| {
                 "Harness authentication URL was not found in the recent Harness log".to_owned()
@@ -635,17 +842,28 @@ impl ConsoleController {
         if !matches!(load_harness_launch_spec(&self.paths), Ok(Some(_))) {
             return;
         }
-        let response = self
-            .client
-            .post(format!(
-                "http://127.0.0.1:{}/v1/harness",
-                self.options.config.port
-            ))
-            .json(&HarnessCommand {
-                action: HarnessAction::Start,
-            })
-            .send()
-            .await;
+        let response = match verified_agent_request(
+            &self.client,
+            self.options.config.port,
+            &self.paths,
+            Method::POST,
+            "/v1/harness",
+        )
+        .await
+        {
+            Ok(request) => {
+                request
+                    .json(&HarnessCommand {
+                        action: HarnessAction::Start,
+                    })
+                    .send()
+                    .await
+            }
+            Err(error) => {
+                eprintln!("nexus-launcher: Console auto-start Harness skipped: {error}");
+                return;
+            }
+        };
         if let Ok(response) = response {
             let status = response.status();
             if !status.is_success() && status != reqwest::StatusCode::CONFLICT {
@@ -658,7 +876,11 @@ impl ConsoleController {
         loop {
             sleep(Duration::from_secs(1)).await;
             let desired = self.state.lock().await.desired_agent_running;
-            if desired && !is_agent_healthy(&self.client, self.options.config.port).await {
+            if desired
+                && !is_agent_healthy(&self.client, self.options.config.port, &self.paths)
+                    .await
+                    .unwrap_or(false)
+            {
                 let _ = self.start_agent().await;
             }
         }
@@ -666,7 +888,7 @@ impl ConsoleController {
 }
 
 async fn run_api(options: &Options, paths: &NexusPaths, client: &Client) -> Result<(), String> {
-    let controller = ConsoleController::new(options.clone(), paths.clone(), client.clone());
+    let controller = ConsoleController::new(options.clone(), paths.clone(), client.clone())?;
     let listener = TcpListener::bind(console_bind_addr(options.console_port))
         .await
         .map_err(|error| {
@@ -680,7 +902,12 @@ async fn run_api(options: &Options, paths: &NexusPaths, client: &Client) -> Resu
     println!(
         "nexus launcher api: http://127.0.0.1:{}/ (Agent {})",
         options.console_port,
-        controller.status().await.agent_api
+        controller
+            .status()
+            .await
+            .agent_api
+            .as_deref()
+            .unwrap_or("unavailable")
     );
 
     let watchdog = tokio::spawn(controller.clone().watchdog());
@@ -744,8 +971,10 @@ fn open_browser_url(url: &str) -> Result<(), String> {
 }
 
 fn build_api_router(controller: ConsoleController) -> Router {
+    let identity = controller.clone();
     Router::new()
         .route("/launcher/status", get(console_status))
+        .route("/launcher/handshake", get(console_handshake))
         .route(
             "/launcher/agent",
             get(console_agent_status).post(console_agent_control),
@@ -755,7 +984,271 @@ fn build_api_router(controller: ConsoleController) -> Router {
             get(console_harness_status).post(console_harness_control),
         )
         .route("/launcher/logs", get(console_logs))
+        .route("/launcher/agent-api/v1/health", get(proxy_agent_request))
+        .route("/launcher/agent-api/v1/state", get(proxy_agent_request))
+        .route(
+            "/launcher/agent-api/v1/harness",
+            get(proxy_agent_request).post(proxy_agent_request),
+        )
+        .route(
+            "/launcher/agent-api/v1/profiles",
+            get(proxy_agent_request).post(proxy_agent_request),
+        )
+        .route(
+            "/launcher/agent-api/v1/checkpoints",
+            get(proxy_agent_request).post(proxy_agent_request),
+        )
+        .route(
+            "/launcher/agent-api/v1/releases",
+            get(proxy_agent_request).post(proxy_agent_request),
+        )
+        .route(
+            "/launcher/agent-api/v1/updates",
+            get(proxy_agent_request).post(proxy_agent_request),
+        )
+        .route(
+            "/launcher/agent-api/v1/diagnostics",
+            get(proxy_agent_request).post(proxy_agent_request),
+        )
+        .route(
+            "/launcher/agent-api/v1/config",
+            get(proxy_agent_request).post(proxy_agent_request),
+        )
+        .layer(middleware::from_fn_with_state(
+            identity,
+            enforce_launcher_identity,
+        ))
         .with_state(controller)
+}
+
+async fn console_handshake(
+    State(controller): State<ConsoleController>,
+    request: Request,
+) -> Response {
+    let challenge = match request
+        .headers()
+        .get(LAUNCHER_CHALLENGE_HEADER)
+        .and_then(|value| value.to_str().ok())
+    {
+        Some(value) if value.len() == 64 && value.bytes().all(|byte| byte.is_ascii_hexdigit()) => {
+            value
+        }
+        _ => {
+            return launcher_error_response(
+                StatusCode::BAD_REQUEST,
+                "Launcher handshake requires a 256-bit hexadecimal challenge".to_owned(),
+            )
+        }
+    };
+    let proof = launcher_handshake_proof(
+        &controller.launcher_capability,
+        challenge,
+        &controller.data_root_id,
+        &controller.launcher_instance_id,
+    );
+    Response::builder()
+        .status(StatusCode::OK)
+        .header(LAUNCHER_PROOF_HEADER, proof)
+        .body(Body::empty())
+        .expect("fixed Launcher handshake response is valid")
+}
+
+fn launcher_handshake_proof(
+    capability: &str,
+    challenge: &str,
+    data_root_id: &str,
+    launcher_instance_id: &str,
+) -> String {
+    let mut mac = Hmac::<Sha256>::new_from_slice(capability.as_bytes())
+        .expect("HMAC accepts a capability of any length");
+    mac.update(b"nexus-launcher-handshake-v1");
+    for value in [challenge, data_root_id, launcher_instance_id] {
+        mac.update(&(value.len() as u64).to_be_bytes());
+        mac.update(value.as_bytes());
+    }
+    mac.finalize()
+        .into_bytes()
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect()
+}
+
+fn launcher_identity_matches(
+    headers: &axum::http::HeaderMap,
+    controller: &ConsoleController,
+) -> bool {
+    launcher_identity_values_match(
+        headers,
+        &controller.data_root_id,
+        &controller.launcher_instance_id,
+    )
+}
+
+fn launcher_capability_matches(
+    headers: &axum::http::HeaderMap,
+    controller: &ConsoleController,
+) -> bool {
+    launcher_capability_values_match(headers, &controller.launcher_capability)
+}
+
+fn launcher_capability_values_match(
+    headers: &axum::http::HeaderMap,
+    launcher_capability: &str,
+) -> bool {
+    headers
+        .get(LAUNCHER_CAPABILITY_HEADER)
+        .and_then(|value| value.to_str().ok())
+        == Some(launcher_capability)
+}
+
+fn launcher_identity_values_match(
+    headers: &axum::http::HeaderMap,
+    data_root_id: &str,
+    launcher_instance_id: &str,
+) -> bool {
+    headers
+        .get(LAUNCHER_DATA_ROOT_HEADER)
+        .and_then(|value| value.to_str().ok())
+        == Some(data_root_id)
+        && headers
+            .get(LAUNCHER_INSTANCE_HEADER)
+            .and_then(|value| value.to_str().ok())
+            == Some(launcher_instance_id)
+}
+
+async fn enforce_launcher_identity(
+    State(controller): State<ConsoleController>,
+    request: Request,
+    next: Next,
+) -> Response {
+    if request.uri().path().starts_with("/v1/") {
+        return launcher_error_response(
+            StatusCode::NOT_FOUND,
+            "Top-level Agent routes are not exposed by the Launcher API".to_owned(),
+        );
+    }
+    // Status is the one bootstrap endpoint. It exposes the pair generated for
+    // this helper process; every Launcher control/read route must echo the
+    // verified pair.
+    if launcher_route_requires_identity(request.uri().path()) {
+        if !launcher_capability_matches(request.headers(), &controller) {
+            return launcher_error_response(
+                StatusCode::FORBIDDEN,
+                "Launcher API capability is missing or invalid".to_owned(),
+            );
+        }
+        if !launcher_identity_matches(request.headers(), &controller) {
+            return launcher_error_response(
+                StatusCode::CONFLICT,
+                "Launcher helper identity does not match this API process".to_owned(),
+            );
+        }
+    }
+    next.run(request).await
+}
+
+fn launcher_route_requires_identity(path: &str) -> bool {
+    !matches!(path, "/launcher/status" | "/launcher/handshake")
+}
+
+async fn proxy_agent_request(
+    State(controller): State<ConsoleController>,
+    request: Request,
+) -> Response {
+    let method = request.method().clone();
+    let path = match agent_proxy_target_path(request.uri().path()) {
+        Some(path) => path,
+        None => {
+            return launcher_error_response(
+                StatusCode::NOT_FOUND,
+                "Agent proxy route is not available".to_owned(),
+            )
+        }
+    };
+    let body = match to_bytes(request.into_body(), MAX_AGENT_PROXY_BODY_BYTES).await {
+        Ok(body) => body,
+        Err(error) => return launcher_error_response(StatusCode::BAD_REQUEST, error.to_string()),
+    };
+    let request = match verified_agent_request(
+        &controller.client,
+        controller.options.config.port,
+        &controller.paths,
+        method,
+        path,
+    )
+    .await
+    {
+        Ok(request) => request,
+        Err(error) => return launcher_error_response(StatusCode::BAD_GATEWAY, error),
+    };
+    let response = match request
+        .header(reqwest::header::CONTENT_TYPE, "application/json")
+        .body(body)
+        .send()
+        .await
+    {
+        Ok(response) => response,
+        Err(error) => {
+            return launcher_error_response(
+                StatusCode::BAD_GATEWAY,
+                format!("Agent request failed: {error}"),
+            )
+        }
+    };
+    let status = response.status();
+    if response
+        .content_length()
+        .is_some_and(|length| length > MAX_AGENT_PROXY_RESPONSE_BYTES as u64)
+    {
+        return launcher_error_response(
+            StatusCode::BAD_GATEWAY,
+            "Agent response exceeded the Launcher proxy limit".to_owned(),
+        );
+    }
+    let bytes = match response.bytes().await {
+        Ok(bytes) if bytes.len() <= MAX_AGENT_PROXY_RESPONSE_BYTES => bytes,
+        Ok(_) => {
+            return launcher_error_response(
+                StatusCode::BAD_GATEWAY,
+                "Agent response exceeded the Launcher proxy limit".to_owned(),
+            )
+        }
+        Err(error) => {
+            return launcher_error_response(
+                StatusCode::BAD_GATEWAY,
+                format!("Agent response could not be read: {error}"),
+            )
+        }
+    };
+    Response::builder()
+        .status(status)
+        .header(CONTENT_TYPE, HeaderValue::from_static("application/json"))
+        .body(Body::from(bytes))
+        .unwrap_or_else(|error| {
+            launcher_error_response(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("Launcher proxy response failed: {error}"),
+            )
+        })
+}
+
+fn agent_proxy_target_path(path: &str) -> Option<&'static str> {
+    match path {
+        "/launcher/agent-api/v1/health" => Some("/v1/health"),
+        "/launcher/agent-api/v1/state" => Some("/v1/state"),
+        "/launcher/agent-api/v1/harness" => Some("/v1/harness"),
+        "/launcher/agent-api/v1/profiles" => Some("/v1/profiles"),
+        "/launcher/agent-api/v1/checkpoints" => Some("/v1/checkpoints"),
+        "/launcher/agent-api/v1/releases" => Some("/v1/releases"),
+        "/launcher/agent-api/v1/updates" => Some("/v1/updates"),
+        "/launcher/agent-api/v1/diagnostics" => Some("/v1/diagnostics"),
+        "/launcher/agent-api/v1/config" => Some("/v1/config"),
+        _ => None,
+    }
+}
+
+fn launcher_error_response(status: StatusCode, message: String) -> Response {
+    (status, Json(json!({"ok": false, "message": message}))).into_response()
 }
 
 async fn console_status(State(controller): State<ConsoleController>) -> Json<ConsoleStatus> {
@@ -789,7 +1282,7 @@ async fn console_agent_control(
 async fn console_harness_status(
     State(controller): State<ConsoleController>,
 ) -> Json<HarnessUiInfo> {
-    Json(controller.harness_ui())
+    Json(controller.harness_ui().await)
 }
 
 async fn console_harness_control(
@@ -797,8 +1290,8 @@ async fn console_harness_control(
     Json(command): Json<ConsoleHarnessCommand>,
 ) -> Response {
     let result = match command.action {
-        ConsoleHarnessAction::Open => controller.open_harness(),
-        ConsoleHarnessAction::Status => Ok(controller.harness_ui()),
+        ConsoleHarnessAction::Open => controller.open_harness().await,
+        ConsoleHarnessAction::Status => Ok(controller.harness_ui().await),
     };
     match result {
         Ok(info) => (StatusCode::OK, Json(info)).into_response(),
@@ -811,12 +1304,16 @@ async fn console_harness_control(
 }
 
 async fn console_logs(State(controller): State<ConsoleController>) -> Json<Value> {
+    let session = HarnessLogSessionStore::new(controller.paths.clone())
+        .read()
+        .ok()
+        .flatten();
     Json(json!({
         "data_root": controller.paths.root.display().to_string(),
         "agent_stdout": controller.paths.logs_dir.join("agent.stdout.log"),
         "agent_stderr": controller.paths.logs_dir.join("agent.stderr.log"),
-        "harness_stdout": controller.paths.logs_dir.join("harness.stdout.log"),
-        "harness_stderr": controller.paths.logs_dir.join("harness.stderr.log"),
+        "harness_stdout": session.as_ref().map(|value| controller.paths.logs_dir.join(&value.stdout_log_name)),
+        "harness_stderr": session.as_ref().map(|value| controller.paths.logs_dir.join(&value.stderr_log_name)),
         "launcher_config": launcher_config_path(&controller.paths),
         "launch_record": launch_record_path(&controller.paths),
     }))
@@ -828,42 +1325,83 @@ async fn console_logs(State(controller): State<ConsoleController>) -> Json<Value
 /// text it already redirected to its own logs; it does not inspect `$HOME/.dsh`
 /// or infer a URL from a process command line. A URL is considered usable only
 /// when it is plain HTTP and loopback-bound. Token-bearing URLs are preferred
-/// because readiness/health messages may also contain a loopback URL.
+/// because readiness/health messages may also contain a loopback URL. The
+/// observer keeps only a bounded in-memory cursor. An unchanged byte snapshot
+/// reuses its candidate; every content/length change rescans the bounded tail
+/// so a rotation cannot masquerade as an append merely because its sliding
+/// overlap happens to match.
+#[cfg(test)]
 fn read_harness_ui_info(paths: &NexusPaths) -> HarnessUiInfo {
-    let log_paths = [
-        paths.logs_dir.join("harness.stdout.log"),
-        paths.logs_dir.join("harness.stderr.log"),
+    let mut observer = HarnessLogObserver::default();
+    match HarnessLogSessionStore::new(paths.clone()).read() {
+        Ok(Some(session)) => {
+            read_harness_ui_info_with_observer(paths, &mut observer, Some(&session))
+        }
+        Ok(None) => unavailable_harness_ui_info(
+            paths,
+            "Harness log session marker is not available".to_owned(),
+        ),
+        Err(error) => unavailable_harness_ui_info(
+            paths,
+            format!("Harness log session marker is invalid: {error}"),
+        ),
+    }
+}
+
+fn read_harness_ui_info_with_observer(
+    paths: &NexusPaths,
+    observer: &mut HarnessLogObserver,
+    session: Option<&HarnessLogSession>,
+) -> HarnessUiInfo {
+    observer.select_session(session);
+    let Some(session) = session else {
+        return unavailable_harness_ui_info(
+            paths,
+            "Harness log session marker is not available".to_owned(),
+        );
+    };
+    let log_paths = harness_log_paths(paths, session);
+    let boundaries = [
+        (
+            session.stdout_watermark,
+            Some(session.stdout_file_identity.as_str()),
+        ),
+        (
+            session.stderr_watermark,
+            Some(session.stderr_file_identity.as_str()),
+        ),
     ];
     let mut candidates = Vec::new();
-    for path in log_paths {
-        let Ok((text, modified_at)) = read_log_tail(&path, HARNESS_LOG_TAIL_BYTES) else {
+    for (path, (watermark, file_identity)) in log_paths.into_iter().zip(boundaries) {
+        let Ok(Some(candidate)) = observer.observe_file(&path, watermark, file_identity) else {
             continue;
         };
-        for (order, word) in text.split_whitespace().enumerate() {
-            let cleaned = trim_log_url(word);
-            let Some((url, token)) = parse_loopback_harness_url(cleaned) else {
-                continue;
-            };
-            candidates.push(HarnessUrlCandidate {
-                url,
-                token,
-                source: path.display().to_string(),
-                observed_at_unix: modified_at,
-                order,
-            });
+        if candidate.token.is_some() {
+            candidates.push(candidate);
         }
     }
 
     candidates.sort_by(|left, right| {
-        (left.token.is_some(), left.observed_at_unix, left.order).cmp(&(
-            right.token.is_some(),
-            right.observed_at_unix,
-            right.order,
-        ))
+        (
+            left.token.is_some(),
+            left.observed_at_nanos,
+            left.offset,
+            left.source.as_str(),
+            left.sequence,
+        )
+            .cmp(&(
+                right.token.is_some(),
+                right.observed_at_nanos,
+                right.offset,
+                right.source.as_str(),
+                right.sequence,
+            ))
     });
     if let Some(candidate) = candidates.pop() {
         return HarnessUiInfo {
             available: true,
+            generation: Some(session.generation),
+            run_id: Some(session.run_id.clone()),
             url: Some(candidate.url),
             token: candidate.token,
             source: Some(candidate.source),
@@ -872,48 +1410,302 @@ fn read_harness_ui_info(paths: &NexusPaths) -> HarnessUiInfo {
         };
     }
 
+    unavailable_harness_ui_info(
+        paths,
+        "Current Harness authentication token not found after this run's log boundary".to_owned(),
+    )
+}
+
+fn unavailable_harness_ui_info(_paths: &NexusPaths, message: String) -> HarnessUiInfo {
     HarnessUiInfo {
         available: false,
+        generation: None,
+        run_id: None,
         url: None,
         token: None,
-        source: Some(
-            paths
-                .logs_dir
-                .join("harness.stdout.log")
-                .display()
-                .to_string(),
-        ),
+        source: None,
         observed_at_unix: None,
-        message: Some(
-            "Harness authentication URL not found yet; start or restart Harness and refresh"
-                .to_owned(),
-        ),
+        message: Some(message),
     }
 }
 
+fn harness_observation_matches_session(
+    response: &HarnessResponse,
+    session: &HarnessLogSession,
+) -> bool {
+    response.log_session_run_id.as_deref() == Some(session.run_id.as_str())
+        && response.generation == Some(session.generation)
+        && response.log_session_generation == Some(session.generation)
+        && response.log_stdout_watermark == Some(session.stdout_watermark)
+        && response.log_stderr_watermark == Some(session.stderr_watermark)
+        && response.log_stdout_file_identity.as_deref()
+            == Some(session.stdout_file_identity.as_str())
+        && response.log_stderr_file_identity.as_deref()
+            == Some(session.stderr_file_identity.as_str())
+        && response.log_stdout_name.as_deref() == Some(session.stdout_log_name.as_str())
+        && response.log_stderr_name.as_deref() == Some(session.stderr_log_name.as_str())
+        && response.log_session_launch_pending == Some(session.launch_pending)
+}
+
+#[derive(Debug, Default)]
+struct HarnessLogObserver {
+    files: HashMap<PathBuf, HarnessLogCursor>,
+    sequence: u64,
+    session: Option<(String, u64, u64, u64, String, String, String, String, bool)>,
+    session_initialized: bool,
+}
+
+#[derive(Debug, Clone)]
+struct HarnessLogCursor {
+    offset: u64,
+    fingerprint: u64,
+    candidate: Option<HarnessUrlCandidate>,
+}
+
 #[derive(Debug)]
+struct HarnessLogSnapshot {
+    length: u64,
+    start: u64,
+    file_identity: String,
+    modified_at_nanos: u128,
+    fingerprint: u64,
+    bytes: Vec<u8>,
+    left_delimited: bool,
+    right_delimited: bool,
+}
+
+#[derive(Debug, Clone)]
 struct HarnessUrlCandidate {
     url: String,
     token: Option<String>,
     source: String,
     observed_at_unix: u64,
-    order: usize,
+    observed_at_nanos: u128,
+    offset: u64,
+    sequence: u64,
 }
 
-fn read_log_tail(path: &Path, max_bytes: u64) -> io::Result<(String, u64)> {
+impl HarnessLogObserver {
+    fn invalidate(&mut self) {
+        self.files.clear();
+        self.session = None;
+        self.session_initialized = false;
+    }
+
+    fn select_session(&mut self, session: Option<&HarnessLogSession>) {
+        let selected = session.map(|session| {
+            (
+                session.run_id.clone(),
+                session.generation,
+                session.stdout_watermark,
+                session.stderr_watermark,
+                session.stdout_file_identity.clone(),
+                session.stderr_file_identity.clone(),
+                session.stdout_log_name.clone(),
+                session.stderr_log_name.clone(),
+                session.launch_pending,
+            )
+        });
+        if !self.session_initialized || self.session != selected {
+            self.files.clear();
+            self.sequence = 0;
+            self.session = selected;
+            self.session_initialized = true;
+        }
+    }
+
+    fn observe_file(
+        &mut self,
+        path: &Path,
+        session_watermark: u64,
+        expected_file_identity: Option<&str>,
+    ) -> io::Result<Option<HarnessUrlCandidate>> {
+        let snapshot = read_log_snapshot(path)?;
+        if expected_file_identity.is_some_and(|expected| expected != snapshot.file_identity) {
+            self.files.remove(path);
+            return Ok(None);
+        }
+        let previous = self.files.get(path).cloned();
+        if previous.as_ref().is_some_and(|previous| {
+            snapshot.length == previous.offset && snapshot.fingerprint == previous.fingerprint
+        }) {
+            let previous = previous.expect("same-file cursor is present");
+            self.files.insert(
+                path.to_owned(),
+                HarnessLogCursor {
+                    offset: snapshot.length,
+                    fingerprint: snapshot.fingerprint,
+                    candidate: previous.candidate.clone(),
+                },
+            );
+            return Ok(previous.candidate);
+        }
+
+        // A bounded overlap cannot prove that a file was appended: a rotated
+        // file may preserve the overlap while replacing bytes before it. Parse
+        // the complete current tail and discard candidates no longer present.
+        // A session watermark belongs to the append-only file that existed
+        // when the Agent started Harness. A shorter replacement cannot prove
+        // where this run begins, so fail closed instead of treating its first
+        // byte as current output and potentially reviving an old token.
+        if snapshot.length < session_watermark {
+            self.files.remove(path);
+            return Ok(None);
+        }
+        let mut candidate = None;
+        for (word_start, word_end) in log_word_ranges(&snapshot.bytes) {
+            if (word_start == 0 && !snapshot.left_delimited)
+                || (word_end == snapshot.bytes.len() && !snapshot.right_delimited)
+            {
+                continue;
+            }
+            let absolute_start = snapshot.start + word_start as u64;
+            let absolute_end = snapshot.start + word_end as u64;
+            // The word must begin at or after the durable EOF boundary and
+            // end after it. This rejects a URL whose bytes straddle the
+            // previous and current run while allowing output in a new file to
+            // begin at offset zero.
+            if absolute_start < session_watermark || absolute_end <= session_watermark {
+                continue;
+            }
+            let Ok(word) = std::str::from_utf8(&snapshot.bytes[word_start..word_end]) else {
+                continue;
+            };
+            let cleaned = trim_log_url(word);
+            let Some((url, token)) = parse_loopback_harness_url(cleaned) else {
+                continue;
+            };
+            let next = HarnessUrlCandidate {
+                url,
+                token,
+                source: path.display().to_string(),
+                observed_at_unix: (snapshot.modified_at_nanos / 1_000_000_000) as u64,
+                observed_at_nanos: snapshot.modified_at_nanos,
+                offset: absolute_end,
+                sequence: self.sequence,
+            };
+            self.sequence = self.sequence.wrapping_add(1);
+            if candidate.as_ref().map_or(true, |current| {
+                harness_candidate_cmp(current, &next).is_lt()
+            }) {
+                candidate = Some(next);
+            }
+        }
+
+        self.files.insert(
+            path.to_owned(),
+            HarnessLogCursor {
+                offset: snapshot.length,
+                fingerprint: snapshot.fingerprint,
+                candidate: candidate.clone(),
+            },
+        );
+        Ok(candidate)
+    }
+}
+
+fn harness_log_paths(paths: &NexusPaths, session: &HarnessLogSession) -> [PathBuf; 2] {
+    [
+        paths.logs_dir.join(&session.stdout_log_name),
+        paths.logs_dir.join(&session.stderr_log_name),
+    ]
+}
+
+fn harness_candidate_cmp(
+    left: &HarnessUrlCandidate,
+    right: &HarnessUrlCandidate,
+) -> std::cmp::Ordering {
+    (
+        left.token.is_some(),
+        left.observed_at_nanos,
+        left.offset,
+        left.source.as_str(),
+        left.sequence,
+    )
+        .cmp(&(
+            right.token.is_some(),
+            right.observed_at_nanos,
+            right.offset,
+            right.source.as_str(),
+            right.sequence,
+        ))
+}
+
+fn read_log_snapshot(path: &Path) -> io::Result<HarnessLogSnapshot> {
     let mut file = fs::File::open(path)?;
     let metadata = file.metadata()?;
-    let modified_at = metadata
+    let modified_at_nanos = metadata
         .modified()
         .ok()
         .and_then(|time| time.duration_since(UNIX_EPOCH).ok())
-        .map(|duration| duration.as_secs())
+        .map(|duration| duration.as_nanos())
         .unwrap_or(0);
-    let start = metadata.len().saturating_sub(max_bytes);
-    file.seek(SeekFrom::Start(start))?;
+    let length = metadata.len();
+    let file_identity = log_file_identity(&file)?;
+    let start = length.saturating_sub(HARNESS_LOG_TAIL_BYTES);
+    let read_start = start.saturating_sub(1);
+    file.seek(SeekFrom::Start(read_start))?;
     let mut bytes = Vec::new();
-    file.read_to_end(&mut bytes)?;
-    Ok((String::from_utf8_lossy(&bytes).into_owned(), modified_at))
+    let expected_len = length.saturating_sub(read_start);
+    (&mut file).take(expected_len).read_to_end(&mut bytes)?;
+    if bytes.len() as u64 != expected_len {
+        return Err(io::Error::new(
+            io::ErrorKind::UnexpectedEof,
+            "Harness log changed while its bounded snapshot was read",
+        ));
+    }
+    let left_delimited = if start == 0 {
+        true
+    } else {
+        let delimiter = bytes
+            .first()
+            .copied()
+            .is_some_and(|byte| byte.is_ascii_whitespace());
+        if !bytes.is_empty() {
+            bytes.remove(0);
+        }
+        delimiter
+    };
+    let right_delimited = bytes
+        .last()
+        .copied()
+        .is_none_or(|byte| byte.is_ascii_whitespace());
+    let fingerprint = fingerprint_bytes(&bytes, length);
+    Ok(HarnessLogSnapshot {
+        length,
+        start,
+        file_identity,
+        modified_at_nanos,
+        fingerprint,
+        bytes,
+        left_delimited,
+        right_delimited,
+    })
+}
+
+fn fingerprint_bytes(bytes: &[u8], length: u64) -> u64 {
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    length.hash(&mut hasher);
+    bytes.hash(&mut hasher);
+    hasher.finish()
+}
+
+fn log_word_ranges(bytes: &[u8]) -> Vec<(usize, usize)> {
+    let mut ranges = Vec::new();
+    let mut start = None;
+    for (index, byte) in bytes.iter().enumerate() {
+        if byte.is_ascii_whitespace() {
+            if let Some(start) = start.take() {
+                ranges.push((start, index));
+            }
+        } else if start.is_none() {
+            start = Some(index);
+        }
+    }
+    if let Some(start) = start {
+        ranges.push((start, bytes.len()));
+    }
+    ranges
 }
 
 fn trim_log_url(value: &str) -> &str {
@@ -989,40 +1781,45 @@ async fn ensure_agent_started(
     paths: &NexusPaths,
     client: &Client,
 ) -> Result<EnsureResult, String> {
-    if is_agent_healthy(client, options.config.port).await {
+    if is_agent_healthy(client, options.config.port, paths).await? {
         return Ok(EnsureResult::AlreadyRunning);
     }
 
-    let lock = match acquire_lock(paths) {
-        Ok(lock) => lock,
-        Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {
-            sleep(Duration::from_millis(250)).await;
-            if is_agent_healthy(client, options.config.port).await {
-                return Ok(EnsureResult::AlreadyRunning);
-            }
-            if !lock_is_stale(paths) {
-                return Err(format!(
-                    "another launcher is starting the Agent or holds {}; retry after it finishes",
-                    lock_path(paths).display()
-                ));
-            }
-            remove_lock(paths);
-            acquire_lock(paths).map_err(|error| {
-                format!("cannot recover and acquire Agent instance lock: {error}")
-            })?
+    let lock = acquire_lock(paths).map_err(|error| {
+        if error.kind() == io::ErrorKind::WouldBlock {
+            format!(
+                "another launcher is starting the Agent or holds {}; retry after it finishes",
+                lock_path(paths).display()
+            )
+        } else {
+            format!("cannot acquire Agent instance lock: {error}")
         }
-        Err(error) => return Err(format!("cannot acquire Agent instance lock: {error}")),
-    };
+    })?;
 
-    if is_agent_healthy(client, options.config.port).await {
+    if is_agent_healthy(client, options.config.port, paths).await? {
         return Ok(EnsureResult::AlreadyRunning);
     }
 
+    ensure_runtime_lock_available(paths).map_err(|error| {
+        if error.kind() == io::ErrorKind::WouldBlock {
+            "another Nexus Agent already owns this data root, possibly on a different port"
+                .to_owned()
+        } else {
+            format!("cannot inspect Agent runtime lock: {error}")
+        }
+    })?;
     let agent_program = resolve_agent_program(options.agent_program.as_deref())?;
-    let detached = options.command == LauncherCommand::Start;
-    let log_offset = agent_log_len(paths);
-    let (mut child, pid) = spawn_agent(&agent_program, &options.config, paths, detached)
-        .map_err(|error| format!("cannot start Agent: {error}"))?;
+    let expected_instance_id = new_instance_id();
+    let detached = should_detach_agent(options.command);
+    let mut spawned = spawn_agent(
+        &agent_program,
+        &options.config,
+        paths,
+        &expected_instance_id,
+        detached,
+    )
+    .map_err(|error| format!("cannot start Agent: {error}"))?;
+    let pid = spawned.pid;
     if let Err(error) = write_launch_record(
         paths,
         &LaunchRecord {
@@ -1030,72 +1827,115 @@ async fn ensure_agent_started(
             port: options.config.port,
             started_at_unix: unix_time_seconds(),
             agent_program: agent_program.to_string_lossy().into_owned(),
+            agent_instance_id: Some(expected_instance_id.clone()),
         },
     ) {
-        kill_agent_pid(pid).await;
-        if let Some(child) = child.as_mut() {
-            let _ = child.kill().await;
-            let _ = child.wait().await;
-        }
-        return Err(format!("cannot persist Agent launch record: {error}"));
+        let cleanup = terminate_spawned_agent(&mut spawned).await;
+        return Err(cleanup_error(
+            format!("cannot persist Agent launch record: {error}"),
+            cleanup,
+        ));
     }
 
     // Use a fresh HTTP client after process creation. A client that attempted
     // a connection before the listener existed can retain a Windows TCP
     // refusal while another local WebShell is polling the same port.
-    let startup_client = Client::builder()
+    let startup_client = match Client::builder()
         .connect_timeout(Duration::from_secs(5))
         .timeout(Duration::from_secs(6))
         .build()
-        .map_err(|error| format!("cannot initialize Agent health client: {error}"))?;
-    if let Err(error) = wait_for_health(
+    {
+        Ok(client) => client,
+        Err(error) => {
+            let cleanup = terminate_spawned_agent(&mut spawned).await;
+            remove_launch_record(paths);
+            return Err(cleanup_error(
+                format!("cannot initialize Agent health client: {error}"),
+                cleanup,
+            ));
+        }
+    };
+    let health = match wait_for_health(
         &startup_client,
         options.config.port,
         options.wait_secs,
         paths,
-        log_offset,
+        Some(&expected_instance_id),
     )
     .await
     {
-        kill_agent_pid(pid).await;
-        if let Some(child) = child.as_mut() {
-            let _ = child.kill().await;
-            let _ = child.wait().await;
+        Ok(health) => health,
+        Err(error) => {
+            let cleanup = terminate_spawned_agent(&mut spawned).await;
+            remove_launch_record(paths);
+            return Err(cleanup_error(error, cleanup));
         }
+    };
+    if let Err(error) = write_launch_record(
+        paths,
+        &LaunchRecord {
+            pid,
+            port: options.config.port,
+            started_at_unix: unix_time_seconds(),
+            agent_program: agent_program.to_string_lossy().into_owned(),
+            agent_instance_id: Some(health.instance_id),
+        },
+    ) {
+        let cleanup = terminate_spawned_agent(&mut spawned).await;
         remove_launch_record(paths);
-        return Err(error);
+        return Err(cleanup_error(
+            format!("cannot persist Agent instance identity: {error}"),
+            cleanup,
+        ));
     }
 
-    Ok(EnsureResult::Owned(OwnedAgent { child, lock, pid }))
+    // Exact health proves that the spawned Agent has acquired its own
+    // lifetime runtime lock. The bootstrap lock must not remain coupled to a
+    // foreground Launcher's lifetime.
+    drop(lock);
+    #[cfg(windows)]
+    drop(spawned.process_handle.take());
+    Ok(EnsureResult::Owned(OwnedAgent {
+        child: spawned.child.take(),
+        pid,
+    }))
+}
+
+fn should_detach_agent(command: LauncherCommand) -> bool {
+    matches!(
+        command,
+        LauncherCommand::Start | LauncherCommand::Api | LauncherCommand::Console
+    )
 }
 
 fn acquire_lock(paths: &NexusPaths) -> io::Result<InstanceLock> {
     let path = lock_path(paths);
     let mut file = OpenOptions::new()
+        .read(true)
         .write(true)
-        .create_new(true)
+        .create(true)
         .open(&path)?;
+    file.try_lock()?;
+    file.set_len(0)?;
+    file.seek(SeekFrom::Start(0))?;
     writeln!(file, "pid={}", process::id())?;
-    file.flush()?;
-    Ok(InstanceLock {
-        path,
-        remove_on_drop: true,
-    })
+    file.sync_all()?;
+    Ok(InstanceLock { _file: file })
 }
 
 fn lock_path(paths: &NexusPaths) -> PathBuf {
-    paths.run_dir.join("agent.lock")
+    paths.run_dir.join("agent-bootstrap.lock")
 }
 
-fn lock_is_stale(paths: &NexusPaths) -> bool {
-    let Ok(modified) = fs::metadata(lock_path(paths)).and_then(|metadata| metadata.modified())
-    else {
-        return false;
-    };
-    SystemTime::now()
-        .duration_since(modified)
-        .map(|age| age >= Duration::from_secs(LOCK_STALE_AFTER_SECS))
-        .unwrap_or(false)
+fn ensure_runtime_lock_available(paths: &NexusPaths) -> io::Result<()> {
+    let file = OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create(true)
+        .open(paths.run_dir.join("agent.lock"))?;
+    file.try_lock()?;
+    drop(file);
+    Ok(())
 }
 
 fn launch_record_path(paths: &NexusPaths) -> PathBuf {
@@ -1107,8 +1947,9 @@ fn spawn_agent(
     agent_program: &Path,
     config: &NexusConfig,
     paths: &NexusPaths,
-    _detached: bool,
-) -> io::Result<(Option<Child>, u32)> {
+    instance_id: &str,
+    detached: bool,
+) -> io::Result<SpawnedAgent> {
     let stdout = OpenOptions::new()
         .create(true)
         .append(true)
@@ -1123,14 +1964,35 @@ fn spawn_agent(
         .arg(&paths.root)
         .arg("--port")
         .arg(config.port.to_string())
+        .arg("--instance-id")
+        .arg(instance_id)
         .stdin(Stdio::null())
         .stdout(Stdio::from(stdout))
         .stderr(Stdio::from(stderr));
+    configure_agent_process_group(&mut command, detached);
     let child = command.spawn()?;
     let pid = child
         .id()
         .ok_or_else(|| io::Error::other("Agent process did not expose a PID"))?;
-    Ok((Some(child), pid))
+    Ok(SpawnedAgent {
+        child: Some(child),
+        pid,
+    })
+}
+
+#[cfg(not(windows))]
+fn configure_agent_process_group(command: &mut TokioCommand, detached: bool) {
+    #[cfg(unix)]
+    if detached {
+        // `start` and the headless API transfer Agent lifetime to the Agent's
+        // data-root runtime lock. Put that process in its own group before
+        // spawn so a terminal SIGINT delivered to the Launcher's foreground
+        // group cannot contradict that ownership contract.
+        command.process_group(0);
+    }
+
+    #[cfg(not(unix))]
+    let _ = (command, detached);
 }
 
 #[cfg(windows)]
@@ -1138,14 +2000,20 @@ fn spawn_agent(
     agent_program: &Path,
     config: &NexusConfig,
     paths: &NexusPaths,
+    instance_id: &str,
     detached: bool,
-) -> io::Result<(Option<Child>, u32)> {
+) -> io::Result<SpawnedAgent> {
     if !detached {
-        return spawn_agent_direct(agent_program, config, paths);
+        return spawn_agent_direct(agent_program, config, paths, instance_id);
     }
 
-    let pid = spawn_agent_windows_detached(agent_program, config, paths)?;
-    Ok((None, pid))
+    let (process_handle, pid) =
+        spawn_agent_windows_detached(agent_program, config, paths, instance_id)?;
+    Ok(SpawnedAgent {
+        child: None,
+        pid,
+        process_handle: Some(process_handle),
+    })
 }
 
 #[cfg(windows)]
@@ -1153,7 +2021,8 @@ fn spawn_agent_direct(
     agent_program: &Path,
     config: &NexusConfig,
     paths: &NexusPaths,
-) -> io::Result<(Option<Child>, u32)> {
+    instance_id: &str,
+) -> io::Result<SpawnedAgent> {
     let stdout = OpenOptions::new()
         .create(true)
         .append(true)
@@ -1168,15 +2037,22 @@ fn spawn_agent_direct(
         .arg(&paths.root)
         .arg("--port")
         .arg(config.port.to_string())
+        .arg("--instance-id")
+        .arg(instance_id)
         .stdin(Stdio::null())
         .stdout(Stdio::from(stdout))
         .stderr(Stdio::from(stderr));
+    command.kill_on_drop(true);
     command.creation_flags(0x0900_0200);
     let child = command.spawn()?;
     let pid = child
         .id()
         .ok_or_else(|| io::Error::other("Agent process did not expose a PID"))?;
-    Ok((Some(child), pid))
+    Ok(SpawnedAgent {
+        child: Some(child),
+        pid,
+        process_handle: None,
+    })
 }
 
 #[cfg(windows)]
@@ -1184,11 +2060,13 @@ fn spawn_agent_windows_detached(
     agent_program: &Path,
     config: &NexusConfig,
     paths: &NexusPaths,
-) -> io::Result<u32> {
+    instance_id: &str,
+) -> io::Result<(std::os::windows::io::OwnedHandle, u32)> {
     use std::{
         ffi::{OsStr, OsString},
         mem::size_of,
         os::windows::ffi::OsStrExt,
+        os::windows::io::FromRawHandle,
         ptr::{null, null_mut},
     };
 
@@ -1300,6 +2178,8 @@ fn spawn_agent_windows_detached(
         paths.root.as_os_str().to_owned(),
         OsString::from("--port"),
         OsString::from(config.port.to_string()),
+        OsString::from("--instance-id"),
+        OsString::from(instance_id),
     ];
     let mut command_line: Vec<u16> = Vec::new();
     for (index, argument) in arguments.iter().enumerate() {
@@ -1400,23 +2280,69 @@ fn spawn_agent_windows_detached(
     }
     unsafe {
         CloseHandle(process_info.hThread);
-        CloseHandle(process_info.hProcess);
     }
-    Ok(process_info.dwProcessId)
+    let process_handle =
+        unsafe { std::os::windows::io::OwnedHandle::from_raw_handle(process_info.hProcess) };
+    Ok((process_handle, process_info.dwProcessId))
 }
 
-async fn kill_agent_pid(pid: u32) {
-    #[cfg(windows)]
-    {
-        let _ = StdCommand::new("taskkill")
-            .args(["/PID", &pid.to_string(), "/T", "/F"])
-            .status();
+fn cleanup_error(message: String, cleanup: io::Result<()>) -> String {
+    match cleanup {
+        Ok(()) => message,
+        Err(error) => format!("{message}; spawned Agent handle cleanup failed: {error}"),
     }
-    #[cfg(unix)]
-    {
-        let _ = StdCommand::new("kill")
-            .args(["-TERM", &pid.to_string()])
-            .status();
+}
+
+async fn terminate_spawned_agent(spawned: &mut SpawnedAgent) -> io::Result<()> {
+    if let Some(mut child) = spawned.child.take() {
+        match child.try_wait()? {
+            Some(_) => return Ok(()),
+            None => {
+                child.kill().await?;
+                child.wait().await?;
+                return Ok(());
+            }
+        }
+    }
+    #[cfg(windows)]
+    if let Some(handle) = spawned.process_handle.take() {
+        return tokio::task::spawn_blocking(move || terminate_windows_process(handle))
+            .await
+            .map_err(|error| io::Error::other(format!("process cleanup task failed: {error}")))?;
+    }
+    Ok(())
+}
+
+#[cfg(windows)]
+fn terminate_windows_process(handle: std::os::windows::io::OwnedHandle) -> io::Result<()> {
+    use std::os::windows::io::AsRawHandle;
+    use windows_sys::Win32::{
+        Foundation::{WAIT_FAILED, WAIT_OBJECT_0},
+        System::Threading::{TerminateProcess, WaitForSingleObject},
+    };
+
+    let handle = handle.as_raw_handle() as windows_sys::Win32::Foundation::HANDLE;
+    match unsafe { WaitForSingleObject(handle, 0) } {
+        WAIT_OBJECT_0 => return Ok(()),
+        WAIT_FAILED => return Err(io::Error::last_os_error()),
+        _ => {}
+    }
+    if unsafe { TerminateProcess(handle, 1) } == 0 {
+        // The process can exit naturally between the zero-time probe and the
+        // termination call. Accept only an observed signal on the same owned
+        // handle; never fall back to a reusable PID.
+        if unsafe { WaitForSingleObject(handle, 0) } == WAIT_OBJECT_0 {
+            return Ok(());
+        }
+        return Err(io::Error::last_os_error());
+    }
+    match unsafe { WaitForSingleObject(handle, 5_000) } {
+        WAIT_OBJECT_0 => Ok(()),
+        WAIT_FAILED => Err(io::Error::last_os_error()),
+        _ => Err(io::Error::new(
+            io::ErrorKind::TimedOut,
+            "timed out waiting for the spawned Agent process handle",
+        )),
     }
 }
 
@@ -1448,14 +2374,18 @@ fn resolve_agent_program(explicit: Option<&Path>) -> Result<PathBuf, String> {
     }
 }
 
-async fn is_agent_healthy(client: &Client, port: u16) -> bool {
-    matches!(
-        probe_health(client, port).await,
-        Ok(Some(response)) if response.status == HealthStatus::Ok
-    )
+async fn is_agent_healthy(client: &Client, port: u16, paths: &NexusPaths) -> Result<bool, String> {
+    Ok(matches!(
+        probe_health(client, port, paths).await?,
+        Some(response) if response.status == HealthStatus::Ok
+    ))
 }
 
-async fn probe_health(client: &Client, port: u16) -> Result<Option<HealthResponse>, String> {
+async fn probe_health(
+    client: &Client,
+    port: u16,
+    paths: &NexusPaths,
+) -> Result<Option<HealthResponse>, String> {
     let response = match client
         .get(format!("http://127.0.0.1:{port}/v1/health"))
         .send()
@@ -1467,29 +2397,39 @@ async fn probe_health(client: &Client, port: u16) -> Result<Option<HealthRespons
     if !response.status().is_success() {
         return Ok(None);
     }
-    response
+    let health = response
         .json::<HealthResponse>()
         .await
-        .map(Some)
-        .map_err(|error| format!("invalid Agent health response: {error}"))
-}
-
-fn agent_log_len(paths: &NexusPaths) -> u64 {
-    fs::metadata(paths.logs_dir.join("agent.stdout.log"))
-        .map(|metadata| metadata.len())
-        .unwrap_or(0)
-}
-
-fn agent_log_ready(paths: &NexusPaths, offset: u64) -> bool {
-    let path = paths.logs_dir.join("agent.stdout.log");
-    let Ok(mut file) = fs::File::open(path) else {
-        return false;
-    };
-    if file.seek(SeekFrom::Start(offset)).is_err() {
-        return false;
+        .map_err(|error| format!("invalid Agent health response: {error}"))?;
+    let expected = data_root_identity(paths)
+        .map_err(|error| format!("cannot identify Nexus data root: {error}"))?;
+    if health.api_version != nexus_protocol::API_VERSION
+        || health.service != "nexus-agent"
+        || health.data_root_id != expected
+        || health.instance_id.is_empty()
+    {
+        return Err(format!(
+            "port {port} is occupied by a Nexus Agent for a different data root or instance contract"
+        ));
     }
-    let mut text = String::new();
-    file.read_to_string(&mut text).is_ok() && text.contains("nexus agent listening")
+    Ok(Some(health))
+}
+
+async fn verified_agent_request(
+    client: &Client,
+    port: u16,
+    paths: &NexusPaths,
+    method: Method,
+    path: &str,
+) -> Result<reqwest::RequestBuilder, String> {
+    let health = probe_health(client, port, paths)
+        .await?
+        .filter(|health| health.status == HealthStatus::Ok)
+        .ok_or_else(|| format!("Nexus Agent is not healthy on port {port}"))?;
+    Ok(client
+        .request(method, format!("http://127.0.0.1:{port}{path}"))
+        .header(PROXY_DATA_ROOT_HEADER, health.data_root_id)
+        .header(PROXY_INSTANCE_HEADER, health.instance_id))
 }
 
 async fn wait_for_health(
@@ -1497,17 +2437,27 @@ async fn wait_for_health(
     port: u16,
     wait_secs: u64,
     paths: &NexusPaths,
-    log_offset: u64,
-) -> Result<(), String> {
+    expected_instance_id: Option<&str>,
+) -> Result<HealthResponse, String> {
     let deadline = Instant::now() + Duration::from_secs(wait_secs);
     let mut last_error = None;
     loop {
-        if agent_log_ready(paths, log_offset) {
-            return Ok(());
-        }
-        match probe_health(client, port).await {
-            Ok(Some(response)) if response.status == HealthStatus::Ok => return Ok(()),
+        match probe_health(client, port, paths).await {
+            Ok(Some(response))
+                if response.status == HealthStatus::Ok
+                    && expected_instance_id
+                        .is_none_or(|expected| response.instance_id == expected) =>
+            {
+                return Ok(response)
+            }
+            Ok(Some(response)) if response.status == HealthStatus::Ok => {
+                return Err(format!(
+                    "port {port} answered with Agent instance {} instead of the spawned instance",
+                    response.instance_id
+                ))
+            }
             Ok(_) => {}
+            Err(error) if error.contains("is occupied by a Nexus Agent") => return Err(error),
             Err(error) => last_error = Some(error),
         }
         if Instant::now() >= deadline {
@@ -1523,23 +2473,25 @@ async fn wait_for_health(
 }
 
 async fn stop_agent(options: &Options, paths: &NexusPaths, client: &Client) -> Result<(), String> {
-    let health = probe_health(client, options.config.port).await?;
+    let health = probe_health(client, options.config.port, paths).await?;
     if health.is_none() {
         remove_launch_record(paths);
-        remove_lock(paths);
         print_stop(options, false, paths);
         return Ok(());
     }
 
-    let response = client
-        .post(format!(
-            "http://127.0.0.1:{}/v1/shutdown",
-            options.config.port
-        ))
-        .json(&serde_json::json!({}))
-        .send()
-        .await
-        .map_err(|error| format!("cannot request Agent shutdown: {error}"))?;
+    let response = verified_agent_request(
+        client,
+        options.config.port,
+        paths,
+        Method::POST,
+        "/v1/shutdown",
+    )
+    .await?
+    .json(&serde_json::json!({}))
+    .send()
+    .await
+    .map_err(|error| format!("cannot request Agent shutdown: {error}"))?;
     if !response.status().is_success() {
         return Err(format!(
             "Agent rejected shutdown with HTTP {}",
@@ -1549,9 +2501,11 @@ async fn stop_agent(options: &Options, paths: &NexusPaths, client: &Client) -> R
 
     let deadline = Instant::now() + Duration::from_secs(DEFAULT_STOP_WAIT_SECS);
     loop {
-        if probe_health(client, options.config.port).await?.is_none() {
+        if probe_health(client, options.config.port, paths)
+            .await?
+            .is_none()
+        {
             remove_launch_record(paths);
-            remove_lock(paths);
             print_stop(options, true, paths);
             return Ok(());
         }
@@ -1580,7 +2534,7 @@ async fn run_foreground(
         tokio::select! {
             result = tokio::signal::ctrl_c() => {
                 result.map_err(|error| format!("cannot listen for Ctrl+C: {error}"))?;
-                request_shutdown(client, options.config.port).await?;
+                request_shutdown(client, options.config.port, paths).await?;
                 let deadline = Instant::now() + Duration::from_secs(DEFAULT_STOP_WAIT_SECS);
                 loop {
                     if let Ok(Some(_)) = child.try_wait() {
@@ -1607,7 +2561,7 @@ async fn run_foreground(
                 // listener is gone. Observe that local signal first so a
                 // foreground launcher is not held hostage by a stale TCP
                 // connection while the Agent is already shutting down.
-                if !launch_record_path(paths).exists() && !lock_path(paths).exists() {
+                if !launch_record_path(paths).exists() {
                     if let Ok(Some(status)) = child.try_wait() {
                         println!("agent exited: {status}");
                     } else {
@@ -1617,7 +2571,7 @@ async fn run_foreground(
                     remove_launch_record(paths);
                     return Ok(());
                 }
-                match probe_health(client, options.config.port).await {
+                match probe_health(client, options.config.port, paths).await {
                     Ok(Some(_)) | Err(_) => down_polls = 0,
                     Ok(None) => {
                         down_polls = down_polls.saturating_add(1);
@@ -1645,9 +2599,12 @@ async fn run_foreground(
     }
 }
 
-async fn request_shutdown(client: &Client, port: u16) -> Result<(), String> {
-    let response = client
-        .post(format!("http://127.0.0.1:{port}/v1/shutdown"))
+async fn request_shutdown(client: &Client, port: u16, paths: &NexusPaths) -> Result<(), String> {
+    let Some(_) = probe_health(client, port, paths).await? else {
+        return Ok(());
+    };
+    let response = verified_agent_request(client, port, paths, Method::POST, "/v1/shutdown")
+        .await?
         .json(&serde_json::json!({}))
         .send()
         .await
@@ -1667,11 +2624,15 @@ async fn status_agent(
     paths: &NexusPaths,
     client: &Client,
 ) -> Result<(), String> {
-    let health = probe_health(client, options.config.port).await?;
-    let record = read_launch_record(paths);
+    let health = probe_health(client, options.config.port, paths).await?;
+    let record = read_launch_record(paths).filter(|record| {
+        health.as_ref().is_some_and(|health| {
+            record.agent_instance_id.as_deref() == Some(health.instance_id.as_str())
+        })
+    });
     let state = if health.is_some() {
-        client
-            .get(format!("http://127.0.0.1:{}/v1/state", options.config.port))
+        verified_agent_request(client, options.config.port, paths, Method::GET, "/v1/state")
+            .await?
             .send()
             .await
             .map_err(|error| format!("cannot read Agent state: {error}"))?
@@ -1780,14 +2741,24 @@ fn print_stop(options: &Options, stopped: bool, paths: &NexusPaths) {
 }
 
 fn print_logs(options: &Options, paths: &NexusPaths) {
+    let session = HarnessLogSessionStore::new(paths.clone())
+        .read()
+        .ok()
+        .flatten();
+    let harness_stdout = session
+        .as_ref()
+        .map(|value| paths.logs_dir.join(&value.stdout_log_name));
+    let harness_stderr = session
+        .as_ref()
+        .map(|value| paths.logs_dir.join(&value.stderr_log_name));
     if options.json {
         let value = serde_json::json!({
             "api_version": nexus_protocol::API_VERSION,
             "data_root": paths.root.display().to_string(),
             "agent_stdout": paths.logs_dir.join("agent.stdout.log"),
             "agent_stderr": paths.logs_dir.join("agent.stderr.log"),
-            "harness_stdout": paths.logs_dir.join("harness.stdout.log"),
-            "harness_stderr": paths.logs_dir.join("harness.stderr.log"),
+            "harness_stdout": harness_stdout,
+            "harness_stderr": harness_stderr,
             "launcher_config": launcher_config_path(paths),
             "launch_record": launch_record_path(paths),
         });
@@ -1807,11 +2778,17 @@ fn print_logs(options: &Options, paths: &NexusPaths) {
         );
         println!(
             "harness_stdout: {}",
-            paths.logs_dir.join("harness.stdout.log").display()
+            harness_stdout.as_ref().map_or_else(
+                || "<unavailable>".to_owned(),
+                |path| path.display().to_string()
+            )
         );
         println!(
             "harness_stderr: {}",
-            paths.logs_dir.join("harness.stderr.log").display()
+            harness_stderr.as_ref().map_or_else(
+                || "<unavailable>".to_owned(),
+                |path| path.display().to_string()
+            )
         );
         println!("launcher_config: {}", launcher_config_path(paths).display());
         println!("launch_record: {}", launch_record_path(paths).display());
@@ -1820,14 +2797,71 @@ fn print_logs(options: &Options, paths: &NexusPaths) {
 
 fn write_launch_record(paths: &NexusPaths, record: &LaunchRecord) -> io::Result<()> {
     let path = launch_record_path(paths);
-    let temporary = path.with_extension(format!("tmp-{}", process::id()));
+    let temporary = paths.run_dir.join(format!(
+        ".agent.json.tmp-{}-{}",
+        process::id(),
+        unix_time_nanos()
+    ));
     let bytes = serde_json::to_vec_pretty(record)
         .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
-    fs::write(&temporary, bytes)?;
-    if path.exists() {
-        fs::remove_file(&path)?;
+    let result = (|| {
+        let mut file = OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&temporary)?;
+        file.write_all(&bytes)?;
+        file.sync_all()?;
+        drop(file);
+        atomic_replace_launch_record(&temporary, &path)?;
+        #[cfg(unix)]
+        fs::File::open(&paths.run_dir)?.sync_all()?;
+        Ok(())
+    })();
+    if result.is_err() {
+        let _ = fs::remove_file(&temporary);
     }
-    fs::rename(temporary, path)
+    result
+}
+
+#[cfg(unix)]
+fn atomic_replace_launch_record(temporary: &Path, destination: &Path) -> io::Result<()> {
+    fs::rename(temporary, destination)
+}
+
+#[cfg(windows)]
+fn atomic_replace_launch_record(temporary: &Path, destination: &Path) -> io::Result<()> {
+    use std::os::windows::ffi::OsStrExt;
+    use windows_sys::Win32::Storage::FileSystem::{
+        MoveFileExW, MOVEFILE_REPLACE_EXISTING, MOVEFILE_WRITE_THROUGH,
+    };
+
+    let temporary: Vec<u16> = temporary
+        .as_os_str()
+        .encode_wide()
+        .chain(std::iter::once(0))
+        .collect();
+    let destination: Vec<u16> = destination
+        .as_os_str()
+        .encode_wide()
+        .chain(std::iter::once(0))
+        .collect();
+    let result = unsafe {
+        MoveFileExW(
+            temporary.as_ptr(),
+            destination.as_ptr(),
+            MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH,
+        )
+    };
+    if result == 0 {
+        Err(io::Error::last_os_error())
+    } else {
+        Ok(())
+    }
+}
+
+#[cfg(not(any(unix, windows)))]
+fn atomic_replace_launch_record(temporary: &Path, destination: &Path) -> io::Result<()> {
+    fs::rename(temporary, destination)
 }
 
 fn read_launch_record(paths: &NexusPaths) -> Option<LaunchRecord> {
@@ -1839,15 +2873,18 @@ fn remove_launch_record(paths: &NexusPaths) {
     let _ = fs::remove_file(launch_record_path(paths));
 }
 
-fn remove_lock(paths: &NexusPaths) {
-    let _ = fs::remove_file(lock_path(paths));
-}
-
 fn unix_time_seconds() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .unwrap_or_default()
         .as_secs()
+}
+
+fn unix_time_nanos() -> u128 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_nanos()
 }
 
 fn print_help() {
@@ -1857,7 +2894,7 @@ fn print_help() {
 Usage:
   nexus-launcher start [--data-dir PATH] [--port PORT] [--agent PATH] [--wait-secs SECONDS] [--json]
   nexus-launcher run|foreground [--data-dir PATH] [--port PORT] [--agent PATH] [--wait-secs SECONDS]
-  nexus-launcher api [--data-dir PATH] [--port PORT] [--agent PATH] [--console-port PORT] [--wait-secs SECONDS]
+  nexus-launcher api [--data-dir PATH] [--port PORT] [--agent PATH] [--console-port PORT] [--wait-secs SECONDS] [--launcher-instance-id ID]
   nexus-launcher console [same options as api; compatibility alias, no HTML]
   nexus-launcher stop [--data-dir PATH] [--port PORT] [--json]
   nexus-launcher status [--data-dir PATH] [--port PORT] [--json]
@@ -1892,6 +2929,38 @@ browser.
 #[cfg(test)]
 mod tests {
     use super::*;
+    use nexus_protocol::HarnessRuntimeInfo;
+
+    fn test_harness_log_session(
+        paths: &NexusPaths,
+        run_id: &str,
+        generation: u64,
+        stdout_watermark: u64,
+        stderr_watermark: u64,
+    ) -> HarnessLogSession {
+        let stdout = OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(paths.logs_dir.join("harness.stdout.log"))
+            .expect("Harness stdout opens");
+        let stderr = OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(paths.logs_dir.join("harness.stderr.log"))
+            .expect("Harness stderr opens");
+        HarnessLogSession::new(
+            run_id.to_owned(),
+            generation,
+            stdout_watermark,
+            stderr_watermark,
+            log_file_identity(&stdout).expect("Harness stdout identity reads"),
+            log_file_identity(&stderr).expect("Harness stderr identity reads"),
+            "harness.stdout.log".to_owned(),
+            "harness.stderr.log".to_owned(),
+            true,
+            unix_time_seconds(),
+        )
+    }
 
     #[test]
     fn default_agent_path_is_sibling_name_for_current_platform() {
@@ -1901,6 +2970,33 @@ mod tests {
             "nexus-agent"
         };
         assert!(!name.is_empty());
+    }
+
+    #[test]
+    fn background_launcher_modes_detach_agent_but_foreground_run_does_not() {
+        assert!(should_detach_agent(LauncherCommand::Start));
+        assert!(should_detach_agent(LauncherCommand::Api));
+        assert!(should_detach_agent(LauncherCommand::Console));
+        assert!(!should_detach_agent(LauncherCommand::Run));
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn detached_agent_spawn_gets_an_independent_process_group() {
+        let mut command = TokioCommand::new("sh");
+        command.args([
+            "-c",
+            "pid=$$; pgid=$(ps -o pgid= -p $$ | tr -d ' '); test \"$pid\" = \"$pgid\"",
+        ]);
+        configure_agent_process_group(&mut command, true);
+        let status = command
+            .status()
+            .await
+            .expect("detached process-group probe runs");
+        assert!(
+            status.success(),
+            "the detached child PID must be its process-group ID"
+        );
     }
 
     #[test]
@@ -1917,10 +3013,202 @@ mod tests {
             port: nexus_core::DEFAULT_AGENT_PORT,
             started_at_unix: 10,
             agent_program: "nexus-agent".to_owned(),
+            agent_instance_id: Some("instance-42".to_owned()),
         };
         write_launch_record(&paths, &record).expect("record writes");
-        assert_eq!(read_launch_record(&paths), Some(record));
+        let replacement = LaunchRecord {
+            pid: 43,
+            agent_instance_id: Some("instance-43".to_owned()),
+            ..record
+        };
+        write_launch_record(&paths, &replacement).expect("record atomically replaces");
+        assert_eq!(read_launch_record(&paths), Some(replacement));
+        assert!(
+            fs::read_dir(&paths.run_dir)
+                .expect("run directory reads")
+                .all(|entry| !entry
+                    .expect("directory entry reads")
+                    .file_name()
+                    .to_string_lossy()
+                    .starts_with(".agent.json.tmp-")),
+            "an atomic launch-record publication must not leave a temporary file"
+        );
         remove_launch_record(&paths);
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn instance_lock_is_os_owned_and_cannot_be_stale_deleted() {
+        let root = std::env::temp_dir().join(format!(
+            "nexus-launcher-lock-{}-{}",
+            process::id(),
+            unix_time_seconds()
+        ));
+        let paths = NexusPaths::from_root(root.clone());
+        paths.ensure_directories().expect("directories create");
+        let first = acquire_lock(&paths).expect("first launcher acquires lock");
+        let second_error = match acquire_lock(&paths) {
+            Ok(_) => panic!("second launcher must not acquire an OS-owned lock"),
+            Err(error) => error,
+        };
+        assert_eq!(second_error.kind(), io::ErrorKind::WouldBlock);
+        assert!(lock_path(&paths).exists(), "lock file remains while owned");
+        drop(first);
+        let recovered = acquire_lock(&paths).expect("released OS lock can be acquired");
+        assert!(
+            lock_path(&paths).exists(),
+            "persistent lock inode is reused instead of stale-delete/create"
+        );
+        drop(recovered);
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn startup_failure_cleanup_terminates_the_owned_process_handle() {
+        use std::{
+            os::windows::{io::AsRawHandle, io::FromRawHandle, process::CommandExt},
+            process::Command,
+        };
+        use windows_sys::Win32::{
+            Foundation::{DuplicateHandle, DUPLICATE_SAME_ACCESS, HANDLE},
+            System::Threading::{GetCurrentProcess, CREATE_NO_WINDOW},
+        };
+
+        let mut child = Command::new("cmd.exe")
+            .args(["/C", "ping 127.0.0.1 -n 30 >NUL"])
+            .creation_flags(CREATE_NO_WINDOW)
+            .spawn()
+            .expect("test process spawns");
+        let mut duplicate: HANDLE = std::ptr::null_mut();
+        let duplicated = unsafe {
+            DuplicateHandle(
+                GetCurrentProcess(),
+                child.as_raw_handle() as HANDLE,
+                GetCurrentProcess(),
+                &mut duplicate,
+                0,
+                0,
+                DUPLICATE_SAME_ACCESS,
+            )
+        };
+        assert_ne!(duplicated, 0, "process handle duplicates");
+        let handle = unsafe { std::os::windows::io::OwnedHandle::from_raw_handle(duplicate) };
+        if let Err(error) = terminate_windows_process(handle) {
+            let _ = child.kill();
+            let _ = child.wait();
+            panic!("owned-handle cleanup failed: {error}");
+        }
+        let status = child.wait().expect("terminated process reaps");
+        assert!(!status.success());
+    }
+
+    #[tokio::test]
+    async fn health_probe_rejects_agent_for_a_different_data_root() {
+        let root = std::env::temp_dir().join(format!(
+            "nexus-launcher-health-root-{}-{}",
+            process::id(),
+            unix_time_seconds()
+        ));
+        let expected = NexusPaths::from_root(root.join("expected"));
+        let foreign = NexusPaths::from_root(root.join("foreign"));
+        expected
+            .ensure_directories()
+            .expect("expected root creates");
+        foreign.ensure_directories().expect("foreign root creates");
+        let response = HealthResponse::healthy(
+            data_root_identity(&foreign).expect("foreign root canonicalizes"),
+            "foreign-instance".to_owned(),
+        );
+        let app = Router::new().route(
+            "/v1/health",
+            get(move || {
+                let response = response.clone();
+                async move { Json(response) }
+            }),
+        );
+        let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0))
+            .await
+            .expect("foreign Agent binds");
+        let port = listener.local_addr().expect("foreign address").port();
+        let server = tokio::spawn(async move {
+            axum::serve(listener, app)
+                .await
+                .expect("foreign Agent serves")
+        });
+        let client = Client::new();
+        let error = probe_health(&client, port, &expected)
+            .await
+            .expect_err("foreign data root is never adopted");
+        assert!(error.contains("different data root"));
+        server.abort();
+        let _ = server.await;
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[tokio::test]
+    async fn verified_agent_request_binds_the_probed_root_and_instance() {
+        let root = std::env::temp_dir().join(format!(
+            "nexus-launcher-verified-proxy-{}-{}",
+            process::id(),
+            unix_time_seconds()
+        ));
+        let paths = NexusPaths::from_root(root.clone());
+        paths.ensure_directories().expect("root creates");
+        let data_root_id = data_root_identity(&paths).expect("root identity reads");
+        let instance_id = "expected-instance".to_owned();
+        let health = HealthResponse::healthy(data_root_id.clone(), instance_id.clone());
+        let expected_root = data_root_id.clone();
+        let expected_instance = instance_id.clone();
+        let app = Router::new()
+            .route(
+                "/v1/health",
+                get(move || {
+                    let health = health.clone();
+                    async move { Json(health) }
+                }),
+            )
+            .route(
+                "/v1/state",
+                get(move |headers: axum::http::HeaderMap| {
+                    let expected_root = expected_root.clone();
+                    let expected_instance = expected_instance.clone();
+                    async move {
+                        if headers
+                            .get(PROXY_DATA_ROOT_HEADER)
+                            .and_then(|value| value.to_str().ok())
+                            == Some(expected_root.as_str())
+                            && headers
+                                .get(PROXY_INSTANCE_HEADER)
+                                .and_then(|value| value.to_str().ok())
+                                == Some(expected_instance.as_str())
+                        {
+                            StatusCode::OK
+                        } else {
+                            StatusCode::CONFLICT
+                        }
+                    }
+                }),
+            );
+        let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0))
+            .await
+            .expect("Agent mock binds");
+        let port = listener.local_addr().expect("Agent mock address").port();
+        let server = tokio::spawn(async move { axum::serve(listener, app).await.expect("serves") });
+        let client = Client::new();
+        let response = verified_agent_request(&client, port, &paths, Method::GET, "/v1/state")
+            .await
+            .expect("identity-bound request builds")
+            .send()
+            .await
+            .expect("identity-bound request sends");
+        assert_eq!(response.status(), StatusCode::OK);
+        let error = wait_for_health(&client, port, 1, &paths, Some("different-instance"))
+            .await
+            .expect_err("startup nonce mismatch is rejected");
+        assert!(error.contains("instead of the spawned instance"));
+        server.abort();
+        let _ = server.await;
         let _ = fs::remove_dir_all(root);
     }
 
@@ -1930,7 +3218,17 @@ mod tests {
         // is exercised by the release smoke and --help output is intentionally
         // stable for scripts.
         assert_eq!(DEFAULT_WAIT_SECS, 20);
-        assert_eq!(LOCK_STALE_AFTER_SECS, 30);
+        assert_eq!(DEFAULT_STOP_WAIT_SECS, 15);
+    }
+
+    #[test]
+    fn parser_preserves_the_native_helper_instance_nonce() {
+        let options =
+            parse_args_from(["api", "--launcher-instance-id", "native-helper-instance-a"])
+                .expect("arguments parse")
+                .expect("options remain");
+        assert_eq!(options.launcher_instance_id, "native-helper-instance-a");
+        assert!(parse_args_from(["api", "--launcher-instance-id", ""]).is_err());
     }
 
     #[test]
@@ -2042,6 +3340,9 @@ mod tests {
         ));
         let paths = NexusPaths::from_root(root.clone());
         paths.ensure_directories().expect("directories create");
+        HarnessLogSessionStore::new(paths.clone())
+            .write(&test_harness_log_session(&paths, "run-current", 1, 0, 0))
+            .expect("log session writes");
         fs::write(
             paths.logs_dir.join("harness.stdout.log"),
             "ready at http://127.0.0.1:3080/health\nOpen this URL: http://127.0.0.1:3080/?token=abc123.\n",
@@ -2072,13 +3373,584 @@ mod tests {
     }
 
     #[test]
+    fn harness_ui_fails_closed_without_a_valid_log_session_marker() {
+        let root = std::env::temp_dir().join(format!(
+            "nexus-launcher-missing-log-session-{}-{}",
+            process::id(),
+            unix_time_seconds()
+        ));
+        let paths = NexusPaths::from_root(root.clone());
+        paths.ensure_directories().expect("directories create");
+        fs::write(
+            paths.logs_dir.join("harness.stdout.log"),
+            "http://127.0.0.1:3080/?token=stale\n",
+        )
+        .expect("old token writes");
+
+        let missing = read_harness_ui_info(&paths);
+        assert!(!missing.available);
+        assert_eq!(missing.url, None);
+        assert_eq!(missing.token, None);
+
+        fs::write(
+            HarnessLogSessionStore::new(paths.clone()).path(),
+            b"not-json",
+        )
+        .expect("corrupt marker writes");
+        let corrupt = read_harness_ui_info(&paths);
+        assert!(!corrupt.available);
+        assert_eq!(corrupt.url, None);
+        assert_eq!(corrupt.token, None);
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[tokio::test]
+    async fn harness_ui_requires_running_agent_state_and_a_durable_marker() {
+        let root = std::env::temp_dir().join(format!(
+            "nexus-launcher-runtime-token-gate-{}-{}",
+            process::id(),
+            unix_time_seconds()
+        ));
+        let paths = NexusPaths::from_root(root.clone());
+        paths.ensure_directories().expect("directories create");
+        fs::write(
+            paths.logs_dir.join("harness.stdout.log"),
+            "http://127.0.0.1:3080/?token=stale\n",
+        )
+        .expect("old token writes");
+        let stdout_watermark = fs::metadata(paths.logs_dir.join("harness.stdout.log"))
+            .expect("Harness stdout metadata reads")
+            .len();
+        let current_session = test_harness_log_session(&paths, "run-gated", 1, stdout_watermark, 0);
+        let runtime = std::sync::Arc::new(std::sync::Mutex::new(HarnessRuntimeInfo::running(
+            42,
+            unix_time_seconds(),
+            unix_time_seconds(),
+        )));
+        let health = HealthResponse::healthy(
+            data_root_identity(&paths).expect("data-root identity reads"),
+            "runtime-token-agent".to_owned(),
+        );
+        let app = Router::new()
+            .route(
+                "/v1/health",
+                get(move || {
+                    let health = health.clone();
+                    async move { Json(health) }
+                }),
+            )
+            .route(
+                "/v1/harness",
+                get({
+                    let runtime = std::sync::Arc::clone(&runtime);
+                    let session = current_session.clone();
+                    move || {
+                        let runtime = std::sync::Arc::clone(&runtime);
+                        let session = session.clone();
+                        async move {
+                            let runtime = runtime.lock().expect("runtime locks").clone();
+                            Json(HarnessResponse::from_observation(
+                                runtime,
+                                1,
+                                session.run_id,
+                                session.generation,
+                                session.stdout_watermark,
+                                session.stderr_watermark,
+                                session.stdout_file_identity,
+                                session.stderr_file_identity,
+                                session.stdout_log_name,
+                                session.stderr_log_name,
+                                session.launch_pending,
+                            ))
+                        }
+                    }
+                }),
+            );
+        let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0))
+            .await
+            .expect("mock Agent binds");
+        let port = listener.local_addr().expect("mock Agent address").port();
+        let server =
+            tokio::spawn(
+                async move { axum::serve(listener, app).await.expect("mock Agent serves") },
+            );
+        let controller = ConsoleController::new(
+            Options {
+                command: LauncherCommand::Api,
+                config: NexusConfig {
+                    data_dir: Some(root.clone()),
+                    port,
+                },
+                agent_program: None,
+                console_port: DEFAULT_CONSOLE_PORT,
+                wait_secs: DEFAULT_WAIT_SECS,
+                json: false,
+                launcher_instance_id: "test-launcher".to_owned(),
+                launcher_capability: Some("a".repeat(64)),
+            },
+            paths.clone(),
+            Client::new(),
+        )
+        .expect("controller creates");
+
+        let missing_marker = controller.harness_ui().await;
+        assert!(!missing_marker.available);
+        assert_eq!(missing_marker.token, None);
+        let mismatched_session = HarnessLogSession {
+            run_id: "another-agent-run".to_owned(),
+            ..current_session.clone()
+        };
+        HarnessLogSessionStore::new(paths.clone())
+            .write(&mismatched_session)
+            .expect("mismatched log session writes");
+        let mismatched_writer = controller.harness_ui().await;
+        assert!(!mismatched_writer.available);
+        assert_eq!(mismatched_writer.token, None);
+        HarnessLogSessionStore::new(paths.clone())
+            .write(&current_session)
+            .expect("log session writes");
+        *runtime.lock().expect("runtime locks") =
+            HarnessRuntimeInfo::starting(43, unix_time_seconds());
+        let starting = controller.harness_ui().await;
+        assert!(!starting.available);
+        assert_eq!(starting.url, None);
+        assert_eq!(starting.token, None);
+
+        *runtime.lock().expect("runtime locks") =
+            HarnessRuntimeInfo::running(43, unix_time_seconds(), unix_time_seconds());
+        let no_current_token = controller.harness_ui().await;
+        assert!(!no_current_token.available);
+        assert_eq!(no_current_token.token, None);
+        OpenOptions::new()
+            .append(true)
+            .open(paths.logs_dir.join("harness.stdout.log"))
+            .expect("Harness stdout opens")
+            .write_all(b"http://127.0.0.1:3080/?token=current\n")
+            .expect("current token appends");
+        let current = controller.harness_ui().await;
+        assert!(current.available);
+        assert_eq!(current.token.as_deref(), Some("current"));
+        assert_eq!(current.generation, Some(1));
+        assert_eq!(current.run_id.as_deref(), Some("run-gated"));
+
+        let mut unattached =
+            HarnessRuntimeInfo::running(43, unix_time_seconds(), unix_time_seconds());
+        unattached.pid = None;
+        *runtime.lock().expect("runtime locks") = unattached;
+        let pidless = controller.harness_ui().await;
+        assert!(
+            !pidless.available,
+            "an unattached process has no provable token-session continuity"
+        );
+        assert_eq!(pidless.url, None);
+        assert_eq!(pidless.token, None);
+        server.abort();
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn harness_log_cursor_ignores_touched_old_file_and_accepts_append() {
+        let root = std::env::temp_dir().join(format!(
+            "nexus-launcher-harness-cursor-{}-{}",
+            process::id(),
+            unix_time_seconds()
+        ));
+        let paths = NexusPaths::from_root(root.clone());
+        paths.ensure_directories().expect("directories create");
+        let stdout = paths.logs_dir.join("harness.stdout.log");
+        let stderr = paths.logs_dir.join("harness.stderr.log");
+        fs::write(&stdout, "old http://127.0.0.1:3080/?token=old\n").expect("old stdout writes");
+        fs::write(&stderr, "old http://127.0.0.1:3080/?token=old-stderr\n")
+            .expect("old stderr writes");
+        let session = test_harness_log_session(&paths, "run-cursor", 1, 0, 0);
+
+        let mut observer = HarnessLogObserver::default();
+        let initial = read_harness_ui_info_with_observer(&paths, &mut observer, Some(&session));
+        assert!(initial.available);
+        fs::write(&stderr, "old http://127.0.0.1:3080/?token=old-stderr\n")
+            .expect("old stderr is touched");
+        fs::OpenOptions::new()
+            .append(true)
+            .open(&stdout)
+            .expect("stdout opens")
+            .write_all(b"new http://127.0.0.1:3080/?token=new\n")
+            .expect("new stdout appends");
+
+        let info = read_harness_ui_info_with_observer(&paths, &mut observer, Some(&session));
+        assert_eq!(info.token.as_deref(), Some("new"));
+        assert_eq!(
+            info.url.as_deref(),
+            Some("http://127.0.0.1:3080/?token=new")
+        );
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn harness_log_tail_requires_left_and_right_token_boundaries() {
+        let root = std::env::temp_dir().join(format!(
+            "nexus-launcher-token-boundaries-{}-{}",
+            process::id(),
+            unix_time_seconds()
+        ));
+        let paths = NexusPaths::from_root(root.clone());
+        paths.ensure_directories().expect("directories create");
+        let stdout = paths.logs_dir.join("harness.stdout.log");
+        let partial = "prefix-http://127.0.0.1:3080/?token=partial\n";
+        let complete = "http://127.0.0.1:3080/?token=complete\n";
+        let mut bytes = format!("{partial}{complete}").into_bytes();
+        bytes.extend(std::iter::repeat_n(
+            b'x',
+            HARNESS_LOG_TAIL_BYTES as usize + 10 - bytes.len(),
+        ));
+        fs::write(&stdout, bytes).expect("long log writes");
+        let session = test_harness_log_session(&paths, "run-boundary", 1, 0, 0);
+        let mut observer = HarnessLogObserver::default();
+        let info = read_harness_ui_info_with_observer(&paths, &mut observer, Some(&session));
+        assert_eq!(info.token.as_deref(), Some("complete"));
+
+        fs::write(&stdout, "http://127.0.0.1:3080/?token=fragment").expect("fragment writes");
+        let fragment_session = test_harness_log_session(&paths, "run-fragment", 2, 0, 0);
+        observer.invalidate();
+        assert_eq!(
+            read_harness_ui_info_with_observer(&paths, &mut observer, Some(&fragment_session))
+                .token,
+            None,
+            "an EOF token is not published before a delimiter arrives"
+        );
+        OpenOptions::new()
+            .append(true)
+            .open(&stdout)
+            .expect("fragment log opens")
+            .write_all(b"\n")
+            .expect("delimiter appends");
+        assert_eq!(
+            read_harness_ui_info_with_observer(&paths, &mut observer, Some(&fragment_session))
+                .token
+                .as_deref(),
+            Some("fragment")
+        );
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn per_run_log_path_ignores_longer_copy_truncate_of_legacy_log() {
+        let root = std::env::temp_dir().join(format!(
+            "nexus-launcher-per-run-log-{}-{}",
+            process::id(),
+            unix_time_seconds()
+        ));
+        let paths = NexusPaths::from_root(root.clone());
+        paths.ensure_directories().expect("directories create");
+        let legacy = paths.logs_dir.join("harness.stdout.log");
+        fs::write(&legacy, "http://127.0.0.1:3080/?token=stale\n").expect("legacy token writes");
+        let run_stdout = "harness-current.stdout.log";
+        let run_stderr = "harness-current.stderr.log";
+        fs::write(
+            paths.logs_dir.join(run_stdout),
+            "http://127.0.0.1:3080/?token=current\n",
+        )
+        .expect("per-run stdout writes");
+        fs::write(paths.logs_dir.join(run_stderr), b"").expect("per-run stderr writes");
+        let stdout_file = OpenOptions::new()
+            .append(true)
+            .open(paths.logs_dir.join(run_stdout))
+            .expect("per-run stdout opens");
+        let stderr_file = OpenOptions::new()
+            .append(true)
+            .open(paths.logs_dir.join(run_stderr))
+            .expect("per-run stderr opens");
+        let session = HarnessLogSession::new(
+            "run-current".to_owned(),
+            9,
+            0,
+            0,
+            log_file_identity(&stdout_file).expect("stdout identity reads"),
+            log_file_identity(&stderr_file).expect("stderr identity reads"),
+            run_stdout.to_owned(),
+            run_stderr.to_owned(),
+            true,
+            unix_time_seconds(),
+        );
+        let mut observer = HarnessLogObserver::default();
+        assert_eq!(
+            read_harness_ui_info_with_observer(&paths, &mut observer, Some(&session))
+                .token
+                .as_deref(),
+            Some("current")
+        );
+        fs::write(
+            &legacy,
+            format!(
+                "http://127.0.0.1:3080/?token=stale\n{}",
+                "x".repeat(HARNESS_LOG_TAIL_BYTES as usize)
+            ),
+        )
+        .expect("legacy log is copy-truncated to a longer replacement");
+        assert_eq!(
+            read_harness_ui_info_with_observer(&paths, &mut observer, Some(&session))
+                .token
+                .as_deref(),
+            Some("current"),
+            "the current run never reads the reusable legacy log path"
+        );
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn harness_log_cursor_accepts_the_tail_after_truncation() {
+        let root = std::env::temp_dir().join(format!(
+            "nexus-launcher-harness-rotation-{}-{}",
+            process::id(),
+            unix_time_seconds()
+        ));
+        let paths = NexusPaths::from_root(root.clone());
+        paths.ensure_directories().expect("directories create");
+        let stdout = paths.logs_dir.join("harness.stdout.log");
+        fs::write(&stdout, "old http://127.0.0.1:3080/?token=old\n").expect("old log writes");
+        let session = test_harness_log_session(&paths, "run-rotation", 1, 0, 0);
+
+        let mut observer = HarnessLogObserver::default();
+        let old = read_harness_ui_info_with_observer(&paths, &mut observer, Some(&session));
+        assert_eq!(old.token.as_deref(), Some("old"));
+        fs::write(&stdout, "replacement http://127.0.0.1:3080/?token=new\n")
+            .expect("rotated log writes");
+
+        let replacement = read_harness_ui_info_with_observer(&paths, &mut observer, Some(&session));
+        assert_eq!(replacement.token.as_deref(), Some("new"));
+        assert_eq!(
+            replacement.url.as_deref(),
+            Some("http://127.0.0.1:3080/?token=new")
+        );
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn harness_log_cursor_drops_old_token_after_sliding_window_rotation() {
+        let root = std::env::temp_dir().join(format!(
+            "nexus-launcher-harness-long-rotation-{}-{}",
+            process::id(),
+            unix_time_seconds()
+        ));
+        let paths = NexusPaths::from_root(root.clone());
+        paths.ensure_directories().expect("directories create");
+        let stdout = paths.logs_dir.join("harness.stdout.log");
+        let old_url = "http://127.0.0.1:3080/?token=old\n";
+        let new_url = "http://127.0.0.1:3080/?token=new\n";
+        let old_head = format!("{}{}", old_url, "o".repeat(100 - old_url.len()));
+        let new_head = format!("{}{}", new_url, "n".repeat(100 - new_url.len()));
+        let shared_tail = "x".repeat(HARNESS_LOG_TAIL_BYTES as usize - 100);
+        let old = format!("{old_head}{shared_tail}");
+        assert_eq!(old.len(), HARNESS_LOG_TAIL_BYTES as usize);
+        fs::write(&stdout, old).expect("old log writes");
+        let session = test_harness_log_session(&paths, "run-long-rotation", 1, 0, 0);
+
+        let mut observer = HarnessLogObserver::default();
+        let initial = read_harness_ui_info_with_observer(&paths, &mut observer, Some(&session));
+        assert_eq!(initial.token.as_deref(), Some("old"));
+
+        let replacement = format!("{new_head}{shared_tail}{}", "r".repeat(100));
+        assert_eq!(replacement.len(), HARNESS_LOG_TAIL_BYTES as usize + 100);
+        assert!(replacement.len() > observer.files[&stdout].offset as usize);
+        fs::write(&stdout, replacement).expect("longer replacement writes");
+
+        let info = read_harness_ui_info_with_observer(&paths, &mut observer, Some(&session));
+        assert!(!info.available, "the old token must not survive rotation");
+        assert_eq!(info.token, None);
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn harness_log_session_rejects_old_token_until_new_token_is_appended() {
+        let root = std::env::temp_dir().join(format!(
+            "nexus-launcher-log-session-{}-{}",
+            process::id(),
+            unix_time_seconds()
+        ));
+        let paths = NexusPaths::from_root(root.clone());
+        paths.ensure_directories().expect("directories create");
+        let stdout = paths.logs_dir.join("harness.stdout.log");
+        fs::write(&stdout, "old http://127.0.0.1:3080/?token=old\n").expect("old token writes");
+        let mut observer = HarnessLogObserver::default();
+        assert!(
+            !read_harness_ui_info_with_observer(&paths, &mut observer, None).available,
+            "missing session is always fail-closed"
+        );
+        let watermark = fs::metadata(&stdout).expect("stdout metadata").len();
+        let session = test_harness_log_session(&paths, "run-new", 2, watermark, 0);
+        observer.invalidate();
+
+        let stopped_then_starting =
+            read_harness_ui_info_with_observer(&paths, &mut observer, Some(&session));
+        assert!(!stopped_then_starting.available);
+        assert_eq!(stopped_then_starting.token, None);
+        OpenOptions::new()
+            .append(true)
+            .open(&stdout)
+            .expect("stdout opens")
+            .write_all(b"ordinary startup output without a URL\n")
+            .expect("ordinary output appends");
+        let ordinary_append =
+            read_harness_ui_info_with_observer(&paths, &mut observer, Some(&session));
+        assert!(
+            !ordinary_append.available,
+            "ordinary output must not resurrect the pre-session token"
+        );
+        assert_eq!(ordinary_append.token, None);
+
+        OpenOptions::new()
+            .append(true)
+            .open(&stdout)
+            .expect("stdout opens")
+            .write_all(b"open http://127.0.0.1:3080/?token=current\n")
+            .expect("current token appends");
+        let current = read_harness_ui_info_with_observer(&paths, &mut observer, Some(&session));
+        assert!(current.available);
+        assert_eq!(current.token.as_deref(), Some("current"));
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn harness_log_session_rejects_cross_boundary_and_short_replacement_tokens() {
+        let root = std::env::temp_dir().join(format!(
+            "nexus-launcher-log-session-boundary-{}-{}",
+            process::id(),
+            unix_time_seconds()
+        ));
+        let paths = NexusPaths::from_root(root.clone());
+        paths.ensure_directories().expect("directories create");
+        let stdout = paths.logs_dir.join("harness.stdout.log");
+        let crossing = "prefix http://127.0.0.1:3080/?token=crossing\n";
+        fs::write(&stdout, crossing).expect("cross-boundary token writes");
+        let watermark = "prefix http://127".len() as u64;
+        let session = test_harness_log_session(&paths, "run-boundary", 4, watermark, 0);
+        let mut observer = HarnessLogObserver::default();
+
+        let crossed = read_harness_ui_info_with_observer(&paths, &mut observer, Some(&session));
+        assert!(!crossed.available, "a URL straddling the boundary is stale");
+        assert_eq!(crossed.token, None);
+
+        let replacement_session =
+            test_harness_log_session(&paths, "run-replacement", 5, crossing.len() as u64, 0);
+        fs::write(&stdout, "http://127.0.0.1:3080/?token=replacement\n")
+            .expect("short replacement writes");
+        let replacement =
+            read_harness_ui_info_with_observer(&paths, &mut observer, Some(&replacement_session));
+        assert!(
+            !replacement.available,
+            "a file shorter than its session watermark has unknown identity"
+        );
+        assert_eq!(replacement.token, None);
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn harness_log_session_rejects_same_path_replacement_with_a_new_file_identity() {
+        let root = std::env::temp_dir().join(format!(
+            "nexus-launcher-log-session-identity-{}-{}",
+            process::id(),
+            unix_time_seconds()
+        ));
+        let paths = NexusPaths::from_root(root.clone());
+        paths.ensure_directories().expect("directories create");
+        let stdout = paths.logs_dir.join("harness.stdout.log");
+        fs::write(&stdout, "http://127.0.0.1:3080/?token=current\n").expect("current token writes");
+        let session = test_harness_log_session(&paths, "run-identity", 6, 0, 0);
+        let mut observer = HarnessLogObserver::default();
+        let current = read_harness_ui_info_with_observer(&paths, &mut observer, Some(&session));
+        assert_eq!(current.token.as_deref(), Some("current"));
+
+        fs::remove_file(&stdout).expect("old log removes");
+        fs::write(
+            &stdout,
+            format!(
+                "http://127.0.0.1:3080/?token=replacement\n{}",
+                "x".repeat(1024)
+            ),
+        )
+        .expect("longer replacement writes");
+        let replacement = read_harness_ui_info_with_observer(&paths, &mut observer, Some(&session));
+        assert!(
+            !replacement.available,
+            "a same-path file replacement must not inherit the active session"
+        );
+        assert_eq!(replacement.token, None);
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn harness_log_session_keeps_byte_offsets_with_invalid_utf8() {
+        let root = std::env::temp_dir().join(format!(
+            "nexus-launcher-log-session-bytes-{}-{}",
+            process::id(),
+            unix_time_seconds()
+        ));
+        let paths = NexusPaths::from_root(root.clone());
+        paths.ensure_directories().expect("directories create");
+        let stdout = paths.logs_dir.join("harness.stdout.log");
+        let prefix = [0xff, b' '];
+        let stale = b"http://127.0.0.1:3080/?token=stale\n";
+        let mut bytes = prefix.to_vec();
+        bytes.extend_from_slice(stale);
+        fs::write(&stdout, bytes).expect("binary Harness output writes");
+        let watermark = (prefix.len() + 8) as u64;
+        let session = test_harness_log_session(&paths, "run-bytes", 7, watermark, 0);
+        let mut observer = HarnessLogObserver::default();
+
+        let info = read_harness_ui_info_with_observer(&paths, &mut observer, Some(&session));
+        assert!(
+            !info.available,
+            "invalid UTF-8 must not shift a stale URL across its byte watermark"
+        );
+        assert_eq!(info.token, None);
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn harness_log_session_survives_launcher_observer_restart() {
+        let root = std::env::temp_dir().join(format!(
+            "nexus-launcher-log-session-restart-{}-{}",
+            process::id(),
+            unix_time_seconds()
+        ));
+        let paths = NexusPaths::from_root(root.clone());
+        paths.ensure_directories().expect("directories create");
+        let stdout = paths.logs_dir.join("harness.stdout.log");
+        fs::write(&stdout, "old http://127.0.0.1:3080/?token=old\n").expect("old token writes");
+        let watermark = fs::metadata(&stdout).expect("stdout metadata").len();
+        let session = test_harness_log_session(&paths, "run-persisted", 9, watermark, 0);
+        HarnessLogSessionStore::new(paths.clone())
+            .write(&session)
+            .expect("session marker writes");
+        OpenOptions::new()
+            .append(true)
+            .open(&stdout)
+            .expect("stdout opens")
+            .write_all(b"open http://127.0.0.1:3080/?token=current\n")
+            .expect("current token appends");
+
+        let first_process = read_harness_ui_info(&paths);
+        let restarted_process = read_harness_ui_info(&paths);
+        assert_eq!(first_process.token.as_deref(), Some("current"));
+        assert_eq!(restarted_process.token.as_deref(), Some("current"));
+        assert_ne!(restarted_process.token.as_deref(), Some("old"));
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
     fn console_status_is_json_safe() {
         let status = ConsoleStatus {
             running: true,
             desired_agent_running: true,
-            agent_api: "http://127.0.0.1:3090".to_owned(),
+            agent_api: Some("http://127.0.0.1:3090".to_owned()),
             console_url: "http://127.0.0.1:3091/".to_owned(),
             data_root: "D:\\dsh-local\\nexus-data".to_owned(),
+            data_root_id: "root-a".to_owned(),
+            launcher_instance_id: "launcher-a".to_owned(),
             agent_pid: Some(42),
             agent_program: Some("nexus-agent.exe".to_owned()),
         };
@@ -2086,5 +3958,220 @@ mod tests {
         assert_eq!(encoded["running"], true);
         assert_eq!(encoded["agent_pid"], 42);
         assert_eq!(encoded["console_url"], "http://127.0.0.1:3091/");
+        assert_eq!(encoded["data_root_id"], "root-a");
+        assert_eq!(encoded["launcher_instance_id"], "launcher-a");
+        assert!(encoded.get("launcher_capability").is_none());
+        assert!(encoded.get("capability").is_none());
+    }
+
+    #[test]
+    fn launcher_control_routes_require_the_exact_helper_identity_pair() {
+        assert!(!launcher_route_requires_identity("/launcher/status"));
+        assert!(!launcher_route_requires_identity("/launcher/handshake"));
+        assert!(launcher_route_requires_identity("/launcher/agent"));
+        assert!(launcher_route_requires_identity(
+            "/launcher/agent-api/v1/health"
+        ));
+        assert!(launcher_route_requires_identity(
+            "/launcher/agent-api/v1/harness"
+        ));
+        let mut headers = axum::http::HeaderMap::new();
+        assert!(!launcher_identity_values_match(
+            &headers,
+            "root-a",
+            "launcher-a"
+        ));
+        headers.insert(
+            LAUNCHER_DATA_ROOT_HEADER,
+            "root-a".parse().expect("root header parses"),
+        );
+        assert!(!launcher_identity_values_match(
+            &headers,
+            "root-a",
+            "launcher-a"
+        ));
+        headers.insert(
+            LAUNCHER_INSTANCE_HEADER,
+            "launcher-a".parse().expect("instance header parses"),
+        );
+        assert!(launcher_identity_values_match(
+            &headers,
+            "root-a",
+            "launcher-a"
+        ));
+        assert!(!launcher_identity_values_match(
+            &headers,
+            "root-b",
+            "launcher-a"
+        ));
+        assert!(!launcher_capability_values_match(&headers, &"a".repeat(64)));
+        headers.insert(
+            LAUNCHER_CAPABILITY_HEADER,
+            "a".repeat(64).parse().expect("capability header parses"),
+        );
+        assert!(launcher_capability_values_match(&headers, &"a".repeat(64)));
+        assert!(!launcher_capability_values_match(&headers, &"b".repeat(64)));
+        assert_eq!(
+            launcher_handshake_proof(&"a".repeat(64), &"b".repeat(64), "root-a", "launcher-a",),
+            "b0a92a24f6aa2ea5e3352d3646293a69210182905e0b3b0e10206cb395325e7f"
+        );
+    }
+
+    #[test]
+    fn agent_proxy_namespace_maps_only_the_exact_allowlist() {
+        let mappings = [
+            ("/launcher/agent-api/v1/health", "/v1/health"),
+            ("/launcher/agent-api/v1/state", "/v1/state"),
+            ("/launcher/agent-api/v1/harness", "/v1/harness"),
+            ("/launcher/agent-api/v1/profiles", "/v1/profiles"),
+            ("/launcher/agent-api/v1/checkpoints", "/v1/checkpoints"),
+            ("/launcher/agent-api/v1/releases", "/v1/releases"),
+            ("/launcher/agent-api/v1/updates", "/v1/updates"),
+            ("/launcher/agent-api/v1/diagnostics", "/v1/diagnostics"),
+            ("/launcher/agent-api/v1/config", "/v1/config"),
+        ];
+        for (launcher_path, agent_path) in mappings {
+            assert_eq!(agent_proxy_target_path(launcher_path), Some(agent_path));
+        }
+        assert_eq!(agent_proxy_target_path("/v1/state"), None);
+        assert_eq!(
+            agent_proxy_target_path("/launcher/agent-api/v1/shutdown"),
+            None
+        );
+        assert_eq!(
+            agent_proxy_target_path("/launcher/agent-api/v1/state/extra"),
+            None
+        );
+    }
+
+    #[tokio::test]
+    async fn headless_api_exposes_agent_proxy_only_in_the_identity_bound_namespace() {
+        let root = std::env::temp_dir().join(format!(
+            "nexus-launcher-helper-identity-{}-{}",
+            process::id(),
+            unix_time_nanos()
+        ));
+        let paths = NexusPaths::from_root(root.clone());
+        paths.ensure_directories().expect("data root creates");
+        let unused_agent = TcpListener::bind((Ipv4Addr::LOCALHOST, 0))
+            .await
+            .expect("unused Agent port reserves");
+        let agent_port = unused_agent.local_addr().expect("Agent address").port();
+        drop(unused_agent);
+        let client = Client::builder()
+            .connect_timeout(Duration::from_millis(100))
+            .timeout(Duration::from_millis(250))
+            .build()
+            .expect("client builds");
+        let controller = ConsoleController::new(
+            Options {
+                command: LauncherCommand::Api,
+                config: NexusConfig {
+                    data_dir: Some(root.clone()),
+                    port: agent_port,
+                },
+                agent_program: None,
+                console_port: DEFAULT_CONSOLE_PORT,
+                wait_secs: DEFAULT_WAIT_SECS,
+                json: false,
+                launcher_instance_id: "launcher-api-test".to_owned(),
+                launcher_capability: Some("a".repeat(64)),
+            },
+            paths,
+            client.clone(),
+        )
+        .expect("controller creates");
+        let expected_root = controller.data_root_id.clone();
+        let app = build_api_router(controller);
+        let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0))
+            .await
+            .expect("Launcher API binds");
+        let port = listener.local_addr().expect("Launcher address").port();
+        let server = tokio::spawn(async move { axum::serve(listener, app).await.expect("serves") });
+
+        let status = client
+            .get(format!("http://127.0.0.1:{port}/launcher/status"))
+            .send()
+            .await
+            .expect("bootstrap status responds")
+            .json::<ConsoleStatus>()
+            .await
+            .expect("bootstrap status parses");
+        assert_eq!(status.data_root_id, expected_root);
+        assert_eq!(status.launcher_instance_id, "launcher-api-test");
+        let challenge = "b".repeat(64);
+        let handshake = client
+            .get(format!("http://127.0.0.1:{port}/launcher/handshake"))
+            .header(LAUNCHER_CHALLENGE_HEADER, &challenge)
+            .send()
+            .await
+            .expect("bootstrap handshake responds");
+        assert_eq!(handshake.status(), StatusCode::OK);
+        assert_eq!(
+            handshake
+                .headers()
+                .get(LAUNCHER_PROOF_HEADER)
+                .and_then(|value| value.to_str().ok()),
+            Some(
+                launcher_handshake_proof(
+                    &"a".repeat(64),
+                    &challenge,
+                    &status.data_root_id,
+                    &status.launcher_instance_id,
+                )
+                .as_str()
+            )
+        );
+        let rejected = client
+            .get(format!(
+                "http://127.0.0.1:{port}/launcher/agent-api/v1/health"
+            ))
+            .send()
+            .await
+            .expect("rejection responds");
+        assert_eq!(rejected.status(), StatusCode::FORBIDDEN);
+        let wrong_capability = client
+            .get(format!(
+                "http://127.0.0.1:{port}/launcher/agent-api/v1/health"
+            ))
+            .header(LAUNCHER_DATA_ROOT_HEADER, &status.data_root_id)
+            .header(LAUNCHER_INSTANCE_HEADER, &status.launcher_instance_id)
+            .header(LAUNCHER_CAPABILITY_HEADER, "b".repeat(64))
+            .send()
+            .await
+            .expect("wrong capability rejection responds");
+        assert_eq!(wrong_capability.status(), StatusCode::FORBIDDEN);
+        let removed_top_level_route_without_identity = client
+            .get(format!("http://127.0.0.1:{port}/v1/health"))
+            .send()
+            .await
+            .expect("removed raw route responds");
+        assert_eq!(
+            removed_top_level_route_without_identity.status(),
+            StatusCode::NOT_FOUND
+        );
+        let identity_bound = client
+            .get(format!(
+                "http://127.0.0.1:{port}/launcher/agent-api/v1/health"
+            ))
+            .header(LAUNCHER_DATA_ROOT_HEADER, &status.data_root_id)
+            .header(LAUNCHER_INSTANCE_HEADER, &status.launcher_instance_id)
+            .header(LAUNCHER_CAPABILITY_HEADER, "a".repeat(64))
+            .send()
+            .await
+            .expect("identity-bound request responds");
+        assert_eq!(identity_bound.status(), StatusCode::BAD_GATEWAY);
+        let removed_top_level_route = client
+            .get(format!("http://127.0.0.1:{port}/v1/health"))
+            .header(LAUNCHER_DATA_ROOT_HEADER, &status.data_root_id)
+            .header(LAUNCHER_INSTANCE_HEADER, &status.launcher_instance_id)
+            .send()
+            .await
+            .expect("removed route responds");
+        assert_eq!(removed_top_level_route.status(), StatusCode::NOT_FOUND);
+
+        server.abort();
+        let _ = server.await;
+        let _ = fs::remove_dir_all(root);
     }
 }

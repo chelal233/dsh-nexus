@@ -7,7 +7,11 @@ use nexus_core::{
     validate_release_version, NexusPaths, ReleaseStore, UpdateSpec, UpdateStateStore,
 };
 use nexus_protocol::{ReleaseManifest, UpdateResponse, UpdateRuntimeInfo, UpdateState};
-use tokio::{process::Command, sync::Mutex, time::timeout};
+use tokio::{
+    process::Command,
+    sync::{oneshot, Mutex, OwnedMutexGuard},
+    time::timeout,
+};
 
 #[derive(Debug)]
 pub enum UpdateExecutorError {
@@ -63,6 +67,14 @@ pub struct UpdateExecutor {
     releases: ReleaseStore,
     state: UpdateStateStore,
     gate: Arc<Mutex<()>>,
+    #[cfg(test)]
+    command_gate: Arc<Mutex<Option<UpdateCommandGate>>>,
+}
+
+#[cfg(test)]
+struct UpdateCommandGate {
+    reached: tokio::sync::oneshot::Sender<()>,
+    release: tokio::sync::oneshot::Receiver<()>,
 }
 
 impl UpdateExecutor {
@@ -72,6 +84,8 @@ impl UpdateExecutor {
             paths,
             releases,
             gate: Arc::new(Mutex::new(())),
+            #[cfg(test)]
+            command_gate: Arc::new(Mutex::new(None)),
         }
     }
 
@@ -87,15 +101,51 @@ impl UpdateExecutor {
         self.state.load().map_err(UpdateExecutorError::Persistence)
     }
 
+    pub(crate) fn try_acquire_gate(&self) -> Result<OwnedMutexGuard<()>, UpdateExecutorError> {
+        Arc::clone(&self.gate)
+            .try_lock_owned()
+            .map_err(|_| UpdateExecutorError::AlreadyRunning)
+    }
+
+    #[cfg(test)]
+    async fn observe_next_command(
+        &self,
+        reached: tokio::sync::oneshot::Sender<()>,
+        release: tokio::sync::oneshot::Receiver<()>,
+    ) {
+        *self.command_gate.lock().await = Some(UpdateCommandGate { reached, release });
+    }
+
     pub async fn install(
         &self,
         requested_id: Option<String>,
         requested_version: Option<String>,
     ) -> Result<UpdateResponse, UpdateExecutorError> {
-        let _guard = self
-            .gate
-            .try_lock()
-            .map_err(|_| UpdateExecutorError::AlreadyRunning)?;
+        let guard = self.try_acquire_gate()?;
+        let owner = self.clone();
+        let (result_tx, result_rx) = oneshot::channel();
+        tokio::spawn(async move {
+            let result = owner
+                .install_owned(requested_id, requested_version, guard)
+                .await;
+            let _ = result_tx.send(result);
+        });
+        result_rx.await.map_err(|_| {
+            UpdateExecutorError::Persistence(io::Error::other(
+                "detached update owner exited without a terminal result",
+            ))
+        })?
+    }
+
+    async fn install_owned(
+        &self,
+        requested_id: Option<String>,
+        requested_version: Option<String>,
+        _guard: OwnedMutexGuard<()>,
+    ) -> Result<UpdateResponse, UpdateExecutorError> {
+        self.state
+            .recover_unattached()
+            .map_err(UpdateExecutorError::Persistence)?;
         let spec = load_update_spec(&self.paths)
             .map_err(UpdateExecutorError::Configuration)?
             .ok_or(UpdateExecutorError::NotConfigured)?;
@@ -139,8 +189,13 @@ impl UpdateExecutor {
                     exit_code: error_exit_code(&error),
                     error: Some(error.to_string()),
                 };
-                let _ = self.state.write(&failed);
-                Err(error)
+                match self.state.write(&failed) {
+                    Ok(()) => Err(error),
+                    Err(persistence) => Err(UpdateExecutorError::Persistence(io::Error::new(
+                        persistence.kind(),
+                        format!("{error}; failed to persist terminal update state: {persistence}"),
+                    ))),
+                }
             }
         }
     }
@@ -179,6 +234,8 @@ impl UpdateExecutor {
             &clone_args,
             None,
             spec.timeout(),
+            #[cfg(test)]
+            &self.command_gate,
         )
         .await?;
 
@@ -192,6 +249,8 @@ impl UpdateExecutor {
                 &args,
                 Some(candidate),
                 spec.timeout(),
+                #[cfg(test)]
+                &self.command_gate,
             )
             .await?;
         }
@@ -205,6 +264,8 @@ impl UpdateExecutor {
                 &args,
                 Some(candidate),
                 spec.timeout(),
+                #[cfg(test)]
+                &self.command_gate,
             )
             .await?;
         }
@@ -275,6 +336,7 @@ async fn run_logged_command(
     args: &[String],
     working_dir: Option<&Path>,
     command_timeout: Duration,
+    #[cfg(test)] command_gate: &Arc<Mutex<Option<UpdateCommandGate>>>,
 ) -> Result<(), UpdateExecutorError> {
     paths
         .ensure_directories()
@@ -300,13 +362,19 @@ async fn run_logged_command(
         .args(args)
         .stdin(Stdio::null())
         .stdout(Stdio::from(stdout))
-        .stderr(Stdio::from(stderr));
+        .stderr(Stdio::from(stderr))
+        .kill_on_drop(true);
     if let Some(working_dir) = working_dir {
         command.current_dir(working_dir);
     }
     let mut child = command
         .spawn()
         .map_err(|source| UpdateExecutorError::Spawn { phase, source })?;
+    #[cfg(test)]
+    if let Some(gate) = command_gate.lock().await.take() {
+        let _ = gate.reached.send(());
+        let _ = gate.release.await;
+    }
     let wait = timeout(command_timeout, child.wait()).await;
     match wait {
         Ok(Ok(status)) if status.success() => Ok(()),
@@ -328,9 +396,11 @@ async fn run_logged_command(
 
 #[cfg(test)]
 mod tests {
-    use super::{resolve_release_id, resolve_release_version};
-    use nexus_core::UpdateSpec;
-    use std::path::PathBuf;
+    use super::{resolve_release_id, resolve_release_version, UpdateExecutor, UpdateExecutorError};
+    use nexus_core::{ConfigStore, NexusConfigFile, NexusPaths, ReleaseStore, UpdateSpec};
+    use nexus_protocol::UpdateState;
+    use std::{fs, path::PathBuf, time::Duration};
+    use tokio::{sync::oneshot, time::timeout};
 
     #[test]
     fn derived_release_identifiers_are_safe() {
@@ -348,5 +418,96 @@ mod tests {
         assert!(id.starts_with("harness-feature-test-"));
         let version = resolve_release_version(None, &spec).expect("version derives");
         assert_eq!(version, "feature/test");
+    }
+
+    #[tokio::test]
+    async fn update_config_gate_excludes_install() {
+        let root = std::env::temp_dir().join(format!(
+            "nexus-update-gate-{}-{}",
+            std::process::id(),
+            nexus_core::unix_time_seconds()
+        ));
+        let paths = NexusPaths::from_root(root.clone());
+        let executor = UpdateExecutor::new(paths.clone(), ReleaseStore::new(paths));
+        let config_guard = executor
+            .try_acquire_gate()
+            .expect("config transaction acquires update gate");
+        assert!(matches!(
+            executor.install(None, None).await,
+            Err(UpdateExecutorError::AlreadyRunning)
+        ));
+        drop(config_guard);
+        assert!(!matches!(
+            executor.install(None, None).await,
+            Err(UpdateExecutorError::AlreadyRunning)
+        ));
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[tokio::test]
+    async fn cancelled_install_keeps_owner_gate_until_child_is_reaped_and_terminal() {
+        let root = std::env::temp_dir().join(format!(
+            "nexus-update-cancel-{}-{}",
+            std::process::id(),
+            nexus_core::unix_time_seconds()
+        ));
+        let paths = NexusPaths::from_root(root.clone());
+        ConfigStore::new(paths.clone())
+            .write(&NexusConfigFile {
+                harness: None,
+                update: Some(UpdateSpec {
+                    source: "https://example.invalid/repo".to_owned(),
+                    ref_name: "main".to_owned(),
+                    git_program: if cfg!(windows) {
+                        PathBuf::from("cmd.exe")
+                    } else {
+                        PathBuf::from("/bin/false")
+                    },
+                    build_program: None,
+                    build_args: Vec::new(),
+                    verify_program: None,
+                    verify_args: Vec::new(),
+                    timeout_secs: Some(5),
+                }),
+            })
+            .expect("update config writes");
+        let executor = UpdateExecutor::new(paths.clone(), ReleaseStore::new(paths));
+        let (started, started_rx) = oneshot::channel();
+        let (release, release_rx) = oneshot::channel();
+        executor.observe_next_command(started, release_rx).await;
+
+        let owner = executor.clone();
+        let request = tokio::spawn(async move {
+            owner
+                .install(Some("cancelled-update".to_owned()), Some("test".to_owned()))
+                .await
+        });
+        timeout(Duration::from_secs(3), started_rx)
+            .await
+            .expect("update command starts before deadline")
+            .expect("update command start signal arrives");
+        request.abort();
+        assert!(request.await.expect_err("request aborts").is_cancelled());
+        assert!(matches!(
+            executor
+                .install(Some("second-update".to_owned()), Some("test".to_owned()))
+                .await,
+            Err(UpdateExecutorError::AlreadyRunning)
+        ));
+
+        release.send(()).expect("detached update owner remains");
+        let terminal = timeout(Duration::from_secs(3), async {
+            loop {
+                let state = executor.status().expect("update state loads");
+                if state.state != UpdateState::Running {
+                    break state;
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("detached owner reaps child and publishes terminal state");
+        assert_eq!(terminal.state, UpdateState::Failed);
+        let _ = fs::remove_dir_all(root);
     }
 }

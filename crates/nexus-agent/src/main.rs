@@ -3,8 +3,8 @@ use std::{env, path::PathBuf, process};
 use nexus_core::NexusConfig;
 
 fn main() {
-    let config = match parse_args() {
-        Ok(Some(config)) => config,
+    let (config, instance_id) = match parse_args() {
+        Ok(Some(options)) => options,
         Ok(None) => return,
         Err(message) => {
             eprintln!("nexus-agent: {message}");
@@ -28,14 +28,15 @@ fn main() {
         }
     };
 
-    if let Err(error) = runtime.block_on(nexus_agent::run(config)) {
+    if let Err(error) = runtime.block_on(nexus_agent::run_with_instance_id(config, instance_id)) {
         eprintln!("nexus-agent: {error}");
         process::exit(1);
     }
 }
 
-fn parse_args() -> Result<Option<NexusConfig>, String> {
+fn parse_args() -> Result<Option<(NexusConfig, Option<String>)>, String> {
     let mut config = NexusConfig::from_env();
+    let mut instance_id = None;
     let mut args = env::args_os().skip(1);
 
     while let Some(argument) = args.next() {
@@ -60,11 +61,22 @@ fn parse_args() -> Result<Option<NexusConfig>, String> {
                 }
                 config.data_dir = Some(path);
             }
+            "--instance-id" => {
+                let value = args
+                    .next()
+                    .ok_or_else(|| "--instance-id requires a value".to_owned())?
+                    .to_string_lossy()
+                    .into_owned();
+                if value.is_empty() || value.len() > 192 || value.chars().any(char::is_control) {
+                    return Err("--instance-id is invalid".to_owned());
+                }
+                instance_id = Some(value);
+            }
             value => return Err(format!("unknown argument: {value}")),
         }
     }
 
-    Ok(Some(config))
+    Ok(Some((config, instance_id)))
 }
 
 fn parse_port(value: &str) -> Result<u16, String> {
@@ -77,7 +89,7 @@ fn parse_port(value: &str) -> Result<u16, String> {
 
 fn print_help() {
     println!(
-        "nexus-agent\n\nUsage: nexus-agent [--port PORT] [--data-dir PATH]\n\n\
+        "nexus-agent\n\nUsage: nexus-agent [--port PORT] [--data-dir PATH] [--instance-id ID]\n\n\
          The Agent binds to loopback only. Environment overrides: NEXUS_AGENT_PORT, NEXUS_DATA_DIR."
     );
 }

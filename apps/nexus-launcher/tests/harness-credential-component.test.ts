@@ -1,0 +1,136 @@
+import assert from "node:assert/strict";
+import test from "node:test";
+
+import { createElement } from "react";
+import { renderToStaticMarkup } from "react-dom/server";
+import { createServer } from "vite";
+
+test("Harness component removes stale credentials while a restart POST is deferred", async () => {
+  const vite = await createServer({
+    root: process.cwd(),
+    appType: "custom",
+    logLevel: "silent",
+    server: { middlewareMode: true },
+  });
+  try {
+    const { CheckpointsView, HarnessView, credentialInvalidationCanSettle } = await vite.ssrLoadModule("/src/App.tsx");
+    const snapshot = {
+      startup: { available: true },
+      endpointErrors: {},
+      status: {},
+      health: {},
+      state: {},
+      harnessRuntime: {
+        harness: { state: "running", pid: 42 },
+        generation: 7,
+        log_session_run_id: "run-a",
+      },
+      harnessUi: {
+        available: true,
+        generation: 7,
+        run_id: "run-a",
+        url: "http://127.0.0.1:3080/?token=old-token",
+        token: "old-token",
+      },
+      profiles: null,
+      checkpoints: null,
+      releases: null,
+      updates: null,
+      diagnostics: null,
+      config: null,
+    };
+    const render = (credentialInvalidationPending: boolean) =>
+      renderToStaticMarkup(
+        createElement(HarnessView, {
+          snapshot,
+          busyAction: credentialInvalidationPending ? "Harness restart" : null,
+          credentialInvalidationPending,
+          runAction: async () => {},
+          refresh: async () => {},
+          themeMode: "system",
+          setThemeMode: () => {},
+        }),
+      );
+
+    const before = render(false);
+    assert.match(before, /old-token/);
+    assert.match(before, /<iframe/);
+
+    let releasePost!: () => void;
+    const deferredPost = new Promise<void>((resolve) => {
+      releasePost = resolve;
+    });
+    let pending = false;
+    const request = (async () => {
+      pending = true;
+      await deferredPost;
+      pending = false;
+    })();
+    await Promise.resolve();
+    assert.equal(pending, true);
+    const during = render(pending);
+    assert.doesNotMatch(during, /old-token/);
+    assert.doesNotMatch(during, /<iframe/);
+    assert.equal(
+      credentialInvalidationCanSettle(snapshot, "7:run-a"),
+      false,
+      "a failed POST refresh cannot re-enable the same credential session",
+    );
+    assert.equal(
+      credentialInvalidationCanSettle({
+        ...snapshot,
+        harnessRuntime: {
+          harness: { state: "running", pid: 43 },
+          generation: 8,
+          log_session_run_id: "run-b",
+        },
+        harnessUi: {
+          ...snapshot.harnessUi,
+          generation: 8,
+          run_id: "run-b",
+          token: "new-token",
+        },
+      }, "7:run-a"),
+      true,
+      "a fresh runtime/UI session releases the fail-closed gate",
+    );
+    assert.equal(
+      credentialInvalidationCanSettle({
+        ...snapshot,
+        harnessRuntime: { harness: { state: "stopped", pid: null } },
+        harnessUi: null,
+      }, "7:run-a"),
+      true,
+      "a positively stopped runtime also releases the gate",
+    );
+    assert.equal(
+      credentialInvalidationCanSettle({ ...snapshot, harnessRuntime: null, harnessUi: null }, "7:run-a"),
+      false,
+      "an endpoint failure is not evidence of a process boundary",
+    );
+
+    const checkpointMarkup = renderToStaticMarkup(
+      createElement(CheckpointsView, {
+        snapshot: {
+          ...snapshot,
+          checkpoints: {
+            checkpoints: [{ id: "cp-a", profile: "web", release: "harness-a" }],
+          },
+        },
+        busyAction: null,
+        credentialInvalidationPending: false,
+        runAction: async () => {},
+        refresh: async () => {},
+        themeMode: "system",
+        setThemeMode: () => {},
+      }),
+    );
+    assert.match(checkpointMarkup, /only Harness profile\/release selection/);
+    assert.match(checkpointMarkup, /Agent lifecycle and Harness runtime are never saved or restored/);
+
+    releasePost();
+    await request;
+  } finally {
+    await vite.close();
+  }
+});

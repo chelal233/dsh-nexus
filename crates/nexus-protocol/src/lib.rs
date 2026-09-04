@@ -29,22 +29,32 @@ pub struct HealthResponse {
     pub api_version: String,
     pub service: String,
     pub status: HealthStatus,
+    /// Canonical Nexus data-root identity. Launchers must compare this before
+    /// adopting or stopping a process already listening on the configured
+    /// loopback port.
+    pub data_root_id: String,
+    /// Opaque per-process correlation value for launcher metadata.
+    pub instance_id: String,
 }
 
 impl HealthResponse {
-    pub fn healthy() -> Self {
+    pub fn healthy(data_root_id: String, instance_id: String) -> Self {
         Self {
             api_version: API_VERSION.to_owned(),
             service: "nexus-agent".to_owned(),
             status: HealthStatus::Ok,
+            data_root_id,
+            instance_id,
         }
     }
 
-    pub fn shutting_down() -> Self {
+    pub fn shutting_down(data_root_id: String, instance_id: String) -> Self {
         Self {
             api_version: API_VERSION.to_owned(),
             service: "nexus-agent".to_owned(),
             status: HealthStatus::ShuttingDown,
+            data_root_id,
+            instance_id,
         }
     }
 }
@@ -202,6 +212,26 @@ impl HarnessRuntimeInfo {
 pub struct HarnessResponse {
     pub api_version: String,
     pub harness: HarnessRuntimeInfo,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub generation: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub log_session_run_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub log_session_generation: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub log_stdout_watermark: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub log_stderr_watermark: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub log_stdout_file_identity: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub log_stderr_file_identity: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub log_stdout_name: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub log_stderr_name: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub log_session_launch_pending: Option<bool>,
 }
 
 /// Alias retained as a descriptive name for clients that use GET semantics.
@@ -212,6 +242,45 @@ impl HarnessResponse {
         Self {
             api_version: API_VERSION.to_owned(),
             harness,
+            generation: None,
+            log_session_run_id: None,
+            log_session_generation: None,
+            log_stdout_watermark: None,
+            log_stderr_watermark: None,
+            log_stdout_file_identity: None,
+            log_stderr_file_identity: None,
+            log_stdout_name: None,
+            log_stderr_name: None,
+            log_session_launch_pending: None,
+        }
+    }
+
+    pub fn from_observation(
+        harness: HarnessRuntimeInfo,
+        generation: u64,
+        log_session_run_id: String,
+        log_session_generation: u64,
+        log_stdout_watermark: u64,
+        log_stderr_watermark: u64,
+        log_stdout_file_identity: String,
+        log_stderr_file_identity: String,
+        log_stdout_name: String,
+        log_stderr_name: String,
+        log_session_launch_pending: bool,
+    ) -> Self {
+        Self {
+            api_version: API_VERSION.to_owned(),
+            harness,
+            generation: Some(generation),
+            log_session_run_id: Some(log_session_run_id),
+            log_session_generation: Some(log_session_generation),
+            log_stdout_watermark: Some(log_stdout_watermark),
+            log_stderr_watermark: Some(log_stderr_watermark),
+            log_stdout_file_identity: Some(log_stdout_file_identity),
+            log_stderr_file_identity: Some(log_stderr_file_identity),
+            log_stdout_name: Some(log_stdout_name),
+            log_stderr_name: Some(log_stderr_name),
+            log_session_launch_pending: Some(log_session_launch_pending),
         }
     }
 }
@@ -285,17 +354,20 @@ impl ProfileSelectResponse {
     }
 }
 
-/// The Nexus-only state included in a checkpoint.  It is deliberately a
-/// summary rather than a copy of Harness data or credentials.
+/// The Harness selection recorded by a checkpoint. Legacy manifests may
+/// contain additional Agent/Harness runtime fields inside `state`; serde
+/// intentionally ignores those fields when reading them, while new
+/// serialization publishes only this selection.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct NexusStateSummary {
-    pub lifecycle: AgentLifecycleState,
-    pub harness: HarnessState,
+pub struct HarnessCheckpointState {
     pub profile: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub release: Option<String>,
-    pub updated_at_unix: u64,
 }
+
+/// Backward-compatible source alias for integrations which used the original
+/// checkpoint state name. Its wire representation is selection-only.
+pub type NexusStateSummary = HarnessCheckpointState;
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
 pub struct CheckpointListRequest {}
@@ -357,7 +429,7 @@ pub struct CheckpointManifest {
     pub release: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub note: Option<String>,
-    pub state: NexusStateSummary,
+    pub state: HarnessCheckpointState,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -711,11 +783,11 @@ impl ConfigResponse {
 #[cfg(test)]
 mod tests {
     use super::{
-        AgentLifecycleState, CheckpointCreateRequest, CheckpointCreateResponse, CheckpointManifest,
+        CheckpointCreateRequest, CheckpointCreateResponse, CheckpointManifest,
         CheckpointRestoreRequest, ConfigAction, ConfigCommand, ConfigResponse, DiagnosticsAction,
-        DiagnosticsCommand, DiagnosticsResponse, HarnessAction, HarnessCommand,
-        HarnessConfigPayload, HarnessResponse, HarnessRuntimeInfo, HarnessState, LifecycleAction,
-        LifecycleCommand, NexusStateSummary, ProfileListResponse, ProfileSelectRequest,
+        DiagnosticsCommand, DiagnosticsResponse, HarnessAction, HarnessCheckpointState,
+        HarnessCommand, HarnessConfigPayload, HarnessResponse, HarnessRuntimeInfo, HarnessState,
+        LifecycleAction, LifecycleCommand, ProfileListResponse, ProfileSelectRequest,
         ReleaseAction, ReleaseCommand, ReleaseListResponse, ReleaseManifest, UpdateAction,
         UpdateCommand, UpdateResponse, UpdateRuntimeInfo,
     };
@@ -751,6 +823,32 @@ mod tests {
         assert_eq!(response_json["harness"]["state"], "running");
         assert_eq!(response_json["harness"]["pid"], 42);
         assert!(response_json["harness"].get("exit_code").is_none());
+        assert!(response_json.get("generation").is_none());
+
+        let observed = HarnessResponse::from_observation(
+            HarnessRuntimeInfo::detached(),
+            7,
+            "run-7".to_owned(),
+            3,
+            100,
+            200,
+            "stdout-identity".to_owned(),
+            "stderr-identity".to_owned(),
+            "harness-run-7.stdout.log".to_owned(),
+            "harness-run-7.stderr.log".to_owned(),
+            true,
+        );
+        let observed_json = serde_json::to_value(observed).expect("observation serializes");
+        assert_eq!(observed_json["generation"], 7);
+        assert_eq!(observed_json["log_session_run_id"], "run-7");
+        assert_eq!(observed_json["log_session_generation"], 3);
+        assert_eq!(observed_json["log_stdout_watermark"], 100);
+        assert_eq!(observed_json["log_stderr_watermark"], 200);
+        assert_eq!(observed_json["log_stdout_file_identity"], "stdout-identity");
+        assert_eq!(observed_json["log_stderr_file_identity"], "stderr-identity");
+        assert_eq!(observed_json["log_stdout_name"], "harness-run-7.stdout.log");
+        assert_eq!(observed_json["log_stderr_name"], "harness-run-7.stderr.log");
+        assert_eq!(observed_json["log_session_launch_pending"], true);
     }
 
     #[test]
@@ -795,19 +893,49 @@ mod tests {
             profile: "web".to_owned(),
             release: Some("r1".to_owned()),
             note: Some("before migration".to_owned()),
-            state: NexusStateSummary {
-                lifecycle: AgentLifecycleState::Stopped,
-                harness: HarnessState::Stopped,
+            state: HarnessCheckpointState {
                 profile: "web".to_owned(),
                 release: Some("r1".to_owned()),
-                updated_at_unix: 123,
             },
         };
         let response = CheckpointCreateResponse::from_manifest(manifest.clone());
         let encoded = serde_json::to_vec(&response).expect("checkpoint response serializes");
+        let value: serde_json::Value =
+            serde_json::from_slice(&encoded).expect("checkpoint response JSON parses");
+        let state = value["checkpoint"]["state"]
+            .as_object()
+            .expect("checkpoint state is an object");
+        assert_eq!(state.len(), 2);
+        assert_eq!(state["profile"], "web");
+        assert_eq!(state["release"], "r1");
+        assert!(!state.contains_key("lifecycle"));
+        assert!(!state.contains_key("harness"));
+        assert!(!state.contains_key("updated_at_unix"));
         let decoded: CheckpointCreateResponse =
             serde_json::from_slice(&encoded).expect("checkpoint response parses");
         assert_eq!(decoded.checkpoint, manifest);
+
+        let legacy = serde_json::json!({
+            "id": "cp-legacy",
+            "created_at_unix": 122,
+            "profile": "web",
+            "release": "r1",
+            "state": {
+                "lifecycle": "running",
+                "harness": "stopped",
+                "profile": "web",
+                "release": "r1",
+                "updated_at_unix": 122
+            }
+        });
+        let legacy: CheckpointManifest =
+            serde_json::from_value(legacy).expect("legacy checkpoint manifest parses");
+        assert_eq!(legacy.state.profile, "web");
+        assert_eq!(legacy.state.release.as_deref(), Some("r1"));
+        let migrated = serde_json::to_value(legacy).expect("legacy checkpoint reserializes");
+        assert!(migrated["state"].get("lifecycle").is_none());
+        assert!(migrated["state"].get("harness").is_none());
+        assert!(migrated["state"].get("updated_at_unix").is_none());
 
         let restore = CheckpointRestoreRequest::new("cp-123");
         assert_eq!(

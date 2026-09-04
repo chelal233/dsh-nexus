@@ -22,8 +22,18 @@ On startup the native side probes and, when possible, starts
    or current directory.
 
 If no helper is available, the UI keeps the error visible and reports the
-exact configuration action. A separately started helper can still be reused
-when it responds on the configured loopback port.
+exact configuration action. The native shell only controls the helper process
+it starts itself. A pre-existing or separately started listener on the same
+loopback port is reported as unavailable rather than reused.
+
+For every start, the native shell creates a fresh private capability and passes
+it only through the owned helper's environment. The helper removes it before
+spawning Agent or Harness processes, omits it from status and CLI arguments,
+and requires it on every route except bootstrap status/handshake. Before an
+operation, native code verifies an HMAC challenge bound to the pinned
+data-root/instance and sends the capability and JSON body only afterward on the
+same TCP connection. An unrelated listener that wins a port-rebind race can
+observe the public challenge, but cannot receive or execute the operation.
 
 ## Development
 
@@ -86,3 +96,8 @@ The Harness page only embeds a validated loopback HTTP URL returned by
 bounded Nexus-owned log tail. The system-browser button calls
 `POST /launcher/harness` with `{"action":"open"}`, which keeps URL validation
 and external opening in the Rust Launcher API.
+An Agent or Harness stop/restart clears the token and unmounts the iframe before
+the request is sent. A failed action stays credential-closed until a positively
+stopped runtime or a new matching run session is observed. PID-less Harness
+observations never expose credentials because their process continuity cannot
+be proven.
