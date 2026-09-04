@@ -6,7 +6,7 @@
   "build": {
     "beforeDevCommand": "pnpm dev",
     "devUrl": "http://localhost:1420",
-    "beforeBuildCommand": "pnpm build",
+    "beforeBuildCommand": "pnpm build && pnpm build:helper",
     "frontendDist": "../dist"
   },
   "app": {
@@ -31,6 +31,9 @@
   "bundle": {
     "active": true,
     "targets": ["nsis", "msi"],
+    "resources": {
+      "resources/nexus-launcher*": ""
+    },
     "category": "Utility",
     "shortDescription": "Native local control plane for Nexus",
     "longDescription": "A native operator shell for the independent Nexus Agent and immutable Harness runtime.",

@@ -2,7 +2,7 @@
 
 use std::{
     env,
-    path::PathBuf,
+    path::{Path, PathBuf},
     process::{self, Child, Command, Stdio},
     sync::Mutex,
     time::{SystemTime, UNIX_EPOCH},
@@ -63,6 +63,7 @@ struct AppState {
     client: Client,
     api_base: Option<String>,
     api_port: Option<u16>,
+    helper_resource_dir: Mutex<Option<PathBuf>>,
     helper: Mutex<HelperState>,
 }
 
@@ -122,6 +123,7 @@ impl AppState {
                 .expect("native launcher HTTP client configuration is valid"),
             api_base,
             api_port,
+            helper_resource_dir: Mutex::new(None),
             helper: Mutex::new(HelperState {
                 path: None,
                 child: None,
@@ -133,7 +135,20 @@ impl AppState {
         }
     }
 
+    fn set_helper_resource_dir(&self, resource_dir: Option<PathBuf>) {
+        let mut current = self
+            .helper_resource_dir
+            .lock()
+            .expect("helper resource directory lock");
+        *current = resource_dir;
+    }
+
     fn start_helper(&self) {
+        let helper_resource_dir = self
+            .helper_resource_dir
+            .lock()
+            .expect("helper resource directory lock")
+            .clone();
         let mut helper = self.helper.lock().expect("helper state lock");
         let Some(api_port) = self.api_port else {
             return;
@@ -156,7 +171,7 @@ impl AppState {
             }
         }
 
-        let path = match resolve_launcher_helper() {
+        let path = match resolve_launcher_helper(helper_resource_dir.as_deref()) {
             Ok(path) => path,
             Err(error) => {
                 helper.startup_error = Some(error);
@@ -287,7 +302,7 @@ fn api_port_from_values(
         .ok_or_else(|| format!("{name} must be an integer between 1 and 65535; got {value:?}"))
 }
 
-fn resolve_launcher_helper() -> Result<PathBuf, String> {
+fn resolve_launcher_helper(resource_dir: Option<&Path>) -> Result<PathBuf, String> {
     if let Some(value) = env::var_os(LAUNCHER_BIN_ENV).filter(|value| !value.is_empty()) {
         let path = PathBuf::from(value);
         if path.is_file() {
@@ -300,11 +315,17 @@ fn resolve_launcher_helper() -> Result<PathBuf, String> {
     }
 
     let mut candidates = Vec::new();
+    if let Some(resource_dir) = resource_dir {
+        candidates.push(resource_dir.join(platform_launcher_name()));
+        // The build staging script keeps this extensionless alias for
+        // platforms where the executable name has no suffix.
+        candidates.push(resource_dir.join("nexus-launcher"));
+    }
     if let Ok(executable) = env::current_exe() {
         if let Some(parent) = executable.parent() {
             candidates.push(parent.join(platform_launcher_name()));
             candidates.push(parent.join("nexus-launcher"));
-            if cfg!(debug_assertions) {
+            if cfg!(debug_assertions) || has_target_ancestor(parent) {
                 let mut ancestor = Some(parent);
                 for _ in 0..8 {
                     if let Some(path) = ancestor {
@@ -339,6 +360,21 @@ fn resolve_launcher_helper() -> Result<PathBuf, String> {
                     .join(platform_launcher_name()),
             );
         }
+    } else if let Ok(current) = env::current_dir() {
+        if has_target_ancestor(&current) {
+            candidates.push(
+                current
+                    .join("target")
+                    .join("debug")
+                    .join(platform_launcher_name()),
+            );
+            candidates.push(
+                current
+                    .join("target")
+                    .join("release")
+                    .join(platform_launcher_name()),
+            );
+        }
     }
 
     candidates
@@ -346,9 +382,18 @@ fn resolve_launcher_helper() -> Result<PathBuf, String> {
         .find(|path| path.is_file())
         .ok_or_else(|| {
             format!(
-                "nexus-launcher helper was not found beside the native app. Debug builds also inspect nearby target directories. Set {LAUNCHER_BIN_ENV} to the signed helper path."
+                "nexus-launcher helper was not found in the bundled resources, beside the native app, or in a nearby Cargo target directory. Set {LAUNCHER_BIN_ENV} to the signed helper path."
             )
         })
+}
+
+fn has_target_ancestor(path: &Path) -> bool {
+    path.ancestors().any(|candidate| {
+        candidate
+            .file_name()
+            .map(|name| name.to_string_lossy().eq_ignore_ascii_case("target"))
+            .unwrap_or(false)
+    })
 }
 
 fn platform_launcher_name() -> &'static str {
@@ -830,6 +875,9 @@ fn main() {
         .manage(state)
         .invoke_handler(tauri::generate_handler![startup_status, proxy_request])
         .setup(|app| {
+            let resource_dir = app.path().resource_dir().ok();
+            app.state::<AppState>()
+                .set_helper_resource_dir(resource_dir);
             app.state::<AppState>().start_helper();
             #[cfg(desktop)]
             {
@@ -1090,6 +1138,7 @@ mod tests {
             client: Client::new(),
             api_base: Some("http://127.0.0.1:3091".to_owned()),
             api_port: Some(3091),
+            helper_resource_dir: Mutex::new(None),
             helper: Mutex::new(HelperState {
                 path: None,
                 child: None,
@@ -1254,11 +1303,18 @@ mod tests {
     }
 
     #[test]
+    fn release_layout_is_the_only_non_debug_target_fallback() {
+        assert!(has_target_ancestor(Path::new("/workspace/target/release")));
+        assert!(!has_target_ancestor(Path::new("/opt/nexus-launcher")));
+    }
+
+    #[test]
     fn failed_final_startup_probe_hides_but_retains_the_permanent_pin() {
         let state = AppState {
             client: Client::new(),
             api_base: Some("http://127.0.0.1:3091".to_owned()),
             api_port: Some(3091),
+            helper_resource_dir: Mutex::new(None),
             helper: Mutex::new(HelperState {
                 path: None,
                 child: None,

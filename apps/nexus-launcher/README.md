@@ -17,9 +17,10 @@ On startup the native side probes and, when possible, starts
 `nexus-launcher api --no-open`. Helper resolution is ordered as follows:
 
 1. `NEXUS_LAUNCHER_BIN` when it names an existing file;
-2. a `nexus-launcher` executable beside the native application;
-3. `target/debug` and `target/release` candidates found near the application
-   or current directory.
+2. the helper staged in the Tauri resource directory;
+3. a `nexus-launcher` executable beside the native application;
+4. `target/debug` and `target/release` candidates found near a Cargo target
+   layout during local development.
 
 If no helper is available, the UI keeps the error visible and reports the
 exact configuration action. The native shell only controls the helper process
@@ -57,26 +58,21 @@ pnpm tauri build
 ```
 
 The frontend dev server is only a development asset server. Production
-packaging embeds the built assets through Tauri. The Rust helper remains a
-separate binary and is supplied through `NEXUS_LAUNCHER_BIN` or a release
-layout; the app does not vendor or modify Harness source.
+packaging embeds the built assets through Tauri. `pnpm tauri build` first
+builds the Rust helper and stages it into the Tauri resources directory, so
+the NSIS/MSI output contains the matching headless helper. The helper remains
+a separate process and the app does not vendor or modify Harness source.
 
-## Installer boundary
+## Helper override
 
-The current NSIS/MSI configuration packages the native GUI and its assets, but
-it does not yet produce a self-contained sidecar installer for the separate
-headless `nexus-launcher` helper. This is a deliberate release boundary until
-the signing and upgrade pipeline can ship both binaries atomically. Before
-launching an installed build, place the matching helper beside the GUI or set
-an explicit path, for example in PowerShell:
+An explicit helper path is still available for development, signed replacement
+builds, or rollback testing. Before launching the native app, set it in
+PowerShell:
 
 ```text
 $env:NEXUS_LAUNCHER_BIN = 'C:\Program Files\Nexus Launcher\nexus-launcher.exe'
 $env:NEXUS_CONSOLE_PORT = '3091'
 ```
-
-Revisit sidecar packaging when the release pipeline has a signed helper
-artifact and an atomic upgrade test covering helper and GUI version pairing.
 
 ## Native behavior
 
