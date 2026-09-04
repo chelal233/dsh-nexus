@@ -119,7 +119,6 @@ dd { overflow: hidden; margin: 5px 0 0; color: var(--text); font-size: 12px; fon
 .metadata-grid span, .metadata-grid strong { display: block; }
 .metadata-grid span { color: var(--muted); font-size: 10px; }
 .metadata-grid strong { overflow: hidden; margin-top: 5px; color: var(--text); font-size: 11px; font-weight: 550; text-overflow: ellipsis; white-space: nowrap; }
-.harness-grid { align-items: start; }
 .harness-frame { display: block; width: 100%; min-height: 520px; border: 1px solid var(--line); border-radius: 9px; background: #0a0f13; }
 .status-block { display: grid; gap: 13px; }
 .status-block strong { color: var(--text); font-size: 16px; font-weight: 600; }

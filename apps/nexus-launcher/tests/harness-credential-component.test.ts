@@ -5,7 +5,7 @@ import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { createServer } from "vite";
 
-test("Harness component removes stale credentials while a restart POST is deferred", async () => {
+test("Overview removes stale Harness credentials while a restart POST is deferred", async () => {
   const vite = await createServer({
     root: process.cwd(),
     appType: "custom",
@@ -13,7 +13,7 @@ test("Harness component removes stale credentials while a restart POST is deferr
     server: { middlewareMode: true },
   });
   try {
-    const { CheckpointsView, HarnessView, credentialInvalidationCanSettle } = await vite.ssrLoadModule("/src/App.tsx");
+    const { CheckpointsView, OverviewView, credentialInvalidationCanSettle } = await vite.ssrLoadModule("/src/App.tsx");
     const snapshot = {
       startup: { available: true },
       endpointErrors: {},
@@ -41,7 +41,7 @@ test("Harness component removes stale credentials while a restart POST is deferr
     };
     const render = (credentialInvalidationPending: boolean) =>
       renderToStaticMarkup(
-        createElement(HarnessView, {
+        createElement(OverviewView, {
           snapshot,
           busyAction: credentialInvalidationPending ? "Harness restart" : null,
           credentialInvalidationPending,

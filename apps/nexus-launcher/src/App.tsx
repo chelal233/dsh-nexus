@@ -67,7 +67,6 @@ type Snapshot = {
 
 type ModuleId =
   | "overview"
-  | "harness"
   | "profiles"
   | "checkpoints"
   | "updates"
@@ -84,7 +83,6 @@ type ModuleDefinition = {
 
 const modules: ModuleDefinition[] = [
   { id: "overview", label: "Overview", icon: House },
-  { id: "harness", label: "Harness", icon: MonitorPlay },
   { id: "profiles", label: "Profiles", icon: SlidersHorizontal },
   { id: "checkpoints", label: "Checkpoints", icon: ListChecks },
   { id: "updates", label: "Updates", icon: CloudArrowUp },
@@ -657,7 +655,6 @@ function App() {
   const content = useMemo(() => {
     const common = { snapshot, busyAction, credentialInvalidationPending, runAction, refresh, themeMode, setThemeMode, openSettings: () => setActiveModule("settings") };
     switch (activeModule) {
-      case "harness": return <HarnessView {...common} />;
       case "profiles": return <ProfilesView {...common} />;
       case "checkpoints": return <CheckpointsView {...common} />;
       case "updates": return <UpdatesView {...common} />;
@@ -735,7 +732,7 @@ type HarnessPanelProps = Pick<ViewProps, "snapshot" | "busyAction" | "runAction"
 type HarnessAuthPanelProps = HarnessPanelProps & Pick<ViewProps, "credentialInvalidationPending">;
 type HarnessWebPanelProps = Pick<ViewProps, "snapshot" | "credentialInvalidationPending">;
 
-function OverviewView({ snapshot, busyAction, credentialInvalidationPending, runAction, openSettings }: ViewProps) {
+export function OverviewView({ snapshot, busyAction, credentialInvalidationPending, runAction, openSettings }: ViewProps) {
   const { t } = useI18n();
   const status = asObject(snapshot.status);
   const health = asObject(snapshot.health);
@@ -854,17 +851,6 @@ function HarnessWebPanel({ snapshot, credentialInvalidationPending }: HarnessWeb
   return <Panel title={t("Embedded Harness Web")} icon={<MonitorPlay size={18} />}>
     {safeUrl ? <iframe className="harness-frame" title={t("Harness Web interface")} src={safeUrl} referrerPolicy="no-referrer" sandbox="allow-forms allow-scripts allow-same-origin" /> : <EmptyState title={t("Harness view is not ready")} detail={t("A validated loopback HTTP URL will appear here when Harness reports its web interface.")} />}
   </Panel>;
-}
-
-export function HarnessView({ snapshot, busyAction, credentialInvalidationPending, runAction, openSettings }: ViewProps) {
-  const { t } = useI18n();
-  const harness = harnessRuntimeValue(snapshot.harnessRuntime);
-  const harnessRunning = stringValue(harness, "state") === "running";
-  return <>
-    <div className="page-heading"><div><span className="kicker">{t("Runtime / Harness")}</span><h1>{t("Harness workspace")}</h1><p>{t("Harness is an immutable external runtime. Nexus only supervises its process.")}</p></div><StatusPill label={localizedRuntimeState(stringValue(harness, "state"), t)} tone={harnessRunning ? "good" : "neutral"} /></div>
-    <div className="grid-two harness-grid"><HarnessControlPanel snapshot={snapshot} busyAction={busyAction} runAction={runAction} openSettings={openSettings} /><HarnessAuthPanel snapshot={snapshot} busyAction={busyAction} credentialInvalidationPending={credentialInvalidationPending} runAction={runAction} /></div>
-    <HarnessWebPanel snapshot={snapshot} credentialInvalidationPending={credentialInvalidationPending} />
-  </>;
 }
 
 function ProfilesView({ snapshot }: ViewProps) {
