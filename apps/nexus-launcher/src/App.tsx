@@ -32,6 +32,7 @@ import {
   invalidatesHarnessCredentials,
   launcherContentMode,
 } from "./control-state";
+import { useI18n, type Locale } from "./i18n";
 
 type JsonObject = Record<string, unknown>;
 type IconComponent = React.ComponentType<IconProps>;
@@ -196,8 +197,8 @@ export function credentialInvalidationCanSettle(
   return previousSessionKey === undefined || nextSessionKey !== previousSessionKey;
 }
 
-function formatTimestamp(value: unknown): string {
-  if (typeof value !== "number" || value <= 0) return "Not available";
+function formatTimestamp(value: unknown, unavailable = "Not available"): string {
+  if (typeof value !== "number" || value <= 0) return unavailable;
   return new Date(value * 1000).toLocaleString();
 }
 
@@ -205,6 +206,17 @@ function errorMessage(error: unknown): string {
   if (error instanceof Error) return error.message;
   if (typeof error === "string") return error;
   return "The native bridge returned an unknown error";
+}
+
+function localizeBackendError(message: string, t: (key: string) => string): string {
+  const normalized = message.toLowerCase();
+  if (normalized.includes("harness is not configured")) {
+    return t("Harness is not configured. Open Settings to configure it.");
+  }
+  if (normalized.includes("harness must be stopped")) {
+    return t("Harness must be stopped before changing its configuration.");
+  }
+  return message;
 }
 
 function compactError(value: string): string {
@@ -240,6 +252,41 @@ function isLoopbackUrl(value: string | undefined): value is string {
   }
 }
 
+type HarnessConfigDraft = {
+  program: string;
+  args: string;
+  workingDir: string;
+  readinessUrl: string;
+  timeout: string;
+  argsRedacted: boolean;
+  replaceRedactedArgs: boolean;
+};
+
+const emptyHarnessDraft: HarnessConfigDraft = {
+  program: "",
+  args: "",
+  workingDir: "",
+  readinessUrl: "",
+  timeout: "",
+  argsRedacted: false,
+  replaceRedactedArgs: false,
+};
+
+function harnessDraftFromConfig(config: JsonObject): HarnessConfigDraft {
+  const harness = nestedValue(config, "harness");
+  const args = arrayValue(harness, "args").filter((item): item is string => typeof item === "string");
+  const argsRedacted = args.some((item) => item.includes("[REDACTED]"));
+  return {
+    program: stringValue(harness, "program") || "",
+    args: args.join("\n"),
+    workingDir: stringValue(harness, "working_dir") || "",
+    readinessUrl: stringValue(harness, "readiness_url") || "",
+    timeout: numberValue(harness, "readiness_timeout_secs")?.toString() || "",
+    argsRedacted,
+    replaceRedactedArgs: false,
+  };
+}
+
 async function proxyRequest<T = JsonObject>(
   path: string,
   method = "GET",
@@ -257,10 +304,11 @@ function StatusPill({ label, tone = "neutral" }: { label: string; tone?: "good" 
 }
 
 function LoadingState() {
+  const { t } = useI18n();
   return (
     <div className="state-card loading-state" role="status" aria-live="polite">
       <Pulse size={22} className="spin" aria-hidden="true" />
-      <div><strong>Connecting to Nexus</strong><span>Waiting for the local control plane.</span></div>
+      <div><strong>{t("Connecting to Nexus")}</strong><span>{t("Waiting for the local control plane.")}</span></div>
     </div>
   );
 }
@@ -274,21 +322,23 @@ function EmptyState({ title, detail }: { title: string; detail: string }) {
   );
 }
 
-function ErrorState({ message, onRetry }: { message: string; onRetry: () => void }) {
+function ErrorState({ message, onRetry, title }: { message: string; onRetry: () => void; title?: string }) {
+  const { t } = useI18n();
   return (
     <div className="state-card error-state" role="alert">
       <WarningCircle size={25} aria-hidden="true" />
-      <div className="state-copy"><strong>Launcher bridge unavailable</strong><span>{message}</span></div>
-      <button className="button subtle" onClick={onRetry}><ArrowClockwise size={16} />Retry</button>
+      <div className="state-copy"><strong>{title || t("Launcher bridge unavailable")}</strong><span>{message}</span></div>
+      <button className="button subtle" onClick={onRetry}><ArrowClockwise size={16} />{t("Retry")}</button>
     </div>
   );
 }
 
 function DegradedNotice({ errors }: { errors: Record<string, string> }) {
+  const { t } = useI18n();
   const details = Object.entries(errors)
     .map(([path, message]) => `${path}: ${compactError(message)}`)
     .join(" | ");
-  return <div className="notice degraded" role="status" aria-live="polite"><WarningCircle size={17} /> <span>Some workspace data is unavailable. {details}</span></div>;
+  return <div className="notice degraded" role="status" aria-live="polite"><WarningCircle size={17} /> <span>{t("Some workspace data is unavailable.")} {details}</span></div>;
 }
 
 function Metric({ label, value, detail }: { label: string; value: string; detail?: string }) {
@@ -327,12 +377,14 @@ function DataList({
 }
 
 function App() {
+  const { t } = useI18n();
   const [activeModule, setActiveModule] = useState<ModuleId>("overview");
   const [themeMode, setThemeMode] = useState<ThemeMode>(storedTheme);
   const [systemThemeMode, setSystemThemeMode] = useState<"light" | "dark">(systemTheme);
   const [snapshot, setSnapshot] = useState<Snapshot>(emptySnapshot);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [bridgeError, setBridgeError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [busyAction, setBusyAction] = useState<string | null>(null);
   const [credentialInvalidationPending, setCredentialInvalidationPending] = useState(false);
@@ -379,9 +431,10 @@ function App() {
               harnessPollState.current = undefined;
               setSnapshot(next);
               setNotice(null);
-              setError(startup.message || "Set NEXUS_LAUNCHER_BIN or build the Rust launcher helper.");
+              setBridgeError(startup.message || t("Set NEXUS_LAUNCHER_BIN or build the Rust launcher helper."));
               continue;
             }
+            setBridgeError(null);
             const endpointErrors: Record<string, string> = {};
             const entries = await Promise.all(Object.entries(endpointMap).map(async ([key, path]) => {
               try {
@@ -407,13 +460,13 @@ function App() {
               setCredentialInvalidationPending(false);
             }
             if (!next.status && !next.health) {
-              setError("The Launcher API is not responding on its loopback port.");
+              setBridgeError(t("The Launcher API is not responding on its loopback port."));
             }
           } catch (cause) {
             harnessPollState.current = undefined;
             setSnapshot(failClosedSnapshot(emptySnapshot));
             setNotice(null);
-            setError(errorMessage(cause));
+            setBridgeError(errorMessage(cause));
           } finally {
             setLoading(false);
           }
@@ -426,7 +479,7 @@ function App() {
     })();
     refreshInFlight.current = drain;
     await drain;
-  }, []);
+  }, [t]);
 
   useEffect(() => {
     let cancelled = false;
@@ -444,10 +497,10 @@ function App() {
     };
   }, [refresh]);
 
-  const runAction = useCallback(async (label: string, path: string, body: JsonObject) => {
+  const runAction = useCallback(async (label: string, path: string, body: JsonObject): Promise<boolean> => {
     if (snapshot.startup?.available !== true) {
-      setError("Launcher controls are disabled until the native helper identity is verified.");
-      return;
+      setError(t("Launcher controls are disabled until the native helper identity is verified."));
+      return false;
     }
     const invalidatesCredentials = invalidatesHarnessCredentials(path, body.action);
     const beginAction = () => {
@@ -469,11 +522,13 @@ function App() {
       beginAction();
     }
     let actionError: string | null = null;
+    let actionSucceeded = false;
     try {
       await proxyRequest(path, "POST", body);
-      setNotice(`${label} complete`);
+      actionSucceeded = true;
+      setNotice(`${label} ${t("complete")}`);
     } catch (cause) {
-      actionError = `${label} failed: ${errorMessage(cause)}`;
+      actionError = `${label} ${t("failed")}: ${localizeBackendError(errorMessage(cause), t)}`;
     } finally {
       // Refresh after both successful and failed POSTs. The Agent may have
       // advanced a generation before returning an error (for example an
@@ -482,14 +537,15 @@ function App() {
       if (actionError) setError(actionError);
       setBusyAction(null);
     }
-  }, [refresh, snapshot]);
+    return actionSucceeded;
+  }, [refresh, snapshot, t]);
 
   const launcherStatus = asObject(snapshot.status);
   const isRunning = launcherStatus.running === true;
   const agentState = nestedValue(snapshot.state, "state");
-  const connectionLabel = snapshot.status ? (isRunning ? "Agent online" : "Agent stopped") : "Bridge offline";
+  const connectionLabel = snapshot.status ? (isRunning ? t("Agent online") : t("Agent stopped")) : t("Bridge offline");
   const connectionTone = snapshot.status ? (isRunning ? "good" : "warn") : "bad";
-  const contentMode = launcherContentMode(error, loading, snapshot.status !== null);
+  const contentMode = launcherContentMode(bridgeError, loading, snapshot.status !== null);
 
   const content = useMemo(() => {
     const common = { snapshot, busyAction, credentialInvalidationPending, runAction, refresh, themeMode, setThemeMode };
@@ -502,11 +558,11 @@ function App() {
       case "settings": return <SettingsView {...common} />;
       default: return <OverviewView {...common} />;
     }
-  }, [activeModule, busyAction, credentialInvalidationPending, refresh, runAction, snapshot, themeMode]);
+  }, [activeModule, busyAction, credentialInvalidationPending, refresh, runAction, snapshot, t, themeMode]);
 
   return (
     <div className="app-shell">
-      <aside className="sidebar" aria-label="Nexus modules">
+      <aside className="sidebar" aria-label={t("Nexus modules")}>
         <div className="brand-lockup">
           <div className="brand-mark" aria-hidden="true"><RocketLaunch size={20} weight="fill" /></div>
           <div className="brand-copy"><strong>NEXUS</strong><span>LOCAL CONTROL</span></div>
@@ -518,36 +574,37 @@ function App() {
               key={id}
               onClick={() => setActiveModule(id)}
               aria-current={activeModule === id ? "page" : undefined}
-              title={label}
+              title={t(label)}
             >
               <Icon size={19} weight={activeModule === id ? "fill" : "regular"} aria-hidden="true" />
-              <span>{label}</span>
+              <span>{t(label)}</span>
             </button>
           ))}
         </nav>
-        <div className="sidebar-footer"><ShieldCheck size={16} /><span>Loopback only</span></div>
+        <div className="sidebar-footer"><ShieldCheck size={16} /><span>{t("Loopback only")}</span></div>
       </aside>
 
       <main className="workspace">
         <header className="topbar">
-          <div className="breadcrumbs"><span>Nexus Launcher</span><span className="crumb-separator">/</span><strong>{modules.find((item) => item.id === activeModule)?.label}</strong></div>
+          <div className="breadcrumbs"><span>{t("Nexus Launcher")}</span><span className="crumb-separator">/</span><strong>{t(modules.find((item) => item.id === activeModule)?.label || "Overview")}</strong></div>
           <div className="topbar-actions">
             <StatusPill label={connectionLabel} tone={connectionTone} />
-            <button className="icon-button" onClick={() => void refresh()} aria-label="Refresh launcher status" title="Refresh launcher status"><ArrowsClockwise size={19} /></button>
+            <button className="icon-button" onClick={() => void refresh()} aria-label={t("Refresh launcher status")} title={t("Refresh launcher status")}><ArrowsClockwise size={19} /></button>
           </div>
         </header>
 
-        {notice && <div className="notice" role="status"><CheckCircle size={17} />{notice}<button onClick={() => setNotice(null)} aria-label="Dismiss notice"><X size={15} /></button></div>}
+        {notice && <div className="notice" role="status"><CheckCircle size={17} />{notice}<button onClick={() => setNotice(null)} aria-label={t("Dismiss notice")}><X size={15} /></button></div>}
+        {error && contentMode !== "error" && <div className="notice action-error" role="alert"><WarningCircle size={17} /><span>{error}</span><button onClick={() => setError(null)} aria-label={t("Dismiss error")}><X size={15} /></button></div>}
         {!error && Object.keys(snapshot.endpointErrors).length > 0 && <DegradedNotice errors={snapshot.endpointErrors} />}
         {contentMode === "error"
-          ? <ErrorState message={error ?? "The native bridge is unavailable."} onRetry={() => void refresh()} />
+          ? <ErrorState message={bridgeError ?? t("The native bridge is unavailable.")} onRetry={() => void refresh()} />
           : contentMode === "loading"
             ? <LoadingState />
             : <section className="page-content">{content}</section>}
 
         <footer className="workspace-footer">
-          <span><Cpu size={15} />Agent {stringValue(snapshot.health, "api_version") || "v1"}</span>
-          <span><Key size={15} />No credentials leave this device</span>
+          <span><Cpu size={15} />{t("Agent {version}", { version: stringValue(snapshot.health, "api_version") || "v1" })}</span>
+          <span><Key size={15} />{t("No credentials leave this device")}</span>
           {snapshot.startup?.api_base && <span className="api-address">{snapshot.startup.api_base}</span>}
         </footer>
       </main>
@@ -559,13 +616,14 @@ type ViewProps = {
   snapshot: Snapshot;
   busyAction: string | null;
   credentialInvalidationPending: boolean;
-  runAction: (label: string, path: string, body: JsonObject) => Promise<void>;
+  runAction: (label: string, path: string, body: JsonObject) => Promise<void | boolean>;
   refresh: () => Promise<void>;
   themeMode: ThemeMode;
   setThemeMode: (mode: ThemeMode) => void;
 };
 
 function OverviewView({ snapshot, busyAction, runAction }: ViewProps) {
+  const { t } = useI18n();
   const status = asObject(snapshot.status);
   const health = asObject(snapshot.health);
   const state = nestedValue(snapshot.state, "state");
@@ -577,38 +635,39 @@ function OverviewView({ snapshot, busyAction, runAction }: ViewProps) {
   const controlsDisabled = busyAction !== null || snapshot.startup?.available !== true;
   return (
     <>
-      <div className="page-heading"><div><span className="kicker">RUNTIME / OVERVIEW</span><h1>Local control plane</h1><p>Observe and operate the independent Agent and its immutable Harness runtime.</p></div><StatusPill label={agentRunning ? "Running" : "Standby"} tone={agentRunning ? "good" : "warn"} /></div>
+      <div className="page-heading"><div><span className="kicker">{t("Runtime / Overview")}</span><h1>{t("Local control plane")}</h1><p>{t("Observe and operate the independent Agent and its immutable Harness runtime.")}</p></div><StatusPill label={agentRunning ? t("Running") : t("Standby")} tone={agentRunning ? "good" : "warn"} /></div>
       <div className="metric-grid">
-        <Metric label="Agent lifecycle" value={stringValue(state, "lifecycle") || "Unknown"} detail={stringValue(health, "status") || "No health response"} />
-        <Metric label="Harness" value={stringValue(harness, "state") || "Detached"} detail={stringValue(harness, "pid") ? `PID ${stringValue(harness, "pid")}` : "No child process"} />
-        <Metric label="Active profile" value={stringValue(state, "profile") || "None selected"} detail={`${profiles.length} profiles available`} />
-        <Metric label="Checkpoints" value={String(checkpoints.length)} detail={stringValue(update, "state") || "Update queue idle"} />
+        <Metric label={t("Agent lifecycle")} value={stringValue(state, "lifecycle") || t("Unknown")} detail={stringValue(health, "status") || t("No health response")} />
+        <Metric label={t("Harness")} value={stringValue(harness, "state") || t("Detached")} detail={stringValue(harness, "pid") ? t("PID {pid}", { pid: stringValue(harness, "pid") || "" }) : t("No child process")} />
+        <Metric label={t("Active profile")} value={stringValue(state, "profile") || t("None selected")} detail={t("{count} profiles available", { count: profiles.length })} />
+        <Metric label={t("Checkpoints")} value={String(checkpoints.length)} detail={stringValue(update, "state") || t("Update queue idle")} />
       </div>
       <div className="grid-two">
-        <Panel title="Agent operations" icon={<Pulse size={18} />}>
-          <p className="panel-description">The Agent remains a separate process. Launcher controls are explicit and recoverable.</p>
+        <Panel title={t("Agent operations")} icon={<Pulse size={18} />}>
+          <p className="panel-description">{t("The Agent remains a separate process. Launcher controls are explicit and recoverable.")}</p>
           <div className="button-row">
-            <ActionButton tone="primary" disabled={controlsDisabled} onClick={() => void runAction("Agent start", "/launcher/agent", { action: "start" })}><CheckCircle size={16} />Start Agent</ActionButton>
-            <ActionButton disabled={controlsDisabled} onClick={() => void runAction("Agent restart", "/launcher/agent", { action: "restart" })}><ArrowsClockwise size={16} />Restart</ActionButton>
-            <ActionButton tone="danger" disabled={controlsDisabled} onClick={() => void runAction("Agent stop", "/launcher/agent", { action: "stop" })}><StopCircle size={16} />Stop Agent</ActionButton>
+            <ActionButton tone="primary" disabled={controlsDisabled} onClick={() => void runAction(t("Agent start"), "/launcher/agent", { action: "start" })}><CheckCircle size={16} />{t("Start Agent")}</ActionButton>
+            <ActionButton disabled={controlsDisabled} onClick={() => void runAction(t("Agent restart"), "/launcher/agent", { action: "restart" })}><ArrowsClockwise size={16} />{t("Restart")}</ActionButton>
+            <ActionButton tone="danger" disabled={controlsDisabled} onClick={() => void runAction(t("Agent stop"), "/launcher/agent", { action: "stop" })}><StopCircle size={16} />{t("Stop Agent")}</ActionButton>
           </div>
         </Panel>
-        <Panel title="Runtime boundary" icon={<ShieldCheck size={18} />}>
+        <Panel title={t("Runtime boundary")} icon={<ShieldCheck size={18} />}>
           <dl className="detail-list">
-            <div><dt>Data root</dt><dd>{stringValue(status, "data_root") || "Not reported"}</dd></div>
-            <div><dt>Agent API</dt><dd>{stringValue(status, "agent_api") || "Loopback unavailable"}</dd></div>
-            <div><dt>Agent PID</dt><dd>{stringValue(status, "agent_pid") || "Not reported"}</dd></div>
+            <div><dt>{t("Data root")}</dt><dd>{stringValue(status, "data_root") || t("Not reported")}</dd></div>
+            <div><dt>{t("Agent API")}</dt><dd>{stringValue(status, "agent_api") || t("Loopback unavailable")}</dd></div>
+            <div><dt>{t("Agent PID")}</dt><dd>{stringValue(status, "agent_pid") || t("Not reported")}</dd></div>
           </dl>
         </Panel>
       </div>
-      <Panel title="Activity signal" icon={<Pulse size={18} />}>
-        {snapshot.startup?.helper_path ? <div className="signal-line"><CheckCircle size={17} />Headless helper ready<span>{snapshot.startup.helper_path}</span></div> : <EmptyState title="Helper path pending" detail="The native side will report the resolved launcher helper after startup." />}
+      <Panel title={t("Activity signal")} icon={<Pulse size={18} />}>
+        {snapshot.startup?.helper_path ? <div className="signal-line"><CheckCircle size={17} />{t("Headless helper ready")}<span>{snapshot.startup.helper_path}</span></div> : <EmptyState title={t("Helper path pending")} detail={t("The native side will report the resolved launcher helper after startup.")} />}
       </Panel>
     </>
   );
 }
 
 export function HarnessView({ snapshot, busyAction, credentialInvalidationPending, runAction }: ViewProps) {
+  const { t } = useI18n();
   const info = asObject(snapshot.harnessUi);
   const harness = harnessRuntimeValue(snapshot.harnessRuntime);
   const harnessRunning = stringValue(harness, "state") === "running";
@@ -635,72 +694,208 @@ export function HarnessView({ snapshot, busyAction, credentialInvalidationPendin
   useEffect(() => {
     setRevealedSessionKey((revealed) => revealed === sessionKey ? revealed : undefined);
   }, [sessionKey]);
-  const harnessAction = (action: string) => void runAction(`Harness ${action}`, "/launcher/agent-api/v1/harness", { action });
-  const openSystemBrowser = () => void runAction("Open Harness", "/launcher/harness", { action: "open" });
+  const harnessAction = (action: string) => void runAction(t(`Harness ${action}`), "/launcher/agent-api/v1/harness", { action });
+  const openSystemBrowser = () => void runAction(t("Open Harness"), "/launcher/harness", { action: "open" });
   return (
     <>
-      <div className="page-heading"><div><span className="kicker">RUNTIME / HARNESS</span><h1>Harness workspace</h1><p>Harness is an immutable external runtime. Nexus only supervises its process.</p></div><StatusPill label={stringValue(harness, "state") || "Detached"} tone={harnessRunning ? "good" : "neutral"} /></div>
+      <div className="page-heading"><div><span className="kicker">{t("Runtime / Harness")}</span><h1>{t("Harness workspace")}</h1><p>{t("Harness is an immutable external runtime. Nexus only supervises its process.")}</p></div><StatusPill label={stringValue(harness, "state") || t("Detached")} tone={harnessRunning ? "good" : "neutral"} /></div>
       <div className="grid-two harness-grid">
-        <Panel title="Harness controls" icon={<MonitorPlay size={18} />}>
+        <Panel title={t("Harness controls")} icon={<MonitorPlay size={18} />}>
           <div className="button-row">
-            <ActionButton tone="primary" disabled={controlGate.controlsDisabled} onClick={() => harnessAction("start")}><CheckCircle size={16} />Start</ActionButton>
-            <ActionButton disabled={controlGate.controlsDisabled} onClick={() => harnessAction("restart")}><ArrowsClockwise size={16} />Restart</ActionButton>
-            <ActionButton tone="danger" disabled={controlGate.controlsDisabled} onClick={() => harnessAction("stop")}><StopCircle size={16} />Stop</ActionButton>
+            <ActionButton tone="primary" disabled={controlGate.controlsDisabled} onClick={() => harnessAction("start")}><CheckCircle size={16} />{t("Start")}</ActionButton>
+            <ActionButton disabled={controlGate.controlsDisabled} onClick={() => harnessAction("restart")}><ArrowsClockwise size={16} />{t("Restart")}</ActionButton>
+            <ActionButton tone="danger" disabled={controlGate.controlsDisabled} onClick={() => harnessAction("stop")}><StopCircle size={16} />{t("Stop")}</ActionButton>
           </div>
-          {controlGate.externallyManaged && <p className="field-help" role="status">Harness is running outside this Agent process. Manage it from its owning Agent; lifecycle controls are disabled here.</p>}
+          {controlGate.externallyManaged && <p className="field-help" role="status">{t("Harness is running outside this Agent process. Manage it from its owning Agent; lifecycle controls are disabled here.")}</p>}
           <dl className="detail-list compact-details">
-            <div><dt>Process ID</dt><dd>{stringValue(harness, "pid") || "Not attached"}</dd></div>
-            <div><dt>Exit code</dt><dd>{stringValue(harness, "exit_code") || "Not exited"}</dd></div>
-            <div><dt>Last error</dt><dd>{stringValue(harness, "error") || "None reported"}</dd></div>
+            <div><dt>{t("Process ID")}</dt><dd>{stringValue(harness, "pid") || t("Not attached")}</dd></div>
+            <div><dt>{t("Exit code")}</dt><dd>{stringValue(harness, "exit_code") || t("Not exited")}</dd></div>
+            <div><dt>{t("Last error")}</dt><dd>{stringValue(harness, "error") || t("None reported")}</dd></div>
           </dl>
         </Panel>
-        <Panel title="Authentication metadata" icon={<Key size={18} />}>
+        <Panel title={t("Authentication metadata")} icon={<Key size={18} />}>
           {token ? <>
-            <label className="field-label" htmlFor="harness-token">Latest loopback token</label>
-            <div className="token-row"><input id="harness-token" readOnly type={showToken ? "text" : "password"} value={token} aria-describedby="token-help" /><button className="button subtle" onClick={() => setRevealedSessionKey(showToken ? undefined : sessionKey)}>{showToken ? "Hide" : "Reveal"}</button></div>
-            <p className="field-help" id="token-help">Read from a bounded Nexus-owned Harness log tail. It is not written to Nexus state.</p>
-          </> : <EmptyState title="No token observed" detail={stringValue(info, "message") || "Start Harness and refresh when its loopback URL is ready."} />}
-          <div className="metadata-grid"><div><span>Source</span><strong>{stringValue(info, "source") || "Not available"}</strong></div><div><span>Observed</span><strong>{formatTimestamp(numberValue(info, "observed_at_unix"))}</strong></div></div>
-          <div className="button-row"><ActionButton disabled={!token || controlsDisabled} onClick={() => void navigator.clipboard?.writeText(token || "")}><ClipboardText size={16} />Copy token</ActionButton><ActionButton tone="primary" disabled={!uiUrl || controlsDisabled} onClick={openSystemBrowser}><RocketLaunch size={16} />Open in system browser</ActionButton></div>
+            <label className="field-label" htmlFor="harness-token">{t("Latest loopback token")}</label>
+            <div className="token-row"><input id="harness-token" readOnly type={showToken ? "text" : "password"} value={token} aria-describedby="token-help" /><button className="button subtle" onClick={() => setRevealedSessionKey(showToken ? undefined : sessionKey)}>{showToken ? t("Hide") : t("Reveal")}</button></div>
+            <p className="field-help" id="token-help">{t("Read from a bounded Nexus-owned Harness log tail. It is not written to Nexus state.")}</p>
+          </> : <EmptyState title={t("No token observed")} detail={stringValue(info, "message") || t("Start Harness and refresh when its loopback URL is ready.")} />}
+          <div className="metadata-grid"><div><span>{t("Source")}</span><strong>{stringValue(info, "source") || t("Not available")}</strong></div><div><span>{t("Observed")}</span><strong>{formatTimestamp(numberValue(info, "observed_at_unix"), t("Not available"))}</strong></div></div>
+          <div className="button-row"><ActionButton disabled={!token || controlsDisabled} onClick={() => void navigator.clipboard?.writeText(token || "")}><ClipboardText size={16} />{t("Copy token")}</ActionButton><ActionButton tone="primary" disabled={!uiUrl || controlsDisabled} onClick={openSystemBrowser}><RocketLaunch size={16} />{t("Open in system browser")}</ActionButton></div>
         </Panel>
       </div>
-      <Panel title="Embedded Harness Web" icon={<MonitorPlay size={18} />}>
-        {safeUrl ? <iframe className="harness-frame" title="Harness Web interface" src={safeUrl} referrerPolicy="no-referrer" sandbox="allow-forms allow-scripts allow-same-origin" /> : <EmptyState title="Harness view is not ready" detail="A validated loopback HTTP URL will appear here when Harness reports its web interface." />}
+      <Panel title={t("Embedded Harness Web")} icon={<MonitorPlay size={18} />}>
+        {safeUrl ? <iframe className="harness-frame" title={t("Harness Web interface")} src={safeUrl} referrerPolicy="no-referrer" sandbox="allow-forms allow-scripts allow-same-origin" /> : <EmptyState title={t("Harness view is not ready")} detail={t("A validated loopback HTTP URL will appear here when Harness reports its web interface.")} />}
       </Panel>
     </>
   );
 }
 
 function ProfilesView({ snapshot }: ViewProps) {
+  const { t } = useI18n();
   const active = stringValue(snapshot.profiles, "active_profile");
   const items = arrayValue(snapshot.profiles, "profiles");
-  return <><PageIntro kicker="CONTROL / PROFILES" title="Profiles" detail="Nexus-owned profile names are passed to Harness only through explicit launch configuration." /><Panel title="Profile catalog" icon={<SlidersHorizontal size={18} />}><DataList items={items} emptyTitle="No profiles configured" emptyDetail="The Agent will expose profiles after its catalog is initialized." render={(item) => { const name = typeof item === "string" ? item : stringValue(item, "name") || "Unnamed profile"; return <><div><strong>{name}</strong>{name === active && <StatusPill label="Active" tone="good" />}</div><span className="row-meta">{name === active ? "Selected by Agent" : "Available"}</span></>; }} /></Panel></>;
+  return <><PageIntro kicker={t("Control / Profiles")} title={t("Profiles")} detail={t("Nexus-owned profile names are passed to Harness only through explicit launch configuration.")} /><Panel title={t("Profile catalog")} icon={<SlidersHorizontal size={18} />}><DataList items={items} emptyTitle={t("No profiles configured")} emptyDetail={t("The Agent will expose profiles after its catalog is initialized.")} render={(item) => { const name = typeof item === "string" ? item : stringValue(item, "name") || t("Unnamed profile"); return <><div><strong>{name}</strong>{name === active && <StatusPill label={t("Active")} tone="good" />}</div><span className="row-meta">{name === active ? t("Selected by Agent") : t("Available")}</span></>; }} /></Panel></>;
 }
 
 export function CheckpointsView({ snapshot, busyAction, runAction }: ViewProps) {
+  const { t } = useI18n();
   const items = arrayValue(snapshot.checkpoints, "checkpoints");
   const controlsDisabled = busyAction !== null || snapshot.startup?.available !== true;
-  return <><PageIntro kicker="STATE / CHECKPOINTS" title="Checkpoints" detail="Checkpoint manifests contain only Harness profile/release selection. Agent lifecycle and Harness runtime are never saved or restored." /><Panel title="Saved checkpoints" icon={<ListChecks size={18} />}><div className="panel-toolbar"><span className="toolbar-count">{items.length} saved</span><ActionButton tone="primary" disabled={controlsDisabled} onClick={() => void runAction("Checkpoint creation", "/launcher/agent-api/v1/checkpoints", { action: "create", note: "Native launcher checkpoint" })}><CheckCircle size={16} />Create checkpoint</ActionButton></div><DataList items={items} emptyTitle="No checkpoints yet" emptyDetail="Create a checkpoint after the Agent has a stable profile and release state." render={(item) => <><div><strong>{stringValue(item, "id") || "Checkpoint"}</strong><span>{stringValue(item, "profile") || "No profile"}</span></div><span className="row-meta">{formatTimestamp(numberValue(item, "created_at_unix"))}</span></>} /></Panel></>;
+  return <><PageIntro kicker={t("State / Checkpoints")} title={t("Checkpoints")} detail={t("Checkpoint manifests contain only Harness profile/release selection. Agent lifecycle and Harness runtime are never saved or restored.")} /><Panel title={t("Saved checkpoints")} icon={<ListChecks size={18} />}><div className="panel-toolbar"><span className="toolbar-count">{t("{count} saved", { count: items.length })}</span><ActionButton tone="primary" disabled={controlsDisabled} onClick={() => void runAction(t("Checkpoint creation"), "/launcher/agent-api/v1/checkpoints", { action: "create", note: "Native launcher checkpoint" })}><CheckCircle size={16} />{t("Create checkpoint")}</ActionButton></div><DataList items={items} emptyTitle={t("No checkpoints yet")} emptyDetail={t("Create a checkpoint after the Agent has a stable profile and release state.")} render={(item) => <><div><strong>{stringValue(item, "id") || t("Checkpoint")}</strong><span>{stringValue(item, "profile") || t("No profile")}</span></div><span className="row-meta">{formatTimestamp(numberValue(item, "created_at_unix"), t("Not available"))}</span></>} /></Panel></>;
 }
 
 function UpdatesView({ snapshot }: ViewProps) {
+  const { t } = useI18n();
   const update = nestedValue(snapshot.updates, "update");
   const release = nestedValue(snapshot.updates, "release");
   const releases = arrayValue(snapshot.releases, "releases");
-  return <><PageIntro kicker="RELEASES / UPDATES" title="Updates" detail="Release installation is external and explicit. Promotion stays separate from downloading and verification." /><div className="grid-two"><Panel title="Update status" icon={<CloudArrowUp size={18} />}><div className="status-block"><StatusPill label={stringValue(update, "state") || "idle"} tone={stringValue(update, "state") === "failed" ? "bad" : "neutral"} /><strong>{stringValue(update, "release_id") || "No active update"}</strong><span>{stringValue(update, "error") || "No update error reported"}</span></div></Panel><Panel title="Current release" icon={<Package size={18} />}><dl className="detail-list compact-details"><div><dt>Version</dt><dd>{stringValue(release, "version") || "Not registered"}</dd></div><div><dt>Current slot</dt><dd>{stringValue(snapshot.releases, "current_release") || "None"}</dd></div><div><dt>Last known good</dt><dd>{stringValue(snapshot.releases, "last_known_good") || "None"}</dd></div></dl></Panel></div><Panel title="Release slots" icon={<Package size={18} />}><DataList items={releases} emptyTitle="No release slots" emptyDetail="Register an immutable slot through the Agent API before promotion." render={(item) => <><div><strong>{stringValue(item, "id") || "Release"}</strong><span>{stringValue(item, "version") || "Unknown version"}</span></div><span className="row-meta">{stringValue(item, "status") || "Registered"}</span></>} /></Panel></>;
+  return <><PageIntro kicker={t("Releases / Updates")} title={t("Updates")} detail={t("Release installation is external and explicit. Promotion stays separate from downloading and verification.")} /><div className="grid-two"><Panel title={t("Update status")} icon={<CloudArrowUp size={18} />}><div className="status-block"><StatusPill label={stringValue(update, "state") || t("idle")} tone={stringValue(update, "state") === "failed" ? "bad" : "neutral"} /><strong>{stringValue(update, "release_id") || t("No active update")}</strong><span>{stringValue(update, "error") || t("No update error reported")}</span></div></Panel><Panel title={t("Current release")} icon={<Package size={18} />}><dl className="detail-list compact-details"><div><dt>{t("Version")}</dt><dd>{stringValue(release, "version") || t("Not registered")}</dd></div><div><dt>{t("Current slot")}</dt><dd>{stringValue(snapshot.releases, "current_release") || t("None")}</dd></div><div><dt>{t("Last known good")}</dt><dd>{stringValue(snapshot.releases, "last_known_good") || t("None")}</dd></div></dl></Panel></div><Panel title={t("Release slots")} icon={<Package size={18} />}><DataList items={releases} emptyTitle={t("No release slots")} emptyDetail={t("Register an immutable slot through the Agent API before promotion.")} render={(item) => <><div><strong>{stringValue(item, "id") || t("Release")}</strong><span>{stringValue(item, "version") || t("Unknown version")}</span></div><span className="row-meta">{stringValue(item, "status") || t("Registered")}</span></>} /></Panel></>;
 }
 
 function DiagnosticsView({ snapshot, busyAction, runAction }: ViewProps) {
+  const { t } = useI18n();
   const items = arrayValue(snapshot.diagnostics, "bundles");
   const controlsDisabled = busyAction !== null || snapshot.startup?.available !== true;
-  return <><PageIntro kicker="OBSERVABILITY / DIAGNOSTICS" title="Diagnostics" detail="Bundles are bounded, redacted, and limited to Nexus-owned metadata and text logs." /><Panel title="Diagnostic bundles" icon={<TerminalWindow size={18} />}><div className="panel-toolbar"><span className="toolbar-count">{items.length} bundles</span><ActionButton tone="primary" disabled={controlsDisabled} onClick={() => void runAction("Diagnostic collection", "/launcher/agent-api/v1/diagnostics", { action: "collect", note: "Native launcher collection" })}><TerminalWindow size={16} />Collect diagnostics</ActionButton></div><DataList items={items} emptyTitle="No diagnostic bundles" emptyDetail="Collect a bounded bundle when a runtime issue needs review." render={(item) => <><div><strong>{stringValue(item, "id") || "Bundle"}</strong><span>{`${arrayValue(item, "files").length} files`}</span></div><span className="row-meta">{formatTimestamp(numberValue(item, "created_at_unix"))}</span></>} /></Panel></>;
+  return <><PageIntro kicker={t("Observability / Diagnostics")} title={t("Diagnostics")} detail={t("Bundles are bounded, redacted, and limited to Nexus-owned metadata and text logs.")} /><Panel title={t("Diagnostic bundles")} icon={<TerminalWindow size={18} />}><div className="panel-toolbar"><span className="toolbar-count">{t("{count} bundles", { count: items.length })}</span><ActionButton tone="primary" disabled={controlsDisabled} onClick={() => void runAction(t("Diagnostic collection"), "/launcher/agent-api/v1/diagnostics", { action: "collect", note: "Native launcher collection" })}><TerminalWindow size={16} />{t("Collect diagnostics")}</ActionButton></div><DataList items={items} emptyTitle={t("No diagnostic bundles")} emptyDetail={t("Collect a bounded bundle when a runtime issue needs review.")} render={(item) => <><div><strong>{stringValue(item, "id") || t("Bundle")}</strong><span>{t("{count} files", { count: arrayValue(item, "files").length })}</span></div><span className="row-meta">{formatTimestamp(numberValue(item, "created_at_unix"), t("Not available"))}</span></>} /></Panel></>;
 }
 
-function SettingsView({ snapshot, themeMode, setThemeMode }: ViewProps) {
+function SettingsView({ snapshot, themeMode, setThemeMode, busyAction, runAction }: ViewProps) {
+  const { locale, setLocale, t } = useI18n();
   const config = asObject(snapshot.config);
   const harness = nestedValue(config, "harness");
   const update = nestedValue(config, "update");
-  return <><PageIntro kicker="SYSTEM / SETTINGS" title="Settings" detail="Configuration remains Agent-owned. This view intentionally exposes metadata, not credentials or raw environment values." /><div className="grid-two"><Panel title="Appearance" icon={<Gear size={18} />}><label className="field-label" htmlFor="theme-mode">Theme</label><select id="theme-mode" className="theme-select" value={themeMode} onChange={(event) => setThemeMode(event.target.value as ThemeMode)}><option value="system">System</option><option value="light">Light</option><option value="dark">Dark</option></select><p className="field-help">System follows the operating system preference. Your choice is saved locally.</p></Panel><Panel title="Harness configuration" icon={<Gear size={18} />}>{Object.keys(harness).length ? <dl className="detail-list"><div><dt>Program</dt><dd>{stringValue(harness, "program") || "Not configured"}</dd></div><div><dt>Working directory</dt><dd>{stringValue(harness, "working_dir") || "Default"}</dd></div><div><dt>Readiness URL</dt><dd>{isLoopbackUrl(stringValue(harness, "readiness_url")) ? stringValue(harness, "readiness_url") : "Not shown"}</dd></div></dl> : <EmptyState title="Harness is not configured" detail="The Agent remains usable as a control plane until an external Harness is configured." />}</Panel><Panel title="Update configuration" icon={<CloudArrowUp size={18} />}>{Object.keys(update).length ? <dl className="detail-list"><div><dt>Source</dt><dd>{stringValue(update, "source") || "Not shown"}</dd></div><div><dt>Ref</dt><dd>{stringValue(update, "ref_name") || "Default"}</dd></div><div><dt>Git program</dt><dd>{stringValue(update, "git_program") || "git"}</dd></div></dl> : <EmptyState title="Updates are not configured" detail="Release metadata and current runtime remain available without an update source." />}</Panel></div><Panel title="Native integration" icon={<Bell size={18} />}><div className="integration-list"><div><CheckCircle size={18} /><span>Single instance guard</span><strong>Enabled</strong></div><div><Bell size={18} /><span>Desktop notifications</span><strong>Available through Tauri</strong></div><div><Key size={18} /><span>API transport</span><strong>Rust loopback proxy</strong></div></div></Panel></>;
+  const hasHarnessConfig = Object.keys(harness).length > 0;
+  const harnessRuntime = harnessRuntimeValue(snapshot.harnessRuntime);
+  const harnessState = stringValue(harnessRuntime, "state");
+  const harnessInTransition = harnessState === "starting" || harnessState === "stopping";
+  const configControlsDisabled = busyAction !== null || snapshot.startup?.available !== true || harnessInTransition || harnessState === "running";
+  const [editingHarness, setEditingHarness] = useState(!hasHarnessConfig);
+  const [draft, setDraft] = useState<HarnessConfigDraft>(() => harnessDraftFromConfig(config));
+  const [draftDirty, setDraftDirty] = useState(false);
+  const [formError, setFormError] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!draftDirty) {
+      setDraft(harnessDraftFromConfig(asObject(snapshot.config)));
+      setEditingHarness(Object.keys(nestedValue(asObject(snapshot.config), "harness")).length === 0);
+    }
+  }, [draftDirty, snapshot.config]);
+
+  const updateDraft = (field: keyof HarnessConfigDraft, value: string | boolean) => {
+    setDraft((current) => ({ ...current, [field]: value }));
+    setDraftDirty(true);
+    setFormError(null);
+  };
+
+  const openEditor = () => {
+    setDraft(harnessDraftFromConfig(config));
+    // Keep the editor open while the background poll refreshes runtime data.
+    setDraftDirty(true);
+    setFormError(null);
+    setEditingHarness(true);
+  };
+
+  const saveHarness = async (event: React.FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    setFormError(null);
+    const program = draft.program.trim();
+    if (!program) {
+      setFormError(t("A program path is required."));
+      return;
+    }
+    const readinessUrl = draft.readinessUrl.trim();
+    if (readinessUrl && !isLoopbackUrl(readinessUrl)) {
+      setFormError(t("Readiness URL must be an HTTP loopback URL."));
+      return;
+    }
+    const timeoutText = draft.timeout.trim();
+    let timeout: number | undefined;
+    if (timeoutText) {
+      const parsed = Number(timeoutText);
+      if (!Number.isInteger(parsed) || parsed <= 0) {
+        setFormError(t("Timeout must be a positive integer."));
+        return;
+      }
+      timeout = parsed;
+    }
+    if (draft.argsRedacted && !draft.replaceRedactedArgs) {
+      setFormError(t("Existing sensitive arguments are hidden. Enable replacement before saving."));
+      return;
+    }
+    const args = draft.args
+      .split(/\r?\n/)
+      .map((value) => value.trim())
+      .filter(Boolean);
+    const saved = await runAction(t("Save Harness configuration"), "/launcher/agent-api/v1/config", {
+      action: "set_harness",
+      harness: {
+        program,
+        args,
+        working_dir: draft.workingDir.trim() || null,
+        readiness_url: readinessUrl || null,
+        readiness_timeout_secs: timeout ?? null,
+      },
+    });
+    if (saved === true) {
+      setDraftDirty(false);
+      setEditingHarness(false);
+      setFormError(null);
+    }
+  };
+
+  const clearHarness = async () => {
+    if (!window.confirm(t("Remove the Harness launch configuration? Harness must be stopped first."))) return;
+    const cleared = await runAction(t("Clear Harness configuration"), "/launcher/agent-api/v1/config", { action: "clear_harness" });
+    if (cleared === true) {
+      setDraft(emptyHarnessDraft);
+      setDraftDirty(false);
+      setEditingHarness(true);
+      setFormError(null);
+    }
+  };
+
+  return <>
+    <PageIntro kicker={t("System / Settings")} title={t("Settings")} detail={t("Configuration remains Agent-owned. This view intentionally exposes metadata, not credentials or raw environment values.")} />
+    <div className="grid-two">
+      <Panel title={t("Appearance")} icon={<Gear size={18} />}>
+        <label className="field-label" htmlFor="theme-mode">{t("Theme")}</label>
+        <select id="theme-mode" className="theme-select" value={themeMode} onChange={(event) => setThemeMode(event.target.value as ThemeMode)}>
+          <option value="system">{t("System")}</option><option value="light">{t("Light")}</option><option value="dark">{t("Dark")}</option>
+        </select>
+        <p className="field-help">{t("System follows the operating system preference. Your choice is saved locally.")}</p>
+        <label className="field-label" htmlFor="locale-mode">{t("Language")}</label>
+        <select id="locale-mode" className="theme-select" value={locale} onChange={(event) => setLocale(event.target.value as Locale)}>
+          <option value="en">{t("English")}</option><option value="zh">{t("Chinese")}</option>
+        </select>
+        <p className="field-help">{t("Choose the language used by the Launcher interface.")}</p>
+      </Panel>
+      <Panel title={t("Harness configuration")} icon={<Gear size={18} />}>
+        <p className="panel-description">{t("Configure the external Harness here. Editing config.json is only a fallback.")}</p>
+        {!editingHarness && hasHarnessConfig ? <>
+          <dl className="detail-list"><div><dt>{t("Program")}</dt><dd>{stringValue(harness, "program") || t("Not configured")}</dd></div><div><dt>{t("Working directory")}</dt><dd>{stringValue(harness, "working_dir") || t("Default")}</dd></div><div><dt>{t("Readiness URL")}</dt><dd>{isLoopbackUrl(stringValue(harness, "readiness_url")) ? stringValue(harness, "readiness_url") : t("Not shown")}</dd></div></dl>
+          <div className="form-actions"><button type="button" className="button" disabled={configControlsDisabled} onClick={openEditor}>{t("Edit configuration")}</button><button type="button" className="button danger" disabled={configControlsDisabled} onClick={() => void clearHarness()}>{t("Clear configuration")}</button></div>
+        </> : <form className="config-form" onSubmit={(event) => void saveHarness(event)}>
+          <div className="form-grid">
+            <label className="form-field full"><span className="field-label">{t("Program")}</span><input className="form-input" value={draft.program} onChange={(event) => updateDraft("program", event.target.value)} placeholder={t("Program path or command")} disabled={configControlsDisabled} required /></label>
+            <label className="form-field"><span className="field-label">{t("Working directory")} <em>{t("Optional")}</em></span><input className="form-input" value={draft.workingDir} onChange={(event) => updateDraft("workingDir", event.target.value)} placeholder={t("Agent default")} disabled={configControlsDisabled} /></label>
+            <label className="form-field"><span className="field-label">{t("Readiness timeout (seconds)")} <em>{t("Optional")}</em></span><input className="form-input" inputMode="numeric" value={draft.timeout} onChange={(event) => updateDraft("timeout", event.target.value)} placeholder={t("Agent default")} disabled={configControlsDisabled} /></label>
+            <label className="form-field full"><span className="field-label">{t("Readiness URL")} <em>{t("Optional")}</em></span><input className="form-input" type="url" value={draft.readinessUrl} onChange={(event) => updateDraft("readinessUrl", event.target.value)} placeholder="http://127.0.0.1:3080/" disabled={configControlsDisabled} /></label>
+            <label className="form-field full"><span className="field-label">{t("Arguments")}</span><textarea className="form-textarea" value={draft.args} onChange={(event) => updateDraft("args", event.target.value)} placeholder={t("One argument per line. Use {profile}, {release}, or {release_root} when needed.")} disabled={configControlsDisabled || (draft.argsRedacted && !draft.replaceRedactedArgs)} /></label>
+          </div>
+          <p className="field-help">{t("One argument per line. Use {profile}, {release}, or {release_root} when needed.")}</p>
+          {draft.argsRedacted && <label className="form-check"><input type="checkbox" checked={draft.replaceRedactedArgs} onChange={(event) => updateDraft("replaceRedactedArgs", event.target.checked)} disabled={configControlsDisabled} /><span>{t("Replace hidden arguments")}</span></label>}
+          {formError && <div className="form-error" role="alert"><WarningCircle size={16} />{formError}</div>}
+          {harnessState === "running" && <p className="field-help" role="status">{t("Stop Harness before changing its launch configuration.")}</p>}
+          <div className="form-actions"><button type="submit" className="button primary" disabled={configControlsDisabled}>{t("Save configuration")}</button>{hasHarnessConfig && <button type="button" className="button" disabled={configControlsDisabled} onClick={() => { setDraftDirty(false); setFormError(null); setEditingHarness(false); }}>{t("Cancel")}</button>}{hasHarnessConfig && <button type="button" className="button danger" disabled={configControlsDisabled} onClick={() => void clearHarness()}>{t("Clear configuration")}</button>}</div>
+        </form>}
+        {!hasHarnessConfig && !editingHarness && <EmptyState title={t("Harness is not configured")} detail={t("The Agent remains usable as a control plane until an external Harness is configured.")} />}
+      </Panel>
+      <Panel title={t("Update configuration")} icon={<CloudArrowUp size={18} />}>
+        {Object.keys(update).length ? <dl className="detail-list"><div><dt>{t("Source")}</dt><dd>{stringValue(update, "source") || t("Not shown")}</dd></div><div><dt>{t("Ref")}</dt><dd>{stringValue(update, "ref_name") || t("Default")}</dd></div><div><dt>{t("Git program")}</dt><dd>{stringValue(update, "git_program") || "git"}</dd></div></dl> : <EmptyState title={t("Updates are not configured")} detail={t("Release metadata and current runtime remain available without an update source.")} />}
+      </Panel>
+    </div>
+    <Panel title={t("Native integration")} icon={<Bell size={18} />}><div className="integration-list"><div><CheckCircle size={18} /><span>{t("Single instance guard")}</span><strong>{t("Enabled")}</strong></div><div><Bell size={18} /><span>{t("Desktop notifications")}</span><strong>{t("Available through Tauri")}</strong></div><div><Key size={18} /><span>{t("API transport")}</span><strong>{t("Rust loopback proxy")}</strong></div></div></Panel>
+  </>;
 }
 
 function PageIntro({ kicker, title, detail }: { kicker: string; title: string; detail: string }) {

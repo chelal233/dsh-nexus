@@ -394,7 +394,8 @@ fn validate_proxy_request(path: &str, method: &Method, body: Option<&Value>) -> 
         | "/launcher/harness"
         | "/launcher/agent-api/v1/harness"
         | "/launcher/agent-api/v1/checkpoints"
-        | "/launcher/agent-api/v1/diagnostics" => *method == Method::GET || *method == Method::POST,
+        | "/launcher/agent-api/v1/diagnostics"
+        | "/launcher/agent-api/v1/config" => *method == Method::GET || *method == Method::POST,
         _ => *method == Method::GET,
     };
     if !method_allowed {
@@ -432,6 +433,10 @@ fn validate_proxy_request(path: &str, method: &Method, body: Option<&Value>) -> 
             }
             "/launcher/agent-api/v1/checkpoints" => action == "create",
             "/launcher/agent-api/v1/diagnostics" => action == "collect",
+            "/launcher/agent-api/v1/config" => matches!(
+                action,
+                "status" | "set_harness" | "clear_harness" | "set_update" | "clear_update"
+            ),
             _ => false,
         };
         if !action_allowed {
@@ -925,6 +930,12 @@ mod tests {
             "/launcher/agent-api/v1/config",
             &Method::POST,
             Some(&serde_json::json!({ "action": "set_harness" }))
+        )
+        .is_ok());
+        assert!(validate_proxy_request(
+            "/launcher/agent-api/v1/config",
+            &Method::POST,
+            Some(&serde_json::json!({ "action": "set_config" }))
         )
         .is_err());
         assert!(validate_proxy_request(
