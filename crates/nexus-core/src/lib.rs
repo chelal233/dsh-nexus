@@ -1,6 +1,7 @@
 //! UI-independent configuration, path, and state primitives for Nexus.
 
 use std::{
+    collections::HashSet,
     env, fs, io,
     net::{IpAddr, Ipv4Addr, SocketAddr},
     path::{Path, PathBuf},
@@ -10,9 +11,9 @@ use std::{
 
 use nexus_protocol::{
     decode_json, encode_json, AgentLifecycleState, AgentStatePayload, CheckpointManifest,
-    DiagnosticsBundle, DiagnosticsFile, HarnessCheckpointState, HarnessConfigPayload,
-    HarnessRuntimeInfo, HarnessState, ReleaseManifest, UpdateConfigPayload, UpdateRuntimeInfo,
-    UpdateState,
+    DiagnosticsBundle, DiagnosticsFile, HarnessCandidate, HarnessCheckpointState,
+    HarnessConfigPayload, HarnessDiscoveryResponse, HarnessLaunchMode, HarnessRuntimeInfo,
+    HarnessState, ReleaseManifest, UpdateConfigPayload, UpdateRuntimeInfo, UpdateState,
 };
 use serde::{Deserialize, Serialize};
 
@@ -2177,14 +2178,18 @@ mod tests {
         path::{Path, PathBuf},
     };
 
-    use nexus_protocol::{AgentLifecycleState, HarnessRuntimeInfo, HarnessState};
+    use nexus_protocol::{
+        AgentLifecycleState, HarnessConfigPayload, HarnessLaunchMode, HarnessRuntimeInfo,
+        HarnessState,
+    };
 
     use super::{
-        is_within, load_harness_launch_spec, read_runtime_metadata, write_runtime_metadata,
-        AgentState, CheckpointRestoreIntent, CheckpointRestoreJournalStore, CheckpointRestorePhase,
-        CheckpointStore, ConfigStore, DiagnosticsStore, HarnessLaunchSpec, HarnessLogSession,
-        HarnessLogSessionStore, NexusConfig, NexusConfigFile, NexusPaths, NexusRuntimeMetadata,
-        ProfileCatalog, ProfileStore, ReleaseStore, UpdateSpec,
+        discover_harness_candidates_in_roots, is_within, load_harness_launch_spec,
+        read_runtime_metadata, write_runtime_metadata, AgentState, CheckpointRestoreIntent,
+        CheckpointRestoreJournalStore, CheckpointRestorePhase, CheckpointStore, ConfigStore,
+        DiagnosticsStore, HarnessLaunchSpec, HarnessLogSession, HarnessLogSessionStore,
+        NexusConfig, NexusConfigFile, NexusPaths, NexusRuntimeMetadata, ProfileCatalog,
+        ProfileStore, ReleaseStore, UpdateSpec,
     };
 
     #[test]
@@ -2744,6 +2749,150 @@ mod tests {
     }
 
     #[test]
+    fn harness_launch_modes_are_explicit_and_legacy_specs_remain_direct() {
+        let direct = HarnessLaunchSpec {
+            mode: HarnessLaunchMode::Direct,
+            program: PathBuf::from("node"),
+            args: vec!["--version".to_owned()],
+            working_dir: None,
+            readiness_url: None,
+            readiness_timeout_secs: None,
+        };
+        let direct_payload = direct.to_payload();
+        assert_eq!(direct_payload.mode, HarnessLaunchMode::Direct);
+        assert_eq!(direct_payload.args, vec!["--version"]);
+        assert_eq!(direct_payload.entry, None);
+
+        let node = HarnessLaunchSpec::from_payload(HarnessConfigPayload {
+            mode: HarnessLaunchMode::Node,
+            program: "node".to_owned(),
+            args: vec!["--port".to_owned(), "3080".to_owned()],
+            entry: Some("dist/index.js".to_owned()),
+            working_dir: None,
+            readiness_url: None,
+            readiness_timeout_secs: None,
+        })
+        .expect("node payload validates");
+        assert_eq!(node.mode, HarnessLaunchMode::Node);
+        assert_eq!(node.args[0], "dist/index.js");
+        let node_payload = node.to_payload();
+        assert_eq!(node_payload.mode, HarnessLaunchMode::Node);
+        assert_eq!(node_payload.entry.as_deref(), Some("dist/index.js"));
+        assert_eq!(node_payload.args, vec!["--port", "3080"]);
+
+        let legacy: HarnessLaunchSpec = serde_json::from_value(serde_json::json!({
+            "program": "node",
+            "args": ["dist/index.js", "--port", "3080"]
+        }))
+        .expect("legacy spec deserializes");
+        assert_eq!(legacy.mode, HarnessLaunchMode::Direct);
+        assert_eq!(legacy.to_payload().mode, HarnessLaunchMode::Direct);
+        assert_eq!(legacy.to_payload().args, legacy.args);
+    }
+
+    #[test]
+    fn harness_discovery_finds_official_node_fixture_and_bounded_direct_targets() {
+        let root = unique_test_root("harness-discovery");
+        let node_program = root.join("runtime").join("node.exe");
+        let direct_program = root.join("bin").join("deepseek-harness.exe");
+        let package_dir = root.join("deepseek-harness").join("apps").join("cli");
+        let entry = package_dir.join("lib").join("bin.js");
+        fs::create_dir_all(node_program.parent().expect("node parent creates"))
+            .expect("node parent creates");
+        fs::create_dir_all(direct_program.parent().expect("direct parent creates"))
+            .expect("direct parent creates");
+        fs::create_dir_all(entry.parent().expect("entry parent creates"))
+            .expect("entry parent creates");
+        fs::write(&node_program, b"node fixture").expect("node fixture writes");
+        fs::write(&direct_program, b"harness fixture").expect("direct fixture writes");
+        fs::write(&entry, b"console.log('fixture')").expect("entry fixture writes");
+        fs::write(
+            package_dir.join("package.json"),
+            r#"{"name":"@deepseek-ai/dsh","version":"alpha.3","bin":{"dsh":"lib/bin.js"}}"#,
+        )
+        .expect("package manifest writes");
+
+        let ignored_package = root.join("node_modules").join("deepseek-harness");
+        fs::create_dir_all(ignored_package.join("lib")).expect("ignored package creates");
+        fs::write(
+            ignored_package.join("package.json"),
+            r#"{"name":"@deepseek-ai/dsh","version":"ignored","bin":{"dsh":"lib/bin.js"}}"#,
+        )
+        .expect("ignored manifest writes");
+        fs::write(ignored_package.join("lib").join("bin.js"), b"ignored")
+            .expect("ignored entry writes");
+
+        let roots = vec![(root.clone(), "fixture".to_owned())];
+        let candidates = discover_harness_candidates_in_roots(&roots, Some(&node_program));
+        let direct = candidates
+            .iter()
+            .find(|candidate| candidate.mode == HarnessLaunchMode::Direct)
+            .expect("direct fixture is discovered");
+        assert!(direct.program.ends_with("deepseek-harness.exe"));
+        let node = candidates
+            .iter()
+            .find(|candidate| candidate.mode == HarnessLaunchMode::Node)
+            .expect("official node fixture is discovered");
+        assert_eq!(node.version.as_deref(), Some("alpha.3"));
+        assert_eq!(
+            node.program,
+            fs::canonicalize(&node_program)
+                .expect("node path canonicalizes")
+                .to_string_lossy()
+        );
+        assert_eq!(
+            node.args,
+            vec![
+                "--profile".to_owned(),
+                "{profile}".to_owned(),
+                "--no-open".to_owned(),
+                "--host".to_owned(),
+                "127.0.0.1".to_owned(),
+                "--port".to_owned(),
+                "3080".to_owned()
+            ]
+        );
+        assert_eq!(
+            node.readiness_url.as_deref(),
+            Some("http://127.0.0.1:3080/")
+        );
+        assert!(node
+            .entry
+            .as_deref()
+            .is_some_and(|path| path.contains("apps")
+                && path.contains("cli")
+                && path.ends_with("bin.js")));
+        assert!(!candidates.iter().any(|candidate| {
+            candidate
+                .entry
+                .as_deref()
+                .is_some_and(|path| path.contains("node_modules"))
+        }));
+
+        assert!(discover_harness_candidates_in_roots(&[], Some(&node_program)).is_empty());
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn harness_discovery_anchors_on_data_root_parent_for_sibling_checkout() {
+        let sandbox = unique_test_root("harness-discovery-sibling");
+        let data_root = sandbox.join("nexus-data");
+        let sibling = sandbox.join("deepseek-harness");
+        fs::create_dir_all(&data_root).expect("data root creates");
+        fs::create_dir_all(&sibling).expect("sibling creates");
+        fs::write(sibling.join("deepseek-harness.exe"), b"harness fixture")
+            .expect("sibling executable writes");
+
+        let response =
+            super::discover_harness_candidates_with_paths(&NexusPaths::from_root(data_root));
+        assert!(response
+            .candidates
+            .iter()
+            .any(|candidate| candidate.program.ends_with("deepseek-harness.exe")));
+        let _ = fs::remove_dir_all(sandbox);
+    }
+
+    #[test]
     fn diagnostics_collects_bounded_redacted_nexus_files_only() {
         let root = unique_test_root("diagnostics");
         let paths = NexusPaths::from_root(root.clone());
@@ -2785,6 +2934,7 @@ mod tests {
 
         let document = NexusConfigFile {
             harness: Some(HarnessLaunchSpec {
+                mode: Default::default(),
                 program: PathBuf::from("bin/harness"),
                 args: vec!["--profile".to_owned(), "{profile}".to_owned()],
                 working_dir: Some(PathBuf::from("runtime")),
@@ -2825,10 +2975,14 @@ mod tests {
 }
 
 /// The immutable upstream Harness is launched only through this external
-/// process specification. Nexus never infers a Harness installation from a
-/// home directory or from the current working directory.
+/// process specification. Nexus never silently chooses a discovered
+/// installation; discovery is an advisory API and the selected command is
+/// persisted here. Node mode is normalized to `program=node` and an entry
+/// script as the first process argument so the supervisor remains unchanged.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct HarnessLaunchSpec {
+    #[serde(default)]
+    pub mode: HarnessLaunchMode,
     pub program: PathBuf,
     #[serde(default)]
     pub args: Vec<String>,
@@ -2843,6 +2997,7 @@ pub struct HarnessLaunchSpec {
 impl HarnessLaunchSpec {
     pub fn new(program: PathBuf) -> Self {
         Self {
+            mode: HarnessLaunchMode::Direct,
             program,
             args: Vec::new(),
             working_dir: None,
@@ -2859,6 +3014,20 @@ impl HarnessLaunchSpec {
                 io::ErrorKind::InvalidInput,
                 "Harness program must be non-empty and contain no control characters",
             ));
+        }
+        if matches!(self.mode, HarnessLaunchMode::Node) {
+            if !harness_program_is_node_runtime(&self.program) {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    "Harness node launch mode requires a node runtime program",
+                ));
+            }
+            if self.args.first().map(String::is_empty).unwrap_or(true) {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    "Harness node launch mode requires an entry script",
+                ));
+            }
         }
         if let Some(working_dir) = &self.working_dir {
             if working_dir.to_string_lossy().chars().any(char::is_control) {
@@ -2892,9 +3061,19 @@ impl HarnessLaunchSpec {
     }
 
     pub fn to_payload(&self) -> HarnessConfigPayload {
+        let mode = self.mode;
+        let (entry, args) = match mode {
+            HarnessLaunchMode::Node => (
+                self.args.first().cloned(),
+                self.args.iter().skip(1).cloned().collect(),
+            ),
+            HarnessLaunchMode::Direct => (None, self.args.clone()),
+        };
         HarnessConfigPayload {
+            mode,
             program: self.program.to_string_lossy().into_owned(),
-            args: self.args.clone(),
+            args,
+            entry,
             working_dir: self
                 .working_dir
                 .as_ref()
@@ -2905,12 +3084,43 @@ impl HarnessLaunchSpec {
     }
 
     pub fn from_payload(payload: HarnessConfigPayload) -> io::Result<Self> {
+        let HarnessConfigPayload {
+            mode,
+            program,
+            mut args,
+            entry,
+            working_dir,
+            readiness_url,
+            readiness_timeout_secs,
+        } = payload;
+        if matches!(mode, HarnessLaunchMode::Direct) && entry.is_some() {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "Harness entry is only valid for node launch mode",
+            ));
+        }
+        if matches!(mode, HarnessLaunchMode::Node) {
+            let entry = entry.ok_or_else(|| {
+                io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    "Harness node launch mode requires an entry script",
+                )
+            })?;
+            if entry.is_empty() || entry.chars().any(char::is_control) {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    "Harness node entry must be non-empty and contain no control characters",
+                ));
+            }
+            args.insert(0, entry);
+        }
         let spec = Self {
-            program: PathBuf::from(payload.program),
-            args: payload.args,
-            working_dir: payload.working_dir.map(PathBuf::from),
-            readiness_url: payload.readiness_url,
-            readiness_timeout_secs: payload.readiness_timeout_secs,
+            mode,
+            program: PathBuf::from(program),
+            args,
+            working_dir: working_dir.map(PathBuf::from),
+            readiness_url,
+            readiness_timeout_secs,
         };
         spec.validate()?;
         Ok(spec)
@@ -2955,6 +3165,461 @@ impl HarnessLaunchSpec {
             release_root,
         )?))
     }
+}
+
+fn harness_program_is_node_runtime(program: &Path) -> bool {
+    let Some(name) = program.file_name().and_then(|name| name.to_str()) else {
+        return false;
+    };
+    let name = name.to_ascii_lowercase();
+    matches!(name.as_str(), "node" | "node.exe" | "nodejs" | "nodejs.exe")
+}
+
+const HARNESS_DISCOVERY_MAX_DEPTH: usize = 4;
+const HARNESS_DISCOVERY_MAX_CANDIDATES: usize = 32;
+const HARNESS_DISCOVERY_MAX_DIRECTORIES: usize = 512;
+const HARNESS_DISCOVERY_MAX_ENTRIES_PER_DIR: usize = 256;
+const HARNESS_DISCOVERY_MAX_MANIFEST_BYTES: u64 = 512 * 1024;
+
+/// Discover likely immutable Harness launch targets without scanning an
+/// entire volume. The result is deliberately advisory; the caller must
+/// explicitly select a candidate before writing it to Nexus config.
+pub fn discover_harness_candidates() -> HarnessDiscoveryResponse {
+    let roots = discovery_roots();
+    let node_program = find_on_path(&["node", "node.exe", "nodejs", "nodejs.exe"]);
+    HarnessDiscoveryResponse::new(discover_harness_candidates_in_roots(
+        &roots,
+        node_program.as_deref(),
+    ))
+}
+
+/// Discover using the Agent's configured data root as an additional bounded
+/// anchor. A common local layout keeps `nexus-data` beside the checked-out
+/// `deepseek-harness` tree, which is not necessarily below the process or
+/// user-home directory.
+pub fn discover_harness_candidates_with_paths(paths: &NexusPaths) -> HarnessDiscoveryResponse {
+    let mut roots = discovery_roots();
+    if let Some(parent) = paths.root.parent() {
+        push_discovery_root(&mut roots, parent.to_path_buf(), "data_root_parent");
+    }
+    push_discovery_root(&mut roots, paths.root.clone(), "data_root");
+    let node_program = find_on_path(&["node", "node.exe", "nodejs", "nodejs.exe"]);
+    HarnessDiscoveryResponse::new(discover_harness_candidates_in_roots(
+        &roots,
+        node_program.as_deref(),
+    ))
+}
+
+fn discovery_roots() -> Vec<(PathBuf, String)> {
+    let mut roots = Vec::new();
+    if let Some(root) = non_empty_env("NEXUS_HARNESS_ROOT") {
+        push_discovery_root(&mut roots, PathBuf::from(root), "configured");
+    }
+    if let Some(root) = non_empty_env("DEEPSEEK_HARNESS_ROOT") {
+        push_discovery_root(&mut roots, PathBuf::from(root), "configured");
+    }
+    if let Some(root) = non_empty_env("DSH_HOME") {
+        push_discovery_root(&mut roots, PathBuf::from(root), "configured");
+    }
+    if let Ok(current_dir) = env::current_dir() {
+        push_discovery_root(&mut roots, current_dir, "current_dir");
+    }
+    if let Ok(current_exe) = env::current_exe() {
+        if let Some(parent) = current_exe.parent() {
+            push_discovery_root(&mut roots, parent.to_path_buf(), "current_exe");
+        }
+    }
+
+    if let Some(home) = user_home_dir() {
+        push_discovery_root(&mut roots, home.clone(), "home");
+        for relative in [
+            ".dsh",
+            "dsh",
+            "deepseek-harness",
+            "AppData/Local/dsh",
+            "AppData/Local/deepseek-harness",
+            "AppData/Roaming/dsh",
+            "AppData/Roaming/deepseek-harness",
+        ] {
+            push_discovery_root(&mut roots, home.join(relative), "home");
+        }
+    }
+    roots
+}
+
+fn user_home_dir() -> Option<PathBuf> {
+    if let Some(home) = non_empty_env("HOME") {
+        return Some(PathBuf::from(home));
+    }
+    non_empty_env("USERPROFILE").map(PathBuf::from)
+}
+
+fn push_discovery_root(roots: &mut Vec<(PathBuf, String)>, root: PathBuf, source: &str) {
+    let Ok(root) = fs::canonicalize(root) else {
+        return;
+    };
+    if !root.is_dir() || roots.iter().any(|(known, _)| known == &root) {
+        return;
+    }
+    roots.push((root, source.to_owned()));
+}
+
+fn discover_harness_candidates_in_roots(
+    roots: &[(PathBuf, String)],
+    node_program: Option<&Path>,
+) -> Vec<HarnessCandidate> {
+    let mut candidates = Vec::new();
+    let mut seen = HashSet::new();
+    let mut visited_directories = 0;
+    for (root, source) in roots {
+        if candidates.len() >= HARNESS_DISCOVERY_MAX_CANDIDATES {
+            break;
+        }
+        let Ok(root) = fs::canonicalize(root) else {
+            continue;
+        };
+        if !root.is_dir() {
+            continue;
+        }
+        scan_discovery_dir(
+            &root,
+            &root,
+            0,
+            source,
+            node_program,
+            &mut candidates,
+            &mut seen,
+            &mut visited_directories,
+        );
+    }
+    candidates.sort_by(|left, right| left.id.cmp(&right.id));
+    candidates
+}
+
+fn scan_discovery_dir(
+    root: &Path,
+    directory: &Path,
+    depth: usize,
+    source: &str,
+    node_program: Option<&Path>,
+    candidates: &mut Vec<HarnessCandidate>,
+    seen: &mut HashSet<String>,
+    visited_directories: &mut usize,
+) {
+    if candidates.len() >= HARNESS_DISCOVERY_MAX_CANDIDATES
+        || *visited_directories >= HARNESS_DISCOVERY_MAX_DIRECTORIES
+    {
+        return;
+    }
+    *visited_directories += 1;
+
+    for name in [
+        "deepseek-harness",
+        "deepseek-harness.exe",
+        "dsh-harness",
+        "dsh-harness.exe",
+        "harness",
+        "harness.exe",
+    ] {
+        add_direct_candidate(root, &directory.join(name), source, candidates, seen);
+        if candidates.len() >= HARNESS_DISCOVERY_MAX_CANDIDATES {
+            return;
+        }
+    }
+
+    if let Some(node_program) = node_program {
+        add_node_manifest_candidate(root, directory, source, node_program, candidates, seen);
+    }
+
+    if depth >= HARNESS_DISCOVERY_MAX_DEPTH {
+        return;
+    }
+    let mut directories = Vec::new();
+    let Ok(entries) = fs::read_dir(directory) else {
+        return;
+    };
+    for entry in entries
+        .flatten()
+        .take(HARNESS_DISCOVERY_MAX_ENTRIES_PER_DIR)
+    {
+        let Ok(file_type) = entry.file_type() else {
+            continue;
+        };
+        if !file_type.is_dir() {
+            continue;
+        }
+        let name = entry.file_name();
+        if name == ".git" || name == "target" || name == "node_modules" {
+            continue;
+        }
+        directories.push(entry.path());
+    }
+    directories.sort();
+    for child in directories {
+        let Ok(child) = fs::canonicalize(child) else {
+            continue;
+        };
+        if !is_within(root, &child) || !child.is_dir() {
+            continue;
+        }
+        scan_discovery_dir(
+            root,
+            &child,
+            depth + 1,
+            source,
+            node_program,
+            candidates,
+            seen,
+            visited_directories,
+        );
+        if candidates.len() >= HARNESS_DISCOVERY_MAX_CANDIDATES {
+            return;
+        }
+    }
+}
+
+fn add_direct_candidate(
+    root: &Path,
+    program: &Path,
+    source: &str,
+    candidates: &mut Vec<HarnessCandidate>,
+    seen: &mut HashSet<String>,
+) {
+    let Some(program) = canonical_file_within(root, program) else {
+        return;
+    };
+    let Some(parent) = program.parent() else {
+        return;
+    };
+    let program_text = program.to_string_lossy().into_owned();
+    let id = discovery_candidate_id(HarnessLaunchMode::Direct, &program_text, None);
+    if !seen.insert(id.clone()) {
+        return;
+    }
+    let display_name = program
+        .file_stem()
+        .or_else(|| program.file_name())
+        .and_then(|name| name.to_str())
+        .unwrap_or("Harness")
+        .to_owned();
+    candidates.push(HarnessCandidate {
+        id,
+        mode: HarnessLaunchMode::Direct,
+        program: program_text,
+        entry: None,
+        args: Vec::new(),
+        working_dir: Some(parent.to_string_lossy().into_owned()),
+        readiness_url: None,
+        readiness_timeout_secs: None,
+        source: source.to_owned(),
+        display_name,
+        version: None,
+    });
+}
+
+fn add_node_manifest_candidate(
+    root: &Path,
+    directory: &Path,
+    source: &str,
+    node_program: &Path,
+    candidates: &mut Vec<HarnessCandidate>,
+    seen: &mut HashSet<String>,
+) {
+    let Some(node_program) = fs::canonicalize(node_program)
+        .ok()
+        .filter(|path| path.is_file())
+    else {
+        return;
+    };
+    let manifest_path = directory.join("package.json");
+    let Ok(metadata) = fs::metadata(&manifest_path) else {
+        return;
+    };
+    if !metadata.is_file() || metadata.len() > HARNESS_DISCOVERY_MAX_MANIFEST_BYTES {
+        return;
+    }
+    let Some(manifest_path) = canonical_file_within(root, &manifest_path) else {
+        return;
+    };
+    let Ok(bytes) = fs::read(&manifest_path) else {
+        return;
+    };
+    let Ok(manifest) = serde_json::from_slice::<NodePackageManifest>(&bytes) else {
+        return;
+    };
+    let mut bin_name = manifest.bin.as_ref().and_then(node_manifest_bin_name);
+    let package_name = manifest.name.as_deref().unwrap_or_default();
+    if bin_name.is_none()
+        && manifest
+            .bin
+            .as_ref()
+            .is_some_and(serde_json::Value::is_string)
+    {
+        // A string-valued `bin` has no command key to use as a hint. The
+        // package name still identifies the official @deepseek-ai/dsh
+        // package and is enough for the bounded discovery check.
+        bin_name = Some(package_name.to_owned());
+    }
+    if !looks_like_harness_package(package_name, bin_name.as_deref(), directory, root) {
+        return;
+    }
+    let Some(entry) = node_manifest_entry(&manifest, bin_name.as_deref()) else {
+        return;
+    };
+    let Some(entry) = canonical_file_within(root, &directory.join(entry)) else {
+        return;
+    };
+    let Some(package_dir) = manifest_path.parent() else {
+        return;
+    };
+    let node_program = node_program.to_string_lossy().into_owned();
+    let entry_text = entry.to_string_lossy().into_owned();
+    let id = discovery_candidate_id(HarnessLaunchMode::Node, &node_program, Some(&entry_text));
+    if !seen.insert(id.clone()) {
+        return;
+    }
+    let display_name = if package_name.is_empty() {
+        entry
+            .file_stem()
+            .and_then(|name| name.to_str())
+            .unwrap_or("Node Harness")
+            .to_owned()
+    } else {
+        package_name.to_owned()
+    };
+    let official_dsh = is_official_dsh_package(package_name);
+    candidates.push(HarnessCandidate {
+        id,
+        mode: HarnessLaunchMode::Node,
+        program: node_program,
+        entry: Some(entry_text),
+        args: if official_dsh {
+            vec![
+                "--profile".to_owned(),
+                "{profile}".to_owned(),
+                "--no-open".to_owned(),
+                "--host".to_owned(),
+                "127.0.0.1".to_owned(),
+                "--port".to_owned(),
+                "3080".to_owned(),
+            ]
+        } else {
+            Vec::new()
+        },
+        working_dir: Some(package_dir.to_string_lossy().into_owned()),
+        readiness_url: official_dsh.then(|| "http://127.0.0.1:3080/".to_owned()),
+        readiness_timeout_secs: official_dsh.then_some(30),
+        source: source.to_owned(),
+        display_name,
+        version: manifest.version,
+    });
+}
+
+#[derive(Debug, Deserialize)]
+struct NodePackageManifest {
+    name: Option<String>,
+    version: Option<String>,
+    main: Option<String>,
+    bin: Option<serde_json::Value>,
+}
+
+fn node_manifest_bin_name(bin: &serde_json::Value) -> Option<String> {
+    match bin {
+        serde_json::Value::String(_) => None,
+        serde_json::Value::Object(values) => values
+            .keys()
+            .find(|key| key.to_ascii_lowercase().contains("harness"))
+            .cloned()
+            .or_else(|| values.keys().next().cloned()),
+        _ => None,
+    }
+}
+
+fn node_manifest_entry(manifest: &NodePackageManifest, bin_name: Option<&str>) -> Option<String> {
+    match manifest.bin.as_ref() {
+        Some(serde_json::Value::String(entry)) => Some(entry.clone()),
+        Some(serde_json::Value::Object(values)) => bin_name
+            .and_then(|name| values.get(name))
+            .and_then(serde_json::Value::as_str)
+            .map(str::to_owned)
+            .or_else(|| {
+                values
+                    .values()
+                    .find_map(serde_json::Value::as_str)
+                    .map(str::to_owned)
+            }),
+        _ => manifest.main.clone(),
+    }
+}
+
+fn looks_like_harness_package(
+    package_name: &str,
+    bin_name: Option<&str>,
+    directory: &Path,
+    root: &Path,
+) -> bool {
+    [Some(package_name), bin_name]
+        .into_iter()
+        .flatten()
+        .map(str::to_ascii_lowercase)
+        .any(|name| {
+            name.contains("deepseek-harness")
+                || name.contains("dsh-harness")
+                || name == "@deepseek-ai/dsh"
+                || name == "@deepseek-ai/dsh-root"
+                || name == "harness"
+                || name.ends_with("-harness")
+        })
+        || directory
+            .ancestors()
+            .take_while(|ancestor| is_within(root, ancestor))
+            .filter_map(Path::file_name)
+            .filter_map(|name| name.to_str())
+            .map(str::to_ascii_lowercase)
+            .any(|name| name == "dsh" || name.contains("deepseek-harness"))
+}
+
+fn is_official_dsh_package(package_name: &str) -> bool {
+    matches!(
+        package_name.to_ascii_lowercase().as_str(),
+        "@deepseek-ai/dsh" | "@deepseek-ai/dsh-root"
+    )
+}
+
+fn canonical_file_within(root: &Path, path: &Path) -> Option<PathBuf> {
+    let canonical = fs::canonicalize(path).ok()?;
+    if canonical.is_file() && is_within(root, &canonical) {
+        Some(canonical)
+    } else {
+        None
+    }
+}
+
+fn discovery_candidate_id(mode: HarnessLaunchMode, program: &str, entry: Option<&str>) -> String {
+    let mode = match mode {
+        HarnessLaunchMode::Direct => "direct",
+        HarnessLaunchMode::Node => "node",
+    };
+    format!(
+        "{mode}:{}:{}",
+        program.to_ascii_lowercase(),
+        entry.unwrap_or_default().to_ascii_lowercase()
+    )
+}
+
+fn find_on_path(names: &[&str]) -> Option<PathBuf> {
+    let path = env::var_os("PATH")?;
+    for directory in env::split_paths(&path) {
+        for name in names {
+            let candidate = directory.join(name);
+            if let Ok(candidate) = fs::canonicalize(candidate) {
+                if candidate.is_file() {
+                    return Some(candidate);
+                }
+            }
+        }
+    }
+    None
 }
 
 fn validate_launch_args(args: &[String], label: &str) -> io::Result<()> {

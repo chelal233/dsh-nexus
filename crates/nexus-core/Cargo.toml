@@ -8,6 +8,7 @@ publish.workspace = true
 [dependencies]
 nexus-protocol = { path = "../nexus-protocol" }
 serde.workspace = true
+serde_json.workspace = true
 
 [target.'cfg(windows)'.dependencies]
 windows-sys.workspace = true

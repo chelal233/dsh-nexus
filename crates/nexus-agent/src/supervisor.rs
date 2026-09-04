@@ -2715,6 +2715,7 @@ mod tests {
         ConfigStore::new(paths.clone())
             .write(&NexusConfigFile {
                 harness: Some(HarnessLaunchSpec {
+                    mode: Default::default(),
                     program,
                     args,
                     working_dir: None,
@@ -2772,6 +2773,7 @@ mod tests {
         ConfigStore::new(paths.clone())
             .write(&NexusConfigFile {
                 harness: Some(HarnessLaunchSpec {
+                    mode: Default::default(),
                     program: PathBuf::from("unused-harness"),
                     args: Vec::new(),
                     working_dir: None,
@@ -2905,6 +2907,7 @@ mod tests {
         ConfigStore::new(paths.clone())
             .write(&NexusConfigFile {
                 harness: Some(HarnessLaunchSpec {
+                    mode: Default::default(),
                     program: PathBuf::from("unused-harness"),
                     args: Vec::new(),
                     working_dir: None,
@@ -3009,6 +3012,7 @@ mod tests {
         ConfigStore::new(paths.clone())
             .write(&NexusConfigFile {
                 harness: Some(HarnessLaunchSpec {
+                    mode: Default::default(),
                     program,
                     args,
                     working_dir: None,
@@ -3228,6 +3232,7 @@ mod tests {
         ConfigStore::new(paths.clone())
             .write(&NexusConfigFile {
                 harness: Some(HarnessLaunchSpec {
+                    mode: Default::default(),
                     program,
                     args,
                     working_dir: None,
@@ -3298,6 +3303,7 @@ mod tests {
         ConfigStore::new(paths.clone())
             .write(&NexusConfigFile {
                 harness: Some(HarnessLaunchSpec {
+                    mode: Default::default(),
                     program,
                     args,
                     working_dir: None,
@@ -3361,6 +3367,7 @@ mod tests {
         ConfigStore::new(paths.clone())
             .write(&NexusConfigFile {
                 harness: Some(HarnessLaunchSpec {
+                    mode: Default::default(),
                     program,
                     args,
                     working_dir: None,
@@ -3437,6 +3444,7 @@ mod tests {
         ConfigStore::new(paths.clone())
             .write(&NexusConfigFile {
                 harness: Some(HarnessLaunchSpec {
+                    mode: Default::default(),
                     program,
                     args,
                     working_dir: None,
@@ -3525,6 +3533,7 @@ mod tests {
         ConfigStore::new(paths.clone())
             .write(&NexusConfigFile {
                 harness: Some(HarnessLaunchSpec {
+                    mode: Default::default(),
                     program,
                     args,
                     working_dir: None,
@@ -3609,6 +3618,7 @@ mod tests {
         ConfigStore::new(paths.clone())
             .write(&NexusConfigFile {
                 harness: Some(HarnessLaunchSpec {
+                    mode: Default::default(),
                     program,
                     args,
                     working_dir: None,
@@ -3666,6 +3676,7 @@ mod tests {
         ConfigStore::new(paths.clone())
             .write(&NexusConfigFile {
                 harness: Some(HarnessLaunchSpec {
+                    mode: Default::default(),
                     program,
                     args,
                     working_dir: None,
@@ -3720,6 +3731,7 @@ mod tests {
         ConfigStore::new(paths.clone())
             .write(&NexusConfigFile {
                 harness: Some(HarnessLaunchSpec {
+                    mode: Default::default(),
                     program,
                     args,
                     working_dir: None,
@@ -3767,6 +3779,7 @@ mod tests {
         ConfigStore::new(paths.clone())
             .write(&NexusConfigFile {
                 harness: Some(HarnessLaunchSpec {
+                    mode: Default::default(),
                     program,
                     args,
                     working_dir: None,
@@ -3848,6 +3861,7 @@ mod tests {
         ConfigStore::new(paths.clone())
             .write(&NexusConfigFile {
                 harness: Some(HarnessLaunchSpec {
+                    mode: Default::default(),
                     program,
                     args,
                     working_dir: None,
@@ -3956,6 +3970,7 @@ mod tests {
         ConfigStore::new(paths.clone())
             .write(&NexusConfigFile {
                 harness: Some(HarnessLaunchSpec {
+                    mode: Default::default(),
                     program,
                     args,
                     working_dir: None,
@@ -3996,6 +4011,7 @@ mod tests {
         ConfigStore::new(paths.clone())
             .write(&NexusConfigFile {
                 harness: Some(HarnessLaunchSpec {
+                    mode: Default::default(),
                     program: if cfg!(windows) {
                         PathBuf::from("powershell.exe")
                     } else {
@@ -4052,6 +4068,7 @@ mod tests {
         ConfigStore::new(paths.clone())
             .write(&NexusConfigFile {
                 harness: Some(HarnessLaunchSpec {
+                    mode: Default::default(),
                     program: PathBuf::from("nexus-harness-program-does-not-exist"),
                     args: Vec::new(),
                     working_dir: None,
@@ -4137,6 +4154,7 @@ mod tests {
         ConfigStore::new(paths.clone())
             .write(&NexusConfigFile {
                 harness: Some(HarnessLaunchSpec {
+                    mode: Default::default(),
                     program,
                     args,
                     working_dir: None,
@@ -4469,6 +4487,7 @@ mod tests {
         ConfigStore::new(paths.clone())
             .write(&NexusConfigFile {
                 harness: Some(HarnessLaunchSpec {
+                    mode: Default::default(),
                     program: PathBuf::from("must-not-run"),
                     args: Vec::new(),
                     working_dir: None,
@@ -4547,6 +4566,7 @@ mod tests {
         ConfigStore::new(paths.clone())
             .write(&NexusConfigFile {
                 harness: Some(HarnessLaunchSpec {
+                    mode: Default::default(),
                     program: PathBuf::from(shell),
                     args: vec!["/C".to_owned(), "exit 1".to_owned()],
                     working_dir: None,
@@ -4650,6 +4670,7 @@ mod tests {
         ConfigStore::new(paths.clone())
             .write(&NexusConfigFile {
                 harness: Some(HarnessLaunchSpec {
+                    mode: Default::default(),
                     program,
                     args,
                     working_dir: None,
@@ -4723,6 +4744,7 @@ mod tests {
         ConfigStore::new(paths.clone())
             .write(&NexusConfigFile {
                 harness: Some(HarnessLaunchSpec {
+                    mode: Default::default(),
                     program,
                     args,
                     working_dir: None,
@@ -4798,6 +4820,7 @@ mod tests {
         ConfigStore::new(paths.clone())
             .write(&NexusConfigFile {
                 harness: Some(HarnessLaunchSpec {
+                    mode: Default::default(),
                     program,
                     args,
                     working_dir: None,
@@ -4996,6 +5019,7 @@ mod tests {
         ConfigStore::new(paths.clone())
             .write(&NexusConfigFile {
                 harness: Some(HarnessLaunchSpec {
+                    mode: Default::default(),
                     program,
                     args,
                     working_dir: None,
@@ -5120,6 +5144,7 @@ mod tests {
         ConfigStore::new(paths.clone())
             .write(&NexusConfigFile {
                 harness: Some(HarnessLaunchSpec {
+                    mode: Default::default(),
                     program: PathBuf::from("must-not-run"),
                     args: Vec::new(),
                     working_dir: None,
@@ -5233,6 +5258,7 @@ mod tests {
         ConfigStore::new(paths.clone())
             .write(&NexusConfigFile {
                 harness: Some(HarnessLaunchSpec {
+                    mode: Default::default(),
                     program: PathBuf::from("must-not-run"),
                     args: Vec::new(),
                     working_dir: None,

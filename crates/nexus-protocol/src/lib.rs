@@ -704,9 +704,52 @@ impl DiagnosticsResponse {
     }
 }
 
+/// How the immutable upstream Harness is launched.
+///
+/// `direct` preserves the original command model. `node` means `program` is
+/// the Node runtime and `entry` names the JavaScript entry point; the Agent
+/// normalizes that pair into the process argument vector it supervises.
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum HarnessLaunchMode {
+    #[default]
+    Direct,
+    Node,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct HarnessConfigPayload {
+    #[serde(default)]
+    pub mode: HarnessLaunchMode,
     pub program: String,
+    #[serde(default)]
+    pub args: Vec<String>,
+    /// JavaScript entry point used by `node` mode. The persisted core spec
+    /// keeps this as the first process argument for supervisor compatibility.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub entry: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub working_dir: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub readiness_url: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub readiness_timeout_secs: Option<u64>,
+}
+
+/// A locally discoverable Harness launch target. Discovery is advisory: the
+/// caller still explicitly chooses a candidate (or supplies a manual config)
+/// before mutating Nexus configuration.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct HarnessCandidate {
+    /// Stable for the lifetime of the installation and suitable for UI
+    /// selection; it is not an authorization token.
+    pub id: String,
+    pub mode: HarnessLaunchMode,
+    /// Direct mode uses this as the Harness program. Node mode uses this as
+    /// the Node runtime executable.
+    pub program: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub entry: Option<String>,
     #[serde(default)]
     pub args: Vec<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -715,6 +758,26 @@ pub struct HarnessConfigPayload {
     pub readiness_url: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub readiness_timeout_secs: Option<u64>,
+    /// Stable machine-readable discovery source, such as `path` or `home`.
+    pub source: String,
+    pub display_name: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub version: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct HarnessDiscoveryResponse {
+    pub api_version: String,
+    pub candidates: Vec<HarnessCandidate>,
+}
+
+impl HarnessDiscoveryResponse {
+    pub fn new(candidates: Vec<HarnessCandidate>) -> Self {
+        Self {
+            api_version: API_VERSION.to_owned(),
+            candidates,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -786,10 +849,10 @@ mod tests {
         CheckpointCreateRequest, CheckpointCreateResponse, CheckpointManifest,
         CheckpointRestoreRequest, ConfigAction, ConfigCommand, ConfigResponse, DiagnosticsAction,
         DiagnosticsCommand, DiagnosticsResponse, HarnessAction, HarnessCheckpointState,
-        HarnessCommand, HarnessConfigPayload, HarnessResponse, HarnessRuntimeInfo, HarnessState,
-        LifecycleAction, LifecycleCommand, ProfileListResponse, ProfileSelectRequest,
-        ReleaseAction, ReleaseCommand, ReleaseListResponse, ReleaseManifest, UpdateAction,
-        UpdateCommand, UpdateResponse, UpdateRuntimeInfo,
+        HarnessCommand, HarnessConfigPayload, HarnessLaunchMode, HarnessResponse,
+        HarnessRuntimeInfo, HarnessState, LifecycleAction, LifecycleCommand, ProfileListResponse,
+        ProfileSelectRequest, ReleaseAction, ReleaseCommand, ReleaseListResponse, ReleaseManifest,
+        UpdateAction, UpdateCommand, UpdateResponse, UpdateRuntimeInfo,
     };
 
     #[test]
@@ -1018,8 +1081,10 @@ mod tests {
         let command = ConfigCommand {
             action: ConfigAction::SetHarness,
             harness: Some(HarnessConfigPayload {
+                mode: HarnessLaunchMode::Direct,
                 program: "harness".to_owned(),
                 args: vec!["--profile".to_owned(), "{profile}".to_owned()],
+                entry: None,
                 working_dir: None,
                 readiness_url: None,
                 readiness_timeout_secs: None,
@@ -1035,5 +1100,28 @@ mod tests {
             serde_json::to_value(response).expect("config response serializes")["api_version"],
             "v1"
         );
+    }
+
+    #[test]
+    fn harness_launch_mode_defaults_for_legacy_payloads_and_round_trips_node() {
+        let legacy: HarnessConfigPayload = serde_json::from_value(serde_json::json!({
+            "program": "harness"
+        }))
+        .expect("legacy payload deserializes");
+        assert_eq!(legacy.mode, HarnessLaunchMode::Direct);
+        assert_eq!(legacy.entry, None);
+
+        let node = HarnessConfigPayload {
+            mode: HarnessLaunchMode::Node,
+            program: "node".to_owned(),
+            args: vec!["--port".to_owned(), "3080".to_owned()],
+            entry: Some("dist/index.js".to_owned()),
+            working_dir: Some("harness".to_owned()),
+            readiness_url: None,
+            readiness_timeout_secs: Some(20),
+        };
+        let value = serde_json::to_value(node).expect("node payload serializes");
+        assert_eq!(value["mode"], "node");
+        assert_eq!(value["entry"], "dist/index.js");
     }
 }

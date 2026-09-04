@@ -27,11 +27,11 @@ use axum::{
     Json, Router,
 };
 use nexus_core::{
-    data_root_identity, new_instance_id, AgentState, CheckpointRestoreIntent,
-    CheckpointRestoreJournal, CheckpointRestoreJournalStore, CheckpointRestorePhase,
-    CheckpointStore, ConfigStore, DiagnosticsStore, HarnessLaunchSpec, HarnessLogSession,
-    HarnessLogSessionStore, NexusConfig, NexusConfigFile, NexusStateSnapshot, ProfileCatalog,
-    ProfileStore, ReleaseCatalog, ReleaseStore, UpdateSpec, DEFAULT_PROFILE,
+    data_root_identity, discover_harness_candidates_with_paths, new_instance_id, AgentState,
+    CheckpointRestoreIntent, CheckpointRestoreJournal, CheckpointRestoreJournalStore,
+    CheckpointRestorePhase, CheckpointStore, ConfigStore, DiagnosticsStore, HarnessLaunchSpec,
+    HarnessLogSession, HarnessLogSessionStore, NexusConfig, NexusConfigFile, NexusStateSnapshot,
+    ProfileCatalog, ProfileStore, ReleaseCatalog, ReleaseStore, UpdateSpec, DEFAULT_PROFILE,
 };
 use nexus_launcher_core::{
     harness_observation_matches_session, read_harness_ui_info, unavailable_harness_ui_info,
@@ -40,10 +40,10 @@ use nexus_protocol::{
     AgentLifecycleState, CheckpointAction, CheckpointCommand, CheckpointCreateResponse,
     CheckpointListResponse, CheckpointRestoreResponse, ConfigAction, ConfigCommand, ConfigResponse,
     DiagnosticsAction, DiagnosticsCommand, DiagnosticsResponse, ErrorResponse, HarnessAction,
-    HarnessCommand, HarnessResponse, HarnessRuntimeInfo, HealthResponse, LifecycleAccepted,
-    LifecycleAction, LifecycleCommand, ProfileAction, ProfileCommand, ProfileListResponse,
-    ProfileSelectResponse, ReleaseAction, ReleaseCommand, ReleaseListResponse, StateResponse,
-    UpdateAction, UpdateCommand, UpdateResponse, UpdateState,
+    HarnessCommand, HarnessDiscoveryResponse, HarnessResponse, HarnessRuntimeInfo, HealthResponse,
+    LifecycleAccepted, LifecycleAction, LifecycleCommand, ProfileAction, ProfileCommand,
+    ProfileListResponse, ProfileSelectResponse, ReleaseAction, ReleaseCommand, ReleaseListResponse,
+    StateResponse, UpdateAction, UpdateCommand, UpdateResponse, UpdateState,
 };
 use tokio::{
     net::TcpListener,
@@ -253,6 +253,7 @@ fn build_router(state: AppState) -> Router {
         .route("/v1/health", get(health))
         .route("/v1/state", get(current_state))
         .route("/v1/harness", get(harness_status).post(harness_control))
+        .route("/v1/harness/discover", get(harness_discover))
         .route("/v1/harness/ui", get(harness_ui))
         .route("/v1/profiles", get(profile_list).post(profile_control))
         .route(
@@ -700,6 +701,11 @@ async fn harness_control(
             harness_error_response(error)
         }
     }
+}
+
+async fn harness_discover(State(state): State<AppState>) -> impl IntoResponse {
+    let response: HarnessDiscoveryResponse = discover_harness_candidates_with_paths(&state.paths);
+    (StatusCode::OK, Json(response))
 }
 
 async fn execute_harness_action(
@@ -2136,6 +2142,7 @@ mod checkpoint_tests {
         config
             .write(&NexusConfigFile {
                 harness: Some(HarnessLaunchSpec {
+                    mode: Default::default(),
                     program,
                     args,
                     working_dir: None,
