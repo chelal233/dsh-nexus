@@ -19,12 +19,15 @@ export function harnessControlGate(
     state === "stopped" ||
     state === "failed" ||
     state === "running";
-  const pidlessActive =
-    (state === "starting" || state === "running") && pid === undefined;
+  // A PID-less running Harness can be a descendant that survived its
+  // bootstrap parent or an externally restarted instance. It remains
+  // observable, but lifecycle operations must stay read-only until this Agent
+  // has a child handle again.
+  const pidlessActive = state === "starting" && pid === undefined;
   const externallyManaged = state === "running" && pid === undefined;
   return {
     controlsDisabled:
-      busy || !bridgeAvailable || !controllableState || pidlessActive,
+      busy || !bridgeAvailable || !controllableState || pidlessActive || externallyManaged,
     externallyManaged,
   };
 }

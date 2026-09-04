@@ -599,8 +599,9 @@ async fn harness_status(State(state): State<AppState>) -> axum::response::Respon
 ///
 /// The parser only reads the Agent-owned bounded log tail. The surrounding
 /// checks bind that observation to the current running Harness generation and
-/// durable log-session marker, so a stale token or a PID-less process is never
-/// exposed.
+/// durable log-session marker. A recovered descendant may be PID-less after a
+/// bootstrap parent exits; generation and log identity remain the authority
+/// for deciding whether its token belongs to the current run.
 async fn harness_ui(State(state): State<AppState>) -> axum::response::Response {
     let _lifecycle = state.supervisor.acquire_lifecycle().await;
     if let Err(error) = settle_checkpoint_restore(&state).await {
@@ -615,7 +616,7 @@ async fn harness_ui(State(state): State<AppState>) -> axum::response::Response {
     }
 
     let first = sync_harness_state(&state).await.into_response();
-    if first.harness.state != nexus_protocol::HarnessState::Running || first.harness.pid.is_none() {
+    if first.harness.state != nexus_protocol::HarnessState::Running {
         return unavailable_harness_ui_response(format!(
             "Harness is {:?}; a current authentication token is not available",
             first.harness.state
@@ -644,7 +645,6 @@ async fn harness_ui(State(state): State<AppState>) -> axum::response::Response {
     let second = sync_harness_state(&state).await.into_response();
     if first != second
         || second.harness.state != nexus_protocol::HarnessState::Running
-        || second.harness.pid.is_none()
         || !harness_observation_matches_session(&second, &session)
     {
         return unavailable_harness_ui_response(
