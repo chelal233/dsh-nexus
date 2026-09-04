@@ -338,7 +338,7 @@ impl HarnessSupervisor {
     pub(crate) async fn status_observation(&self) -> (u64, HarnessRuntimeInfo, HarnessLogSession) {
         let (runtime, generation, log_session, changed, recovery) = {
             let mut inner = self.inner.lock().await;
-            let (runtime, changed) = match poll_child(&mut inner, &self.log_sessions) {
+            let (runtime, changed) = match poll_child(&self.paths, &mut inner, &self.log_sessions) {
                 Ok(Some(runtime)) => (runtime, true),
                 Ok(None) => (inner.runtime.clone(), false),
                 Err(error) => {
@@ -446,7 +446,7 @@ impl HarnessSupervisor {
             None => false,
         };
 
-        let (runtime, recovery, arm_monitor) = {
+        let (persist_generation, runtime, recovery, arm_monitor) = {
             let mut inner = self.inner.lock().await;
             if inner.generation != generation || inner.child.is_some() || inner.runtime != previous
             {
@@ -455,11 +455,31 @@ impl HarnessSupervisor {
             inner.readiness = readiness.clone();
             let mut arm_monitor = None;
             if healthy {
-                inner.recovery = None;
-                inner.runtime = running_runtime_without_pid(&previous);
-                if let Some(readiness) = readiness.as_ref() {
-                    inner.unattached_monitor_started = true;
-                    arm_monitor = Some(readiness.target.clone());
+                // The Agent cannot reattach the old PID after a restart. Rotate
+                // the durable log boundary before publishing PID-less Running
+                // so a token emitted by the previous Agent/Harness instance is
+                // never presented as belonging to this recovered observation.
+                match rotate_unattached_session(&self.paths, &self.log_sessions, &mut inner) {
+                    Ok(()) => {
+                        inner.recovery = None;
+                        inner.runtime = running_runtime_without_pid(&previous);
+                        if let Some(readiness) = readiness.as_ref() {
+                            inner.unattached_monitor_started = true;
+                            arm_monitor = Some(readiness.target.clone());
+                        }
+                    }
+                    Err(error) => {
+                        inner.recovery = None;
+                        inner.unattached_monitor_started = false;
+                        let mut failed = failed_runtime(
+                            &previous,
+                            format!(
+                                "failed to establish a new Harness token boundary after Agent restart: {error}"
+                            ),
+                        );
+                        failed.pid = None;
+                        inner.runtime = failed;
+                    }
                 }
             } else if launch_pending {
                 if let Some(readiness) = readiness.as_ref() {
@@ -489,19 +509,24 @@ impl HarnessSupervisor {
                 };
             }
             let recovery = pending_recovery(&mut inner);
-            (inner.runtime.clone(), recovery, arm_monitor)
+            (
+                inner.generation,
+                inner.runtime.clone(),
+                recovery,
+                arm_monitor,
+            )
         };
         if let Some(recovery) = recovery {
             self.spawn_recovery(recovery);
         }
         if matches!(
-            self.persist_if_current(generation, &runtime).await,
+            self.persist_if_current(persist_generation, &runtime).await,
             Ok(false)
         ) {
             return self.inner.lock().await.runtime.clone();
         }
         if let Some(target) = arm_monitor {
-            self.spawn_unattached_monitor(generation, target);
+            self.spawn_unattached_monitor(persist_generation, target);
         }
         runtime
     }
@@ -610,7 +635,7 @@ impl HarnessSupervisor {
                 return Err(HarnessSupervisorError::AlreadyRunning);
             }
             if inner.child.is_some() {
-                match poll_child(&mut inner, &self.log_sessions) {
+                match poll_child(&self.paths, &mut inner, &self.log_sessions) {
                     Ok(None) => return Err(HarnessSupervisorError::AlreadyRunning),
                     Ok(Some(_)) => {
                         if inner.recovery.is_some() {
@@ -1441,20 +1466,23 @@ impl HarnessSupervisor {
                     if inner.generation != generation || inner.child.is_none() {
                         (inner.runtime.clone(), false, true, None)
                     } else {
-                        let (runtime, changed) =
-                            match poll_child(&mut inner, &supervisor.log_sessions) {
-                                Ok(Some(runtime)) => (runtime, true),
-                                Ok(None) => (inner.runtime.clone(), false),
-                                Err(error) => {
-                                    inner.recovery = None;
-                                    inner.attached_readiness = None;
-                                    inner.runtime = failed_runtime(
-                                        &inner.runtime,
-                                        format!("failed to query child process: {error}"),
-                                    );
-                                    (inner.runtime.clone(), true)
-                                }
-                            };
+                        let (runtime, changed) = match poll_child(
+                            &supervisor.paths,
+                            &mut inner,
+                            &supervisor.log_sessions,
+                        ) {
+                            Ok(Some(runtime)) => (runtime, true),
+                            Ok(None) => (inner.runtime.clone(), false),
+                            Err(error) => {
+                                inner.recovery = None;
+                                inner.attached_readiness = None;
+                                inner.runtime = failed_runtime(
+                                    &inner.runtime,
+                                    format!("failed to query child process: {error}"),
+                                );
+                                (inner.runtime.clone(), true)
+                            }
+                        };
                         let recovery = pending_recovery(&mut inner);
                         let done = inner.child.is_none() || inner.generation != generation;
                         (runtime, changed, done, recovery)
@@ -1521,7 +1549,7 @@ impl HarnessSupervisor {
             {
                 return None;
             }
-            let (runtime, changed) = match poll_child(&mut inner, &self.log_sessions) {
+            let (runtime, changed) = match poll_child(&self.paths, &mut inner, &self.log_sessions) {
                 Ok(Some(runtime)) => (runtime, true),
                 Ok(None) => (inner.runtime.clone(), false),
                 Err(error) => {
@@ -1998,6 +2026,7 @@ fn create_new_log(logs_dir: &Path, name: &str) -> io::Result<fs::File> {
 }
 
 fn poll_child(
+    paths: &NexusPaths,
     inner: &mut SupervisorInner,
     log_sessions: &HarnessLogSessionStore,
 ) -> io::Result<Option<HarnessRuntimeInfo>> {
@@ -2016,15 +2045,35 @@ fn poll_child(
         // A Harness bootstrap parent may exit successfully after handing the
         // listener to a long-lived descendant. Only the explicit stop owner
         // may interpret exit 0 as Stopped; every observed parent exit probes
-        // the configured readiness endpoint before releasing ownership.
-        inner.recovery = Some(RecoveryState {
-            generation: inner.generation,
-            target: readiness.target,
-            deadline: Instant::now() + readiness.timeout,
-            exit_code: exit.code(),
-            task_started: false,
-        });
-        recovery_runtime(&inner.runtime)
+        // the configured readiness endpoint before releasing ownership. The
+        // boundary is rotated before that probe so a replacement process must
+        // emit fresh UI credentials rather than inheriting a stale token.
+        let exit_code = exit.code();
+        match rotate_unattached_session(paths, log_sessions, inner) {
+            Ok(()) => {
+                inner.recovery = Some(RecoveryState {
+                    generation: inner.generation,
+                    target: readiness.target,
+                    deadline: Instant::now() + readiness.timeout,
+                    exit_code,
+                    task_started: false,
+                });
+                recovery_runtime(&inner.runtime)
+            }
+            Err(error) => {
+                inner.recovery = None;
+                inner.unattached_monitor_started = false;
+                let mut runtime = failed_runtime(
+                    &inner.runtime,
+                    format!(
+                        "failed to establish a new Harness token boundary after process replacement: {error}"
+                    ),
+                );
+                runtime.pid = None;
+                runtime.exit_code = exit_code;
+                runtime
+            }
+        }
     } else {
         let runtime = runtime_from_exit(&inner.runtime, exit, false);
         clear_launch_pending(log_sessions, inner)?;
@@ -2104,6 +2153,32 @@ fn advance_unattached_session(
     inner: &mut SupervisorInner,
     target: &ReadinessTarget,
 ) -> io::Result<()> {
+    rotate_unattached_session(paths, log_sessions, inner)?;
+    inner.runtime = recovery_runtime(&inner.runtime);
+    let timeout = inner.readiness.as_ref().map_or(
+        Duration::from_secs(DEFAULT_READINESS_TIMEOUT_SECS),
+        |value| value.timeout,
+    );
+    inner.recovery = Some(RecoveryState {
+        generation: inner.generation,
+        target: target.clone(),
+        deadline: Instant::now() + timeout,
+        exit_code: None,
+        task_started: false,
+    });
+    Ok(())
+}
+
+/// Establish a new durable append-only log boundary for a process that Nexus
+/// can observe but cannot safely identify by PID. The caller must hold the
+/// supervisor's inner lock. This operation is deliberately independent from
+/// readiness probing: once it succeeds, only output after the new watermark
+/// can be used to synchronize a Harness URL/token.
+fn rotate_unattached_session(
+    paths: &NexusPaths,
+    log_sessions: &HarnessLogSessionStore,
+    inner: &mut SupervisorInner,
+) -> io::Result<()> {
     let durable = log_sessions.read()?.ok_or_else(|| {
         io::Error::new(
             io::ErrorKind::NotFound,
@@ -2137,18 +2212,6 @@ fn advance_unattached_session(
     log_sessions.write(&session)?;
     inner.generation = generation;
     inner.log_session = session;
-    inner.runtime = recovery_runtime(&inner.runtime);
-    let timeout = inner.readiness.as_ref().map_or(
-        Duration::from_secs(DEFAULT_READINESS_TIMEOUT_SECS),
-        |value| value.timeout,
-    );
-    inner.recovery = Some(RecoveryState {
-        generation,
-        target: target.clone(),
-        deadline: Instant::now() + timeout,
-        exit_code: None,
-        task_started: false,
-    });
     Ok(())
 }
 
@@ -2528,6 +2591,7 @@ mod tests {
         unix_time_seconds, AgentState, ConfigStore, HarnessLaunchSpec, NexusConfigFile, NexusPaths,
         RuntimeMetadataStore,
     };
+    use nexus_launcher_core::read_harness_ui_info;
     use nexus_protocol::{HarnessRuntimeInfo, HarnessState};
     use tokio::{
         io::{AsyncReadExt, AsyncWriteExt},
@@ -2855,12 +2919,54 @@ mod tests {
             .expect("persisted Harness state writes");
 
         let supervisor = HarnessSupervisor::new(paths).expect("supervisor creates");
+        let old_session = supervisor
+            .log_sessions
+            .read()
+            .expect("old session reads")
+            .expect("old session exists");
+        let old_stdout_path = supervisor.paths.logs_dir.join(&old_session.stdout_log_name);
+        fs::write(
+            &old_stdout_path,
+            "http://127.0.0.1:3080/?token=stale-after-agent-restart\n",
+        )
+        .expect("old token appends");
+        let old_stdout_length = fs::metadata(&old_stdout_path)
+            .expect("old stdout metadata reads")
+            .len();
         let runtime = supervisor.recover_unattached().await;
 
         assert_eq!(runtime.state, HarnessState::Running);
         assert_eq!(runtime.pid, None);
         assert_eq!(runtime.exit_code, None);
         assert_eq!(runtime.error, None);
+        let new_session = supervisor
+            .log_sessions
+            .read()
+            .expect("new session reads")
+            .expect("new session exists");
+        assert!(new_session.generation > old_session.generation);
+        assert_ne!(new_session.run_id, old_session.run_id);
+        assert!(new_session.stdout_watermark >= old_stdout_length);
+        assert!(new_session.launch_pending);
+        let unavailable = read_harness_ui_info(supervisor.paths());
+        assert!(!unavailable.available);
+        fs::OpenOptions::new()
+            .append(true)
+            .open(&old_stdout_path)
+            .expect("current stdout opens")
+            .write_all(b"http://127.0.0.1:3080/?token=fresh-after-agent-restart\n")
+            .expect("new token appends");
+        let available = read_harness_ui_info(supervisor.paths());
+        assert!(available.available);
+        assert_eq!(
+            available.token.as_deref(),
+            Some("fresh-after-agent-restart")
+        );
+        assert_eq!(available.generation, Some(new_session.generation));
+        assert_eq!(
+            available.run_id.as_deref(),
+            Some(new_session.run_id.as_str())
+        );
         server.await.expect("readiness server completes");
         let error = supervisor
             .start()
@@ -4424,16 +4530,18 @@ mod tests {
         let server = tokio::spawn(async move {
             sleep(Duration::from_millis(250)).await;
             let listener = TcpListener::bind(address).await.expect("readiness binds");
-            let (mut stream, _) = listener.accept().await.expect("readiness accepts");
-            let mut request = [0_u8; 256];
-            let _ = stream
-                .read(&mut request)
-                .await
-                .expect("readiness request reads");
-            stream
-                .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n")
-                .await
-                .expect("readiness responds");
+            loop {
+                let (mut stream, _) = listener.accept().await.expect("readiness accepts");
+                let mut request = [0_u8; 256];
+                let _ = stream
+                    .read(&mut request)
+                    .await
+                    .expect("readiness request reads");
+                stream
+                    .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n")
+                    .await
+                    .expect("readiness responds");
+            }
         });
         let shell = std::env::var_os("ComSpec").unwrap_or_else(|| "cmd.exe".into());
         ConfigStore::new(paths.clone())
@@ -4461,7 +4569,6 @@ mod tests {
             .expect("start log session exists");
 
         assert_eq!(initial.state, HarnessState::Starting);
-        server.await.expect("readiness server completes");
         let runtime = timeout(Duration::from_secs(2), async {
             loop {
                 let runtime = supervisor.status().await;
@@ -4476,15 +4583,20 @@ mod tests {
         assert_eq!(runtime.pid, None);
         assert_eq!(runtime.exit_code, None);
         assert_eq!(runtime.error, None);
-        assert_eq!(
-            supervisor
-                .log_sessions
-                .read()
-                .expect("recovery log session reads")
-                .expect("recovery log session exists"),
-            start_session,
-            "a bootstrap parent handing readiness to its descendant remains one logical run"
+        let recovered_session = supervisor
+            .log_sessions
+            .read()
+            .expect("recovery log session reads")
+            .expect("recovery log session exists");
+        assert!(recovered_session.generation > start_session.generation);
+        assert_ne!(recovered_session.run_id, start_session.run_id);
+        assert!(recovered_session.launch_pending);
+        assert!(
+            recovered_session.stdout_watermark >= start_session.stdout_watermark,
+            "a bootstrap parent replacement establishes a fresh token boundary"
         );
+        server.abort();
+        let _ = server.await;
         let _ = fs::remove_dir_all(root);
     }
 
@@ -4571,14 +4683,14 @@ mod tests {
             Err(HarnessSupervisorError::AlreadyRunning)
         ));
         assert_eq!(marker_lines(&marker), ["bootstrap"]);
-        assert_eq!(
-            supervisor
-                .log_sessions
-                .read()
-                .expect("session rereads")
-                .expect("session remains"),
-            session
-        );
+        let recovered_session = supervisor
+            .log_sessions
+            .read()
+            .expect("session rereads")
+            .expect("session remains");
+        assert!(recovered_session.generation > session.generation);
+        assert_ne!(recovered_session.run_id, session.run_id);
+        assert!(recovered_session.launch_pending);
         server.abort();
         let _ = server.await;
         let _ = fs::remove_dir_all(root);

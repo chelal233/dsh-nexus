@@ -97,6 +97,44 @@ test("Harness component removes stale credentials while a restart POST is deferr
     assert.equal(
       credentialInvalidationCanSettle({
         ...snapshot,
+        harnessRuntime: {
+          harness: { state: "running" },
+          generation: 8,
+          log_session_run_id: "run-recovered",
+          log_session_launch_pending: true,
+        },
+        harnessUi: {
+          ...snapshot.harnessUi,
+          generation: 8,
+          run_id: "run-recovered",
+          token: "recovered-token",
+        },
+      }, "7:run-a"),
+      true,
+      "a recovered PID-less runtime may publish only its post-boundary credential",
+    );
+    assert.equal(
+      credentialInvalidationCanSettle({
+        ...snapshot,
+        harnessRuntime: {
+          harness: { state: "running" },
+          generation: 8,
+          log_session_run_id: "run-recovered",
+          log_session_launch_pending: false,
+        },
+        harnessUi: {
+          ...snapshot.harnessUi,
+          generation: 8,
+          run_id: "run-recovered",
+          token: "unsafe-token",
+        },
+      }, "7:run-a"),
+      false,
+      "a PID-less runtime without a fresh boundary remains credential-closed",
+    );
+    assert.equal(
+      credentialInvalidationCanSettle({
+        ...snapshot,
         harnessRuntime: { harness: { state: "stopped", pid: null } },
         harnessUi: null,
       }, "7:run-a"),

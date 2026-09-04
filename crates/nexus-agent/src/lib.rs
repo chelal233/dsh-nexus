@@ -599,9 +599,11 @@ async fn harness_status(State(state): State<AppState>) -> axum::response::Respon
 ///
 /// The parser only reads the Agent-owned bounded log tail. The surrounding
 /// checks bind that observation to the current running Harness generation and
-/// durable log-session marker. A recovered descendant may be PID-less after a
-/// bootstrap parent exits; generation and log identity remain the authority
-/// for deciding whether its token belongs to the current run.
+/// durable log-session marker. A PID-less process may be a healthy descendant
+/// recovered after an Agent/Harness replacement; it is eligible only when the
+/// current session carries the fresh launch boundary established by recovery.
+/// Lifecycle control remains PID-gated in the GUI, so this read-only handoff
+/// cannot authorize an unowned stop or restart.
 async fn harness_ui(State(state): State<AppState>) -> axum::response::Response {
     let _lifecycle = state.supervisor.acquire_lifecycle().await;
     if let Err(error) = settle_checkpoint_restore(&state).await {
@@ -613,14 +615,6 @@ async fn harness_ui(State(state): State<AppState>) -> axum::response::Response {
 
     fn unavailable_harness_ui_response(message: impl Into<String>) -> axum::response::Response {
         (StatusCode::OK, Json(unavailable_harness_ui_info(message))).into_response()
-    }
-
-    let first = sync_harness_state(&state).await.into_response();
-    if first.harness.state != nexus_protocol::HarnessState::Running {
-        return unavailable_harness_ui_response(format!(
-            "Harness is {:?}; a current authentication token is not available",
-            first.harness.state
-        ));
     }
 
     let session = match HarnessLogSessionStore::new(state.paths.clone()).read() {
@@ -636,6 +630,13 @@ async fn harness_ui(State(state): State<AppState>) -> axum::response::Response {
             ))
         }
     };
+    let first = sync_harness_state(&state).await.into_response();
+    if !harness_ui_process_is_presentable(&first, &session) {
+        return unavailable_harness_ui_response(format!(
+            "Harness is {:?}; a current authentication token is not available",
+            first.harness.state
+        ));
+    }
     if !harness_observation_matches_session(&first, &session) {
         return unavailable_harness_ui_response(
             "Agent Harness observation does not match the durable log session marker",
@@ -644,7 +645,7 @@ async fn harness_ui(State(state): State<AppState>) -> axum::response::Response {
 
     let second = sync_harness_state(&state).await.into_response();
     if first != second
-        || second.harness.state != nexus_protocol::HarnessState::Running
+        || !harness_ui_process_is_presentable(&second, &session)
         || !harness_observation_matches_session(&second, &session)
     {
         return unavailable_harness_ui_response(
@@ -664,6 +665,23 @@ async fn harness_ui(State(state): State<AppState>) -> axum::response::Response {
     }
 
     (StatusCode::OK, Json(info)).into_response()
+}
+
+/// A PID is required for lifecycle control, but a recovered descendant has no
+/// PID that this Agent can safely claim. Such a process may still publish its
+/// current URL/token after the durable log session was rotated, because the
+/// parser will accept only bytes emitted after that boundary. Keeping this
+/// check separate from the UI parser makes the read-only takeover contract
+/// explicit and keeps endpoint regressions easy to test.
+fn harness_ui_process_is_presentable(
+    response: &HarnessResponse,
+    session: &HarnessLogSession,
+) -> bool {
+    response.harness.state == nexus_protocol::HarnessState::Running
+        && match response.harness.pid {
+            Some(pid) => pid > 0,
+            None => session.launch_pending,
+        }
 }
 
 async fn harness_control(
@@ -1751,11 +1769,13 @@ async fn wait_for_shutdown(mut receiver: watch::Receiver<bool>) {
 #[cfg(test)]
 mod cors_tests {
     use super::{
-        acquire_runtime_lock, are_allowed_cors_headers, is_allowed_console_origin_for_port,
-        is_allowed_cors_method, proxy_identity_values_match, PROXY_DATA_ROOT_HEADER,
-        PROXY_INSTANCE_HEADER,
+        acquire_runtime_lock, are_allowed_cors_headers, harness_ui_process_is_presentable,
+        is_allowed_console_origin_for_port, is_allowed_cors_method, proxy_identity_values_match,
+        PROXY_DATA_ROOT_HEADER, PROXY_INSTANCE_HEADER,
     };
+    use nexus_core::HarnessLogSession;
     use nexus_core::NexusPaths;
+    use nexus_protocol::{HarnessResponse, HarnessRuntimeInfo, HarnessState};
 
     #[test]
     fn allows_only_the_configured_local_console_port() {
@@ -1849,6 +1869,66 @@ mod cors_tests {
             "root-a",
             "instance-a"
         ));
+    }
+
+    #[test]
+    fn recovered_pidless_ui_requires_a_fresh_log_boundary() {
+        let runtime = HarnessRuntimeInfo {
+            state: HarnessState::Running,
+            pid: None,
+            exit_code: None,
+            error: None,
+            started_at_unix: Some(10),
+            updated_at_unix: Some(11),
+        };
+        let response = HarnessResponse::from_observation(
+            runtime,
+            2,
+            "run-2".to_owned(),
+            2,
+            10,
+            20,
+            "stdout-id".to_owned(),
+            "stderr-id".to_owned(),
+            "stdout.log".to_owned(),
+            "stderr.log".to_owned(),
+            true,
+        );
+        let session = HarnessLogSession::new(
+            "run-2".to_owned(),
+            2,
+            10,
+            20,
+            "stdout-id".to_owned(),
+            "stderr-id".to_owned(),
+            "stdout.log".to_owned(),
+            "stderr.log".to_owned(),
+            true,
+            11,
+        );
+        assert!(harness_ui_process_is_presentable(&response, &session));
+
+        let mut unreserved = session.clone();
+        unreserved.launch_pending = false;
+        assert!(!harness_ui_process_is_presentable(&response, &unreserved));
+
+        let attached = HarnessResponse::from_observation(
+            HarnessRuntimeInfo {
+                pid: Some(42),
+                ..response.harness.clone()
+            },
+            2,
+            "run-2".to_owned(),
+            2,
+            10,
+            20,
+            "stdout-id".to_owned(),
+            "stderr-id".to_owned(),
+            "stdout.log".to_owned(),
+            "stderr.log".to_owned(),
+            false,
+        );
+        assert!(harness_ui_process_is_presentable(&attached, &unreserved));
     }
 }
 

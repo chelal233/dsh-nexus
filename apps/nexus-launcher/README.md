@@ -96,7 +96,9 @@ $env:NEXUS_CONSOLE_PORT = '3091'
 
 The Harness view consumes `GET /v1/harness/ui`, an Agent-owned bounded JSON
 contract for the current validated loopback URL/token session. The Agent
-publishes credentials only for a running, PID-owned Harness generation whose
-durable log-session boundary still matches. The UI fails closed when that
-contract is unavailable. Stop/restart actions clear displayed credentials
-before the request is sent.
+publishes credentials for a running PID-owned Harness generation, or for a
+PID-less recovered descendant only after its fresh durable log-session boundary
+matches. PID-less recovery is read-only: lifecycle controls remain disabled
+because the Agent cannot safely claim the replacement process. The UI fails
+closed when that contract is unavailable. Stop/restart actions clear displayed
+credentials before the request is sent.

@@ -131,7 +131,9 @@ The Agent exposes:
   process control. `status` is also accepted as a harmless query action.
 - `GET /v1/harness/ui` — a bounded, validated Harness loopback URL/token
   observation tied to the current Agent-owned generation and log session;
-  unavailable or PID-less sessions fail closed.
+  unavailable sessions fail closed. A PID-less recovered descendant may publish
+  credentials only after Agent rotates a fresh durable log boundary; this
+  read-only handoff never enables lifecycle control.
 - `GET|POST /v1/profiles` — list/status the Nexus catalog or select a profile;
   selecting while Harness is starting/running returns a readable conflict and
   never performs an implicit restart.
@@ -233,11 +235,13 @@ persisted `starting`, `running`, or `failed` observations. A healthy endpoint
 restores `running` without reviving or claiming the persisted PID. If the probe
 is not healthy and the durable session still owns an active run, Agent remains
 in bounded recovery and refuses another spawn. A recovered `running` process
-with no child handle has a continuous bounded readiness owner. Loss of that
-signal immediately returns to `starting`, advances the run ID and EOF token
-watermarks, and requires a token emitted after that boundary when readiness
-returns. Persisted `stopped` and `detached` observations without an active
-reservation are never probed or resurrected.
+with no child handle has a continuous bounded readiness owner. A healthy
+recovery first advances the generation/run ID and EOF token watermarks, so a
+token from before the Agent/Harness replacement cannot be reused. Loss of
+readiness likewise immediately returns to `starting`, advances the run ID and
+EOF token watermarks, and requires a token emitted after that boundary when
+readiness returns. Persisted `stopped` and `detached` observations without an
+active reservation are never probed or resurrected.
 A `running` process with an attached child handle also retains a serialized
 readiness owner when a readiness URL is configured. The first failed probe
 durably advances the generation/run ID and log EOF watermarks, publishes
@@ -256,11 +260,12 @@ A pending replacement recovery and an externally recovered `running`
 observation have no attached child handle. Nexus rejects stop with
 `409 harness_unattached` and continues to reject start, rather than claiming the
 external process stopped or launching a duplicate.
-Because an unattached process has no durable process identity, Launcher never
-publishes its URL or token. An attached process is required for credential
-presentation, and the first PID-less readiness gap advances the run boundary;
-availability is sacrificed rather than reusing a credential across a restart
-that Nexus cannot prove did not occur.
+Because an unattached process has no durable process identity, Launcher keeps
+its lifecycle controls disabled and never claims the process for stop or
+restart. Its URL/token may be published read-only only after the Agent has
+established the fresh log boundary above and the parser observes bytes after
+that watermark. Thus an active Harness can remain usable after a replacement
+while stale credentials remain excluded.
 
 The default listener is `127.0.0.1:3090`, deliberately separate from the
 current Harness Web port. No remote bind option is exposed in this phase. The
@@ -404,10 +409,10 @@ stdout/stderr watermarks plus cross-platform file identities (Windows volume
 serial/file index or Unix device/inode). Only then are the same handles
 transferred to the child. On upgrade or Agent startup with no current marker,
 new empty per-run files become a safe baseline: historical tokens are not
-adopted. A bootstrap parent
-that hands readiness to a descendant remains the same logical start/run and
-therefore retains the same marker; an explicit stop plus start/restart creates a
-new marker. A fresh start also re-reads the marker and refuses to spawn if a
+adopted. A bootstrap parent that hands readiness to a descendant enters a
+bounded replacement recovery and rotates the marker before the descendant is
+exposed as PID-less Running; an explicit stop plus start/restart also creates a
+new marker. A fresh start re-reads the marker and refuses to spawn if a
 different Agent writer replaced it. The supported Launcher path serializes
 bootstrap with an OS-owned exclusive lock on persistent
 `run/agent-bootstrap.lock`; it never deletes a lock based on age. The Agent
@@ -431,12 +436,13 @@ cleared while the exit code remains available as historical evidence. Agent
 startup also scrubs a persisted PID from unattached `stopped` and `failed`
 snapshots.
 Readiness ownership uses an in-memory operation epoch distinct from the durable
-logical run generation. A bootstrap-parent exit converts the one existing
-readiness task into the recovery owner; it does not launch a competing probe
-owner. On transfer that task reads the current `RecoveryState` owner epoch and
-deadline instead of retaining its original start deadline; any stale-epoch
-completion exits without publishing. Stop failures restore the child under the
-same logical generation, so the durable log-session join remains valid. If an Agent restart finds a
+logical run generation. A bootstrap-parent exit rotates the durable token
+boundary, then converts the one existing readiness task into the recovery
+owner; it does not launch a competing probe owner. On transfer that task reads
+the current `RecoveryState` owner epoch and deadline instead of retaining its
+original start deadline; any stale-epoch completion exits without publishing.
+Stop failures restore the child under the same logical generation, so the
+durable log-session join remains valid. If an Agent restart finds a
 write-ahead launch reservation for a configuration with no readiness contract,
 it marks that run failed and durably clears the reservation. A recovery owner
 that reaches its configured deadline does the same. This is the explicit
@@ -531,8 +537,9 @@ no helper process, resource directory, capability, or Launcher identity.
 
 The UI keeps Harness token metadata masked by default and embeds only validated
 loopback URLs. The Agent owns the bounded `/v1/harness/ui` URL/token response;
-the native bridge handles the system-browser action after the same loopback
-validation. Stop/restart actions for either Harness or Agent synchronously
+recovered PID-less descendants are accepted only when the response is joined
+to a fresh log boundary. The native bridge handles the system-browser action
+after the same loopback validation. Stop/restart actions for either Harness or Agent synchronously
 remove the token and iframe before native transport begins. Theme selection
 supports System, Light, and Dark, persists locally, and follows system
 preference changes when System is selected. The UI polls every eight seconds
@@ -569,7 +576,8 @@ authentication protocol. It adds `nexus-launcher-core` as a UI-independent
 Rust bridge for the stable Agent HTTP/JSON contract and common Agent process
 lifecycle. The Agent `/v1/harness/ui` endpoint only surfaces a token that the
 opaque upstream process already printed to a local loopback URL; it does not
-introduce a new credential source. The single-entry Rust host is
+introduce a new credential source. A PID-less recovered credential is
+read-only and does not authorize process control. The single-entry Rust host is
 available via `nexus-launcher api` (with `console` as a legacy alias), while
 native packaging is under `apps/nexus-launcher/` directly against Agent. Future
 Electron integration consumes the same Agent JSON API and does not link the

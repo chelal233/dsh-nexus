@@ -168,9 +168,18 @@ function harnessUiMatchesRuntime(
   const response = asObject(runtimeValue);
   const runtime = harnessRuntimeValue(runtimeValue);
   const info = asObject(uiValue);
+  const pid = numberValue(runtime, "pid");
+  const attachedProcess = pid !== undefined && pid > 0;
+  // A recovered Harness descendant is intentionally PID-less. The Agent may
+  // publish its UI credentials only after rotating the durable log boundary;
+  // require that reservation marker here as defense in depth for older or
+  // racing responses. This never enables lifecycle controls, which retain the
+  // separate PID gate in control-state.ts.
+  const recoveredProcess = pid === undefined && response.log_session_launch_pending === true;
   return (
     !credentialInvalidationPending &&
     stringValue(runtime, "state") === "running" &&
+    (attachedProcess || recoveredProcess) &&
     info.available === true &&
     numberValue(response, "generation") !== undefined &&
     numberValue(response, "generation") === numberValue(info, "generation") &&
