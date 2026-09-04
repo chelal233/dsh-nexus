@@ -338,6 +338,7 @@ accepted):
 ```json
 {
   "harness": {
+    "mode": "direct",
     "program": "/opt/dsh-harness/bin/harness",
     "args": ["--headless"],
     "working_dir": "/opt/dsh-harness",
@@ -346,6 +347,20 @@ accepted):
   }
 }
 ```
+
+`mode` is optional for legacy documents and defaults to `direct`. In `node`
+mode, `program` is the Node runtime, `entry` is the JavaScript entry point,
+and `args` contains only arguments after that entry. Nexus normalizes the
+entry into the supervised process argument vector without changing the
+upstream Harness. The Settings view exposes both modes and keeps manual
+configuration as a fallback.
+
+`GET /v1/harness/discover` is an advisory, read-only scan. It inspects bounded
+local anchors (the Agent data-root parent, configured Harness roots, the
+current installation, PATH for direct executables, and limited user-home
+locations), caps traversal depth and candidate count, and skips repository
+dependency trees. Discovery never writes configuration or silently selects a
+candidate; the user must choose one before saving it through `/v1/config`.
 
 Harness launch fields may opt into the active immutable release slot with the
 placeholders `{release}` (the safe slot ID) and `{release_root}` (the

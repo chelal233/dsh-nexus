@@ -385,6 +385,7 @@ export type HarnessCandidate = {
   args: string[];
   workingDir: string;
   readinessUrl: string;
+  readinessTimeout: string;
   version: string;
   source: string;
   displayName: string;
@@ -409,6 +410,7 @@ export function harnessCandidates(value: unknown): HarnessCandidate[] {
       || "";
     const workingDir = stringValue(item, "working_dir") || stringValue(item, "project_dir") || "";
     const readinessUrl = stringValue(item, "readiness_url") || "";
+    const readinessTimeout = numberValue(item, "readiness_timeout_secs")?.toString() || "";
     const id = stringValue(item, "id") || `${mode}:${program}:${entry}:${index}`;
     return {
       id,
@@ -418,6 +420,7 @@ export function harnessCandidates(value: unknown): HarnessCandidate[] {
       args,
       workingDir,
       readinessUrl,
+      readinessTimeout,
       version: stringValue(item, "version") || "",
       source: stringValue(item, "source") || "",
       displayName: stringValue(item, "display_name") || stringValue(item, "name") || program || id,
@@ -1080,6 +1083,7 @@ function SettingsView({ snapshot, themeMode, setThemeMode, busyAction, runAction
       args: candidate.args.join("\n"),
       workingDir: candidate.workingDir,
       readinessUrl: candidate.readinessUrl,
+      timeout: candidate.readinessTimeout,
       argsRedacted: false,
       replaceRedactedArgs: false,
     }));

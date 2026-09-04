@@ -57,11 +57,13 @@ test("Node candidates expose entry separately while preserving additional args",
         source: "configured",
         display_name: "deepseek-harness",
         version: "rc.1",
+        readiness_timeout_secs: 30,
       }],
     });
     assert.equal(candidate.mode, "node");
     assert.equal(candidate.entry, "dist/index.js");
     assert.deepEqual(candidate.args, ["--port", "3080"]);
+    assert.equal(candidate.readinessTimeout, "30");
 
     const draft = harnessDraftFromConfig({
       harness: {
