@@ -3198,11 +3198,18 @@ pub fn discover_harness_candidates() -> HarnessDiscoveryResponse {
 /// `deepseek-harness` tree, which is not necessarily below the process or
 /// user-home directory.
 pub fn discover_harness_candidates_with_paths(paths: &NexusPaths) -> HarnessDiscoveryResponse {
-    let mut roots = discovery_roots();
+    // The Agent's own data-root anchor is the most actionable source (and in
+    // the supported local layout it sits beside the checked-out Harness).
+    // Put it first so a busy home directory cannot consume the bounded
+    // traversal budget before the configured workspace is inspected.
+    let mut roots = Vec::new();
     if let Some(parent) = paths.root.parent() {
         push_discovery_root(&mut roots, parent.to_path_buf(), "data_root_parent");
     }
     push_discovery_root(&mut roots, paths.root.clone(), "data_root");
+    for (root, source) in discovery_roots() {
+        push_discovery_root(&mut roots, root, &source);
+    }
     let node_program = find_on_path(&["node", "node.exe", "nodejs", "nodejs.exe"]);
     HarnessDiscoveryResponse::new(discover_harness_candidates_in_roots(
         &roots,
