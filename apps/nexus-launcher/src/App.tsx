@@ -208,7 +208,7 @@ export function credentialInvalidationCanSettle(
   return previousSessionKey === undefined || nextSessionKey !== previousSessionKey;
 }
 
-function formatTimestamp(value: unknown, unavailable = "Not available"): string {
+function formatTimestamp(value: unknown, unavailable: string): string {
   if (typeof value !== "number" || value <= 0) return unavailable;
   return new Date(value * 1000).toLocaleString();
 }
@@ -655,7 +655,7 @@ function App() {
   const contentMode = launcherContentMode(bridgeError, loading, snapshot.status !== null);
 
   const content = useMemo(() => {
-    const common = { snapshot, busyAction, credentialInvalidationPending, runAction, refresh, themeMode, setThemeMode };
+    const common = { snapshot, busyAction, credentialInvalidationPending, runAction, refresh, themeMode, setThemeMode, openSettings: () => setActiveModule("settings") };
     switch (activeModule) {
       case "harness": return <HarnessView {...common} />;
       case "profiles": return <ProfilesView {...common} />;
@@ -728,13 +728,14 @@ type ViewProps = {
   refresh: () => Promise<void>;
   themeMode: ThemeMode;
   setThemeMode: (mode: ThemeMode) => void;
+  openSettings?: () => void;
 };
 
 type HarnessPanelProps = Pick<ViewProps, "snapshot" | "busyAction" | "runAction">;
 type HarnessAuthPanelProps = HarnessPanelProps & Pick<ViewProps, "credentialInvalidationPending">;
 type HarnessWebPanelProps = Pick<ViewProps, "snapshot" | "credentialInvalidationPending">;
 
-function OverviewView({ snapshot, busyAction, credentialInvalidationPending, runAction }: ViewProps) {
+function OverviewView({ snapshot, busyAction, credentialInvalidationPending, runAction, openSettings }: ViewProps) {
   const { t } = useI18n();
   const status = asObject(snapshot.status);
   const health = asObject(snapshot.health);
@@ -744,7 +745,13 @@ function OverviewView({ snapshot, busyAction, credentialInvalidationPending, run
   const checkpoints = arrayValue(snapshot.checkpoints, "checkpoints");
   const update = nestedValue(snapshot.updates, "update");
   const agentRunning = status.running === true;
+  const agentLifecycle = stringValue(state, "lifecycle");
   const controlsDisabled = busyAction !== null || snapshot.startup?.available !== true;
+  const agentStarting = agentLifecycle === "starting";
+  const agentStopping = agentLifecycle === "stopping";
+  const agentStartDisabled = controlsDisabled || agentRunning || agentStarting || agentStopping;
+  const agentRestartDisabled = controlsDisabled || agentStarting || agentStopping;
+  const agentStopDisabled = controlsDisabled || (!agentRunning && !agentStarting);
   return (
     <>
       <div className="page-heading"><div><span className="kicker">{t("Runtime / Overview")}</span><h1>{t("Local control plane")}</h1><p>{t("Observe and operate the independent Agent and its immutable Harness runtime.")}</p></div><StatusPill label={agentRunning ? t("Running") : t("Standby")} tone={agentRunning ? "good" : "warn"} /></div>
@@ -758,12 +765,12 @@ function OverviewView({ snapshot, busyAction, credentialInvalidationPending, run
         <Panel title={t("Agent operations")} icon={<Pulse size={18} />}>
           <p className="panel-description">{t("The Agent remains a separate process. Launcher controls are explicit and recoverable.")}</p>
           <div className="button-row">
-          <ActionButton tone="primary" disabled={controlsDisabled} onClick={() => void runAction(t("Agent start"), "/v1/agent", { action: "start" })}><CheckCircle size={16} />{t("Start Agent")}</ActionButton>
-            <ActionButton disabled={controlsDisabled} onClick={() => void runAction(t("Agent restart"), "/v1/agent", { action: "restart" })}><ArrowsClockwise size={16} />{t("Restart")}</ActionButton>
-            <ActionButton tone="danger" disabled={controlsDisabled} onClick={() => void runAction(t("Agent stop"), "/v1/agent", { action: "stop" })}><StopCircle size={16} />{t("Stop Agent")}</ActionButton>
+          <ActionButton tone="primary" disabled={agentStartDisabled} onClick={() => void runAction(t("Agent start"), "/v1/agent", { action: "start" })}><CheckCircle size={16} />{t("Start Agent")}</ActionButton>
+            <ActionButton disabled={agentRestartDisabled} onClick={() => void runAction(t("Agent restart"), "/v1/agent", { action: "restart" })}><ArrowsClockwise size={16} />{t("Restart")}</ActionButton>
+            <ActionButton tone="danger" disabled={agentStopDisabled} onClick={() => void runAction(t("Agent stop"), "/v1/agent", { action: "stop" })}><StopCircle size={16} />{t("Stop Agent")}</ActionButton>
           </div>
         </Panel>
-        <HarnessControlPanel snapshot={snapshot} busyAction={busyAction} runAction={runAction} />
+        <HarnessControlPanel snapshot={snapshot} busyAction={busyAction} runAction={runAction} openSettings={openSettings} />
       </div>
       <HarnessAuthPanel snapshot={snapshot} busyAction={busyAction} credentialInvalidationPending={credentialInvalidationPending} runAction={runAction} />
       <HarnessWebPanel snapshot={snapshot} credentialInvalidationPending={credentialInvalidationPending} />
@@ -771,7 +778,7 @@ function OverviewView({ snapshot, busyAction, credentialInvalidationPending, run
   );
 }
 
-function HarnessControlPanel({ snapshot, busyAction, runAction }: HarnessPanelProps) {
+function HarnessControlPanel({ snapshot, busyAction, runAction, openSettings }: HarnessPanelProps & Pick<ViewProps, "openSettings">) {
   const { t } = useI18n();
   const harness = harnessRuntimeValue(snapshot.harnessRuntime);
   const controlGate = harnessControlGate(
@@ -794,7 +801,7 @@ function HarnessControlPanel({ snapshot, busyAction, runAction }: HarnessPanelPr
         <ActionButton tone="danger" disabled={stopDisabled} onClick={() => harnessAction("stop")}><StopCircle size={16} />{t("Stop")}</ActionButton>
       </div>
       {controlGate.externallyManaged && <p className="field-help" role="status">{t("Harness is running outside this Agent process. Manage it from its owning Agent; lifecycle controls are disabled here.")}</p>}
-      {state === "detached" && <p className="field-help" role="status">{t("Harness is detached. Configure it in Settings, then start it from the control panel.")}</p>}
+      {state === "detached" && <><p className="field-help" role="status">{t("Harness is detached. Configure it in Settings, then start it from the control panel.")}</p>{openSettings && <div className="button-row"><ActionButton onClick={openSettings}><Gear size={16} />{t("Configure Harness")}</ActionButton></div>}</>}
       <dl className="detail-list compact-details">
         <div><dt>{t("Process ID")}</dt><dd>{stringValue(harness, "pid") || t("Not attached")}</dd></div>
         <div><dt>{t("Exit code")}</dt><dd>{stringValue(harness, "exit_code") || t("Not exited")}</dd></div>
@@ -849,13 +856,13 @@ function HarnessWebPanel({ snapshot, credentialInvalidationPending }: HarnessWeb
   </Panel>;
 }
 
-export function HarnessView({ snapshot, busyAction, credentialInvalidationPending, runAction }: ViewProps) {
+export function HarnessView({ snapshot, busyAction, credentialInvalidationPending, runAction, openSettings }: ViewProps) {
   const { t } = useI18n();
   const harness = harnessRuntimeValue(snapshot.harnessRuntime);
   const harnessRunning = stringValue(harness, "state") === "running";
   return <>
     <div className="page-heading"><div><span className="kicker">{t("Runtime / Harness")}</span><h1>{t("Harness workspace")}</h1><p>{t("Harness is an immutable external runtime. Nexus only supervises its process.")}</p></div><StatusPill label={localizedRuntimeState(stringValue(harness, "state"), t)} tone={harnessRunning ? "good" : "neutral"} /></div>
-    <div className="grid-two harness-grid"><HarnessControlPanel snapshot={snapshot} busyAction={busyAction} runAction={runAction} /><HarnessAuthPanel snapshot={snapshot} busyAction={busyAction} credentialInvalidationPending={credentialInvalidationPending} runAction={runAction} /></div>
+    <div className="grid-two harness-grid"><HarnessControlPanel snapshot={snapshot} busyAction={busyAction} runAction={runAction} openSettings={openSettings} /><HarnessAuthPanel snapshot={snapshot} busyAction={busyAction} credentialInvalidationPending={credentialInvalidationPending} runAction={runAction} /></div>
     <HarnessWebPanel snapshot={snapshot} credentialInvalidationPending={credentialInvalidationPending} />
   </>;
 }
