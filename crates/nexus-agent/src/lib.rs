@@ -30,8 +30,11 @@ use nexus_core::{
     data_root_identity, new_instance_id, AgentState, CheckpointRestoreIntent,
     CheckpointRestoreJournal, CheckpointRestoreJournalStore, CheckpointRestorePhase,
     CheckpointStore, ConfigStore, DiagnosticsStore, HarnessLaunchSpec, HarnessLogSession,
-    NexusConfig, NexusConfigFile, NexusStateSnapshot, ProfileCatalog, ProfileStore, ReleaseCatalog,
-    ReleaseStore, UpdateSpec, DEFAULT_PROFILE,
+    HarnessLogSessionStore, NexusConfig, NexusConfigFile, NexusStateSnapshot, ProfileCatalog,
+    ProfileStore, ReleaseCatalog, ReleaseStore, UpdateSpec, DEFAULT_PROFILE,
+};
+use nexus_launcher_core::{
+    harness_observation_matches_session, read_harness_ui_info, unavailable_harness_ui_info,
 };
 use nexus_protocol::{
     AgentLifecycleState, CheckpointAction, CheckpointCommand, CheckpointCreateResponse,
@@ -67,6 +70,7 @@ struct AgentRuntimeLock {
 
 #[derive(Clone)]
 struct AppState {
+    paths: nexus_core::NexusPaths,
     runtime: Arc<RwLock<AgentState>>,
     agent_revision: Arc<AtomicU64>,
     profiles: ProfileStore,
@@ -194,6 +198,7 @@ pub async fn run_with_instance_id(
     let agent_revision = Arc::new(AtomicU64::new(0));
     let (shutdown, shutdown_receiver) = watch::channel(false);
     let state = AppState {
+        paths: paths.clone(),
         runtime: Arc::clone(&runtime),
         agent_revision: Arc::clone(&agent_revision),
         profiles,
@@ -248,6 +253,7 @@ fn build_router(state: AppState) -> Router {
         .route("/v1/health", get(health))
         .route("/v1/state", get(current_state))
         .route("/v1/harness", get(harness_status).post(harness_control))
+        .route("/v1/harness/ui", get(harness_ui))
         .route("/v1/profiles", get(profile_list).post(profile_control))
         .route(
             "/v1/checkpoints",
@@ -587,6 +593,77 @@ async fn harness_status(State(state): State<AppState>) -> axum::response::Respon
     }
     let harness = sync_harness_state(&state).await;
     (StatusCode::OK, Json(harness.into_response())).into_response()
+}
+
+/// Return the current validated Harness URL/token observation for UI clients.
+///
+/// The parser only reads the Agent-owned bounded log tail. The surrounding
+/// checks bind that observation to the current running Harness generation and
+/// durable log-session marker, so a stale token or a PID-less process is never
+/// exposed.
+async fn harness_ui(State(state): State<AppState>) -> axum::response::Response {
+    let _lifecycle = state.supervisor.acquire_lifecycle().await;
+    if let Err(error) = settle_checkpoint_restore(&state).await {
+        return data_error_response(
+            io::Error::other(error.to_string()),
+            "checkpoint_recovery_failed",
+        );
+    }
+
+    fn unavailable_harness_ui_response(message: impl Into<String>) -> axum::response::Response {
+        (StatusCode::OK, Json(unavailable_harness_ui_info(message))).into_response()
+    }
+
+    let first = sync_harness_state(&state).await.into_response();
+    if first.harness.state != nexus_protocol::HarnessState::Running || first.harness.pid.is_none() {
+        return unavailable_harness_ui_response(format!(
+            "Harness is {:?}; a current authentication token is not available",
+            first.harness.state
+        ));
+    }
+
+    let session = match HarnessLogSessionStore::new(state.paths.clone()).read() {
+        Ok(Some(session)) => session,
+        Ok(None) => {
+            return unavailable_harness_ui_response(
+                "Harness log session marker is not available; restart Harness to establish a safe token boundary",
+            )
+        }
+        Err(error) => {
+            return unavailable_harness_ui_response(format!(
+                "Harness log session marker is invalid: {error}"
+            ))
+        }
+    };
+    if !harness_observation_matches_session(&first, &session) {
+        return unavailable_harness_ui_response(
+            "Agent Harness observation does not match the durable log session marker",
+        );
+    }
+
+    let second = sync_harness_state(&state).await.into_response();
+    if first != second
+        || second.harness.state != nexus_protocol::HarnessState::Running
+        || second.harness.pid.is_none()
+        || !harness_observation_matches_session(&second, &session)
+    {
+        return unavailable_harness_ui_response(
+            "Harness changed state while its token was being observed; refresh after it is running",
+        );
+    }
+
+    let info = read_harness_ui_info(&state.paths);
+    let final_session = HarnessLogSessionStore::new(state.paths.clone()).read();
+    let final_observation = sync_harness_state(&state).await.into_response();
+    if !matches!(final_session, Ok(Some(ref current)) if current == &session)
+        || final_observation != second
+    {
+        return unavailable_harness_ui_response(
+            "Harness changed state while its token was being observed; refresh after it is running",
+        );
+    }
+
+    (StatusCode::OK, Json(info)).into_response()
 }
 
 async fn harness_control(
@@ -2001,6 +2078,7 @@ mod checkpoint_tests {
         let (transition_reached, transition_reached_rx) = oneshot::channel();
         let (transition_release, transition_release_rx) = oneshot::channel();
         let state = AppState {
+            paths: paths.clone(),
             runtime: Arc::new(RwLock::new(runtime)),
             agent_revision: Arc::new(AtomicU64::new(0)),
             profiles,

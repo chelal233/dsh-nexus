@@ -6,35 +6,38 @@ external Harness runtime.
 ## Runtime boundary
 
 The visible UI is a React and TypeScript application. It never calls the
-Agent with browser `fetch`, so the UI does not depend on CORS or on a custom
-`tauri://` origin. Tauri Rust commands validate a fixed loopback route
-allowlist and proxy `GET` and `POST` requests to the headless Launcher API.
-The only state owned here is window and tray state. Agent business state,
-Harness supervision, profiles, checkpoints, releases, updates, and
-diagnostics remain in the separate Rust Agent.
+Agent with browser `fetch`; Tauri Rust commands validate a fixed loopback
+allowlist and proxy bounded `GET` and `POST` JSON requests directly to the
+Agent's versioned `/v1/*` API. Agent business state, Harness supervision,
+profiles, checkpoints, releases, updates, and diagnostics remain in the
+separate `nexus-agent` process.
 
-On startup the native side probes and, when possible, starts
-`nexus-launcher api --no-open`. Helper resolution is ordered as follows:
+The native side uses `nexus-launcher-core` for Agent HTTP requests and for
+resolving, starting, probing, and stopping the independent Agent. The app does
+not spawn, package, or require `nexus-launcher.exe`. The executable remains a
+legacy compatibility client for existing headless scripts and is not a GUI
+runtime dependency.
 
-1. `NEXUS_LAUNCHER_BIN` when it names an existing file;
-2. the helper staged in the Tauri resource directory;
-3. a `nexus-launcher` executable beside the native application;
-4. `target/debug` and `target/release` candidates found near a Cargo target
-   layout during local development.
+Agent resolution is ordered as follows:
 
-If no helper is available, the UI keeps the error visible and reports the
-exact configuration action. The native shell only controls the helper process
-it starts itself. A pre-existing or separately started listener on the same
-loopback port is reported as unavailable rather than reused.
+1. an explicit path passed to the core runtime;
+2. `NEXUS_AGENT_BIN` when it names an existing file;
+3. an `nexus-agent` executable beside the native application;
+4. the Tauri resource root or its `resources/nexus-agent` subdirectory
+   (including the platform `.exe` name);
+5. nearby `target/debug` and `target/release` candidates during local
+   development.
 
-For every start, the native shell creates a fresh private capability and passes
-it only through the owned helper's environment. The helper removes it before
-spawning Agent or Harness processes, omits it from status and CLI arguments,
-and requires it on every route except bootstrap status/handshake. Before an
-operation, native code verifies an HMAC challenge bound to the pinned
-data-root/instance and sends the capability and JSON body only afterward on the
-same TCP connection. An unrelated listener that wins a port-rebind race can
-observe the public challenge, but cannot receive or execute the operation.
+The Agent API binds to loopback and carries the data-root and instance
+identity headers when a client has a positively probed identity. Requests and
+responses are bounded, and only the documented `/v1/*` route allowlist is
+forwarded. A separately started Agent can be probed and used when its
+identity matches the configured data root; the native shell never attaches to
+an unrelated listener.
+
+The Agent HTTP/JSON API is the cross-language boundary. Future Electron or
+another UI consumes the same API rather than linking the Rust crate directly;
+`nexus-launcher-core` is a current Rust bridge and compatibility convenience.
 
 ## Development
 
@@ -45,32 +48,36 @@ pnpm install
 pnpm tauri dev
 ```
 
-The local Tauri CLI is provided by `@tauri-apps/cli`; a globally installed
-`cargo-tauri` command is not required. `pnpm exec tauri` is the equivalent
-explicit invocation when the CLI is not on PATH.
-
 Useful checks:
 
 ```text
 pnpm typecheck
+pnpm test
 pnpm build
 pnpm tauri build
 ```
 
-The frontend dev server is only a development asset server. Production
-packaging embeds the built assets through Tauri. `pnpm tauri build` first
-builds the Rust helper and stages it into the Tauri resources directory, so
-the NSIS/MSI output contains the matching headless helper. The helper remains
-a separate process and the app does not vendor or modify Harness source.
+`pnpm tauri build` first runs `pnpm prepare:agent`, which builds the locked,
+local `nexus-agent`, `nexus-launcher`, and `nexus-cli` packages and stages their
+three matching executables as Tauri resources before the installer is
+assembled. The bundle resource map gives each `resources/nexus-*` binary an
+empty target, flattening all three into the bundle resource root (the same
+install directory as the launcher executable on the supported Windows bundle
+layout); the resolver also accepts the platform's `<exe>/resources` layout as
+a bounded fallback. The staging step touches only the exact generated
+`src-tauri/resources/nexus-agent*`, `nexus-launcher*`, and `nexusctl*` files; it
+does not download, start, or modify Harness source or data. The installer
+therefore runs without a workspace `target` directory or `NEXUS_AGENT_BIN`,
+and the GUI never requires any of these compatibility binaries at runtime.
 
-## Helper override
+## Agent override
 
-An explicit helper path is still available for development, signed replacement
+An explicit Agent path is available for development, signed replacement
 builds, or rollback testing. Before launching the native app, set it in
 PowerShell:
 
 ```text
-$env:NEXUS_LAUNCHER_BIN = 'C:\Program Files\Nexus Launcher\nexus-launcher.exe'
+$env:NEXUS_AGENT_BIN = 'C:\Program Files\Nexus Agent\nexus-agent.exe'
 $env:NEXUS_CONSOLE_PORT = '3091'
 ```
 
@@ -87,13 +94,9 @@ $env:NEXUS_CONSOLE_PORT = '3091'
 - Settings offers System, Light, and Dark themes. The selected mode is stored
   in local storage and System follows operating-system preference changes.
 
-The Harness page only embeds a validated loopback HTTP URL returned by
-`GET /launcher/harness`. Its token is masked by default and is read from a
-bounded Nexus-owned log tail. The system-browser button calls
-`POST /launcher/harness` with `{"action":"open"}`, which keeps URL validation
-and external opening in the Rust Launcher API.
-An Agent or Harness stop/restart clears the token and unmounts the iframe before
-the request is sent. A failed action stays credential-closed until a positively
-stopped runtime or a new matching run session is observed. PID-less Harness
-observations never expose credentials because their process continuity cannot
-be proven.
+The Harness view consumes `GET /v1/harness/ui`, an Agent-owned bounded JSON
+contract for the current validated loopback URL/token session. The Agent
+publishes credentials only for a running, PID-owned Harness generation whose
+durable log-session boundary still matches. The UI fails closed when that
+contract is unavailable. Stop/restart actions clear displayed credentials
+before the request is sent.

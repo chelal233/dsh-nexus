@@ -5,7 +5,7 @@ export type HarnessControlGate = {
 
 export function invalidatesHarnessCredentials(path: string, action: unknown): boolean {
   if (action !== "start" && action !== "stop" && action !== "restart") return false;
-  return path === "/launcher/agent" || path === "/launcher/agent-api/v1/harness";
+  return path === "/v1/agent" || path === "/v1/harness";
 }
 
 export function harnessControlGate(

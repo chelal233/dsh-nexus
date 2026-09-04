@@ -4,6 +4,7 @@ members = [
     "crates/nexus-core",
     "crates/nexus-agent",
     "crates/nexus-cli",
+    "crates/nexus-launcher-core",
     "crates/nexus-launcher",
 ]
 resolver = "2"
@@ -16,7 +17,7 @@ publish = false
 
 [workspace.dependencies]
 axum = "0.7"
-reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "stream"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 tracing = "0.1"

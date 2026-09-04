@@ -39,10 +39,13 @@ type IconComponent = React.ComponentType<IconProps>;
 
 type StartupStatus = {
   available: boolean;
+  running: boolean;
   api_base?: string;
-  helper_path?: string;
+  agent_program?: string;
+  agent_pid?: number;
+  data_root?: string;
   data_root_id?: string;
-  launcher_instance_id?: string;
+  instance_id?: string;
   message?: string;
 };
 
@@ -105,20 +108,21 @@ const emptySnapshot: Snapshot = {
   config: null,
 };
 
-type SnapshotEndpoint = Exclude<keyof Snapshot, "startup" | "endpointErrors">;
+type SnapshotEndpoint = Exclude<keyof Snapshot, "startup" | "status" | "endpointErrors">;
 
 const endpointMap: Record<SnapshotEndpoint, string> = {
-  status: "/launcher/status",
-  health: "/launcher/agent-api/v1/health",
-  state: "/launcher/agent-api/v1/state",
-  harnessRuntime: "/launcher/agent-api/v1/harness",
-  harnessUi: "/launcher/harness",
-  profiles: "/launcher/agent-api/v1/profiles",
-  checkpoints: "/launcher/agent-api/v1/checkpoints",
-  releases: "/launcher/agent-api/v1/releases",
-  updates: "/launcher/agent-api/v1/updates",
-  diagnostics: "/launcher/agent-api/v1/diagnostics",
-  config: "/launcher/agent-api/v1/config",
+  health: "/v1/health",
+  state: "/v1/state",
+  harnessRuntime: "/v1/harness",
+  // The Agent owns Harness URL/token observation. Older Agents may not expose
+  // this optional endpoint, in which case the UI remains credential-closed.
+  harnessUi: "/v1/harness/ui",
+  profiles: "/v1/profiles",
+  checkpoints: "/v1/checkpoints",
+  releases: "/v1/releases",
+  updates: "/v1/updates",
+  diagnostics: "/v1/diagnostics",
+  config: "/v1/config",
 };
 
 function isObject(value: unknown): value is JsonObject {
@@ -426,12 +430,16 @@ function App() {
           setError(null);
           try {
             const startup = await invoke<StartupStatus>("startup_status");
-            const next: Snapshot = { ...emptySnapshot, startup };
+            const next: Snapshot = {
+              ...emptySnapshot,
+              startup,
+              status: startup as unknown as JsonObject,
+            };
             if (!startup.available) {
               harnessPollState.current = undefined;
               setSnapshot(next);
               setNotice(null);
-              setBridgeError(startup.message || t("Set NEXUS_LAUNCHER_BIN or build the Rust launcher helper."));
+              setBridgeError(startup.message || t("Set NEXUS_AGENT_BIN or build the Rust Agent."));
               continue;
             }
             setBridgeError(null);
@@ -460,7 +468,7 @@ function App() {
               setCredentialInvalidationPending(false);
             }
             if (!next.status && !next.health) {
-              setBridgeError(t("The Launcher API is not responding on its loopback port."));
+              setBridgeError(t("The Agent API is not responding on its loopback port."));
             }
           } catch (cause) {
             harnessPollState.current = undefined;
@@ -497,9 +505,18 @@ function App() {
     };
   }, [refresh]);
 
+  const retryStartup = useCallback(async () => {
+    try {
+      await invoke("retry_startup");
+    } catch (cause) {
+      setBridgeError(errorMessage(cause));
+    }
+    await refresh();
+  }, [refresh]);
+
   const runAction = useCallback(async (label: string, path: string, body: JsonObject): Promise<boolean> => {
     if (snapshot.startup?.available !== true) {
-      setError(t("Launcher controls are disabled until the native helper identity is verified."));
+      setError(t("Launcher controls are disabled until the Agent identity is verified."));
       return false;
     }
     const invalidatesCredentials = invalidatesHarnessCredentials(path, body.action);
@@ -597,7 +614,7 @@ function App() {
         {error && contentMode !== "error" && <div className="notice action-error" role="alert"><WarningCircle size={17} /><span>{error}</span><button onClick={() => setError(null)} aria-label={t("Dismiss error")}><X size={15} /></button></div>}
         {!error && Object.keys(snapshot.endpointErrors).length > 0 && <DegradedNotice errors={snapshot.endpointErrors} />}
         {contentMode === "error"
-          ? <ErrorState message={bridgeError ?? t("The native bridge is unavailable.")} onRetry={() => void refresh()} />
+          ? <ErrorState message={bridgeError ?? t("The native bridge is unavailable.")} onRetry={() => void retryStartup()} />
           : contentMode === "loading"
             ? <LoadingState />
             : <section className="page-content">{content}</section>}
@@ -646,21 +663,21 @@ function OverviewView({ snapshot, busyAction, runAction }: ViewProps) {
         <Panel title={t("Agent operations")} icon={<Pulse size={18} />}>
           <p className="panel-description">{t("The Agent remains a separate process. Launcher controls are explicit and recoverable.")}</p>
           <div className="button-row">
-            <ActionButton tone="primary" disabled={controlsDisabled} onClick={() => void runAction(t("Agent start"), "/launcher/agent", { action: "start" })}><CheckCircle size={16} />{t("Start Agent")}</ActionButton>
-            <ActionButton disabled={controlsDisabled} onClick={() => void runAction(t("Agent restart"), "/launcher/agent", { action: "restart" })}><ArrowsClockwise size={16} />{t("Restart")}</ActionButton>
-            <ActionButton tone="danger" disabled={controlsDisabled} onClick={() => void runAction(t("Agent stop"), "/launcher/agent", { action: "stop" })}><StopCircle size={16} />{t("Stop Agent")}</ActionButton>
+          <ActionButton tone="primary" disabled={controlsDisabled} onClick={() => void runAction(t("Agent start"), "/v1/agent", { action: "start" })}><CheckCircle size={16} />{t("Start Agent")}</ActionButton>
+            <ActionButton disabled={controlsDisabled} onClick={() => void runAction(t("Agent restart"), "/v1/agent", { action: "restart" })}><ArrowsClockwise size={16} />{t("Restart")}</ActionButton>
+            <ActionButton tone="danger" disabled={controlsDisabled} onClick={() => void runAction(t("Agent stop"), "/v1/agent", { action: "stop" })}><StopCircle size={16} />{t("Stop Agent")}</ActionButton>
           </div>
         </Panel>
         <Panel title={t("Runtime boundary")} icon={<ShieldCheck size={18} />}>
           <dl className="detail-list">
             <div><dt>{t("Data root")}</dt><dd>{stringValue(status, "data_root") || t("Not reported")}</dd></div>
-            <div><dt>{t("Agent API")}</dt><dd>{stringValue(status, "agent_api") || t("Loopback unavailable")}</dd></div>
+            <div><dt>{t("Agent API")}</dt><dd>{stringValue(status, "api_base") || t("Loopback unavailable")}</dd></div>
             <div><dt>{t("Agent PID")}</dt><dd>{stringValue(status, "agent_pid") || t("Not reported")}</dd></div>
           </dl>
         </Panel>
       </div>
       <Panel title={t("Activity signal")} icon={<Pulse size={18} />}>
-        {snapshot.startup?.helper_path ? <div className="signal-line"><CheckCircle size={17} />{t("Headless helper ready")}<span>{snapshot.startup.helper_path}</span></div> : <EmptyState title={t("Helper path pending")} detail={t("The native side will report the resolved launcher helper after startup.")} />}
+        {snapshot.startup?.agent_program ? <div className="signal-line"><CheckCircle size={17} />{t("Agent runtime ready")}<span>{snapshot.startup.agent_program}</span></div> : <EmptyState title={t("Agent program pending")} detail={t("The native side will report the resolved Agent program after startup.")} />}
       </Panel>
     </>
   );
@@ -694,8 +711,8 @@ export function HarnessView({ snapshot, busyAction, credentialInvalidationPendin
   useEffect(() => {
     setRevealedSessionKey((revealed) => revealed === sessionKey ? revealed : undefined);
   }, [sessionKey]);
-  const harnessAction = (action: string) => void runAction(t(`Harness ${action}`), "/launcher/agent-api/v1/harness", { action });
-  const openSystemBrowser = () => void runAction(t("Open Harness"), "/launcher/harness", { action: "open" });
+  const harnessAction = (action: string) => void runAction(t(`Harness ${action}`), "/v1/harness", { action });
+  const openSystemBrowser = () => void runAction(t("Open Harness"), "/v1/harness/ui", { action: "open" });
   return (
     <>
       <div className="page-heading"><div><span className="kicker">{t("Runtime / Harness")}</span><h1>{t("Harness workspace")}</h1><p>{t("Harness is an immutable external runtime. Nexus only supervises its process.")}</p></div><StatusPill label={stringValue(harness, "state") || t("Detached")} tone={harnessRunning ? "good" : "neutral"} /></div>
@@ -741,7 +758,7 @@ export function CheckpointsView({ snapshot, busyAction, runAction }: ViewProps) 
   const { t } = useI18n();
   const items = arrayValue(snapshot.checkpoints, "checkpoints");
   const controlsDisabled = busyAction !== null || snapshot.startup?.available !== true;
-  return <><PageIntro kicker={t("State / Checkpoints")} title={t("Checkpoints")} detail={t("Checkpoint manifests contain only Harness profile/release selection. Agent lifecycle and Harness runtime are never saved or restored.")} /><Panel title={t("Saved checkpoints")} icon={<ListChecks size={18} />}><div className="panel-toolbar"><span className="toolbar-count">{t("{count} saved", { count: items.length })}</span><ActionButton tone="primary" disabled={controlsDisabled} onClick={() => void runAction(t("Checkpoint creation"), "/launcher/agent-api/v1/checkpoints", { action: "create", note: "Native launcher checkpoint" })}><CheckCircle size={16} />{t("Create checkpoint")}</ActionButton></div><DataList items={items} emptyTitle={t("No checkpoints yet")} emptyDetail={t("Create a checkpoint after the Agent has a stable profile and release state.")} render={(item) => <><div><strong>{stringValue(item, "id") || t("Checkpoint")}</strong><span>{stringValue(item, "profile") || t("No profile")}</span></div><span className="row-meta">{formatTimestamp(numberValue(item, "created_at_unix"), t("Not available"))}</span></>} /></Panel></>;
+  return <><PageIntro kicker={t("State / Checkpoints")} title={t("Checkpoints")} detail={t("Checkpoint manifests contain only Harness profile/release selection. Agent lifecycle and Harness runtime are never saved or restored.")} /><Panel title={t("Saved checkpoints")} icon={<ListChecks size={18} />}><div className="panel-toolbar"><span className="toolbar-count">{t("{count} saved", { count: items.length })}</span><ActionButton tone="primary" disabled={controlsDisabled} onClick={() => void runAction(t("Checkpoint creation"), "/v1/checkpoints", { action: "create", note: "Native launcher checkpoint" })}><CheckCircle size={16} />{t("Create checkpoint")}</ActionButton></div><DataList items={items} emptyTitle={t("No checkpoints yet")} emptyDetail={t("Create a checkpoint after the Agent has a stable profile and release state.")} render={(item) => <><div><strong>{stringValue(item, "id") || t("Checkpoint")}</strong><span>{stringValue(item, "profile") || t("No profile")}</span></div><span className="row-meta">{formatTimestamp(numberValue(item, "created_at_unix"), t("Not available"))}</span></>} /></Panel></>;
 }
 
 function UpdatesView({ snapshot }: ViewProps) {
@@ -756,7 +773,7 @@ function DiagnosticsView({ snapshot, busyAction, runAction }: ViewProps) {
   const { t } = useI18n();
   const items = arrayValue(snapshot.diagnostics, "bundles");
   const controlsDisabled = busyAction !== null || snapshot.startup?.available !== true;
-  return <><PageIntro kicker={t("Observability / Diagnostics")} title={t("Diagnostics")} detail={t("Bundles are bounded, redacted, and limited to Nexus-owned metadata and text logs.")} /><Panel title={t("Diagnostic bundles")} icon={<TerminalWindow size={18} />}><div className="panel-toolbar"><span className="toolbar-count">{t("{count} bundles", { count: items.length })}</span><ActionButton tone="primary" disabled={controlsDisabled} onClick={() => void runAction(t("Diagnostic collection"), "/launcher/agent-api/v1/diagnostics", { action: "collect", note: "Native launcher collection" })}><TerminalWindow size={16} />{t("Collect diagnostics")}</ActionButton></div><DataList items={items} emptyTitle={t("No diagnostic bundles")} emptyDetail={t("Collect a bounded bundle when a runtime issue needs review.")} render={(item) => <><div><strong>{stringValue(item, "id") || t("Bundle")}</strong><span>{t("{count} files", { count: arrayValue(item, "files").length })}</span></div><span className="row-meta">{formatTimestamp(numberValue(item, "created_at_unix"), t("Not available"))}</span></>} /></Panel></>;
+  return <><PageIntro kicker={t("Observability / Diagnostics")} title={t("Diagnostics")} detail={t("Bundles are bounded, redacted, and limited to Nexus-owned metadata and text logs.")} /><Panel title={t("Diagnostic bundles")} icon={<TerminalWindow size={18} />}><div className="panel-toolbar"><span className="toolbar-count">{t("{count} bundles", { count: items.length })}</span><ActionButton tone="primary" disabled={controlsDisabled} onClick={() => void runAction(t("Diagnostic collection"), "/v1/diagnostics", { action: "collect", note: "Native launcher collection" })}><TerminalWindow size={16} />{t("Collect diagnostics")}</ActionButton></div><DataList items={items} emptyTitle={t("No diagnostic bundles")} emptyDetail={t("Collect a bounded bundle when a runtime issue needs review.")} render={(item) => <><div><strong>{stringValue(item, "id") || t("Bundle")}</strong><span>{t("{count} files", { count: arrayValue(item, "files").length })}</span></div><span className="row-meta">{formatTimestamp(numberValue(item, "created_at_unix"), t("Not available"))}</span></>} /></Panel></>;
 }
 
 function SettingsView({ snapshot, themeMode, setThemeMode, busyAction, runAction }: ViewProps) {
@@ -826,7 +843,7 @@ function SettingsView({ snapshot, themeMode, setThemeMode, busyAction, runAction
       .split(/\r?\n/)
       .map((value) => value.trim())
       .filter(Boolean);
-    const saved = await runAction(t("Save Harness configuration"), "/launcher/agent-api/v1/config", {
+    const saved = await runAction(t("Save Harness configuration"), "/v1/config", {
       action: "set_harness",
       harness: {
         program,
@@ -845,7 +862,7 @@ function SettingsView({ snapshot, themeMode, setThemeMode, busyAction, runAction
 
   const clearHarness = async () => {
     if (!window.confirm(t("Remove the Harness launch configuration? Harness must be stopped first."))) return;
-    const cleared = await runAction(t("Clear Harness configuration"), "/launcher/agent-api/v1/config", { action: "clear_harness" });
+    const cleared = await runAction(t("Clear Harness configuration"), "/v1/config", { action: "clear_harness" });
     if (cleared === true) {
       setDraft(emptyHarnessDraft);
       setDraftDirty(false);

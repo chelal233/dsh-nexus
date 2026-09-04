@@ -16,6 +16,7 @@ path = "src/main.rs"
 [dependencies]
 axum.workspace = true
 nexus-core = { path = "../nexus-core" }
+nexus-launcher-core = { path = "../nexus-launcher-core" }
 nexus-protocol = { path = "../nexus-protocol" }
 tokio.workspace = true
 tracing.workspace = true

@@ -6,14 +6,12 @@
 //! reachable through its loopback v1 API.
 
 use std::{
-    collections::HashMap,
     env,
     fs::{self, OpenOptions},
-    hash::{Hash, Hasher},
-    io::{self, Read, Seek, SeekFrom, Write},
+    io::{self, Write},
     net::{IpAddr, Ipv4Addr, SocketAddr},
     path::{Path, PathBuf},
-    process::{self, Command as StdCommand, Stdio},
+    process::{self, Command as StdCommand},
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
@@ -21,7 +19,7 @@ use axum::{
     body::{to_bytes, Body},
     extract::Request,
     extract::State,
-    http::{header::CONTENT_TYPE, HeaderValue, Method, StatusCode},
+    http::StatusCode,
     middleware::{self, Next},
     response::{IntoResponse, Response},
     routing::get,
@@ -29,36 +27,36 @@ use axum::{
 };
 use hmac::{Hmac, Mac};
 use nexus_core::{
-    data_root_identity, load_harness_launch_spec, log_file_identity, new_instance_id,
-    HarnessLogSession, HarnessLogSessionStore, NexusConfig, NexusPaths,
+    data_root_identity, load_harness_launch_spec, new_instance_id, HarnessLogSessionStore,
+    NexusConfig, NexusPaths,
 };
-use nexus_protocol::{
-    HarnessAction, HarnessCommand, HarnessResponse, HarnessState, HealthResponse, HealthStatus,
-    StateResponse,
+#[cfg(test)]
+use nexus_core::{log_file_identity, HarnessLogSession};
+use nexus_launcher_core::{
+    harness_observation_matches_session, parse_loopback_harness_url,
+    read_harness_ui_info_with_observer, AgentClient, AgentClientError, AgentResponse, AgentRuntime,
+    AgentStartResult, HarnessLogObserver, HarnessUiInfo,
 };
-use reqwest::{Client, Url};
+#[cfg(test)]
+use nexus_launcher_core::{read_harness_ui_info, HARNESS_LOG_TAIL_BYTES};
+use nexus_protocol::{HarnessAction, HarnessCommand, HarnessResponse, HarnessState, StateResponse};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use sha2::Sha256;
-use tokio::{
-    net::TcpListener,
-    process::{Child, Command as TokioCommand},
-    sync::Mutex,
-    time::{sleep, Instant},
-};
+use tokio::{net::TcpListener, sync::Mutex, time::sleep};
+
+fn unavailable_harness_ui_info(_paths: &NexusPaths, message: String) -> HarnessUiInfo {
+    nexus_launcher_core::unavailable_harness_ui_info(message)
+}
 
 const DEFAULT_WAIT_SECS: u64 = 20;
 const DEFAULT_STOP_WAIT_SECS: u64 = 15;
 const DEFAULT_CONSOLE_PORT: u16 = 3091;
 const DEFAULT_LAUNCHER_SCHEMA_VERSION: u32 = 1;
-const HARNESS_LOG_TAIL_BYTES: u64 = 64 * 1024;
-const AGENT_BINARY_ENV: &str = "NEXUS_AGENT_BIN";
 const CONSOLE_PORT_ENV: &str = "NEXUS_CONSOLE_PORT";
 const LAUNCHER_WAIT_SECS_ENV: &str = "NEXUS_LAUNCHER_WAIT_SECS";
 const CONSOLE_OPEN_ENV: &str = "NEXUS_CONSOLE_OPEN";
 const LAUNCHER_CONFIG_FILE: &str = "launcher.json";
-const PROXY_DATA_ROOT_HEADER: &str = "x-nexus-data-root-id";
-const PROXY_INSTANCE_HEADER: &str = "x-nexus-instance-id";
 const LAUNCHER_DATA_ROOT_HEADER: &str = "x-nexus-launcher-data-root-id";
 const LAUNCHER_INSTANCE_HEADER: &str = "x-nexus-launcher-instance-id";
 const LAUNCHER_CAPABILITY_HEADER: &str = "x-nexus-launcher-capability";
@@ -66,7 +64,6 @@ const LAUNCHER_CHALLENGE_HEADER: &str = "x-nexus-launcher-challenge";
 const LAUNCHER_PROOF_HEADER: &str = "x-nexus-launcher-proof";
 const LAUNCHER_CAPABILITY_ENV: &str = "NEXUS_LAUNCHER_CAPABILITY";
 const MAX_AGENT_PROXY_BODY_BYTES: usize = 32 * 1024;
-const MAX_AGENT_PROXY_RESPONSE_BYTES: usize = 512 * 1024;
 
 #[derive(Clone)]
 struct Options {
@@ -169,25 +166,6 @@ fn default_launcher_schema_version() -> u32 {
     DEFAULT_LAUNCHER_SCHEMA_VERSION
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-struct HarnessUiInfo {
-    available: bool,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    generation: Option<u64>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    run_id: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    url: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    token: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    source: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    observed_at_unix: Option<u64>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    message: Option<String>,
-}
-
 #[derive(Debug, Clone, Deserialize)]
 struct ConsoleHarnessCommand {
     action: ConsoleHarnessAction,
@@ -218,7 +196,7 @@ enum ConsoleAgentAction {
 struct ConsoleController {
     options: Options,
     paths: NexusPaths,
-    client: Client,
+    runtime: AgentRuntime,
     state: std::sync::Arc<Mutex<ConsoleRuntimeState>>,
     operation: std::sync::Arc<Mutex<()>>,
     harness_logs: std::sync::Arc<Mutex<HarnessLogObserver>>,
@@ -240,31 +218,6 @@ struct LaunchRecord {
     agent_program: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     agent_instance_id: Option<String>,
-}
-
-struct InstanceLock {
-    _file: fs::File,
-}
-
-struct OwnedAgent {
-    child: Option<Child>,
-    pid: u32,
-}
-
-struct SpawnedAgent {
-    child: Option<Child>,
-    pid: u32,
-    #[cfg(windows)]
-    process_handle: Option<std::os::windows::io::OwnedHandle>,
-}
-
-#[cfg(windows)]
-impl Drop for SpawnedAgent {
-    fn drop(&mut self) {
-        if let Some(handle) = self.process_handle.take() {
-            let _ = terminate_windows_process(handle);
-        }
-    }
 }
 
 #[tokio::main]
@@ -535,19 +488,9 @@ fn parse_port(value: &str) -> Result<u16, String> {
 }
 
 async fn run(options: Options) -> Result<(), String> {
-    let paths = options.config.paths();
-    paths
-        .ensure_directories()
-        .map_err(|error| format!("cannot initialize Nexus directories: {error}"))?;
-    let client = Client::builder()
-        // Keep the initial probe alive long enough for a just-spawned Agent to
-        // bind its loopback listener. A one-second connect timeout can leave
-        // the launcher in a retry storm when another local client is polling
-        // the same port during startup.
-        .connect_timeout(Duration::from_secs(5))
-        .timeout(Duration::from_secs(6))
-        .build()
-        .map_err(|error| format!("cannot initialize HTTP client: {error}"))?;
+    let runtime = AgentRuntime::new(options.config.clone(), options.agent_program.clone())
+        .map_err(|error| format!("cannot initialize Nexus Agent runtime: {error}"))?;
+    let paths = runtime.paths().clone();
 
     // Keep the Agent's browser CORS allowlist aligned with the legacy browser
     // port. The variable is inherited by a newly spawned Agent; an already-running
@@ -556,45 +499,40 @@ async fn run(options: Options) -> Result<(), String> {
 
     match options.command {
         LauncherCommand::Start => {
-            let result = ensure_agent_started(&options, &paths, &client).await?;
-            match result {
-                EnsureResult::AlreadyRunning => print_started(&options, None, &paths, true),
-                EnsureResult::Owned(owned) => {
-                    let pid = owned.pid;
-                    drop(owned.child);
-                    print_started(&options, Some(pid), &paths, false);
-                }
+            let result = runtime
+                .start(options.wait_secs)
+                .await
+                .map_err(|error| format!("cannot start Agent: {error}"))?;
+            if result.started {
+                persist_started_agent_or_stop(&runtime, &paths, &result).await?;
             }
+            print_started(&options, result.pid, &paths, !result.started);
         }
         LauncherCommand::Run => {
-            let EnsureResult::Owned(owned) =
-                ensure_agent_started(&options, &paths, &client).await?
-            else {
+            let result = runtime
+                .start(options.wait_secs)
+                .await
+                .map_err(|error| format!("cannot start Agent: {error}"))?;
+            if !result.started {
                 return Err(
                     "Agent is already running; use `nexus-launcher status` or `stop`, or run foreground after stopping it"
                         .to_owned(),
                 );
-            };
-            run_foreground(owned, &options, &paths, &client).await?;
+            }
+            persist_started_agent_or_stop(&runtime, &paths, &result).await?;
+            run_foreground(&runtime, &options, &paths).await?;
         }
-        LauncherCommand::Api | LauncherCommand::Console => {
-            run_api(&options, &paths, &client).await?
-        }
-        LauncherCommand::Stop => stop_agent(&options, &paths, &client).await?,
-        LauncherCommand::Status => status_agent(&options, &paths, &client).await?,
+        LauncherCommand::Api | LauncherCommand::Console => run_api(&options, &runtime).await?,
+        LauncherCommand::Stop => stop_agent(&runtime, &options, &paths).await?,
+        LauncherCommand::Status => status_agent(&runtime, &options, &paths).await?,
         LauncherCommand::Logs => print_logs(&options, &paths),
     }
 
     Ok(())
 }
 
-enum EnsureResult {
-    AlreadyRunning,
-    Owned(OwnedAgent),
-}
-
 impl ConsoleController {
-    fn new(options: Options, paths: NexusPaths, client: Client) -> Result<Self, String> {
+    fn new(options: Options, paths: NexusPaths, runtime: AgentRuntime) -> Result<Self, String> {
         let data_root_id = data_root_identity(&paths)
             .map_err(|error| format!("cannot identify Launcher data root: {error}"))?;
         let launcher_instance_id = options.launcher_instance_id.clone();
@@ -604,7 +542,7 @@ impl ConsoleController {
         Ok(Self {
             options,
             paths,
-            client,
+            runtime,
             state: std::sync::Arc::new(Mutex::new(ConsoleRuntimeState {
                 desired_agent_running: true,
             })),
@@ -623,14 +561,13 @@ impl ConsoleController {
     }
 
     async fn start_agent_locked(&self) -> Result<(), String> {
-        let mut options = self.options.clone();
-        options.command = LauncherCommand::Start;
-        let result = ensure_agent_started(&options, &self.paths, &self.client).await?;
-        match result {
-            EnsureResult::AlreadyRunning => {}
-            EnsureResult::Owned(owned) => {
-                drop(owned.child);
-            }
+        let result = self
+            .runtime
+            .start(self.options.wait_secs)
+            .await
+            .map_err(|error| format!("cannot start Agent: {error}"))?;
+        if result.started {
+            persist_started_agent_or_stop(&self.runtime, &self.paths, &result).await?;
         }
         {
             let mut state = self.state.lock().await;
@@ -650,8 +587,12 @@ impl ConsoleController {
             let mut state = self.state.lock().await;
             state.desired_agent_running = false;
         }
-        let result = stop_agent(&self.options, &self.paths, &self.client).await;
-        result?;
+        self.runtime
+            .stop(self.options.wait_secs)
+            .await
+            .map_err(|error| format!("cannot stop Agent: {error}"))?;
+        remove_launch_record(&self.paths);
+        print_stop(&self.options, true, &self.paths);
         Ok(self.status().await)
     }
 
@@ -661,17 +602,17 @@ impl ConsoleController {
             let mut state = self.state.lock().await;
             state.desired_agent_running = true;
         }
-        stop_agent(&self.options, &self.paths, &self.client).await?;
+        self.runtime
+            .stop(self.options.wait_secs)
+            .await
+            .map_err(|error| format!("cannot stop Agent: {error}"))?;
+        remove_launch_record(&self.paths);
         self.start_agent_locked().await?;
         Ok(self.status().await)
     }
 
     async fn status(&self) -> ConsoleStatus {
-        let health = probe_health(&self.client, self.options.config.port, &self.paths)
-            .await
-            .ok()
-            .flatten()
-            .filter(|health| health.status == HealthStatus::Ok);
+        let health = self.runtime.probe().await.ok();
         let record = read_launch_record(&self.paths);
         let state = self.state.lock().await.clone();
         let (agent_pid, agent_program) = if let Some(health) = health.as_ref() {
@@ -804,27 +745,11 @@ impl ConsoleController {
     }
 
     async fn fetch_harness_observation(&self) -> Result<HarnessResponse, String> {
-        let response = verified_agent_request(
-            &self.client,
-            self.options.config.port,
-            &self.paths,
-            Method::GET,
-            "/v1/harness",
-        )
-        .await?
-        .send()
-        .await
-        .map_err(|error| format!("Agent Harness status is unavailable: {error}"))?;
-        if !response.status().is_success() {
-            return Err(format!(
-                "Agent Harness status returned HTTP {}",
-                response.status()
-            ));
-        }
-        response
-            .json::<HarnessResponse>()
+        verified_agent_client(&self.runtime)
+            .await?
+            .get_json::<HarnessResponse>("/v1/harness")
             .await
-            .map_err(|error| format!("Agent Harness status is invalid: {error}"))
+            .map_err(|error| format!("Agent Harness status is unavailable: {error}"))
     }
 
     async fn open_harness(&self) -> Result<HarnessUiInfo, String> {
@@ -842,21 +767,15 @@ impl ConsoleController {
         if !matches!(load_harness_launch_spec(&self.paths), Ok(Some(_))) {
             return;
         }
-        let response = match verified_agent_request(
-            &self.client,
-            self.options.config.port,
-            &self.paths,
-            Method::POST,
-            "/v1/harness",
-        )
-        .await
-        {
-            Ok(request) => {
-                request
-                    .json(&HarnessCommand {
-                        action: HarnessAction::Start,
-                    })
-                    .send()
+        let response = match verified_agent_client(&self.runtime).await {
+            Ok(client) => {
+                client
+                    .post_json::<_, HarnessResponse>(
+                        "/v1/harness",
+                        &HarnessCommand {
+                            action: HarnessAction::Start,
+                        },
+                    )
                     .await
             }
             Err(error) => {
@@ -864,10 +783,9 @@ impl ConsoleController {
                 return;
             }
         };
-        if let Ok(response) = response {
-            let status = response.status();
-            if !status.is_success() && status != reqwest::StatusCode::CONFLICT {
-                eprintln!("nexus-launcher: Console auto-start Harness returned HTTP {status}");
+        if let Err(error) = response {
+            if !error.to_string().contains("HTTP 409") {
+                eprintln!("nexus-launcher: Console auto-start Harness returned {error}");
             }
         }
     }
@@ -876,19 +794,16 @@ impl ConsoleController {
         loop {
             sleep(Duration::from_secs(1)).await;
             let desired = self.state.lock().await.desired_agent_running;
-            if desired
-                && !is_agent_healthy(&self.client, self.options.config.port, &self.paths)
-                    .await
-                    .unwrap_or(false)
-            {
+            if desired && self.runtime.probe().await.is_err() {
                 let _ = self.start_agent().await;
             }
         }
     }
 }
 
-async fn run_api(options: &Options, paths: &NexusPaths, client: &Client) -> Result<(), String> {
-    let controller = ConsoleController::new(options.clone(), paths.clone(), client.clone())?;
+async fn run_api(options: &Options, runtime: &AgentRuntime) -> Result<(), String> {
+    let paths = runtime.paths().clone();
+    let controller = ConsoleController::new(options.clone(), paths, runtime.clone())?;
     let listener = TcpListener::bind(console_bind_addr(options.console_port))
         .await
         .map_err(|error| {
@@ -922,6 +837,21 @@ async fn run_api(options: &Options, paths: &NexusPaths, client: &Client) -> Resu
     };
     watchdog.abort();
     server_result
+}
+
+async fn stop_agent(
+    runtime: &AgentRuntime,
+    options: &Options,
+    paths: &NexusPaths,
+) -> Result<(), String> {
+    let was_running = runtime.probe().await.is_ok();
+    runtime
+        .stop(options.wait_secs)
+        .await
+        .map_err(|error| format!("cannot stop Agent: {error}"))?;
+    remove_launch_record(paths);
+    print_stop(options, was_running, paths);
+    Ok(())
 }
 
 fn console_bind_addr(port: u16) -> SocketAddr {
@@ -1169,67 +1099,64 @@ async fn proxy_agent_request(
         Ok(body) => body,
         Err(error) => return launcher_error_response(StatusCode::BAD_REQUEST, error.to_string()),
     };
-    let request = match verified_agent_request(
-        &controller.client,
-        controller.options.config.port,
-        &controller.paths,
-        method,
-        path,
-    )
-    .await
-    {
-        Ok(request) => request,
+    let body = if body.is_empty() {
+        None
+    } else {
+        match serde_json::from_slice::<Value>(&body) {
+            Ok(value) => Some(value),
+            Err(error) => {
+                return launcher_error_response(
+                    StatusCode::BAD_REQUEST,
+                    format!("Agent request body is not valid JSON: {error}"),
+                )
+            }
+        }
+    };
+    let client = match verified_agent_client(&controller.runtime).await {
+        Ok(client) => client,
         Err(error) => return launcher_error_response(StatusCode::BAD_GATEWAY, error),
     };
-    let response = match request
-        .header(reqwest::header::CONTENT_TYPE, "application/json")
-        .body(body)
-        .send()
-        .await
-    {
-        Ok(response) => response,
-        Err(error) => {
-            return launcher_error_response(
-                StatusCode::BAD_GATEWAY,
-                format!("Agent request failed: {error}"),
-            )
-        }
-    };
-    let status = response.status();
-    if response
-        .content_length()
-        .is_some_and(|length| length > MAX_AGENT_PROXY_RESPONSE_BYTES as u64)
-    {
-        return launcher_error_response(
-            StatusCode::BAD_GATEWAY,
-            "Agent response exceeded the Launcher proxy limit".to_owned(),
-        );
+    match client.request_raw_value(method, path, body.as_ref()).await {
+        Ok(response) => agent_proxy_success_response(response),
+        Err(error) => agent_proxy_error_response(error),
     }
-    let bytes = match response.bytes().await {
-        Ok(bytes) if bytes.len() <= MAX_AGENT_PROXY_RESPONSE_BYTES => bytes,
-        Ok(_) => {
-            return launcher_error_response(
-                StatusCode::BAD_GATEWAY,
-                "Agent response exceeded the Launcher proxy limit".to_owned(),
-            )
-        }
-        Err(error) => {
-            return launcher_error_response(
-                StatusCode::BAD_GATEWAY,
-                format!("Agent response could not be read: {error}"),
-            )
-        }
-    };
-    Response::builder()
-        .status(status)
-        .header(CONTENT_TYPE, HeaderValue::from_static("application/json"))
-        .body(Body::from(bytes))
+}
+
+fn agent_proxy_success_response(response: AgentResponse<Vec<u8>>) -> Response {
+    let status = StatusCode::from_u16(response.status.as_u16()).unwrap_or(StatusCode::BAD_GATEWAY);
+    let mut builder = Response::builder().status(status);
+    if !response.body.is_empty() {
+        builder = builder.header("content-type", "application/json");
+    }
+    builder
+        .body(Body::from(response.body))
         .unwrap_or_else(|error| {
             launcher_error_response(
                 StatusCode::INTERNAL_SERVER_ERROR,
                 format!("Launcher proxy response failed: {error}"),
             )
         })
+}
+
+fn agent_proxy_error_response(error: AgentClientError) -> Response {
+    match error {
+        AgentClientError::Http { status, body, .. } => agent_proxy_raw_response(status, body),
+        error => launcher_error_response(StatusCode::BAD_GATEWAY, error.to_string()),
+    }
+}
+
+fn agent_proxy_raw_response(status: reqwest::StatusCode, body: Vec<u8>) -> Response {
+    let status = StatusCode::from_u16(status.as_u16()).unwrap_or(StatusCode::BAD_GATEWAY);
+    let mut builder = Response::builder().status(status);
+    if !body.is_empty() {
+        builder = builder.header("content-type", "application/json");
+    }
+    builder.body(Body::from(body)).unwrap_or_else(|error| {
+        launcher_error_response(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("Launcher proxy response failed: {error}"),
+        )
+    })
 }
 
 fn agent_proxy_target_path(path: &str) -> Option<&'static str> {
@@ -1319,1326 +1246,108 @@ async fn console_logs(State(controller): State<ConsoleController>) -> Json<Value
     }))
 }
 
-/// Return the newest loopback Harness URL from a bounded log tail.
-///
-/// Harness remains an opaque upstream process. The launcher only observes the
-/// text it already redirected to its own logs; it does not inspect `$HOME/.dsh`
-/// or infer a URL from a process command line. A URL is considered usable only
-/// when it is plain HTTP and loopback-bound. Token-bearing URLs are preferred
-/// because readiness/health messages may also contain a loopback URL. The
-/// observer keeps only a bounded in-memory cursor. An unchanged byte snapshot
-/// reuses its candidate; every content/length change rescans the bounded tail
-/// so a rotation cannot masquerade as an append merely because its sliding
-/// overlap happens to match.
-#[cfg(test)]
-fn read_harness_ui_info(paths: &NexusPaths) -> HarnessUiInfo {
-    let mut observer = HarnessLogObserver::default();
-    match HarnessLogSessionStore::new(paths.clone()).read() {
-        Ok(Some(session)) => {
-            read_harness_ui_info_with_observer(paths, &mut observer, Some(&session))
-        }
-        Ok(None) => unavailable_harness_ui_info(
-            paths,
-            "Harness log session marker is not available".to_owned(),
-        ),
-        Err(error) => unavailable_harness_ui_info(
-            paths,
-            format!("Harness log session marker is invalid: {error}"),
-        ),
-    }
-}
-
-fn read_harness_ui_info_with_observer(
-    paths: &NexusPaths,
-    observer: &mut HarnessLogObserver,
-    session: Option<&HarnessLogSession>,
-) -> HarnessUiInfo {
-    observer.select_session(session);
-    let Some(session) = session else {
-        return unavailable_harness_ui_info(
-            paths,
-            "Harness log session marker is not available".to_owned(),
-        );
-    };
-    let log_paths = harness_log_paths(paths, session);
-    let boundaries = [
-        (
-            session.stdout_watermark,
-            Some(session.stdout_file_identity.as_str()),
-        ),
-        (
-            session.stderr_watermark,
-            Some(session.stderr_file_identity.as_str()),
-        ),
-    ];
-    let mut candidates = Vec::new();
-    for (path, (watermark, file_identity)) in log_paths.into_iter().zip(boundaries) {
-        let Ok(Some(candidate)) = observer.observe_file(&path, watermark, file_identity) else {
-            continue;
-        };
-        if candidate.token.is_some() {
-            candidates.push(candidate);
-        }
-    }
-
-    candidates.sort_by(|left, right| {
-        (
-            left.token.is_some(),
-            left.observed_at_nanos,
-            left.offset,
-            left.source.as_str(),
-            left.sequence,
-        )
-            .cmp(&(
-                right.token.is_some(),
-                right.observed_at_nanos,
-                right.offset,
-                right.source.as_str(),
-                right.sequence,
-            ))
-    });
-    if let Some(candidate) = candidates.pop() {
-        return HarnessUiInfo {
-            available: true,
-            generation: Some(session.generation),
-            run_id: Some(session.run_id.clone()),
-            url: Some(candidate.url),
-            token: candidate.token,
-            source: Some(candidate.source),
-            observed_at_unix: Some(candidate.observed_at_unix),
-            message: None,
-        };
-    }
-
-    unavailable_harness_ui_info(
-        paths,
-        "Current Harness authentication token not found after this run's log boundary".to_owned(),
-    )
-}
-
-fn unavailable_harness_ui_info(_paths: &NexusPaths, message: String) -> HarnessUiInfo {
-    HarnessUiInfo {
-        available: false,
-        generation: None,
-        run_id: None,
-        url: None,
-        token: None,
-        source: None,
-        observed_at_unix: None,
-        message: Some(message),
-    }
-}
-
-fn harness_observation_matches_session(
-    response: &HarnessResponse,
-    session: &HarnessLogSession,
-) -> bool {
-    response.log_session_run_id.as_deref() == Some(session.run_id.as_str())
-        && response.generation == Some(session.generation)
-        && response.log_session_generation == Some(session.generation)
-        && response.log_stdout_watermark == Some(session.stdout_watermark)
-        && response.log_stderr_watermark == Some(session.stderr_watermark)
-        && response.log_stdout_file_identity.as_deref()
-            == Some(session.stdout_file_identity.as_str())
-        && response.log_stderr_file_identity.as_deref()
-            == Some(session.stderr_file_identity.as_str())
-        && response.log_stdout_name.as_deref() == Some(session.stdout_log_name.as_str())
-        && response.log_stderr_name.as_deref() == Some(session.stderr_log_name.as_str())
-        && response.log_session_launch_pending == Some(session.launch_pending)
-}
-
-#[derive(Debug, Default)]
-struct HarnessLogObserver {
-    files: HashMap<PathBuf, HarnessLogCursor>,
-    sequence: u64,
-    session: Option<(String, u64, u64, u64, String, String, String, String, bool)>,
-    session_initialized: bool,
-}
-
-#[derive(Debug, Clone)]
-struct HarnessLogCursor {
-    offset: u64,
-    fingerprint: u64,
-    candidate: Option<HarnessUrlCandidate>,
-}
-
-#[derive(Debug)]
-struct HarnessLogSnapshot {
-    length: u64,
-    start: u64,
-    file_identity: String,
-    modified_at_nanos: u128,
-    fingerprint: u64,
-    bytes: Vec<u8>,
-    left_delimited: bool,
-    right_delimited: bool,
-}
-
-#[derive(Debug, Clone)]
-struct HarnessUrlCandidate {
-    url: String,
-    token: Option<String>,
-    source: String,
-    observed_at_unix: u64,
-    observed_at_nanos: u128,
-    offset: u64,
-    sequence: u64,
-}
-
-impl HarnessLogObserver {
-    fn invalidate(&mut self) {
-        self.files.clear();
-        self.session = None;
-        self.session_initialized = false;
-    }
-
-    fn select_session(&mut self, session: Option<&HarnessLogSession>) {
-        let selected = session.map(|session| {
-            (
-                session.run_id.clone(),
-                session.generation,
-                session.stdout_watermark,
-                session.stderr_watermark,
-                session.stdout_file_identity.clone(),
-                session.stderr_file_identity.clone(),
-                session.stdout_log_name.clone(),
-                session.stderr_log_name.clone(),
-                session.launch_pending,
-            )
-        });
-        if !self.session_initialized || self.session != selected {
-            self.files.clear();
-            self.sequence = 0;
-            self.session = selected;
-            self.session_initialized = true;
-        }
-    }
-
-    fn observe_file(
-        &mut self,
-        path: &Path,
-        session_watermark: u64,
-        expected_file_identity: Option<&str>,
-    ) -> io::Result<Option<HarnessUrlCandidate>> {
-        let snapshot = read_log_snapshot(path)?;
-        if expected_file_identity.is_some_and(|expected| expected != snapshot.file_identity) {
-            self.files.remove(path);
-            return Ok(None);
-        }
-        let previous = self.files.get(path).cloned();
-        if previous.as_ref().is_some_and(|previous| {
-            snapshot.length == previous.offset && snapshot.fingerprint == previous.fingerprint
-        }) {
-            let previous = previous.expect("same-file cursor is present");
-            self.files.insert(
-                path.to_owned(),
-                HarnessLogCursor {
-                    offset: snapshot.length,
-                    fingerprint: snapshot.fingerprint,
-                    candidate: previous.candidate.clone(),
-                },
-            );
-            return Ok(previous.candidate);
-        }
-
-        // A bounded overlap cannot prove that a file was appended: a rotated
-        // file may preserve the overlap while replacing bytes before it. Parse
-        // the complete current tail and discard candidates no longer present.
-        // A session watermark belongs to the append-only file that existed
-        // when the Agent started Harness. A shorter replacement cannot prove
-        // where this run begins, so fail closed instead of treating its first
-        // byte as current output and potentially reviving an old token.
-        if snapshot.length < session_watermark {
-            self.files.remove(path);
-            return Ok(None);
-        }
-        let mut candidate = None;
-        for (word_start, word_end) in log_word_ranges(&snapshot.bytes) {
-            if (word_start == 0 && !snapshot.left_delimited)
-                || (word_end == snapshot.bytes.len() && !snapshot.right_delimited)
-            {
-                continue;
-            }
-            let absolute_start = snapshot.start + word_start as u64;
-            let absolute_end = snapshot.start + word_end as u64;
-            // The word must begin at or after the durable EOF boundary and
-            // end after it. This rejects a URL whose bytes straddle the
-            // previous and current run while allowing output in a new file to
-            // begin at offset zero.
-            if absolute_start < session_watermark || absolute_end <= session_watermark {
-                continue;
-            }
-            let Ok(word) = std::str::from_utf8(&snapshot.bytes[word_start..word_end]) else {
-                continue;
-            };
-            let cleaned = trim_log_url(word);
-            let Some((url, token)) = parse_loopback_harness_url(cleaned) else {
-                continue;
-            };
-            let next = HarnessUrlCandidate {
-                url,
-                token,
-                source: path.display().to_string(),
-                observed_at_unix: (snapshot.modified_at_nanos / 1_000_000_000) as u64,
-                observed_at_nanos: snapshot.modified_at_nanos,
-                offset: absolute_end,
-                sequence: self.sequence,
-            };
-            self.sequence = self.sequence.wrapping_add(1);
-            if candidate.as_ref().map_or(true, |current| {
-                harness_candidate_cmp(current, &next).is_lt()
-            }) {
-                candidate = Some(next);
-            }
-        }
-
-        self.files.insert(
-            path.to_owned(),
-            HarnessLogCursor {
-                offset: snapshot.length,
-                fingerprint: snapshot.fingerprint,
-                candidate: candidate.clone(),
-            },
-        );
-        Ok(candidate)
-    }
-}
-
-fn harness_log_paths(paths: &NexusPaths, session: &HarnessLogSession) -> [PathBuf; 2] {
-    [
-        paths.logs_dir.join(&session.stdout_log_name),
-        paths.logs_dir.join(&session.stderr_log_name),
-    ]
-}
-
-fn harness_candidate_cmp(
-    left: &HarnessUrlCandidate,
-    right: &HarnessUrlCandidate,
-) -> std::cmp::Ordering {
-    (
-        left.token.is_some(),
-        left.observed_at_nanos,
-        left.offset,
-        left.source.as_str(),
-        left.sequence,
-    )
-        .cmp(&(
-            right.token.is_some(),
-            right.observed_at_nanos,
-            right.offset,
-            right.source.as_str(),
-            right.sequence,
-        ))
-}
-
-fn read_log_snapshot(path: &Path) -> io::Result<HarnessLogSnapshot> {
-    let mut file = fs::File::open(path)?;
-    let metadata = file.metadata()?;
-    let modified_at_nanos = metadata
-        .modified()
-        .ok()
-        .and_then(|time| time.duration_since(UNIX_EPOCH).ok())
-        .map(|duration| duration.as_nanos())
-        .unwrap_or(0);
-    let length = metadata.len();
-    let file_identity = log_file_identity(&file)?;
-    let start = length.saturating_sub(HARNESS_LOG_TAIL_BYTES);
-    let read_start = start.saturating_sub(1);
-    file.seek(SeekFrom::Start(read_start))?;
-    let mut bytes = Vec::new();
-    let expected_len = length.saturating_sub(read_start);
-    (&mut file).take(expected_len).read_to_end(&mut bytes)?;
-    if bytes.len() as u64 != expected_len {
-        return Err(io::Error::new(
-            io::ErrorKind::UnexpectedEof,
-            "Harness log changed while its bounded snapshot was read",
-        ));
-    }
-    let left_delimited = if start == 0 {
-        true
-    } else {
-        let delimiter = bytes
-            .first()
-            .copied()
-            .is_some_and(|byte| byte.is_ascii_whitespace());
-        if !bytes.is_empty() {
-            bytes.remove(0);
-        }
-        delimiter
-    };
-    let right_delimited = bytes
-        .last()
-        .copied()
-        .is_none_or(|byte| byte.is_ascii_whitespace());
-    let fingerprint = fingerprint_bytes(&bytes, length);
-    Ok(HarnessLogSnapshot {
-        length,
-        start,
-        file_identity,
-        modified_at_nanos,
-        fingerprint,
-        bytes,
-        left_delimited,
-        right_delimited,
-    })
-}
-
-fn fingerprint_bytes(bytes: &[u8], length: u64) -> u64 {
-    let mut hasher = std::collections::hash_map::DefaultHasher::new();
-    length.hash(&mut hasher);
-    bytes.hash(&mut hasher);
-    hasher.finish()
-}
-
-fn log_word_ranges(bytes: &[u8]) -> Vec<(usize, usize)> {
-    let mut ranges = Vec::new();
-    let mut start = None;
-    for (index, byte) in bytes.iter().enumerate() {
-        if byte.is_ascii_whitespace() {
-            if let Some(start) = start.take() {
-                ranges.push((start, index));
-            }
-        } else if start.is_none() {
-            start = Some(index);
-        }
-    }
-    if let Some(start) = start {
-        ranges.push((start, bytes.len()));
-    }
-    ranges
-}
-
-fn trim_log_url(value: &str) -> &str {
-    value.trim_matches(|character: char| {
-        character.is_control()
-            || matches!(
-                character,
-                '`' | '"' | '\'' | '(' | ')' | '[' | ']' | '<' | '>' | ',' | ';' | '.'
-            )
-    })
-}
-
-fn parse_loopback_harness_url(raw: &str) -> Option<(String, Option<String>)> {
-    if raw.is_empty() {
-        return None;
-    }
-    let url = Url::parse(raw).ok()?;
-    if url.scheme() != "http"
-        || url.username() != ""
-        || url.password().is_some()
-        || !is_loopback_host(url.host_str()?)
-        || url.port_or_known_default().is_none()
-        || url.as_str().chars().any(char::is_control)
-    {
-        return None;
-    }
-    if url
-        .query_pairs()
-        .any(|(key, value)| key.is_empty() || value.is_empty())
-    {
-        return None;
-    }
-    if let Some(fragment) = url.fragment() {
-        if fragment.is_empty()
-            || fragment.split('&').any(|part| {
-                let Some((key, value)) = part.split_once('=') else {
-                    return true;
-                };
-                key.is_empty() || value.is_empty()
-            })
-        {
-            return None;
-        }
-    }
-    let token = url
-        .query_pairs()
-        .find_map(|(key, value)| is_token_key(&key).then(|| value.into_owned()))
-        .filter(|value| !value.is_empty())
-        .or_else(|| {
-            url.fragment().and_then(|fragment| {
-                fragment.split('&').find_map(|part| {
-                    let (key, value) = part.split_once('=')?;
-                    is_token_key(key).then(|| value.to_owned())
-                })
-            })
-        });
-    Some((url.as_str().to_owned(), token))
-}
-
-fn is_loopback_host(host: &str) -> bool {
-    matches!(host, "127.0.0.1" | "localhost" | "::1")
-}
-
-fn is_token_key(key: &str) -> bool {
-    matches!(
-        key.to_ascii_lowercase().as_str(),
-        "token" | "access_token" | "auth_token" | "session_token" | "authorization"
-    )
-}
-
-async fn ensure_agent_started(
-    options: &Options,
-    paths: &NexusPaths,
-    client: &Client,
-) -> Result<EnsureResult, String> {
-    if is_agent_healthy(client, options.config.port, paths).await? {
-        return Ok(EnsureResult::AlreadyRunning);
-    }
-
-    let lock = acquire_lock(paths).map_err(|error| {
-        if error.kind() == io::ErrorKind::WouldBlock {
-            format!(
-                "another launcher is starting the Agent or holds {}; retry after it finishes",
-                lock_path(paths).display()
-            )
-        } else {
-            format!("cannot acquire Agent instance lock: {error}")
-        }
-    })?;
-
-    if is_agent_healthy(client, options.config.port, paths).await? {
-        return Ok(EnsureResult::AlreadyRunning);
-    }
-
-    ensure_runtime_lock_available(paths).map_err(|error| {
-        if error.kind() == io::ErrorKind::WouldBlock {
-            "another Nexus Agent already owns this data root, possibly on a different port"
-                .to_owned()
-        } else {
-            format!("cannot inspect Agent runtime lock: {error}")
-        }
-    })?;
-    let agent_program = resolve_agent_program(options.agent_program.as_deref())?;
-    let expected_instance_id = new_instance_id();
-    let detached = should_detach_agent(options.command);
-    let mut spawned = spawn_agent(
-        &agent_program,
-        &options.config,
-        paths,
-        &expected_instance_id,
-        detached,
-    )
-    .map_err(|error| format!("cannot start Agent: {error}"))?;
-    let pid = spawned.pid;
-    if let Err(error) = write_launch_record(
+fn persist_started_agent(paths: &NexusPaths, result: &AgentStartResult) -> io::Result<()> {
+    let pid = result
+        .pid
+        .ok_or_else(|| io::Error::other("started Agent did not expose a PID"))?;
+    let program = result
+        .program
+        .as_ref()
+        .ok_or_else(|| io::Error::other("started Agent program was not resolved"))?;
+    write_launch_record(
         paths,
         &LaunchRecord {
             pid,
-            port: options.config.port,
+            port: result.port,
             started_at_unix: unix_time_seconds(),
-            agent_program: agent_program.to_string_lossy().into_owned(),
-            agent_instance_id: Some(expected_instance_id.clone()),
+            agent_program: program.to_string_lossy().into_owned(),
+            agent_instance_id: Some(result.health.instance_id.clone()),
         },
-    ) {
-        let cleanup = terminate_spawned_agent(&mut spawned).await;
-        return Err(cleanup_error(
-            format!("cannot persist Agent launch record: {error}"),
-            cleanup,
-        ));
-    }
-
-    // Use a fresh HTTP client after process creation. A client that attempted
-    // a connection before the listener existed can retain a Windows TCP
-    // refusal while another local WebShell is polling the same port.
-    let startup_client = match Client::builder()
-        .connect_timeout(Duration::from_secs(5))
-        .timeout(Duration::from_secs(6))
-        .build()
-    {
-        Ok(client) => client,
-        Err(error) => {
-            let cleanup = terminate_spawned_agent(&mut spawned).await;
-            remove_launch_record(paths);
-            return Err(cleanup_error(
-                format!("cannot initialize Agent health client: {error}"),
-                cleanup,
-            ));
-        }
-    };
-    let health = match wait_for_health(
-        &startup_client,
-        options.config.port,
-        options.wait_secs,
-        paths,
-        Some(&expected_instance_id),
     )
-    .await
-    {
-        Ok(health) => health,
-        Err(error) => {
-            let cleanup = terminate_spawned_agent(&mut spawned).await;
-            remove_launch_record(paths);
-            return Err(cleanup_error(error, cleanup));
-        }
-    };
-    if let Err(error) = write_launch_record(
-        paths,
-        &LaunchRecord {
-            pid,
-            port: options.config.port,
-            started_at_unix: unix_time_seconds(),
-            agent_program: agent_program.to_string_lossy().into_owned(),
-            agent_instance_id: Some(health.instance_id),
-        },
-    ) {
-        let cleanup = terminate_spawned_agent(&mut spawned).await;
+}
+
+async fn persist_started_agent_or_stop(
+    runtime: &AgentRuntime,
+    paths: &NexusPaths,
+    result: &AgentStartResult,
+) -> Result<(), String> {
+    if let Err(error) = persist_started_agent(paths, result) {
         remove_launch_record(paths);
-        return Err(cleanup_error(
-            format!("cannot persist Agent instance identity: {error}"),
-            cleanup,
-        ));
-    }
-
-    // Exact health proves that the spawned Agent has acquired its own
-    // lifetime runtime lock. The bootstrap lock must not remain coupled to a
-    // foreground Launcher's lifetime.
-    drop(lock);
-    #[cfg(windows)]
-    drop(spawned.process_handle.take());
-    Ok(EnsureResult::Owned(OwnedAgent {
-        child: spawned.child.take(),
-        pid,
-    }))
-}
-
-fn should_detach_agent(command: LauncherCommand) -> bool {
-    matches!(
-        command,
-        LauncherCommand::Start | LauncherCommand::Api | LauncherCommand::Console
-    )
-}
-
-fn acquire_lock(paths: &NexusPaths) -> io::Result<InstanceLock> {
-    let path = lock_path(paths);
-    let mut file = OpenOptions::new()
-        .read(true)
-        .write(true)
-        .create(true)
-        .open(&path)?;
-    file.try_lock()?;
-    file.set_len(0)?;
-    file.seek(SeekFrom::Start(0))?;
-    writeln!(file, "pid={}", process::id())?;
-    file.sync_all()?;
-    Ok(InstanceLock { _file: file })
-}
-
-fn lock_path(paths: &NexusPaths) -> PathBuf {
-    paths.run_dir.join("agent-bootstrap.lock")
-}
-
-fn ensure_runtime_lock_available(paths: &NexusPaths) -> io::Result<()> {
-    let file = OpenOptions::new()
-        .read(true)
-        .write(true)
-        .create(true)
-        .open(paths.run_dir.join("agent.lock"))?;
-    file.try_lock()?;
-    drop(file);
-    Ok(())
-}
-
-fn launch_record_path(paths: &NexusPaths) -> PathBuf {
-    paths.run_dir.join("agent.json")
-}
-
-#[cfg(not(windows))]
-fn spawn_agent(
-    agent_program: &Path,
-    config: &NexusConfig,
-    paths: &NexusPaths,
-    instance_id: &str,
-    detached: bool,
-) -> io::Result<SpawnedAgent> {
-    let stdout = OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(paths.logs_dir.join("agent.stdout.log"))?;
-    let stderr = OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(paths.logs_dir.join("agent.stderr.log"))?;
-    let mut command = TokioCommand::new(agent_program);
-    command
-        .arg("--data-dir")
-        .arg(&paths.root)
-        .arg("--port")
-        .arg(config.port.to_string())
-        .arg("--instance-id")
-        .arg(instance_id)
-        .stdin(Stdio::null())
-        .stdout(Stdio::from(stdout))
-        .stderr(Stdio::from(stderr));
-    configure_agent_process_group(&mut command, detached);
-    let child = command.spawn()?;
-    let pid = child
-        .id()
-        .ok_or_else(|| io::Error::other("Agent process did not expose a PID"))?;
-    Ok(SpawnedAgent {
-        child: Some(child),
-        pid,
-    })
-}
-
-#[cfg(not(windows))]
-fn configure_agent_process_group(command: &mut TokioCommand, detached: bool) {
-    #[cfg(unix)]
-    if detached {
-        // `start` and the headless API transfer Agent lifetime to the Agent's
-        // data-root runtime lock. Put that process in its own group before
-        // spawn so a terminal SIGINT delivered to the Launcher's foreground
-        // group cannot contradict that ownership contract.
-        command.process_group(0);
-    }
-
-    #[cfg(not(unix))]
-    let _ = (command, detached);
-}
-
-#[cfg(windows)]
-fn spawn_agent(
-    agent_program: &Path,
-    config: &NexusConfig,
-    paths: &NexusPaths,
-    instance_id: &str,
-    detached: bool,
-) -> io::Result<SpawnedAgent> {
-    if !detached {
-        return spawn_agent_direct(agent_program, config, paths, instance_id);
-    }
-
-    let (process_handle, pid) =
-        spawn_agent_windows_detached(agent_program, config, paths, instance_id)?;
-    Ok(SpawnedAgent {
-        child: None,
-        pid,
-        process_handle: Some(process_handle),
-    })
-}
-
-#[cfg(windows)]
-fn spawn_agent_direct(
-    agent_program: &Path,
-    config: &NexusConfig,
-    paths: &NexusPaths,
-    instance_id: &str,
-) -> io::Result<SpawnedAgent> {
-    let stdout = OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(paths.logs_dir.join("agent.stdout.log"))?;
-    let stderr = OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(paths.logs_dir.join("agent.stderr.log"))?;
-    let mut command = TokioCommand::new(agent_program);
-    command
-        .arg("--data-dir")
-        .arg(&paths.root)
-        .arg("--port")
-        .arg(config.port.to_string())
-        .arg("--instance-id")
-        .arg(instance_id)
-        .stdin(Stdio::null())
-        .stdout(Stdio::from(stdout))
-        .stderr(Stdio::from(stderr));
-    command.kill_on_drop(true);
-    command.creation_flags(0x0900_0200);
-    let child = command.spawn()?;
-    let pid = child
-        .id()
-        .ok_or_else(|| io::Error::other("Agent process did not expose a PID"))?;
-    Ok(SpawnedAgent {
-        child: Some(child),
-        pid,
-        process_handle: None,
-    })
-}
-
-#[cfg(windows)]
-fn spawn_agent_windows_detached(
-    agent_program: &Path,
-    config: &NexusConfig,
-    paths: &NexusPaths,
-    instance_id: &str,
-) -> io::Result<(std::os::windows::io::OwnedHandle, u32)> {
-    use std::{
-        ffi::{OsStr, OsString},
-        mem::size_of,
-        os::windows::ffi::OsStrExt,
-        os::windows::io::FromRawHandle,
-        ptr::{null, null_mut},
-    };
-
-    use windows_sys::Win32::{
-        Foundation::{CloseHandle, HANDLE, INVALID_HANDLE_VALUE},
-        Security::SECURITY_ATTRIBUTES,
-        Storage::FileSystem::{
-            CreateFileW, FILE_APPEND_DATA, FILE_ATTRIBUTE_NORMAL, FILE_SHARE_READ,
-            FILE_SHARE_WRITE, OPEN_ALWAYS, OPEN_EXISTING,
-        },
-        System::Threading::{
-            CreateProcessW, DeleteProcThreadAttributeList, InitializeProcThreadAttributeList,
-            UpdateProcThreadAttribute, CREATE_BREAKAWAY_FROM_JOB, CREATE_NEW_PROCESS_GROUP,
-            CREATE_NO_WINDOW, EXTENDED_STARTUPINFO_PRESENT, PROCESS_INFORMATION,
-            PROC_THREAD_ATTRIBUTE_HANDLE_LIST, STARTF_USESTDHANDLES, STARTUPINFOEXW,
-        },
-    };
-
-    fn wide(value: &OsStr) -> Vec<u16> {
-        value.encode_wide().chain(std::iter::once(0)).collect()
-    }
-
-    fn quote(value: &OsStr) -> Vec<u16> {
-        let units: Vec<u16> = value.encode_wide().collect();
-        let needs_quotes = units.is_empty()
-            || units
-                .iter()
-                .any(|unit| *unit == b' ' as u16 || *unit == b'\t' as u16 || *unit == b'"' as u16);
-        if !needs_quotes {
-            return units;
-        }
-        let mut result = Vec::with_capacity(units.len() + 2);
-        result.push(b'"' as u16);
-        let mut backslashes = 0usize;
-        for unit in units {
-            if unit == b'\\' as u16 {
-                backslashes += 1;
-            } else if unit == b'"' as u16 {
-                result.extend(std::iter::repeat_n(b'\\' as u16, backslashes * 2 + 1));
-                result.push(unit);
-                backslashes = 0;
-            } else {
-                result.extend(std::iter::repeat_n(b'\\' as u16, backslashes));
-                result.push(unit);
-                backslashes = 0;
-            }
-        }
-        result.extend(std::iter::repeat_n(b'\\' as u16, backslashes * 2));
-        result.push(b'"' as u16);
-        result
-    }
-
-    fn open_output(path: &Path, security: &SECURITY_ATTRIBUTES) -> io::Result<HANDLE> {
-        let path = wide(path.as_os_str());
-        let handle = unsafe {
-            CreateFileW(
-                path.as_ptr(),
-                FILE_APPEND_DATA,
-                FILE_SHARE_READ | FILE_SHARE_WRITE,
-                security,
-                OPEN_ALWAYS,
-                FILE_ATTRIBUTE_NORMAL,
-                null_mut(),
-            )
+        let cleanup = runtime.stop(DEFAULT_STOP_WAIT_SECS).await;
+        return match cleanup {
+            Ok(()) => Err(format!("cannot persist Agent launch record: {error}")),
+            Err(cleanup_error) => Err(format!(
+                "cannot persist Agent launch record: {error}; Agent cleanup failed: {cleanup_error}"
+            )),
         };
-        if handle == INVALID_HANDLE_VALUE {
-            Err(io::Error::last_os_error())
-        } else {
-            Ok(handle)
-        }
-    }
-
-    let security = SECURITY_ATTRIBUTES {
-        nLength: size_of::<SECURITY_ATTRIBUTES>() as u32,
-        lpSecurityDescriptor: null_mut(),
-        bInheritHandle: 1,
-    };
-    let stdout = open_output(&paths.logs_dir.join("agent.stdout.log"), &security)?;
-    let stderr = match open_output(&paths.logs_dir.join("agent.stderr.log"), &security) {
-        Ok(handle) => handle,
-        Err(error) => {
-            unsafe { CloseHandle(stdout) };
-            return Err(error);
-        }
-    };
-    let nul_name = wide(OsStr::new("NUL"));
-    let stdin = unsafe {
-        CreateFileW(
-            nul_name.as_ptr(),
-            windows_sys::Win32::Storage::FileSystem::FILE_GENERIC_READ,
-            FILE_SHARE_READ | FILE_SHARE_WRITE,
-            &security,
-            OPEN_EXISTING,
-            FILE_ATTRIBUTE_NORMAL,
-            null_mut(),
-        )
-    };
-    if stdin == INVALID_HANDLE_VALUE {
-        unsafe {
-            CloseHandle(stdout);
-            CloseHandle(stderr);
-        }
-        return Err(io::Error::last_os_error());
-    }
-
-    let arguments: Vec<OsString> = vec![
-        agent_program.as_os_str().to_owned(),
-        OsString::from("--data-dir"),
-        paths.root.as_os_str().to_owned(),
-        OsString::from("--port"),
-        OsString::from(config.port.to_string()),
-        OsString::from("--instance-id"),
-        OsString::from(instance_id),
-    ];
-    let mut command_line: Vec<u16> = Vec::new();
-    for (index, argument) in arguments.iter().enumerate() {
-        if index != 0 {
-            command_line.push(b' ' as u16);
-        }
-        command_line.extend(quote(argument));
-    }
-    command_line.push(0);
-
-    let mut attribute_size = 0usize;
-    unsafe {
-        let _ = InitializeProcThreadAttributeList(null_mut(), 1, 0, &mut attribute_size);
-    }
-    if attribute_size == 0 {
-        unsafe {
-            CloseHandle(stdin);
-            CloseHandle(stdout);
-            CloseHandle(stderr);
-        }
-        return Err(io::Error::last_os_error());
-    }
-    let words = (attribute_size + size_of::<usize>() - 1) / size_of::<usize>();
-    let mut attribute_storage = vec![0usize; words];
-    let attribute_list = attribute_storage.as_mut_ptr() as *mut core::ffi::c_void;
-    let initialized =
-        unsafe { InitializeProcThreadAttributeList(attribute_list, 1, 0, &mut attribute_size) };
-    if initialized == 0 {
-        unsafe {
-            CloseHandle(stdin);
-            CloseHandle(stdout);
-            CloseHandle(stderr);
-        }
-        return Err(io::Error::last_os_error());
-    }
-
-    let handles = [stdin, stdout, stderr];
-    let updated = unsafe {
-        UpdateProcThreadAttribute(
-            attribute_list,
-            0,
-            PROC_THREAD_ATTRIBUTE_HANDLE_LIST as usize,
-            handles.as_ptr().cast(),
-            size_of::<HANDLE>() * handles.len(),
-            null_mut(),
-            null(),
-        )
-    };
-    if updated == 0 {
-        unsafe {
-            DeleteProcThreadAttributeList(attribute_list);
-            CloseHandle(stdin);
-            CloseHandle(stdout);
-            CloseHandle(stderr);
-        }
-        return Err(io::Error::last_os_error());
-    }
-
-    let mut startup = STARTUPINFOEXW::default();
-    startup.StartupInfo.cb = size_of::<STARTUPINFOEXW>() as u32;
-    startup.StartupInfo.dwFlags = STARTF_USESTDHANDLES;
-    startup.StartupInfo.hStdInput = stdin;
-    startup.StartupInfo.hStdOutput = stdout;
-    startup.StartupInfo.hStdError = stderr;
-    startup.lpAttributeList = attribute_list;
-    let flags = EXTENDED_STARTUPINFO_PRESENT
-        | CREATE_BREAKAWAY_FROM_JOB
-        | CREATE_NEW_PROCESS_GROUP
-        | CREATE_NO_WINDOW;
-    let mut process_info = PROCESS_INFORMATION::default();
-    let created = unsafe {
-        CreateProcessW(
-            null(),
-            command_line.as_mut_ptr(),
-            null(),
-            null(),
-            1,
-            flags,
-            null(),
-            null(),
-            &startup.StartupInfo,
-            &mut process_info,
-        )
-    };
-    let error = if created == 0 {
-        Some(io::Error::last_os_error())
-    } else {
-        None
-    };
-    unsafe {
-        DeleteProcThreadAttributeList(attribute_list);
-        CloseHandle(stdin);
-        CloseHandle(stdout);
-        CloseHandle(stderr);
-    }
-    if let Some(error) = error {
-        return Err(error);
-    }
-    unsafe {
-        CloseHandle(process_info.hThread);
-    }
-    let process_handle =
-        unsafe { std::os::windows::io::OwnedHandle::from_raw_handle(process_info.hProcess) };
-    Ok((process_handle, process_info.dwProcessId))
-}
-
-fn cleanup_error(message: String, cleanup: io::Result<()>) -> String {
-    match cleanup {
-        Ok(()) => message,
-        Err(error) => format!("{message}; spawned Agent handle cleanup failed: {error}"),
-    }
-}
-
-async fn terminate_spawned_agent(spawned: &mut SpawnedAgent) -> io::Result<()> {
-    if let Some(mut child) = spawned.child.take() {
-        match child.try_wait()? {
-            Some(_) => return Ok(()),
-            None => {
-                child.kill().await?;
-                child.wait().await?;
-                return Ok(());
-            }
-        }
-    }
-    #[cfg(windows)]
-    if let Some(handle) = spawned.process_handle.take() {
-        return tokio::task::spawn_blocking(move || terminate_windows_process(handle))
-            .await
-            .map_err(|error| io::Error::other(format!("process cleanup task failed: {error}")))?;
     }
     Ok(())
-}
-
-#[cfg(windows)]
-fn terminate_windows_process(handle: std::os::windows::io::OwnedHandle) -> io::Result<()> {
-    use std::os::windows::io::AsRawHandle;
-    use windows_sys::Win32::{
-        Foundation::{WAIT_FAILED, WAIT_OBJECT_0},
-        System::Threading::{TerminateProcess, WaitForSingleObject},
-    };
-
-    let handle = handle.as_raw_handle() as windows_sys::Win32::Foundation::HANDLE;
-    match unsafe { WaitForSingleObject(handle, 0) } {
-        WAIT_OBJECT_0 => return Ok(()),
-        WAIT_FAILED => return Err(io::Error::last_os_error()),
-        _ => {}
-    }
-    if unsafe { TerminateProcess(handle, 1) } == 0 {
-        // The process can exit naturally between the zero-time probe and the
-        // termination call. Accept only an observed signal on the same owned
-        // handle; never fall back to a reusable PID.
-        if unsafe { WaitForSingleObject(handle, 0) } == WAIT_OBJECT_0 {
-            return Ok(());
-        }
-        return Err(io::Error::last_os_error());
-    }
-    match unsafe { WaitForSingleObject(handle, 5_000) } {
-        WAIT_OBJECT_0 => Ok(()),
-        WAIT_FAILED => Err(io::Error::last_os_error()),
-        _ => Err(io::Error::new(
-            io::ErrorKind::TimedOut,
-            "timed out waiting for the spawned Agent process handle",
-        )),
-    }
-}
-
-fn resolve_agent_program(explicit: Option<&Path>) -> Result<PathBuf, String> {
-    if let Some(path) = explicit {
-        return Ok(path.to_owned());
-    }
-    if let Some(path) = env::var_os(AGENT_BINARY_ENV).filter(|value| !value.is_empty()) {
-        return Ok(PathBuf::from(path));
-    }
-
-    let executable = env::current_exe()
-        .map_err(|error| format!("cannot locate launcher executable: {error}"))?;
-    let parent = executable
-        .parent()
-        .ok_or_else(|| "launcher executable has no parent directory".to_owned())?;
-    let candidate = if cfg!(windows) {
-        parent.join("nexus-agent.exe")
-    } else {
-        parent.join("nexus-agent")
-    };
-    if candidate.exists() {
-        Ok(candidate)
-    } else {
-        Err(format!(
-            "nexus-agent was not found beside the launcher at {}; pass --agent PATH or set {AGENT_BINARY_ENV}",
-            candidate.display()
-        ))
-    }
-}
-
-async fn is_agent_healthy(client: &Client, port: u16, paths: &NexusPaths) -> Result<bool, String> {
-    Ok(matches!(
-        probe_health(client, port, paths).await?,
-        Some(response) if response.status == HealthStatus::Ok
-    ))
-}
-
-async fn probe_health(
-    client: &Client,
-    port: u16,
-    paths: &NexusPaths,
-) -> Result<Option<HealthResponse>, String> {
-    let response = match client
-        .get(format!("http://127.0.0.1:{port}/v1/health"))
-        .send()
-        .await
-    {
-        Ok(response) => response,
-        Err(_) => return Ok(None),
-    };
-    if !response.status().is_success() {
-        return Ok(None);
-    }
-    let health = response
-        .json::<HealthResponse>()
-        .await
-        .map_err(|error| format!("invalid Agent health response: {error}"))?;
-    let expected = data_root_identity(paths)
-        .map_err(|error| format!("cannot identify Nexus data root: {error}"))?;
-    if health.api_version != nexus_protocol::API_VERSION
-        || health.service != "nexus-agent"
-        || health.data_root_id != expected
-        || health.instance_id.is_empty()
-    {
-        return Err(format!(
-            "port {port} is occupied by a Nexus Agent for a different data root or instance contract"
-        ));
-    }
-    Ok(Some(health))
-}
-
-async fn verified_agent_request(
-    client: &Client,
-    port: u16,
-    paths: &NexusPaths,
-    method: Method,
-    path: &str,
-) -> Result<reqwest::RequestBuilder, String> {
-    let health = probe_health(client, port, paths)
-        .await?
-        .filter(|health| health.status == HealthStatus::Ok)
-        .ok_or_else(|| format!("Nexus Agent is not healthy on port {port}"))?;
-    Ok(client
-        .request(method, format!("http://127.0.0.1:{port}{path}"))
-        .header(PROXY_DATA_ROOT_HEADER, health.data_root_id)
-        .header(PROXY_INSTANCE_HEADER, health.instance_id))
-}
-
-async fn wait_for_health(
-    client: &Client,
-    port: u16,
-    wait_secs: u64,
-    paths: &NexusPaths,
-    expected_instance_id: Option<&str>,
-) -> Result<HealthResponse, String> {
-    let deadline = Instant::now() + Duration::from_secs(wait_secs);
-    let mut last_error = None;
-    loop {
-        match probe_health(client, port, paths).await {
-            Ok(Some(response))
-                if response.status == HealthStatus::Ok
-                    && expected_instance_id
-                        .is_none_or(|expected| response.instance_id == expected) =>
-            {
-                return Ok(response)
-            }
-            Ok(Some(response)) if response.status == HealthStatus::Ok => {
-                return Err(format!(
-                    "port {port} answered with Agent instance {} instead of the spawned instance",
-                    response.instance_id
-                ))
-            }
-            Ok(_) => {}
-            Err(error) if error.contains("is occupied by a Nexus Agent") => return Err(error),
-            Err(error) => last_error = Some(error),
-        }
-        if Instant::now() >= deadline {
-            return Err(match last_error {
-                Some(error) => format!(
-                    "Agent did not become healthy within {wait_secs} seconds (last probe error: {error})"
-                ),
-                None => format!("Agent did not become healthy within {wait_secs} seconds"),
-            });
-        }
-        sleep(Duration::from_millis(150)).await;
-    }
-}
-
-async fn stop_agent(options: &Options, paths: &NexusPaths, client: &Client) -> Result<(), String> {
-    let health = probe_health(client, options.config.port, paths).await?;
-    if health.is_none() {
-        remove_launch_record(paths);
-        print_stop(options, false, paths);
-        return Ok(());
-    }
-
-    let response = verified_agent_request(
-        client,
-        options.config.port,
-        paths,
-        Method::POST,
-        "/v1/shutdown",
-    )
-    .await?
-    .json(&serde_json::json!({}))
-    .send()
-    .await
-    .map_err(|error| format!("cannot request Agent shutdown: {error}"))?;
-    if !response.status().is_success() {
-        return Err(format!(
-            "Agent rejected shutdown with HTTP {}",
-            response.status()
-        ));
-    }
-
-    let deadline = Instant::now() + Duration::from_secs(DEFAULT_STOP_WAIT_SECS);
-    loop {
-        if probe_health(client, options.config.port, paths)
-            .await?
-            .is_none()
-        {
-            remove_launch_record(paths);
-            print_stop(options, true, paths);
-            return Ok(());
-        }
-        if Instant::now() >= deadline {
-            return Err(format!(
-                "Agent did not exit within {DEFAULT_STOP_WAIT_SECS} seconds; launch metadata was retained"
-            ));
-        }
-        sleep(Duration::from_millis(200)).await;
-    }
 }
 
 async fn run_foreground(
-    mut owned: OwnedAgent,
+    runtime: &AgentRuntime,
     options: &Options,
     paths: &NexusPaths,
-    client: &Client,
 ) -> Result<(), String> {
-    let mut child = owned
-        .child
-        .take()
-        .ok_or_else(|| "foreground Agent start did not return a child handle".to_owned())?;
-    print_started(options, Some(owned.pid), paths, false);
+    print_started(options, runtime.child_pid(), paths, false);
     let mut down_polls = 0u8;
     loop {
         tokio::select! {
             result = tokio::signal::ctrl_c() => {
                 result.map_err(|error| format!("cannot listen for Ctrl+C: {error}"))?;
-                request_shutdown(client, options.config.port, paths).await?;
-                let deadline = Instant::now() + Duration::from_secs(DEFAULT_STOP_WAIT_SECS);
-                loop {
-                    if let Ok(Some(_)) = child.try_wait() {
-                        break;
-                    }
-                    if Instant::now() >= deadline {
-                        let _ = child.start_kill();
-                        break;
-                    }
-                    sleep(Duration::from_millis(200)).await;
-                }
+                runtime
+                    .stop(DEFAULT_STOP_WAIT_SECS)
+                    .await
+                    .map_err(|error| format!("cannot stop Agent: {error}"))?;
                 remove_launch_record(paths);
                 println!("agent stopped");
                 return Ok(());
             }
             _ = sleep(Duration::from_secs(1)) => {
-                if let Ok(Some(status)) = child.try_wait() {
-                    remove_launch_record(paths);
-                    println!("agent exited: {status}");
-                    return Ok(());
+                if runtime.probe().await.is_ok() {
+                    down_polls = 0;
+                    continue;
                 }
-
-                // `stop` removes the launch metadata after the loopback
-                // listener is gone. Observe that local signal first so a
-                // foreground launcher is not held hostage by a stale TCP
-                // connection while the Agent is already shutting down.
-                if !launch_record_path(paths).exists() {
-                    if let Ok(Some(status)) = child.try_wait() {
-                        println!("agent exited: {status}");
-                    } else {
-                        let _ = child.start_kill();
-                        println!("agent stopped");
-                    }
-                    remove_launch_record(paths);
-                    return Ok(());
+                down_polls = down_polls.saturating_add(1);
+                if down_polls < 3 {
+                    continue;
                 }
-                match probe_health(client, options.config.port, paths).await {
-                    Ok(Some(_)) | Err(_) => down_polls = 0,
-                    Ok(None) => {
-                        down_polls = down_polls.saturating_add(1);
-                        if down_polls < 3 {
-                            continue;
-                        }
-                        if let Ok(Some(status)) = child.try_wait() {
-                            remove_launch_record(paths);
-                            println!("agent exited: {status}");
-                            return Ok(());
-                        }
-
-                        // Once the owned Agent has kept its listener down for
-                        // several consecutive polls, do not wait forever for
-                        // a Windows process notification that may be missed.
-                        // Terminate only the exact child handle and return.
-                        let _ = child.start_kill();
-                        remove_launch_record(paths);
-                        println!("agent stopped");
-                        return Ok(());
-                    }
-                }
+                let _ = runtime.stop(DEFAULT_STOP_WAIT_SECS).await;
+                remove_launch_record(paths);
+                println!("agent stopped");
+                return Ok(());
             }
         }
     }
 }
 
-async fn request_shutdown(client: &Client, port: u16, paths: &NexusPaths) -> Result<(), String> {
-    let Some(_) = probe_health(client, port, paths).await? else {
-        return Ok(());
-    };
-    let response = verified_agent_request(client, port, paths, Method::POST, "/v1/shutdown")
-        .await?
-        .json(&serde_json::json!({}))
-        .send()
+async fn verified_agent_client(runtime: &AgentRuntime) -> Result<AgentClient, String> {
+    let health = runtime
+        .probe()
         .await
-        .map_err(|error| format!("cannot request Agent shutdown: {error}"))?;
-    if response.status().is_success() {
-        Ok(())
-    } else {
-        Err(format!(
-            "Agent rejected shutdown with HTTP {}",
-            response.status()
-        ))
-    }
+        .map_err(|error| format!("Nexus Agent is not healthy: {error}"))?;
+    Ok(runtime
+        .client()
+        .with_expected_identity(nexus_launcher_core::AgentIdentity::from(&health)))
 }
 
 async fn status_agent(
+    runtime: &AgentRuntime,
     options: &Options,
     paths: &NexusPaths,
-    client: &Client,
 ) -> Result<(), String> {
-    let health = probe_health(client, options.config.port, paths).await?;
+    let health = runtime.probe().await.ok();
     let record = read_launch_record(paths).filter(|record| {
         health.as_ref().is_some_and(|health| {
             record.agent_instance_id.as_deref() == Some(health.instance_id.as_str())
         })
     });
     let state = if health.is_some() {
-        verified_agent_request(client, options.config.port, paths, Method::GET, "/v1/state")
+        verified_agent_client(runtime)
             .await?
-            .send()
+            .get_json::<StateResponse>("/v1/state")
             .await
             .map_err(|error| format!("cannot read Agent state: {error}"))?
-            .json::<StateResponse>()
-            .await
-            .map_err(|error| format!("invalid Agent state response: {error}"))?
     } else {
         StateResponse {
             api_version: nexus_protocol::API_VERSION.to_owned(),
@@ -2795,6 +1504,10 @@ fn print_logs(options: &Options, paths: &NexusPaths) {
     }
 }
 
+fn launch_record_path(paths: &NexusPaths) -> PathBuf {
+    paths.run_dir.join("agent.json")
+}
+
 fn write_launch_record(paths: &NexusPaths, record: &LaunchRecord) -> io::Result<()> {
     let path = launch_record_path(paths);
     let temporary = paths.run_dir.join(format!(
@@ -2929,7 +1642,8 @@ browser.
 #[cfg(test)]
 mod tests {
     use super::*;
-    use nexus_protocol::HarnessRuntimeInfo;
+    use nexus_protocol::{HarnessRuntimeInfo, HealthResponse};
+    use reqwest::Client;
 
     fn test_harness_log_session(
         paths: &NexusPaths,
@@ -2960,43 +1674,6 @@ mod tests {
             true,
             unix_time_seconds(),
         )
-    }
-
-    #[test]
-    fn default_agent_path_is_sibling_name_for_current_platform() {
-        let name = if cfg!(windows) {
-            "nexus-agent.exe"
-        } else {
-            "nexus-agent"
-        };
-        assert!(!name.is_empty());
-    }
-
-    #[test]
-    fn background_launcher_modes_detach_agent_but_foreground_run_does_not() {
-        assert!(should_detach_agent(LauncherCommand::Start));
-        assert!(should_detach_agent(LauncherCommand::Api));
-        assert!(should_detach_agent(LauncherCommand::Console));
-        assert!(!should_detach_agent(LauncherCommand::Run));
-    }
-
-    #[cfg(unix)]
-    #[tokio::test]
-    async fn detached_agent_spawn_gets_an_independent_process_group() {
-        let mut command = TokioCommand::new("sh");
-        command.args([
-            "-c",
-            "pid=$$; pgid=$(ps -o pgid= -p $$ | tr -d ' '); test \"$pid\" = \"$pgid\"",
-        ]);
-        configure_agent_process_group(&mut command, true);
-        let status = command
-            .status()
-            .await
-            .expect("detached process-group probe runs");
-        assert!(
-            status.success(),
-            "the detached child PID must be its process-group ID"
-        );
     }
 
     #[test]
@@ -3037,74 +1714,8 @@ mod tests {
         let _ = fs::remove_dir_all(root);
     }
 
-    #[test]
-    fn instance_lock_is_os_owned_and_cannot_be_stale_deleted() {
-        let root = std::env::temp_dir().join(format!(
-            "nexus-launcher-lock-{}-{}",
-            process::id(),
-            unix_time_seconds()
-        ));
-        let paths = NexusPaths::from_root(root.clone());
-        paths.ensure_directories().expect("directories create");
-        let first = acquire_lock(&paths).expect("first launcher acquires lock");
-        let second_error = match acquire_lock(&paths) {
-            Ok(_) => panic!("second launcher must not acquire an OS-owned lock"),
-            Err(error) => error,
-        };
-        assert_eq!(second_error.kind(), io::ErrorKind::WouldBlock);
-        assert!(lock_path(&paths).exists(), "lock file remains while owned");
-        drop(first);
-        let recovered = acquire_lock(&paths).expect("released OS lock can be acquired");
-        assert!(
-            lock_path(&paths).exists(),
-            "persistent lock inode is reused instead of stale-delete/create"
-        );
-        drop(recovered);
-        let _ = fs::remove_dir_all(root);
-    }
-
-    #[cfg(windows)]
-    #[test]
-    fn startup_failure_cleanup_terminates_the_owned_process_handle() {
-        use std::{
-            os::windows::{io::AsRawHandle, io::FromRawHandle, process::CommandExt},
-            process::Command,
-        };
-        use windows_sys::Win32::{
-            Foundation::{DuplicateHandle, DUPLICATE_SAME_ACCESS, HANDLE},
-            System::Threading::{GetCurrentProcess, CREATE_NO_WINDOW},
-        };
-
-        let mut child = Command::new("cmd.exe")
-            .args(["/C", "ping 127.0.0.1 -n 30 >NUL"])
-            .creation_flags(CREATE_NO_WINDOW)
-            .spawn()
-            .expect("test process spawns");
-        let mut duplicate: HANDLE = std::ptr::null_mut();
-        let duplicated = unsafe {
-            DuplicateHandle(
-                GetCurrentProcess(),
-                child.as_raw_handle() as HANDLE,
-                GetCurrentProcess(),
-                &mut duplicate,
-                0,
-                0,
-                DUPLICATE_SAME_ACCESS,
-            )
-        };
-        assert_ne!(duplicated, 0, "process handle duplicates");
-        let handle = unsafe { std::os::windows::io::OwnedHandle::from_raw_handle(duplicate) };
-        if let Err(error) = terminate_windows_process(handle) {
-            let _ = child.kill();
-            let _ = child.wait();
-            panic!("owned-handle cleanup failed: {error}");
-        }
-        let status = child.wait().expect("terminated process reaps");
-        assert!(!status.success());
-    }
-
     #[tokio::test]
-    async fn health_probe_rejects_agent_for_a_different_data_root() {
+    async fn runtime_probe_rejects_agent_for_a_different_data_root() {
         let root = std::env::temp_dir().join(format!(
             "nexus-launcher-health-root-{}-{}",
             process::id(),
@@ -3136,18 +1747,26 @@ mod tests {
                 .await
                 .expect("foreign Agent serves")
         });
-        let client = Client::new();
-        let error = probe_health(&client, port, &expected)
+        let runtime = AgentRuntime::new(
+            NexusConfig {
+                data_dir: Some(expected.root.clone()),
+                port,
+            },
+            None,
+        )
+        .expect("runtime creates");
+        let error = runtime
+            .probe()
             .await
             .expect_err("foreign data root is never adopted");
-        assert!(error.contains("different data root"));
+        assert!(error.to_string().contains("identity mismatch"));
         server.abort();
         let _ = server.await;
         let _ = fs::remove_dir_all(root);
     }
 
     #[tokio::test]
-    async fn verified_agent_request_binds_the_probed_root_and_instance() {
+    async fn verified_agent_client_binds_the_probed_root_and_instance() {
         let root = std::env::temp_dir().join(format!(
             "nexus-launcher-verified-proxy-{}-{}",
             process::id(),
@@ -3175,17 +1794,17 @@ mod tests {
                     let expected_instance = expected_instance.clone();
                     async move {
                         if headers
-                            .get(PROXY_DATA_ROOT_HEADER)
+                            .get(nexus_launcher_core::AGENT_DATA_ROOT_HEADER)
                             .and_then(|value| value.to_str().ok())
                             == Some(expected_root.as_str())
                             && headers
-                                .get(PROXY_INSTANCE_HEADER)
+                                .get(nexus_launcher_core::AGENT_INSTANCE_HEADER)
                                 .and_then(|value| value.to_str().ok())
                                 == Some(expected_instance.as_str())
                         {
-                            StatusCode::OK
+                            Json(json!({ "ok": true }))
                         } else {
-                            StatusCode::CONFLICT
+                            Json(json!({ "ok": false }))
                         }
                     }
                 }),
@@ -3195,18 +1814,21 @@ mod tests {
             .expect("Agent mock binds");
         let port = listener.local_addr().expect("Agent mock address").port();
         let server = tokio::spawn(async move { axum::serve(listener, app).await.expect("serves") });
-        let client = Client::new();
-        let response = verified_agent_request(&client, port, &paths, Method::GET, "/v1/state")
+        let runtime = AgentRuntime::new(
+            NexusConfig {
+                data_dir: Some(root.clone()),
+                port,
+            },
+            None,
+        )
+        .expect("runtime creates");
+        let response = verified_agent_client(&runtime)
             .await
-            .expect("identity-bound request builds")
-            .send()
+            .expect("identity-bound client builds")
+            .get_json::<Value>("/v1/state")
             .await
             .expect("identity-bound request sends");
-        assert_eq!(response.status(), StatusCode::OK);
-        let error = wait_for_health(&client, port, 1, &paths, Some("different-instance"))
-            .await
-            .expect_err("startup nonce mismatch is rejected");
-        assert!(error.contains("instead of the spawned instance"));
+        assert_eq!(response.get("ok"), Some(&Value::Bool(true)));
         server.abort();
         let _ = server.await;
         let _ = fs::remove_dir_all(root);
@@ -3489,7 +2111,14 @@ mod tests {
                 launcher_capability: Some("a".repeat(64)),
             },
             paths.clone(),
-            Client::new(),
+            AgentRuntime::new(
+                NexusConfig {
+                    data_dir: Some(root.clone()),
+                    port,
+                },
+                None,
+            )
+            .expect("Agent runtime creates"),
         )
         .expect("controller creates");
 
@@ -4045,6 +2674,39 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn agent_proxy_preserves_legacy_agent_http_status_and_error_body() {
+        let body = br#"{"api_version":"v1","code":"busy","message":"Agent lifecycle is busy"}"#;
+        let response = agent_proxy_error_response(AgentClientError::Http {
+            status: reqwest::StatusCode::CONFLICT,
+            message: "Agent lifecycle is busy".to_owned(),
+            body: body.to_vec(),
+        });
+        assert_eq!(response.status(), StatusCode::CONFLICT);
+        let bytes = to_bytes(response.into_body(), MAX_AGENT_PROXY_BODY_BYTES)
+            .await
+            .expect("proxy error body is readable");
+        assert_eq!(bytes.as_ref(), body);
+        let value: Value = serde_json::from_slice(&bytes).expect("proxy error body is JSON");
+        assert_eq!(value["api_version"], "v1");
+        assert_eq!(value["code"], "busy");
+    }
+
+    #[test]
+    fn agent_proxy_preserves_legacy_agent_success_status_codes() {
+        let created = agent_proxy_success_response(AgentResponse {
+            status: StatusCode::CREATED,
+            body: br#"{"accepted":true}"#.to_vec(),
+        });
+        assert_eq!(created.status(), StatusCode::CREATED);
+
+        let no_content = agent_proxy_success_response(AgentResponse {
+            status: StatusCode::NO_CONTENT,
+            body: Vec::new(),
+        });
+        assert_eq!(no_content.status(), StatusCode::NO_CONTENT);
+    }
+
+    #[tokio::test]
     async fn headless_api_exposes_agent_proxy_only_in_the_identity_bound_namespace() {
         let root = std::env::temp_dir().join(format!(
             "nexus-launcher-helper-identity-{}-{}",
@@ -4059,8 +2721,12 @@ mod tests {
         let agent_port = unused_agent.local_addr().expect("Agent address").port();
         drop(unused_agent);
         let client = Client::builder()
-            .connect_timeout(Duration::from_millis(100))
-            .timeout(Duration::from_millis(250))
+            // The shared AgentRuntime deliberately uses the same bounded
+            // transport as the native entry points. This route test is about
+            // namespace/auth behavior, so allow that bounded probe to finish
+            // when the selected port is intentionally unused.
+            .connect_timeout(Duration::from_secs(3))
+            .timeout(Duration::from_secs(3))
             .build()
             .expect("client builds");
         let controller = ConsoleController::new(
@@ -4078,7 +2744,14 @@ mod tests {
                 launcher_capability: Some("a".repeat(64)),
             },
             paths,
-            client.clone(),
+            AgentRuntime::new(
+                NexusConfig {
+                    data_dir: Some(root.clone()),
+                    port: agent_port,
+                },
+                None,
+            )
+            .expect("Agent runtime creates"),
         )
         .expect("controller creates");
         let expected_root = controller.data_root_id.clone();

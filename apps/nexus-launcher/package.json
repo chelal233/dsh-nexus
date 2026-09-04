@@ -7,7 +7,7 @@
     "dev": "vite",
     "test": "node --experimental-strip-types --test tests/*.test.ts",
     "build": "tsc --noEmit && vite build",
-    "build:helper": "node scripts/prepare-helper.mjs",
+    "prepare:agent": "node src-tauri/scripts/prepare-agent.mjs",
     "typecheck": "tsc --noEmit",
     "tauri": "tauri",
     "tauri:dev": "tauri dev",

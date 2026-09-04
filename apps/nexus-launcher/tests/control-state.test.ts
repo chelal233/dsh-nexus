@@ -58,15 +58,9 @@ test("bridge error renders no stale page content even when an old status existed
 });
 
 test("Harness and Agent lifecycle actions invalidate credentials before transport", () => {
-  assert.equal(invalidatesHarnessCredentials("/launcher/agent", "restart"), true);
-  assert.equal(invalidatesHarnessCredentials("/launcher/agent", "stop"), true);
-  assert.equal(
-    invalidatesHarnessCredentials("/launcher/agent-api/v1/harness", "restart"),
-    true,
-  );
-  assert.equal(
-    invalidatesHarnessCredentials("/launcher/agent-api/v1/harness", "stop"),
-    true,
-  );
-  assert.equal(invalidatesHarnessCredentials("/launcher/harness", "open"), false);
+  assert.equal(invalidatesHarnessCredentials("/v1/agent", "restart"), true);
+  assert.equal(invalidatesHarnessCredentials("/v1/agent", "stop"), true);
+  assert.equal(invalidatesHarnessCredentials("/v1/harness", "restart"), true);
+  assert.equal(invalidatesHarnessCredentials("/v1/harness", "stop"), true);
+  assert.equal(invalidatesHarnessCredentials("/v1/harness", "open"), false);
 });
