@@ -23,6 +23,7 @@ tauri = { version = "2", features = ["tray-icon"] }
 tauri-plugin-global-shortcut = "2"
 tauri-plugin-notification = "2"
 tauri-plugin-single-instance = "2"
+windows-sys = { version = "0.61", features = ["Win32_Globalization"] }
 
 # Keep the GUI crate independent from the headless workspace lockfile.
 [workspace]

@@ -456,7 +456,7 @@ function DataList({
 }
 
 function App() {
-  const { t } = useI18n();
+  const { locale, t } = useI18n();
   const [activeModule, setActiveModule] = useState<ModuleId>("overview");
   const [themeMode, setThemeMode] = useState<ThemeMode>(storedTheme);
   const [systemThemeMode, setSystemThemeMode] = useState<"light" | "dark">(systemTheme);
@@ -472,6 +472,13 @@ function App() {
   const refreshPending = useRef(false);
   const harnessPollState = useRef<string | undefined>(undefined);
   const credentialInvalidation = useRef<{ previousSessionKey: string | undefined } | null>(null);
+
+  useEffect(() => {
+    // Keep tray labels and minimize notifications in lockstep with the
+    // webview language. The command is intentionally best-effort so the same
+    // React bundle remains usable in a browser-only development preview.
+    void invoke("set_native_locale", { locale }).catch(() => undefined);
+  }, [locale]);
 
   useEffect(() => {
     const media = window.matchMedia("(prefers-color-scheme: light)");

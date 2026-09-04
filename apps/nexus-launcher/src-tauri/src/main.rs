@@ -24,7 +24,7 @@ use tauri::{
 };
 
 mod native_i18n;
-use native_i18n::{detect_locale, text as native_text, NativeText};
+use native_i18n::{text as native_text, NativeText};
 
 const START_WAIT_SECS: u64 = nexus_launcher_core::DEFAULT_START_WAIT_SECS;
 const STOP_WAIT_SECS: u64 = nexus_launcher_core::DEFAULT_STOP_WAIT_SECS;
@@ -287,8 +287,10 @@ fn show_window(app: &AppHandle) {
 }
 
 #[cfg(desktop)]
-fn setup_tray(app: &mut tauri::App) -> tauri::Result<()> {
-    let locale = detect_locale();
+fn tray_menu(
+    app: &impl Manager<tauri::Wry>,
+    locale: native_i18n::NativeLocale,
+) -> tauri::Result<Menu<tauri::Wry>> {
     let show = MenuItem::with_id(
         app,
         "show",
@@ -303,8 +305,14 @@ fn setup_tray(app: &mut tauri::App) -> tauri::Result<()> {
         true,
         None::<&str>,
     )?;
-    let menu = Menu::with_items(app, &[&show, &quit])?;
-    TrayIconBuilder::new()
+    Menu::with_items(app, &[&show, &quit])
+}
+
+#[cfg(desktop)]
+fn setup_tray(app: &mut tauri::App) -> tauri::Result<()> {
+    let locale = native_i18n::active_locale();
+    let menu = tray_menu(app, locale)?;
+    TrayIconBuilder::with_id("main")
         .icon(
             app.default_window_icon()
                 .cloned()
@@ -332,6 +340,29 @@ fn setup_tray(app: &mut tauri::App) -> tauri::Result<()> {
     Ok(())
 }
 
+#[cfg(desktop)]
+#[tauri::command]
+fn set_native_locale(app: AppHandle, locale: String) -> Result<(), String> {
+    let locale = native_i18n::NativeLocale::from_code(&locale)
+        .ok_or_else(|| format!("unsupported locale: {locale}"))?;
+    native_i18n::set_active_locale(locale);
+    let menu = tray_menu(&app, locale).map_err(|error| error.to_string())?;
+    let tray = app
+        .tray_by_id("main")
+        .ok_or_else(|| "native tray is not available".to_owned())?;
+    tray.set_menu(Some(menu))
+        .map_err(|error| error.to_string())?;
+    tray.set_tooltip(Some(native_text(locale, NativeText::TrayTooltip)))
+        .map_err(|error| error.to_string())?;
+    Ok(())
+}
+
+#[cfg(not(desktop))]
+#[tauri::command]
+fn set_native_locale(_app: AppHandle, _locale: String) -> Result<(), String> {
+    Ok(())
+}
+
 fn main() {
     let builder = tauri::Builder::default()
         // The single-instance plugin must be registered first.
@@ -342,7 +373,8 @@ fn main() {
         .invoke_handler(tauri::generate_handler![
             startup_status,
             retry_startup,
-            proxy_request
+            proxy_request,
+            set_native_locale
         ])
         .setup(|app| {
             let resource_dir = app.path().resource_dir().map_err(|error| {
@@ -385,8 +417,14 @@ fn main() {
                 let _ = app
                     .notification()
                     .builder()
-                    .title(native_text(detect_locale(), NativeText::MinimizedTitle))
-                    .body(native_text(detect_locale(), NativeText::MinimizedBody))
+                    .title(native_text(
+                        native_i18n::active_locale(),
+                        NativeText::MinimizedTitle,
+                    ))
+                    .body(native_text(
+                        native_i18n::active_locale(),
+                        NativeText::MinimizedBody,
+                    ))
                     .show();
             }
         });
