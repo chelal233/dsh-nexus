@@ -51,6 +51,7 @@ const AGENT_ROUTES: &[&str] = &[
     "/v1/state",
     "/v1/harness",
     "/v1/harness/ui",
+    "/v1/harness/discover",
     "/v1/profiles",
     "/v1/checkpoints",
     "/v1/releases",
@@ -412,7 +413,9 @@ pub fn validate_agent_request(
         return Err(AgentClientError::InvalidPath(path.to_owned()));
     }
     let method_allowed = match path {
-        "/v1/health" | "/v1/state" | "/v1/harness/ui" => *method == Method::GET,
+        "/v1/health" | "/v1/state" | "/v1/harness/ui" | "/v1/harness/discover" => {
+            *method == Method::GET
+        }
         "/v1/harness" | "/v1/profiles" | "/v1/checkpoints" | "/v1/releases" | "/v1/updates"
         | "/v1/diagnostics" | "/v1/config" => *method == Method::GET || *method == Method::POST,
         "/v1/lifecycle" | "/v1/shutdown" => *method == Method::POST,
@@ -1267,8 +1270,10 @@ mod tests {
     fn agent_routes_are_loopback_versioned_and_bounded() {
         assert!(is_allowed_agent_route("/v1/health"));
         assert!(is_allowed_agent_route("/v1/harness/ui"));
+        assert!(is_allowed_agent_route("/v1/harness/discover"));
         assert!(!is_allowed_agent_route("/launcher/status"));
         assert!(validate_agent_request("/v1/health", &Method::GET, None).is_ok());
+        assert!(validate_agent_request("/v1/harness/discover", &Method::GET, None).is_ok());
         assert!(
             validate_agent_request("/v1/health?url=http://example", &Method::GET, None).is_err()
         );
