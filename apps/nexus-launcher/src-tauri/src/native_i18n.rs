@@ -40,13 +40,28 @@ impl NativeLocale {
 }
 
 pub fn detect_locale() -> NativeLocale {
-    let environment_locale = ["NEXUS_LOCALE", "LC_ALL", "LANG", "LANGUAGE"]
+    if let Some(locale) = std::env::var("NEXUS_LOCALE")
+        .ok()
+        .and_then(|value| NativeLocale::from_code(&value))
+    {
+        return locale;
+    }
+
+    #[cfg(windows)]
+    if let Some(locale) = windows_ui_locale() {
+        return locale;
+    }
+
+    #[cfg(not(windows))]
+    if let Some(locale) = ["LC_ALL", "LANG", "LANGUAGE"]
         .into_iter()
         .filter_map(|key| std::env::var(key).ok())
-        .find_map(|value| NativeLocale::from_code(&value));
-    environment_locale
-        .or_else(windows_default_locale)
-        .unwrap_or(NativeLocale::English)
+        .find_map(|value| NativeLocale::from_code(&value))
+    {
+        return locale;
+    }
+
+    NativeLocale::English
 }
 
 /// Returns the locale currently shared by the webview and native surfaces.
@@ -70,24 +85,22 @@ pub fn set_active_locale(locale: NativeLocale) {
     }
 }
 
-#[cfg(windows)]
-fn windows_default_locale() -> Option<NativeLocale> {
-    use windows_sys::Win32::Globalization::GetUserDefaultLocaleName;
-
-    // GetUserDefaultLocaleName includes the terminating NUL in its length.
-    let mut buffer = [0u16; 85];
-    let length = unsafe { GetUserDefaultLocaleName(buffer.as_mut_ptr(), buffer.len() as i32) };
-    if length <= 1 || length as usize > buffer.len() {
-        return None;
+/// Maps a Windows LANGID to the small locale set supported by the Launcher.
+/// The low ten bits contain the primary language, so region-specific values
+/// such as zh-CN (0x0804) and en-US (0x0409) remain stable inputs for tests.
+pub fn locale_from_windows_langid(lang_id: u16) -> Option<NativeLocale> {
+    match lang_id & 0x03ff {
+        0x0004 => Some(NativeLocale::SimplifiedChinese),
+        0x0009 => Some(NativeLocale::English),
+        _ => None,
     }
-    String::from_utf16(&buffer[..length as usize - 1])
-        .ok()
-        .and_then(|value| NativeLocale::from_code(&value))
 }
 
-#[cfg(not(windows))]
-fn windows_default_locale() -> Option<NativeLocale> {
-    None
+#[cfg(windows)]
+fn windows_ui_locale() -> Option<NativeLocale> {
+    use windows_sys::Win32::Globalization::GetUserDefaultUILanguage;
+
+    locale_from_windows_langid(unsafe { GetUserDefaultUILanguage() })
 }
 
 pub const fn text(locale: NativeLocale, key: NativeText) -> &'static str {
@@ -138,6 +151,15 @@ mod tests {
             Some(NativeLocale::English)
         );
         assert_eq!(NativeLocale::from_code("C.UTF-8"), None);
+        assert_eq!(
+            locale_from_windows_langid(0x0804),
+            Some(NativeLocale::SimplifiedChinese)
+        );
+        assert_eq!(
+            locale_from_windows_langid(0x0409),
+            Some(NativeLocale::English)
+        );
+        assert_eq!(locale_from_windows_langid(0x0407), None);
     }
 
     #[test]
