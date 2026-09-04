@@ -23,6 +23,9 @@ use tauri::{
     AppHandle, Manager, WindowEvent,
 };
 
+mod native_i18n;
+use native_i18n::{detect_locale, text as native_text, NativeText};
+
 const START_WAIT_SECS: u64 = nexus_launcher_core::DEFAULT_START_WAIT_SECS;
 const STOP_WAIT_SECS: u64 = nexus_launcher_core::DEFAULT_STOP_WAIT_SECS;
 
@@ -285,8 +288,21 @@ fn show_window(app: &AppHandle) {
 
 #[cfg(desktop)]
 fn setup_tray(app: &mut tauri::App) -> tauri::Result<()> {
-    let show = MenuItem::with_id(app, "show", "Show launcher", true, None::<&str>)?;
-    let quit = MenuItem::with_id(app, "quit", "Quit", true, None::<&str>)?;
+    let locale = detect_locale();
+    let show = MenuItem::with_id(
+        app,
+        "show",
+        native_text(locale, NativeText::TrayShow),
+        true,
+        None::<&str>,
+    )?;
+    let quit = MenuItem::with_id(
+        app,
+        "quit",
+        native_text(locale, NativeText::TrayQuit),
+        true,
+        None::<&str>,
+    )?;
     let menu = Menu::with_items(app, &[&show, &quit])?;
     TrayIconBuilder::new()
         .icon(
@@ -295,7 +311,7 @@ fn setup_tray(app: &mut tauri::App) -> tauri::Result<()> {
                 .expect("Nexus Launcher config must provide a default icon"),
         )
         .menu(&menu)
-        .tooltip("Nexus Launcher")
+        .tooltip(native_text(locale, NativeText::TrayTooltip))
         .show_menu_on_left_click(false)
         .on_menu_event(|app, event| match event.id.as_ref() {
             "show" => show_window(app),
@@ -369,8 +385,8 @@ fn main() {
                 let _ = app
                     .notification()
                     .builder()
-                    .title("Nexus Launcher")
-                    .body("Launcher is still running in the system tray")
+                    .title(native_text(detect_locale(), NativeText::MinimizedTitle))
+                    .body(native_text(detect_locale(), NativeText::MinimizedBody))
                     .show();
             }
         });

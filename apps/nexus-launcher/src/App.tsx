@@ -32,7 +32,7 @@ import {
   invalidatesHarnessCredentials,
   launcherContentMode,
 } from "./control-state";
-import { useI18n, type Locale } from "./i18n";
+import { useI18n, type Locale, type Translator } from "./i18n";
 
 type JsonObject = Record<string, unknown>;
 type IconComponent = React.ComponentType<IconProps>;
@@ -217,7 +217,7 @@ function errorMessage(error: unknown): string {
   return "The native bridge returned an unknown error";
 }
 
-function localizeBackendError(message: string, t: (key: string) => string): string {
+function localizeBackendError(message: string, t: Translator): string {
   const normalized = message.toLowerCase();
   if (normalized.includes("harness is not configured")) {
     return t("Harness is not configured. Open Settings to configure it.");
@@ -252,18 +252,20 @@ function localizeBackendError(message: string, t: (key: string) => string): stri
   if (normalized.includes("native bridge returned an unknown error")) {
     return t("The native bridge returned an unknown error");
   }
-  return message;
+  return t("Backend error: {message}", { message });
 }
 
-function localizedRuntimeState(value: unknown, t: (key: string) => string): string {
+function localizedRuntimeState(value: unknown, t: Translator): string {
   const state = typeof value === "string" ? value.toLowerCase() : "";
   switch (state) {
     case "ok": return t("Healthy");
     case "running": return t("Running");
     case "starting": return t("Starting");
     case "stopping": return t("Stopping");
+    case "shutting_down": return t("Shutting down");
     case "stopped": return t("Stopped");
     case "failed": return t("Failed");
+    case "succeeded": return t("Succeeded");
     case "detached": return t("Detached");
     case "idle": return t("idle");
     case "ready": return t("Ready");
@@ -271,11 +273,13 @@ function localizedRuntimeState(value: unknown, t: (key: string) => string): stri
     case "queued": return t("Queued");
     case "registered": return t("Registered");
     case "available": return t("Available");
-    default: return typeof value === "string" && value ? value : t("Unknown");
+    default: return typeof value === "string" && value
+      ? t("Unknown state: {state}", { state: value })
+      : t("Unknown");
   }
 }
 
-function updateStateLabel(update: JsonObject, t: (key: string) => string): string {
+function updateStateLabel(update: JsonObject, t: Translator): string {
   const state = stringValue(update, "state");
   return state ? localizedRuntimeState(state, t) : t("Update queue idle");
 }
