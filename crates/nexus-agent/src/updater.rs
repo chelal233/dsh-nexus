@@ -4,7 +4,8 @@ use std::{fmt, fs, io, path::Path, process::Stdio, sync::Arc, time::Duration};
 
 use nexus_core::{
     load_update_spec, unix_time_nanos_for_update, unix_time_seconds, validate_release_id,
-    validate_release_version, NexusPaths, ReleaseStore, UpdateSpec, UpdateStateStore,
+    validate_release_version, validate_update_ref, validate_update_source, NexusPaths,
+    ReleaseStore, UpdateSpec, UpdateStateStore,
 };
 use nexus_protocol::{ReleaseManifest, UpdateResponse, UpdateRuntimeInfo, UpdateState};
 use tokio::{
@@ -394,9 +395,94 @@ async fn run_logged_command(
     }
 }
 
+/// Parse `git ls-remote --tags` output into bare tag names. Peeled
+/// `^{}` duplicates are dropped and the order is reversed so the
+/// newest tag renders first in UI lists.
+pub fn parse_ls_remote_tags(stdout: &str) -> Vec<String> {
+    let mut tags: Vec<String> = Vec::new();
+    for line in stdout.lines() {
+        let Some(target) = line.split_whitespace().nth(1) else {
+            continue;
+        };
+        let Some(tag) = target.strip_prefix("refs/tags/") else {
+            continue;
+        };
+        if tag.ends_with("^{}") || tags.iter().any(|existing| existing == tag) {
+            continue;
+        }
+        if validate_update_ref(tag).is_err() {
+            continue;
+        }
+        tags.push(tag.to_owned());
+    }
+    tags.reverse();
+    tags
+}
+
+/// Enumerate upstream tags with one bounded `git ls-remote --tags` call.
+/// The update source itself is validated before the process is spawned.
+pub async fn list_remote_tags(
+    source: &str,
+    git_program: &Path,
+    command_timeout: Duration,
+) -> Result<Vec<String>, UpdateExecutorError> {
+    const PHASE: &str = "tags";
+    validate_update_source(source).map_err(|source| UpdateExecutorError::Configuration(source))?;
+    let mut command = Command::new(git_program);
+    command
+        .args(["ls-remote", "--tags", source])
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .kill_on_drop(true);
+    let child = command
+        .spawn()
+        .map_err(|source| UpdateExecutorError::Spawn { phase: PHASE, source })?;
+    // Dropping the timed-out future drops the child; kill_on_drop then
+    // terminates the process, so no explicit kill is needed here.
+    let wait = timeout(command_timeout, child.wait_with_output()).await;
+    let output = match wait {
+        Ok(Ok(output)) if output.status.success() => output,
+        Ok(Ok(output)) => {
+            return Err(UpdateExecutorError::Failed {
+                phase: PHASE,
+                code: output.status.code(),
+            });
+        }
+        Ok(Err(source)) => {
+            return Err(UpdateExecutorError::Process {
+                phase: PHASE,
+                source,
+            });
+        }
+        Err(_) => {
+            return Err(UpdateExecutorError::TimedOut {
+                phase: PHASE,
+                timeout: command_timeout,
+            });
+        }
+    };
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    Ok(parse_ls_remote_tags(&stdout))
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{resolve_release_id, resolve_release_version, UpdateExecutor, UpdateExecutorError};
+    use super::{parse_ls_remote_tags, resolve_release_id, resolve_release_version, UpdateExecutor, UpdateExecutorError};
+    #[test]
+    fn parse_ls_remote_tags_dedupes_and_reverses() {
+        let stdout = "abc	refs/tags/v0.9.0
+def	refs/tags/v0.9.0^{}
+123	refs/tags/v1.0.0-rc.1
+456	refs/heads/main
+";
+        assert_eq!(
+            parse_ls_remote_tags(stdout),
+            vec!["v1.0.0-rc.1".to_owned(), "v0.9.0".to_owned()]
+        );
+        assert!(parse_ls_remote_tags("").is_empty());
+    }
+
     use nexus_core::{ConfigStore, NexusConfigFile, NexusPaths, ReleaseStore, UpdateSpec};
     use nexus_protocol::UpdateState;
     use std::{fs, path::PathBuf, time::Duration};

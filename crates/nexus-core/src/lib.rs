@@ -4065,7 +4065,7 @@ fn default_git_program() -> PathBuf {
     PathBuf::from("git")
 }
 
-fn validate_update_source(source: &str) -> io::Result<()> {
+pub fn validate_update_source(source: &str) -> io::Result<()> {
     if source.is_empty() || source.len() > MAX_UPDATE_SOURCE_LEN {
         return Err(io::Error::new(
             io::ErrorKind::InvalidInput,
@@ -4096,7 +4096,7 @@ fn validate_update_source(source: &str) -> io::Result<()> {
     Ok(())
 }
 
-fn validate_update_ref(ref_name: &str) -> io::Result<()> {
+pub fn validate_update_ref(ref_name: &str) -> io::Result<()> {
     if ref_name.is_empty() || ref_name.len() > MAX_UPDATE_REF_LEN {
         return Err(io::Error::new(
             io::ErrorKind::InvalidInput,

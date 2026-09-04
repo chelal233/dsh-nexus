@@ -539,6 +539,26 @@ impl ReleaseListResponse {
     }
 }
 
+/// Read-only enumeration of upstream git tags for the configured update
+/// source. Tag names are rendered without the `refs/tags/` prefix and without
+/// peeled `^{}` duplicates.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct TagListResponse {
+    pub api_version: String,
+    pub source: String,
+    pub tags: Vec<String>,
+}
+
+impl TagListResponse {
+    pub fn new(source: String, tags: Vec<String>) -> Self {
+        Self {
+            api_version: API_VERSION.to_owned(),
+            source,
+            tags,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum ReleaseAction {

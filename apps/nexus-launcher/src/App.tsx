@@ -1066,7 +1066,25 @@ function UpdatesView({ snapshot }: ViewProps) {
   const release = nestedValue(snapshot.updates, "release");
   const releases = arrayValue(snapshot.releases, "releases");
   const updateState = stringValue(update, "state");
-  return <><PageIntro kicker={t("Releases / Updates")} title={t("Updates")} detail={t("Release installation is external and explicit. Promotion stays separate from downloading and verification.")} /><div className="grid-two"><Panel title={t("Update status")} icon={<CloudArrowUp size={18} />}><div className="status-block"><StatusPill label={localizedRuntimeState(updateState, t)} tone={updateState === "failed" ? "bad" : "neutral"} /><strong>{stringValue(update, "release_id") || t("No active update")}</strong><span>{stringValue(update, "error") ? localizeBackendError(stringValue(update, "error") || "", t) : t("No update error reported")}</span></div></Panel><Panel title={t("Current release")} icon={<Package size={18} />}><dl className="detail-list compact-details"><div><dt>{t("Version")}</dt><dd>{stringValue(release, "version") || t("Not registered")}</dd></div><div><dt>{t("Current slot")}</dt><dd>{stringValue(snapshot.releases, "current_release") || t("None")}</dd></div><div><dt>{t("Last known good")}</dt><dd>{stringValue(snapshot.releases, "last_known_good") || t("None")}</dd></div></dl></Panel></div><Panel title={t("Release slots")} icon={<Package size={18} />}><DataList items={releases} emptyTitle={t("No release slots")} emptyDetail={t("Register an immutable slot through the Agent API before promotion.")} render={(item) => <><div><strong>{stringValue(item, "id") || t("Release")}</strong><span>{stringValue(item, "version") || t("Unknown version")}</span></div><span className="row-meta">{localizedRuntimeState(stringValue(item, "status"), t)}</span></>} /></Panel></>;
+  const [tagList, setTagList] = useState<JsonObject | null>(null);
+  const [selectedTag, setSelectedTag] = useState<string>("");
+  const [tagsLoading, setTagsLoading] = useState(false);
+  const [tagsError, setTagsError] = useState<string | null>(null);
+  const tags: string[] = tagList ? arrayValue(tagList, "tags").map((tag) => String(tag)) : [];
+  const loadTags = useCallback(async () => {
+    setTagsLoading(true);
+    setTagsError(null);
+    try {
+      setTagList(await proxyRequest<JsonObject>("/v1/releases/tags"));
+    } catch (cause) {
+      setTagList(null);
+      setSelectedTag("");
+      setTagsError(errorMessage(cause));
+    } finally {
+      setTagsLoading(false);
+    }
+  }, []);
+  return <><PageIntro kicker={t("Releases / Updates")} title={t("Updates")} detail={t("Release installation is external and explicit. Promotion stays separate from downloading and verification.")} /><div className="grid-two"><Panel title={t("Update status")} icon={<CloudArrowUp size={18} />}><div className="status-block"><StatusPill label={localizedRuntimeState(updateState, t)} tone={updateState === "failed" ? "bad" : "neutral"} /><strong>{stringValue(update, "release_id") || t("No active update")}</strong><span>{stringValue(update, "error") ? localizeBackendError(stringValue(update, "error") || "", t) : t("No update error reported")}</span></div></Panel><Panel title={t("Current release")} icon={<Package size={18} />}><dl className="detail-list compact-details"><div><dt>{t("Version")}</dt><dd>{stringValue(release, "version") || t("Not registered")}</dd></div><div><dt>{t("Current slot")}</dt><dd>{stringValue(snapshot.releases, "current_release") || t("None")}</dd></div><div><dt>{t("Last known good")}</dt><dd>{stringValue(snapshot.releases, "last_known_good") || t("None")}</dd></div></dl></Panel><Panel title={t("Upstream tags")} icon={<CloudArrowUp size={18} />}><div className="status-block"><ActionButton disabled={tagsLoading} onClick={() => void loadTags()}>{tagsLoading ? t("Listing tags") : t("List upstream tags")}</ActionButton>{tagsError ? <span>{tagsError}</span> : <span>{tagList ? `${t("Source")}: ${stringValue(tagList, "source")}` : t("No tags loaded")}</span>}{tags.length > 0 && <select value={selectedTag} onChange={(event) => setSelectedTag(event.target.value)} aria-label={t("Upstream tags")}><option value="">{t("Select a tag")}</option>{tags.map((tag) => <option key={tag} value={tag}>{tag}</option>)}</select>}{selectedTag && <span>{`${t("Selected tag")}: ${selectedTag}`}</span>}</div></Panel></div><Panel title={t("Release slots")} icon={<Package size={18} />}><DataList items={releases} emptyTitle={t("No release slots")} emptyDetail={t("Register an immutable slot through the Agent API before promotion.")} render={(item) => <><div><strong>{stringValue(item, "id") || t("Release")}</strong><span>{stringValue(item, "version") || t("Unknown version")}</span></div><span className="row-meta">{localizedRuntimeState(stringValue(item, "status"), t)}</span></>} /></Panel></>;
 }
 
 function DiagnosticsView({ snapshot, busyAction, runAction }: ViewProps) {

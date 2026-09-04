@@ -43,6 +43,7 @@ const ALLOWED_ROUTES: &[&str] = &[
     "/v1/profiles",
     "/v1/checkpoints",
     "/v1/releases",
+    "/v1/releases/tags",
     "/v1/updates",
     "/v1/diagnostics",
     "/v1/config",
@@ -488,6 +489,7 @@ mod tests {
         assert!(is_allowed_route("/v1/health"));
         assert!(is_allowed_route("/v1/harness/ui"));
         assert!(is_allowed_route("/v1/harness/discover"));
+        assert!(is_allowed_route("/v1/releases/tags"));
         assert!(is_allowed_route("/v1/agent"));
         assert!(!is_allowed_route("/v1/health?url=https://example.com"));
     }

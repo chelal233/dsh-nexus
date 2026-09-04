@@ -48,7 +48,7 @@ use nexus_protocol::{
     HarnessCommand, HarnessDiscoveryResponse, HarnessResponse, HarnessRuntimeInfo, HealthResponse,
     LifecycleAccepted, LifecycleAction, LifecycleCommand, ProfileAction, ProfileCommand,
     ProfileListResponse, ProfileSelectResponse, ReleaseAction, ReleaseCommand, ReleaseListResponse,
-    StateResponse, UpdateAction, UpdateCommand, UpdateResponse, UpdateState,
+    StateResponse, TagListResponse, UpdateAction, UpdateCommand, UpdateResponse, UpdateState,
 };
 use tokio::{
     net::TcpListener,
@@ -266,6 +266,7 @@ fn build_router(state: AppState) -> Router {
             get(checkpoint_list).post(checkpoint_control),
         )
         .route("/v1/releases", get(release_list).post(release_control))
+        .route("/v1/releases/tags", get(release_tags))
         .route("/v1/updates", get(update_status).post(update_control))
         .route(
             "/v1/diagnostics",
@@ -1251,6 +1252,31 @@ async fn release_list(State(state): State<AppState>) -> axum::response::Response
     match state.releases.load() {
         Ok(catalog) => (StatusCode::OK, Json(release_list_response(catalog))).into_response(),
         Err(error) => data_error_response(error, "release_catalog_unavailable"),
+    }
+}
+
+async fn release_tags(State(state): State<AppState>) -> axum::response::Response {
+    let spec = match load_update_spec(&state.paths) {
+        Ok(Some(spec)) => spec,
+        Ok(None) => {
+            return data_error_response(
+                io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    "update source is not configured; set it in config.json first",
+                ),
+                "update_source_not_configured",
+            );
+        }
+        Err(error) => return data_error_response(error, "update_spec_unavailable"),
+    };
+    let command_timeout = std::time::Duration::from_secs(spec.timeout_secs.unwrap_or(120));
+    match updater::list_remote_tags(&spec.source, &spec.git_program, command_timeout).await {
+        Ok(tags) => (
+            StatusCode::OK,
+            Json(TagListResponse::new(spec.source.clone(), tags)),
+        )
+            .into_response(),
+        Err(error) => data_error_response(io::Error::other(error.to_string()), "tag_list_failed"),
     }
 }
 
