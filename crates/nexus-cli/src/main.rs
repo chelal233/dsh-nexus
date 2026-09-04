@@ -391,6 +391,7 @@ async fn run(options: Options) -> Result<(), String> {
                 action: *action,
                 harness: None,
                 update: None,
+                preserve_harness_readiness_url: false,
             })
             .send()
             .await

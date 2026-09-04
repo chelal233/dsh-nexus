@@ -16,6 +16,15 @@ pub fn decode_json<T: DeserializeOwned>(bytes: &[u8]) -> Result<T, serde_json::E
 /// The first stable HTTP API namespace exposed by Nexus Agent.
 pub const API_VERSION: &str = "v1";
 
+/// Version of the explicit Harness launch wire contract. A Node payload uses
+/// `entry` plus additional `args`; older Agents that do not advertise this
+/// field are not safe targets for a Node configuration write.
+pub const HARNESS_CONFIG_WIRE_VERSION: u8 = 2;
+
+fn is_false(value: &bool) -> bool {
+    !*value
+}
+
 /// Health status is intentionally small so it can be consumed by scripts.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
@@ -35,6 +44,10 @@ pub struct HealthResponse {
     pub data_root_id: String,
     /// Opaque per-process correlation value for launcher metadata.
     pub instance_id: String,
+    /// Capability version for the split Node `entry` + `args` Harness config.
+    /// Missing in older Agent responses and therefore defaults to zero.
+    #[serde(default)]
+    pub harness_config_wire_version: u8,
 }
 
 impl HealthResponse {
@@ -45,6 +58,7 @@ impl HealthResponse {
             status: HealthStatus::Ok,
             data_root_id,
             instance_id,
+            harness_config_wire_version: HARNESS_CONFIG_WIRE_VERSION,
         }
     }
 
@@ -55,6 +69,7 @@ impl HealthResponse {
             status: HealthStatus::ShuttingDown,
             data_root_id,
             instance_id,
+            harness_config_wire_version: HARNESS_CONFIG_WIRE_VERSION,
         }
     }
 }
@@ -724,6 +739,11 @@ pub struct HarnessConfigPayload {
     pub program: String,
     #[serde(default)]
     pub args: Vec<String>,
+    /// Set by a v2 caller when `args` excludes the separate Node `entry`.
+    /// Omitted/false retains the legacy interpretation for older callers that
+    /// included the entry as `args[0]`.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub args_are_additional: bool,
     /// JavaScript entry point used by `node` mode. The persisted core spec
     /// keeps this as the first process argument for supervisor compatibility.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -734,6 +754,11 @@ pub struct HarnessConfigPayload {
     pub readiness_url: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub readiness_timeout_secs: Option<u64>,
+    /// When true, readiness is accepted only after a fresh Harness URL/token
+    /// is observed in the current Nexus-owned log session. This is useful for
+    /// TCP readiness where a listener alone cannot identify the process.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub readiness_token_required: bool,
 }
 
 /// A locally discoverable Harness launch target. Discovery is advisory: the
@@ -758,6 +783,8 @@ pub struct HarnessCandidate {
     pub readiness_url: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub readiness_timeout_secs: Option<u64>,
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub readiness_token_required: bool,
     /// Stable machine-readable discovery source, such as `path` or `home`.
     pub source: String,
     pub display_name: String,
@@ -822,6 +849,11 @@ pub struct ConfigCommand {
     pub harness: Option<HarnessConfigPayload>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub update: Option<UpdateConfigPayload>,
+    /// Preserve a readiness URL whose sensitive query/userinfo was redacted
+    /// from a prior ConfigResponse. The Agent resolves it from its existing
+    /// on-disk Harness spec before validation.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub preserve_harness_readiness_url: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -831,6 +863,19 @@ pub struct ConfigResponse {
     pub harness: Option<HarnessConfigPayload>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub update: Option<UpdateConfigPayload>,
+    /// True when the returned readiness URL is display-safe but shorter than
+    /// the on-disk value. Editors must preserve it unless the user replaces or
+    /// clears the field explicitly.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub harness_readiness_url_redacted: bool,
+    /// True when one or more documented `NEXUS_HARNESS_*` variables override
+    /// the persisted Harness section returned by this response.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub harness_env_override: bool,
+    /// True when one or more documented `NEXUS_UPDATE_*` variables override
+    /// the persisted update section returned by this response.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub update_env_override: bool,
 }
 
 impl ConfigResponse {
@@ -839,7 +884,21 @@ impl ConfigResponse {
             api_version: API_VERSION.to_owned(),
             harness,
             update,
+            harness_readiness_url_redacted: false,
+            harness_env_override: false,
+            update_env_override: false,
         }
+    }
+
+    pub fn with_harness_readiness_url_redacted(mut self, redacted: bool) -> Self {
+        self.harness_readiness_url_redacted = redacted;
+        self
+    }
+
+    pub fn with_environment_overrides(mut self, harness: bool, update: bool) -> Self {
+        self.harness_env_override = harness;
+        self.update_env_override = update;
+        self
     }
 }
 
@@ -1084,12 +1143,15 @@ mod tests {
                 mode: HarnessLaunchMode::Direct,
                 program: "harness".to_owned(),
                 args: vec!["--profile".to_owned(), "{profile}".to_owned()],
+                args_are_additional: false,
                 entry: None,
                 working_dir: None,
                 readiness_url: None,
                 readiness_timeout_secs: None,
+                readiness_token_required: false,
             }),
             update: None,
+            preserve_harness_readiness_url: false,
         };
         let json = serde_json::to_value(command).expect("config command serializes");
         assert_eq!(json["action"], "set_harness");
@@ -1115,10 +1177,12 @@ mod tests {
             mode: HarnessLaunchMode::Node,
             program: "node".to_owned(),
             args: vec!["--port".to_owned(), "3080".to_owned()],
+            args_are_additional: true,
             entry: Some("dist/index.js".to_owned()),
             working_dir: Some("harness".to_owned()),
             readiness_url: None,
             readiness_timeout_secs: Some(20),
+            readiness_token_required: false,
         };
         let value = serde_json::to_value(node).expect("node payload serializes");
         assert_eq!(value["mode"], "node");

@@ -27,6 +27,8 @@ test("Harness config keeps legacy direct arguments unchanged", async () => {
         workingDir: "",
         readinessUrl: "",
         timeout: "",
+        readinessTokenRequired: false,
+        readinessUrlRedacted: false,
         argsRedacted: false,
         replaceRedactedArgs: false,
       },
@@ -44,7 +46,7 @@ test("Node candidates expose entry separately while preserving additional args",
     server: { middlewareMode: true },
   });
   try {
-    const { harnessCandidates, harnessDraftFromConfig } = await vite.ssrLoadModule("/src/App.tsx");
+    const { harnessCandidates, harnessConfigPayloadFromDraft, harnessDraftFromConfig, isLoopbackReadinessTarget } = await vite.ssrLoadModule("/src/App.tsx");
     const [candidate] = harnessCandidates({
       api_version: "v1",
       candidates: [{
@@ -58,24 +60,50 @@ test("Node candidates expose entry separately while preserving additional args",
         display_name: "deepseek-harness",
         version: "rc.1",
         readiness_timeout_secs: 30,
+        readiness_token_required: true,
       }],
     });
     assert.equal(candidate.mode, "node");
     assert.equal(candidate.entry, "dist/index.js");
     assert.deepEqual(candidate.args, ["--port", "3080"]);
     assert.equal(candidate.readinessTimeout, "30");
+    assert.equal(candidate.readinessTokenRequired, true);
 
     const draft = harnessDraftFromConfig({
+      harness_readiness_url_redacted: true,
       harness: {
         mode: "node",
         program: "node.exe",
         entry: "dist/index.js",
         args: ["--port", "3080"],
+        readiness_url: "tcp://127.0.0.1:3080",
+        readiness_token_required: true,
       },
     });
     assert.equal(draft.mode, "node");
     assert.equal(draft.entry, "dist/index.js");
     assert.equal(draft.args, "--port\n3080");
+    assert.equal(draft.readinessUrlRedacted, true);
+    assert.equal(draft.readinessTokenRequired, true);
+    assert.deepEqual(harnessConfigPayloadFromDraft(draft), {
+      mode: "node",
+      program: "node.exe",
+      entry: "dist/index.js",
+      args: ["--port", "3080"],
+      args_are_additional: true,
+      working_dir: null,
+      readiness_url: "tcp://127.0.0.1:3080",
+      readiness_timeout_secs: null,
+      readiness_token_required: true,
+    });
+    assert.equal(isLoopbackReadinessTarget("http://127.0.0.1:3080/health"), true);
+    assert.equal(isLoopbackReadinessTarget("HTTP://127.0.0.1:3080/health"), true);
+    assert.equal(isLoopbackReadinessTarget("http://127.0.0.1:3080?token=secret"), true);
+    assert.equal(isLoopbackReadinessTarget("http://127.0.0.1:3080/#fragment"), false);
+    assert.equal(isLoopbackReadinessTarget("http://127.0.0.1:0/health"), false);
+    assert.equal(isLoopbackReadinessTarget("tcp://127.0.0.1:3080"), true);
+    assert.equal(isLoopbackReadinessTarget("tcp://127.0.0.1"), false);
+    assert.equal(isLoopbackReadinessTarget("tcp://127.0.0.1:3080/health"), false);
   } finally {
     await vite.close();
   }

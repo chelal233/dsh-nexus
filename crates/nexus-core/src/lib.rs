@@ -2088,11 +2088,15 @@ fn write_diagnostics_file(path: &Path, payload: &[u8]) -> io::Result<()> {
 
 fn diagnostics_line_is_sensitive(line: &str) -> bool {
     let lower = line.to_ascii_lowercase();
+    if lower.contains("bearer ") || lower.split_ascii_whitespace().any(|field| field == "token") {
+        return true;
+    }
     [
         "password",
         "passwd",
         "secret",
         "authorization",
+        "token",
         "api_key",
         "apikey",
         "access_token",
@@ -2269,6 +2273,31 @@ mod tests {
         assert_eq!(spec.working_dir, Some(PathBuf::from("runtime")));
         assert_eq!(spec.readiness_timeout_secs, Some(2));
         assert_ne!(paths.state_file, root.join(".dsh").join("state.json"));
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn legacy_official_harness_config_gets_runtime_readiness_defaults() {
+        let root = unique_test_root("legacy-harness-readiness");
+        let paths = NexusPaths::from_root(root.clone());
+        fs::create_dir_all(&root).expect("test root creates");
+        fs::write(
+            &paths.config_file,
+            r#"{
+                "harness": {
+                    "mode": "direct",
+                    "program": "deepseek-harness.exe"
+                }
+            }"#,
+        )
+        .expect("config writes");
+
+        let spec = load_harness_launch_spec(&paths)
+            .expect("config reads")
+            .expect("harness is configured");
+        assert_eq!(spec.readiness_url.as_deref(), Some("tcp://127.0.0.1:3080"));
+        assert_eq!(spec.readiness_timeout_secs, Some(30));
+        assert!(spec.readiness_token_required);
         let _ = fs::remove_dir_all(root);
     }
 
@@ -2757,6 +2786,7 @@ mod tests {
             working_dir: None,
             readiness_url: None,
             readiness_timeout_secs: None,
+            readiness_token_required: false,
         };
         let direct_payload = direct.to_payload();
         assert_eq!(direct_payload.mode, HarnessLaunchMode::Direct);
@@ -2767,10 +2797,12 @@ mod tests {
             mode: HarnessLaunchMode::Node,
             program: "node".to_owned(),
             args: vec!["--port".to_owned(), "3080".to_owned()],
+            args_are_additional: true,
             entry: Some("dist/index.js".to_owned()),
             working_dir: None,
             readiness_url: None,
             readiness_timeout_secs: None,
+            readiness_token_required: false,
         })
         .expect("node payload validates");
         assert_eq!(node.mode, HarnessLaunchMode::Node);
@@ -2779,6 +2811,62 @@ mod tests {
         assert_eq!(node_payload.mode, HarnessLaunchMode::Node);
         assert_eq!(node_payload.entry.as_deref(), Some("dist/index.js"));
         assert_eq!(node_payload.args, vec!["--port", "3080"]);
+
+        let legacy_node = HarnessLaunchSpec::from_payload(HarnessConfigPayload {
+            mode: HarnessLaunchMode::Node,
+            program: "node".to_owned(),
+            args: vec![
+                "dist/index.js".to_owned(),
+                "--port".to_owned(),
+                "3080".to_owned(),
+            ],
+            args_are_additional: false,
+            entry: None,
+            working_dir: None,
+            readiness_url: None,
+            readiness_timeout_secs: None,
+            readiness_token_required: false,
+        })
+        .expect("legacy node payload validates");
+        assert_eq!(legacy_node.args, vec!["dist/index.js", "--port", "3080"]);
+
+        let duplicate_entry = HarnessLaunchSpec::from_payload(HarnessConfigPayload {
+            mode: HarnessLaunchMode::Node,
+            program: "node".to_owned(),
+            args: vec![
+                "dist/index.js".to_owned(),
+                "--port".to_owned(),
+                "3080".to_owned(),
+            ],
+            args_are_additional: false,
+            entry: Some("dist/index.js".to_owned()),
+            working_dir: None,
+            readiness_url: None,
+            readiness_timeout_secs: None,
+            readiness_token_required: false,
+        })
+        .expect("duplicate entry payload validates");
+        assert_eq!(
+            duplicate_entry.args,
+            vec!["dist/index.js", "--port", "3080"]
+        );
+
+        let repeated_argument = HarnessLaunchSpec::from_payload(HarnessConfigPayload {
+            mode: HarnessLaunchMode::Node,
+            program: "node".to_owned(),
+            args: vec!["dist/index.js".to_owned(), "--port".to_owned()],
+            args_are_additional: true,
+            entry: Some("dist/index.js".to_owned()),
+            working_dir: None,
+            readiness_url: None,
+            readiness_timeout_secs: None,
+            readiness_token_required: false,
+        })
+        .expect("canonical Node payload preserves repeated arguments");
+        assert_eq!(
+            repeated_argument.args,
+            vec!["dist/index.js", "dist/index.js", "--port"]
+        );
 
         let legacy: HarnessLaunchSpec = serde_json::from_value(serde_json::json!({
             "program": "node",
@@ -2841,6 +2929,12 @@ mod tests {
             .find(|candidate| candidate.mode == HarnessLaunchMode::Direct)
             .expect("direct fixture is discovered");
         assert!(direct.program.ends_with("deepseek-harness.exe"));
+        assert_eq!(
+            direct.readiness_url.as_deref(),
+            Some("tcp://127.0.0.1:3080")
+        );
+        assert_eq!(direct.readiness_timeout_secs, Some(30));
+        assert!(direct.readiness_token_required);
         let node = candidates
             .iter()
             .find(|candidate| candidate.mode == HarnessLaunchMode::Node)
@@ -2865,10 +2959,8 @@ mod tests {
                 "3080".to_owned()
             ]
         );
-        assert_eq!(
-            node.readiness_url.as_deref(),
-            Some("http://127.0.0.1:3080/")
-        );
+        assert_eq!(node.readiness_url.as_deref(), Some("tcp://127.0.0.1:3080"));
+        assert!(node.readiness_token_required);
         assert!(node
             .entry
             .as_deref()
@@ -2917,7 +3009,14 @@ mod tests {
         paths.ensure_directories().expect("directories create");
         fs::write(
             paths.logs_dir.join("harness.stdout.log"),
-            "normal failure\nAuthorization: bearer secret-value\n",
+            concat!(
+                "normal failure\n",
+                "dsh web: http://127.0.0.1:3080/?token=real-dsh-token\n",
+                "request=http://127.0.0.1:3080/health?api_token=query-token\n",
+                "Authorization: Bearer authorization-secret\n",
+                "Bearer standalone-bearer-secret\n",
+                "token standalone-token-secret\n",
+            ),
         )
         .expect("diagnostic log writes");
         let store = DiagnosticsStore::new(paths.clone());
@@ -2934,7 +3033,15 @@ mod tests {
         let log_path = PathBuf::from(&bundle.directory).join("files/logs/harness.stdout.log");
         let copied = fs::read_to_string(log_path).expect("copied diagnostics log reads");
         assert!(copied.contains("[REDACTED]"));
-        assert!(!copied.contains("secret-value"));
+        for secret in [
+            "real-dsh-token",
+            "query-token",
+            "authorization-secret",
+            "standalone-bearer-secret",
+            "standalone-token-secret",
+        ] {
+            assert!(!copied.contains(secret), "diagnostics leaked {secret}");
+        }
         assert_eq!(store.list().expect("diagnostics list").len(), 1);
         assert!(!root.join(".dsh").exists());
         let _ = fs::remove_dir_all(root);
@@ -2958,6 +3065,7 @@ mod tests {
                 working_dir: Some(PathBuf::from("runtime")),
                 readiness_url: Some("http://127.0.0.1:3080/health".to_owned()),
                 readiness_timeout_secs: Some(5),
+                readiness_token_required: false,
             }),
             update: Some(UpdateSpec {
                 source: "file:///fixtures/harness".to_owned(),
@@ -3010,6 +3118,8 @@ pub struct HarnessLaunchSpec {
     pub readiness_url: Option<String>,
     #[serde(default)]
     pub readiness_timeout_secs: Option<u64>,
+    #[serde(default)]
+    pub readiness_token_required: bool,
 }
 
 impl HarnessLaunchSpec {
@@ -3021,6 +3131,7 @@ impl HarnessLaunchSpec {
             working_dir: None,
             readiness_url: None,
             readiness_timeout_secs: None,
+            readiness_token_required: false,
         }
     }
 
@@ -3075,6 +3186,12 @@ impl HarnessLaunchSpec {
                 ));
             }
         }
+        if self.readiness_token_required && self.readiness_url.is_none() {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "Harness token-bound readiness requires a readiness URL",
+            ));
+        }
         Ok(())
     }
 
@@ -3091,6 +3208,7 @@ impl HarnessLaunchSpec {
             mode,
             program: self.program.to_string_lossy().into_owned(),
             args,
+            args_are_additional: matches!(mode, HarnessLaunchMode::Node),
             entry,
             working_dir: self
                 .working_dir
@@ -3098,6 +3216,7 @@ impl HarnessLaunchSpec {
                 .map(|path| path.to_string_lossy().into_owned()),
             readiness_url: self.readiness_url.clone(),
             readiness_timeout_secs: self.readiness_timeout_secs,
+            readiness_token_required: self.readiness_token_required,
         }
     }
 
@@ -3106,10 +3225,12 @@ impl HarnessLaunchSpec {
             mode,
             program,
             mut args,
+            args_are_additional,
             entry,
             working_dir,
             readiness_url,
             readiness_timeout_secs,
+            readiness_token_required,
         } = payload;
         if matches!(mode, HarnessLaunchMode::Direct) && entry.is_some() {
             return Err(io::Error::new(
@@ -3118,19 +3239,36 @@ impl HarnessLaunchSpec {
             ));
         }
         if matches!(mode, HarnessLaunchMode::Node) {
-            let entry = entry.ok_or_else(|| {
-                io::Error::new(
-                    io::ErrorKind::InvalidInput,
-                    "Harness node launch mode requires an entry script",
-                )
-            })?;
+            // Current clients send `entry` separately. Older clients sent the
+            // Node entry as args[0], so accept that representation while
+            // normalizing both forms to the internal argv shape.
+            let (entry, entry_was_separate) = match entry {
+                Some(entry) => (entry, true),
+                None => (
+                    args.first().cloned().ok_or_else(|| {
+                        io::Error::new(
+                            io::ErrorKind::InvalidInput,
+                            "Harness node launch mode requires an entry script",
+                        )
+                    })?,
+                    false,
+                ),
+            };
             if entry.is_empty() || entry.chars().any(char::is_control) {
                 return Err(io::Error::new(
                     io::ErrorKind::InvalidInput,
                     "Harness node entry must be non-empty and contain no control characters",
                 ));
             }
-            args.insert(0, entry);
+            if entry_was_separate
+                && (args_are_additional
+                    || args
+                        .first()
+                        .map(|argument| argument != &entry)
+                        .unwrap_or(true))
+            {
+                args.insert(0, entry);
+            }
         }
         let spec = Self {
             mode,
@@ -3139,6 +3277,7 @@ impl HarnessLaunchSpec {
             working_dir: working_dir.map(PathBuf::from),
             readiness_url,
             readiness_timeout_secs,
+            readiness_token_required,
         };
         spec.validate()?;
         Ok(spec)
@@ -3204,7 +3343,7 @@ const HARNESS_DISCOVERY_MAX_MANIFEST_BYTES: u64 = 512 * 1024;
 /// explicitly select a candidate before writing it to Nexus config.
 pub fn discover_harness_candidates() -> HarnessDiscoveryResponse {
     let roots = discovery_roots();
-    let node_program = find_on_path(&["node", "node.exe", "nodejs", "nodejs.exe"]);
+    let node_program = find_node_program();
     let mut candidates = discover_harness_candidates_in_roots(&roots, node_program.as_deref());
     append_path_direct_candidates(&mut candidates);
     HarnessDiscoveryResponse::new(candidates)
@@ -3227,7 +3366,7 @@ pub fn discover_harness_candidates_with_paths(paths: &NexusPaths) -> HarnessDisc
     for (root, source) in discovery_roots() {
         push_discovery_root(&mut roots, root, &source);
     }
-    let node_program = find_on_path(&["node", "node.exe", "nodejs", "nodejs.exe"]);
+    let node_program = find_node_program();
     let mut candidates = discover_harness_candidates_in_roots(&roots, node_program.as_deref());
     append_path_direct_candidates(&mut candidates);
     HarnessDiscoveryResponse::new(candidates)
@@ -3427,6 +3566,8 @@ fn add_direct_candidate(
         .and_then(|name| name.to_str())
         .unwrap_or("Harness")
         .to_owned();
+    let (readiness_url, readiness_timeout_secs, readiness_token_required) =
+        discovered_direct_readiness(&program);
     candidates.push(HarnessCandidate {
         id,
         mode: HarnessLaunchMode::Direct,
@@ -3434,12 +3575,29 @@ fn add_direct_candidate(
         entry: None,
         args: Vec::new(),
         working_dir: Some(parent.to_string_lossy().into_owned()),
-        readiness_url: None,
-        readiness_timeout_secs: None,
+        readiness_url,
+        readiness_timeout_secs,
+        readiness_token_required,
         source: source.to_owned(),
         display_name,
         version: None,
     });
+}
+
+/// The official native DSH build uses the same loopback web service and token
+/// log contract as the Node package. Keep generic `harness(.exe)` discoveries
+/// manual-only because their port and authentication behavior are unknown.
+fn discovered_direct_readiness(program: &Path) -> (Option<String>, Option<u64>, bool) {
+    let official_binary = program
+        .file_stem()
+        .and_then(|name| name.to_str())
+        .map(str::to_ascii_lowercase)
+        .is_some_and(|name| matches!(name.as_str(), "deepseek-harness" | "dsh-harness"));
+    if official_binary {
+        (Some("tcp://127.0.0.1:3080".to_owned()), Some(30), true)
+    } else {
+        (None, None, false)
+    }
 }
 
 fn add_node_manifest_candidate(
@@ -3535,8 +3693,12 @@ fn add_node_manifest_candidate(
             Vec::new()
         },
         working_dir: Some(package_dir.to_string_lossy().into_owned()),
-        readiness_url: official_dsh.then(|| "http://127.0.0.1:3080/".to_owned()),
+        // DSH deliberately protects `/` with its browser token and returns
+        // 401 before a cookie is minted. A TCP listener probe is explicit and
+        // avoids treating an arbitrary authentication failure as HTTP health.
+        readiness_url: official_dsh.then(|| "tcp://127.0.0.1:3080".to_owned()),
         readiness_timeout_secs: official_dsh.then_some(30),
+        readiness_token_required: official_dsh,
         source: source.to_owned(),
         display_name,
         version: manifest.version,
@@ -3664,6 +3826,50 @@ fn find_on_path(names: &[&str]) -> Option<PathBuf> {
         }
     }
     None
+}
+
+/// Resolve a Node runtime for automatic package discovery without assuming
+/// that a GUI process inherited the user's interactive shell PATH. Explicit
+/// environment overrides win, then PATH, then a small set of conventional
+/// per-user/system installation locations. Every result is canonicalized and
+/// must be a regular file before it is exposed to the UI.
+fn find_node_program() -> Option<PathBuf> {
+    for variable in ["NEXUS_NODE_PROGRAM", "NODE_BINARY"] {
+        if let Some(value) = non_empty_env(variable) {
+            if let Ok(path) = fs::canonicalize(value) {
+                if path.is_file() {
+                    return Some(path);
+                }
+            }
+        }
+    }
+    if let Some(path) = find_on_path(&["node", "node.exe", "nodejs", "nodejs.exe"]) {
+        return Some(path);
+    }
+
+    let mut candidates = Vec::new();
+    if let Some(home) = user_home_dir() {
+        candidates.extend([
+            home.join(".volta/bin/node"),
+            home.join(".nvm/current/bin/node"),
+            home.join(".local/bin/node"),
+            home.join("bin/node"),
+        ]);
+    }
+    #[cfg(windows)]
+    {
+        for variable in ["ProgramFiles", "ProgramFiles(x86)", "LOCALAPPDATA"] {
+            if let Some(base) = non_empty_env(variable) {
+                let base = PathBuf::from(base);
+                candidates.push(base.join("nodejs/node.exe"));
+                candidates.push(base.join("Programs/nodejs/node.exe"));
+            }
+        }
+    }
+    candidates.into_iter().find_map(|candidate| {
+        let path = fs::canonicalize(candidate).ok()?;
+        path.is_file().then_some(path)
+    })
 }
 
 fn append_path_direct_candidates(candidates: &mut Vec<HarnessCandidate>) {
@@ -4062,8 +4268,40 @@ pub fn load_harness_launch_spec(paths: &NexusPaths) -> io::Result<Option<Harness
         configured.readiness_timeout_secs = Some(timeout);
     }
 
+    apply_known_harness_readiness_defaults(&mut configured);
     configured.validate()?;
     Ok(Some(configured))
+}
+
+/// Known DSH launch shapes use the loopback web service on port 3080 and emit
+/// a fresh browser token in the Nexus-owned Harness log. Fill that readiness
+/// contract in memory when an older config predates the fields, so an Agent
+/// restart can still supervise the current Harness generation. Explicit
+/// readiness settings always win and are never overwritten.
+fn apply_known_harness_readiness_defaults(spec: &mut HarnessLaunchSpec) {
+    if spec.readiness_url.is_some() {
+        return;
+    }
+
+    let direct = discovered_direct_readiness(&spec.program).0.is_some();
+    let node = harness_program_is_node_runtime(&spec.program)
+        && (spec.args.iter().any(|value| is_known_dsh_path(value))
+            || spec
+                .working_dir
+                .as_deref()
+                .is_some_and(|value| is_known_dsh_path(&value.to_string_lossy())));
+    if direct || node {
+        spec.readiness_url = Some("tcp://127.0.0.1:3080".to_owned());
+        spec.readiness_timeout_secs = Some(30);
+        spec.readiness_token_required = true;
+    }
+}
+
+fn is_known_dsh_path(value: &str) -> bool {
+    let value = value.to_ascii_lowercase();
+    value.contains("deepseek-harness")
+        || value.contains("dsh-harness")
+        || value.contains("@deepseek-ai/dsh")
 }
 
 /// Load the optional external update plan from Nexus-owned configuration and

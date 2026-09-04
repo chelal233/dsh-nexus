@@ -13,7 +13,11 @@ test("Overview removes stale Harness credentials while a restart POST is deferre
     server: { middlewareMode: true },
   });
   try {
-    const { CheckpointsView, OverviewView, credentialInvalidationCanSettle } = await vite.ssrLoadModule("/src/App.tsx");
+    const { CheckpointsView, OverviewView, credentialInvalidationCanSettle, isRecoverableNoopError } = await vite.ssrLoadModule("/src/App.tsx");
+    assert.equal(isRecoverableNoopError("Harness is already running"), true);
+    assert.equal(isRecoverableNoopError("Harness is already stopped"), true);
+    assert.equal(isRecoverableNoopError("Harness is already running; no lifecycle change was made."), true);
+    assert.equal(isRecoverableNoopError("启动失败"), false, "no-op matching stays on the raw backend message before i18n");
     const snapshot = {
       startup: { available: true },
       endpointErrors: {},

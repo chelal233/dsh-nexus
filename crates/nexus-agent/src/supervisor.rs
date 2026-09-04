@@ -13,6 +13,7 @@ use nexus_core::{
     AgentState, HarnessLaunchSpec, HarnessLogSession, HarnessLogSessionStore, NexusPaths,
     ReleaseStore, RuntimeMetadataStore, DEFAULT_PROFILE,
 };
+use nexus_launcher_core::{read_harness_ui_info_with_observer, HarnessLogObserver};
 use nexus_protocol::{HarnessRuntimeInfo, HarnessState};
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
@@ -381,7 +382,9 @@ impl HarnessSupervisor {
 
     /// Recover a persisted observation without claiming an old PID is under
     /// this Agent's control. A healthy configured loopback endpoint is enough
-    /// to restore Running with no process identity; otherwise only stale
+    /// to restore Running with no process identity only for legacy readiness;
+    /// token-bound readiness fails closed because process ownership cannot be
+    /// reconstructed after an Agent restart. Otherwise only stale
     /// Starting/Running observations are made Stopped. A persisted Failed
     /// observation remains Failed unless the endpoint proves it recovered.
     pub async fn recover_unattached(&self) -> HarnessRuntimeInfo {
@@ -435,15 +438,18 @@ impl HarnessSupervisor {
             Ok(Some(spec)) => readiness_config(&spec).ok().flatten(),
             Ok(None) | Err(_) => None,
         };
+        let token_requires_owned_evidence = readiness
+            .as_ref()
+            .is_some_and(|readiness| readiness.target.token_required);
         let healthy = match readiness.as_ref() {
-            Some(readiness) => {
+            Some(readiness) if !readiness.target.token_required => {
                 probe_until_deadline(
                     &readiness.target,
                     Instant::now() + readiness.timeout.min(UNATTACHED_RECOVERY_CAP),
                 )
                 .await
             }
-            None => false,
+            Some(_) | None => false,
         };
 
         let (persist_generation, runtime, recovery, arm_monitor) = {
@@ -454,7 +460,29 @@ impl HarnessSupervisor {
             }
             inner.readiness = readiness.clone();
             let mut arm_monitor = None;
-            if healthy {
+            if token_requires_owned_evidence {
+                // After an Agent restart there is no owned process transition
+                // at which to rotate the log watermark. A bare readiness
+                // endpoint therefore cannot distinguish the old Harness from
+                // an unrelated process that reused its port. Fail closed;
+                // token-bound recovery is allowed only after an observed child
+                // exit has established a fresh boundary and emitted a matching
+                // token.
+                inner.recovery = None;
+                inner.unattached_monitor_started = false;
+                let mut failed = failed_runtime(
+                    &previous,
+                    "Token-bound readiness cannot safely reattach after Agent restart without current process identity"
+                        .to_owned(),
+                );
+                failed.pid = None;
+                inner.runtime = failed;
+                if let Err(error) = clear_launch_pending(&self.log_sessions, &mut inner) {
+                    inner.runtime.error = Some(format!(
+                        "Token-bound readiness cannot safely reattach after Agent restart without current process identity; failed to clear the launch reservation: {error}"
+                    ));
+                }
+            } else if healthy {
                 // The Agent cannot reattach the old PID after a restart. Rotate
                 // the durable log boundary before publishing PID-less Running
                 // so a token emitted by the previous Agent/Harness instance is
@@ -1508,6 +1536,7 @@ impl HarnessSupervisor {
         readiness: &ReadinessConfig,
     ) -> Result<Option<ReadinessOwner>, (HarnessSupervisorError, ReadinessOwner)> {
         let start_deadline = Instant::now() + readiness.timeout;
+        let mut log_observer = HarnessLogObserver::default();
 
         loop {
             let lease = match self.refresh_readiness_owner(owner, start_deadline).await {
@@ -1526,7 +1555,15 @@ impl HarnessSupervisor {
 
             let remaining = lease.deadline.saturating_duration_since(Instant::now());
             let attempt_timeout = remaining.min(READINESS_ATTEMPT_TIMEOUT);
-            if let Ok(Ok(())) = timeout(attempt_timeout, readiness_probe(&readiness.target)).await {
+            let ready = matches!(
+                timeout(attempt_timeout, readiness_probe(&readiness.target)).await,
+                Ok(Ok(()))
+            );
+            if ready
+                && self
+                    .readiness_evidence_matches_owner(owner, &readiness.target, &mut log_observer)
+                    .await
+            {
                 return Ok(self
                     .refresh_readiness_owner(owner, start_deadline)
                     .await
@@ -1578,6 +1615,7 @@ impl HarnessSupervisor {
         let supervisor = self.clone();
         let inner = Arc::clone(&self.inner);
         tokio::spawn(async move {
+            let mut log_observer = HarnessLogObserver::default();
             loop {
                 let valid = {
                     let inner = inner.lock().await;
@@ -1618,10 +1656,16 @@ impl HarnessSupervisor {
 
                 let remaining = task.deadline.saturating_duration_since(now);
                 let attempt_timeout = remaining.min(READINESS_ATTEMPT_TIMEOUT);
+                let owner = ReadinessOwner::Recovery {
+                    generation: task.generation,
+                    epoch: task.owner_epoch,
+                };
                 let ready = matches!(
                     timeout(attempt_timeout, readiness_probe(&task.target)).await,
                     Ok(Ok(()))
-                );
+                ) && supervisor
+                    .readiness_evidence_matches_owner(owner, &task.target, &mut log_observer)
+                    .await;
                 if ready && Instant::now() <= task.deadline {
                     let (runtime, arm_monitor) = {
                         let mut inner = inner.lock().await;
@@ -1655,6 +1699,43 @@ impl HarnessSupervisor {
         });
     }
 
+    async fn readiness_evidence_matches_owner(
+        &self,
+        owner: ReadinessOwner,
+        target: &ReadinessTarget,
+        observer: &mut HarnessLogObserver,
+    ) -> bool {
+        if !target.token_required {
+            return true;
+        }
+        let session = {
+            let inner = self.inner.lock().await;
+            if inner.readiness_owner != Some(owner) {
+                return false;
+            }
+            inner.log_session.clone()
+        };
+        if !matches!(self.log_sessions.read(), Ok(Some(ref durable)) if durable == &session) {
+            return false;
+        }
+        readiness_has_current_token(&self.paths, target, &session, observer)
+    }
+
+    async fn readiness_evidence_matches_current_session(
+        &self,
+        target: &ReadinessTarget,
+        observer: &mut HarnessLogObserver,
+    ) -> bool {
+        if !target.token_required {
+            return true;
+        }
+        let session = self.inner.lock().await.log_session.clone();
+        if !matches!(self.log_sessions.read(), Ok(Some(ref durable)) if durable == &session) {
+            return false;
+        }
+        readiness_has_current_token(&self.paths, target, &session, observer)
+    }
+
     /// An attached Harness can keep the same OS process while restarting its
     /// internal HTTP service. Its process handle is therefore not sufficient
     /// evidence that a previously observed credential still belongs to the
@@ -1664,6 +1745,7 @@ impl HarnessSupervisor {
         let supervisor = self.clone();
         tokio::spawn(async move {
             let mut generation = initial_generation;
+            let mut log_observer = HarnessLogObserver::default();
             loop {
                 sleep(Duration::from_millis(250)).await;
                 let phase = {
@@ -1738,7 +1820,16 @@ impl HarnessSupervisor {
                     continue;
                 }
 
+                let current_token = if healthy && phase.deadline.is_some() {
+                    supervisor
+                        .readiness_evidence_matches_current_session(&target, &mut log_observer)
+                        .await
+                } else {
+                    true
+                };
+
                 if healthy
+                    && current_token
                     && phase
                         .deadline
                         .map_or(true, |deadline| Instant::now() <= deadline)
@@ -1885,8 +1976,10 @@ fn readiness_config(
     spec.readiness_url
         .as_deref()
         .map(|url| {
+            let mut target = ReadinessTarget::parse(url)?;
+            target.token_required = spec.readiness_token_required;
             Ok(ReadinessConfig {
-                target: ReadinessTarget::parse(url)?,
+                target,
                 timeout: Duration::from_secs(
                     spec.readiness_timeout_secs
                         .unwrap_or(DEFAULT_READINESS_TIMEOUT_SECS),
@@ -2404,9 +2497,14 @@ fn runtime_from_exit(
     exit: std::process::ExitStatus,
     killed: bool,
 ) -> HarnessRuntimeInfo {
-    let state = if killed || exit.code() == Some(0) {
+    let state = if killed {
         HarnessState::Stopped
     } else {
+        // A natural exit is always unexpected for a directly supervised
+        // long-running Harness. In particular, exit 0 without readiness or a
+        // separate ownership channel cannot prove that a self-restarted
+        // descendant belongs to this launch, so do not report a clean stop or
+        // silently claim a replacement process.
         HarnessState::Failed
     };
     runtime_from_exit_with_state(previous.started_at_unix, previous.pid, exit, state)
@@ -2470,20 +2568,55 @@ struct ReadinessTarget {
     host: String,
     port: u16,
     path: String,
+    tcp: bool,
+    token_required: bool,
 }
 
 impl ReadinessTarget {
     fn parse(url: &str) -> Result<Self, HarnessSupervisorError> {
-        let authority_and_path = url.strip_prefix("http://").ok_or_else(|| {
+        let (scheme, authority_and_path) = url.split_once("://").ok_or_else(|| {
             HarnessSupervisorError::Readiness(
-                "only http:// readiness URLs are supported by the cross-platform supervisor"
+                "only http:// or tcp:// loopback readiness URLs are supported by the cross-platform supervisor"
                     .to_owned(),
             )
         })?;
-        let (authority, path) = match authority_and_path.split_once('/') {
+        let tcp = if scheme.eq_ignore_ascii_case("tcp") {
+            true
+        } else if scheme.eq_ignore_ascii_case("http") {
+            false
+        } else {
+            return Err(HarnessSupervisorError::Readiness(
+                "only http:// or tcp:// loopback readiness URLs are supported by the cross-platform supervisor"
+                    .to_owned(),
+            ));
+        };
+        if authority_and_path.contains('#') {
+            return Err(HarnessSupervisorError::Readiness(
+                "readiness URLs cannot contain a fragment".to_owned(),
+            ));
+        }
+        let (authority_and_path, query) = match authority_and_path.split_once('?') {
+            Some((base, query)) => (base, Some(query)),
+            None => (authority_and_path, None),
+        };
+        if tcp && query.is_some() {
+            return Err(HarnessSupervisorError::Readiness(
+                "tcp readiness URLs cannot contain a query".to_owned(),
+            ));
+        }
+        let (authority, mut path) = match authority_and_path.split_once('/') {
             Some((authority, path)) => (authority, format!("/{path}")),
             None => (authority_and_path, "/".to_owned()),
         };
+        if let Some(query) = query {
+            path.push('?');
+            path.push_str(query);
+        }
+        if tcp && path != "/" {
+            return Err(HarnessSupervisorError::Readiness(
+                "tcp readiness URLs cannot contain a path".to_owned(),
+            ));
+        }
         if authority.is_empty() {
             return Err(HarnessSupervisorError::Readiness(
                 "readiness URL has no host".to_owned(),
@@ -2498,6 +2631,11 @@ impl ReadinessTarget {
             let host = authority[1..close].to_owned();
             let suffix = &authority[close + 1..];
             let port = if suffix.is_empty() {
+                if tcp {
+                    return Err(HarnessSupervisorError::Readiness(
+                        "tcp readiness URLs must include an explicit port".to_owned(),
+                    ));
+                }
                 80
             } else {
                 suffix
@@ -2521,6 +2659,11 @@ impl ReadinessTarget {
             })?;
             (host.to_owned(), port)
         } else {
+            if tcp {
+                return Err(HarnessSupervisorError::Readiness(
+                    "tcp readiness URLs must include an explicit port".to_owned(),
+                ));
+            }
             (authority.to_owned(), 80)
         };
         if host.is_empty() {
@@ -2533,7 +2676,18 @@ impl ReadinessTarget {
                 "readiness URL must target localhost, 127.0.0.1, or [::1]".to_owned(),
             ));
         }
-        Ok(Self { host, port, path })
+        if port == 0 {
+            return Err(HarnessSupervisorError::Readiness(
+                "readiness URL port must be between 1 and 65535".to_owned(),
+            ));
+        }
+        Ok(Self {
+            host,
+            port,
+            path,
+            tcp,
+            token_required: false,
+        })
     }
 }
 
@@ -2544,13 +2698,41 @@ fn is_loopback_host(host: &str) -> bool {
     )
 }
 
+fn readiness_has_current_token(
+    paths: &NexusPaths,
+    target: &ReadinessTarget,
+    session: &HarnessLogSession,
+    observer: &mut HarnessLogObserver,
+) -> bool {
+    let info = read_harness_ui_info_with_observer(paths, observer, Some(session));
+    if !info.available
+        || info.generation != Some(session.generation)
+        || info.run_id.as_deref() != Some(session.run_id.as_str())
+        || info.token.as_deref().is_none()
+    {
+        return false;
+    }
+    let Some(url) = info.url.as_deref() else {
+        return false;
+    };
+    ReadinessTarget::parse(url).is_ok_and(|observed| !observed.tcp && observed.port == target.port)
+}
+
 async fn readiness_probe(target: &ReadinessTarget) -> Result<(), String> {
     let mut stream = TcpStream::connect((target.host.as_str(), target.port))
         .await
         .map_err(|error| error.to_string())?;
+    if target.tcp {
+        return Ok(());
+    }
+    let host_header = if target.host.contains(':') {
+        format!("[{}]", target.host)
+    } else {
+        target.host.clone()
+    };
     let request = format!(
         "GET {} HTTP/1.1\r\nHost: {}\r\nConnection: close\r\n\r\n",
-        target.path, target.host
+        target.path, host_header
     );
     stream
         .write_all(request.as_bytes())
@@ -2601,10 +2783,10 @@ mod tests {
     };
 
     use super::{
-        current_readiness_lease, next_operation_epoch, pending_recovery, recovery_failed_runtime,
-        recovery_runtime, running_runtime_without_pid, HarnessPersistGate, HarnessSupervisor,
-        HarnessSupervisorError, ReadinessConfig, ReadinessOwner, ReadinessTarget, RecoveryState,
-        StartPersistGate,
+        current_readiness_lease, next_operation_epoch, pending_recovery,
+        readiness_has_current_token, recovery_failed_runtime, recovery_runtime,
+        running_runtime_without_pid, HarnessPersistGate, HarnessSupervisor, HarnessSupervisorError,
+        ReadinessConfig, ReadinessOwner, ReadinessTarget, RecoveryState, StartPersistGate,
     };
 
     fn immediate_nonzero_marker_command(marker: &std::path::Path) -> (PathBuf, Vec<String>) {
@@ -2721,6 +2903,7 @@ mod tests {
                     working_dir: None,
                     readiness_url: None,
                     readiness_timeout_secs: None,
+                    readiness_token_required: false,
                 }),
                 update: None,
             })
@@ -2779,6 +2962,7 @@ mod tests {
                     working_dir: None,
                     readiness_url: None,
                     readiness_timeout_secs: None,
+                    readiness_token_required: false,
                 }),
                 update: None,
             })
@@ -2825,6 +3009,32 @@ mod tests {
         assert!(error.to_string().contains("must target localhost"));
         assert!(super::ReadinessTarget::parse("http://127.0.0.1:3090/health").is_ok());
         assert!(super::ReadinessTarget::parse("http://[::1]:3090/health").is_ok());
+        assert!(super::ReadinessTarget::parse("HTTP://127.0.0.1:3090/health").is_ok());
+        assert!(super::ReadinessTarget::parse("http://127.0.0.1:3090?token=secret").is_ok());
+        assert!(super::ReadinessTarget::parse("http://127.0.0.1:3090/#fragment").is_err());
+        assert!(super::ReadinessTarget::parse("http://127.0.0.1:0/health").is_err());
+        let tcp = super::ReadinessTarget::parse("tcp://127.0.0.1:3090")
+            .expect("TCP loopback target parses");
+        assert!(tcp.tcp);
+        assert!(super::ReadinessTarget::parse("tcp://[::1]:3090/").is_ok());
+        assert!(super::ReadinessTarget::parse("tcp://127.0.0.1").is_err());
+        assert!(super::ReadinessTarget::parse("tcp://127.0.0.1:3090?token=secret").is_err());
+        assert!(super::ReadinessTarget::parse("tcp://127.0.0.1:3090/health").is_err());
+    }
+
+    #[tokio::test]
+    async fn tcp_readiness_probe_only_requires_a_loopback_listener() {
+        let listener = TcpListener::bind(("127.0.0.1", 0))
+            .await
+            .expect("TCP readiness listener binds");
+        let port = listener.local_addr().expect("TCP readiness address").port();
+        let target = ReadinessTarget::parse(&format!("tcp://127.0.0.1:{port}"))
+            .expect("TCP readiness target parses");
+        let server = tokio::spawn(async move {
+            let (_stream, _) = listener.accept().await.expect("TCP readiness accepts");
+        });
+        assert!(super::readiness_probe(&target).await.is_ok());
+        server.await.expect("TCP readiness server completes");
     }
 
     #[test]
@@ -2844,6 +3054,65 @@ mod tests {
         assert_eq!(runtime.exit_code, None);
         assert_eq!(runtime.error, None);
         assert_eq!(runtime.started_at_unix, Some(10));
+    }
+
+    #[tokio::test]
+    async fn direct_harness_clean_exit_without_readiness_is_an_explicit_failure() {
+        let root = std::env::temp_dir().join(format!(
+            "nexus-agent-direct-clean-exit-{}-{}",
+            std::process::id(),
+            unix_time_seconds()
+        ));
+        let paths = NexusPaths::from_root(root.clone());
+        let (program, args) = if cfg!(windows) {
+            (
+                std::env::var_os("ComSpec")
+                    .map(PathBuf::from)
+                    .unwrap_or_else(|| PathBuf::from("cmd.exe")),
+                vec!["/C".to_owned(), "exit 0".to_owned()],
+            )
+        } else {
+            (
+                PathBuf::from("sh"),
+                vec!["-c".to_owned(), "exit 0".to_owned()],
+            )
+        };
+        ConfigStore::new(paths.clone())
+            .write(&NexusConfigFile {
+                harness: Some(HarnessLaunchSpec {
+                    mode: Default::default(),
+                    program,
+                    args,
+                    working_dir: None,
+                    readiness_url: None,
+                    readiness_timeout_secs: None,
+                    readiness_token_required: false,
+                }),
+                update: None,
+            })
+            .expect("Harness config writes");
+        let supervisor = HarnessSupervisor::new(paths).expect("supervisor creates");
+        supervisor.start().await.expect("direct Harness spawns");
+        let runtime = timeout(Duration::from_secs(2), async {
+            loop {
+                let runtime = supervisor.status().await;
+                if matches!(runtime.state, HarnessState::Failed | HarnessState::Stopped) {
+                    break runtime;
+                }
+                sleep(Duration::from_millis(25)).await;
+            }
+        })
+        .await
+        .expect("direct Harness exit is observed");
+
+        assert_eq!(runtime.state, HarnessState::Failed);
+        assert_eq!(runtime.pid, None);
+        assert_eq!(runtime.exit_code, Some(0));
+        assert!(runtime
+            .error
+            .as_deref()
+            .is_some_and(|message| message.contains("exited with code 0")));
+        let _ = fs::remove_dir_all(root);
     }
 
     #[test]
@@ -2913,6 +3182,7 @@ mod tests {
                     working_dir: None,
                     readiness_url: Some(format!("http://127.0.0.1:{port}/health")),
                     readiness_timeout_secs: Some(1),
+                    readiness_token_required: false,
                 }),
                 update: None,
             })
@@ -3018,6 +3288,7 @@ mod tests {
                     working_dir: None,
                     readiness_url: Some("http://127.0.0.1:1/health".to_owned()),
                     readiness_timeout_secs: Some(60),
+                    readiness_token_required: false,
                 }),
                 update: None,
             })
@@ -3238,6 +3509,7 @@ mod tests {
                     working_dir: None,
                     readiness_url: None,
                     readiness_timeout_secs: None,
+                    readiness_token_required: false,
                 }),
                 update: None,
             })
@@ -3309,6 +3581,7 @@ mod tests {
                     working_dir: None,
                     readiness_url: Some(format!("http://127.0.0.1:{port}/health")),
                     readiness_timeout_secs: Some(2),
+                    readiness_token_required: false,
                 }),
                 update: None,
             })
@@ -3347,6 +3620,150 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn token_bound_start_rejects_a_ready_listener_without_a_current_token() {
+        let root = std::env::temp_dir().join(format!(
+            "nexus-agent-token-bound-start-negative-{}-{}",
+            std::process::id(),
+            unix_time_seconds()
+        ));
+        let paths = NexusPaths::from_root(root.clone());
+        let listener = TcpListener::bind(("127.0.0.1", 0))
+            .await
+            .expect("unrelated listener binds");
+        let port = listener.local_addr().expect("listener address").port();
+        let server = tokio::spawn(async move {
+            loop {
+                let _ = listener.accept().await.expect("TCP readiness accepts");
+            }
+        });
+        let (program, args) = if cfg!(windows) {
+            (
+                PathBuf::from("powershell.exe"),
+                vec![
+                    "-NoProfile".to_owned(),
+                    "-Command".to_owned(),
+                    "Start-Sleep -Seconds 30".to_owned(),
+                ],
+            )
+        } else {
+            (PathBuf::from("sleep"), vec!["30".to_owned()])
+        };
+        ConfigStore::new(paths.clone())
+            .write(&NexusConfigFile {
+                harness: Some(HarnessLaunchSpec {
+                    mode: Default::default(),
+                    program,
+                    args,
+                    working_dir: None,
+                    readiness_url: Some(format!("tcp://127.0.0.1:{port}")),
+                    readiness_timeout_secs: Some(1),
+                    readiness_token_required: true,
+                }),
+                update: None,
+            })
+            .expect("Harness config writes");
+        let supervisor = HarnessSupervisor::new(paths.clone()).expect("supervisor creates");
+        assert_eq!(
+            supervisor.start().await.expect("Harness starts").state,
+            HarnessState::Starting
+        );
+        let failed = timeout(Duration::from_secs(4), async {
+            loop {
+                let runtime = supervisor.status().await;
+                if runtime.state == HarnessState::Failed {
+                    break runtime;
+                }
+                sleep(Duration::from_millis(25)).await;
+            }
+        })
+        .await
+        .expect("token-bound start reaches its deadline");
+        assert!(failed
+            .error
+            .as_deref()
+            .is_some_and(|message| message.contains("timed out waiting")));
+
+        server.abort();
+        let _ = server.await;
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[tokio::test]
+    async fn token_bound_start_accepts_a_current_token_for_the_ready_port() {
+        let root = std::env::temp_dir().join(format!(
+            "nexus-agent-token-bound-start-positive-{}-{}",
+            std::process::id(),
+            unix_time_seconds()
+        ));
+        let paths = NexusPaths::from_root(root.clone());
+        let listener = TcpListener::bind(("127.0.0.1", 0))
+            .await
+            .expect("readiness listener binds");
+        let port = listener.local_addr().expect("listener address").port();
+        let server = tokio::spawn(async move {
+            loop {
+                let _ = listener.accept().await.expect("TCP readiness accepts");
+            }
+        });
+        let (program, args) = if cfg!(windows) {
+            (
+                PathBuf::from("powershell.exe"),
+                vec![
+                    "-NoProfile".to_owned(),
+                    "-Command".to_owned(),
+                    "Start-Sleep -Seconds 30".to_owned(),
+                ],
+            )
+        } else {
+            (PathBuf::from("sleep"), vec!["30".to_owned()])
+        };
+        ConfigStore::new(paths.clone())
+            .write(&NexusConfigFile {
+                harness: Some(HarnessLaunchSpec {
+                    mode: Default::default(),
+                    program,
+                    args,
+                    working_dir: None,
+                    readiness_url: Some(format!("tcp://127.0.0.1:{port}")),
+                    readiness_timeout_secs: Some(2),
+                    readiness_token_required: true,
+                }),
+                update: None,
+            })
+            .expect("Harness config writes");
+        let supervisor = HarnessSupervisor::new(paths.clone()).expect("supervisor creates");
+        supervisor.start().await.expect("Harness starts");
+        let session = supervisor
+            .log_sessions
+            .read()
+            .expect("session reads")
+            .expect("session exists");
+        fs::OpenOptions::new()
+            .append(true)
+            .open(paths.logs_dir.join(&session.stdout_log_name))
+            .expect("current log opens")
+            .write_all(format!("dsh web: http://127.0.0.1:{port}/?token=current\n").as_bytes())
+            .expect("current token appends");
+        let running = timeout(Duration::from_secs(3), async {
+            loop {
+                let runtime = supervisor.status().await;
+                if runtime.state == HarnessState::Running {
+                    break runtime;
+                }
+                sleep(Duration::from_millis(25)).await;
+            }
+        })
+        .await
+        .expect("token-bound start becomes Running");
+        assert!(running.pid.is_some());
+        supervisor.stop().await.expect("Harness stops");
+
+        server.abort();
+        let _ = server.await;
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[tokio::test]
     async fn cancelled_start_before_persistence_fails_without_orphaning_child() {
         let root = std::env::temp_dir().join(format!(
             "nexus-agent-cancelled-start-persist-{}-{}",
@@ -3373,6 +3790,7 @@ mod tests {
                     working_dir: None,
                     readiness_url: Some("http://127.0.0.1:1/health".to_owned()),
                     readiness_timeout_secs: Some(2),
+                    readiness_token_required: false,
                 }),
                 update: None,
             })
@@ -3450,6 +3868,7 @@ mod tests {
                     working_dir: None,
                     readiness_url: Some(format!("http://127.0.0.1:{port}/health")),
                     readiness_timeout_secs: Some(2),
+                    readiness_token_required: false,
                 }),
                 update: None,
             })
@@ -3539,6 +3958,7 @@ mod tests {
                     working_dir: None,
                     readiness_url: Some(format!("http://127.0.0.1:{port}/health")),
                     readiness_timeout_secs: Some(2),
+                    readiness_token_required: false,
                 }),
                 update: None,
             })
@@ -3624,6 +4044,7 @@ mod tests {
                     working_dir: None,
                     readiness_url: None,
                     readiness_timeout_secs: None,
+                    readiness_token_required: false,
                 }),
                 update: None,
             })
@@ -3682,6 +4103,7 @@ mod tests {
                     working_dir: None,
                     readiness_url: None,
                     readiness_timeout_secs: None,
+                    readiness_token_required: false,
                 }),
                 update: None,
             })
@@ -3737,6 +4159,7 @@ mod tests {
                     working_dir: None,
                     readiness_url: Some("http://127.0.0.1:1/health".to_owned()),
                     readiness_timeout_secs: Some(60),
+                    readiness_token_required: false,
                 }),
                 update: None,
             })
@@ -3785,6 +4208,7 @@ mod tests {
                     working_dir: None,
                     readiness_url: None,
                     readiness_timeout_secs: None,
+                    readiness_token_required: false,
                 }),
                 update: None,
             })
@@ -3867,6 +4291,7 @@ mod tests {
                     working_dir: None,
                     readiness_url: Some(format!("http://127.0.0.1:{port}/health")),
                     readiness_timeout_secs: Some(60),
+                    readiness_token_required: false,
                 }),
                 update: None,
             })
@@ -3976,6 +4401,7 @@ mod tests {
                     working_dir: None,
                     readiness_url: None,
                     readiness_timeout_secs: None,
+                    readiness_token_required: false,
                 }),
                 update: None,
             })
@@ -4021,6 +4447,7 @@ mod tests {
                     working_dir: None,
                     readiness_url: None,
                     readiness_timeout_secs: None,
+                    readiness_token_required: false,
                 }),
                 update: None,
             })
@@ -4074,6 +4501,7 @@ mod tests {
                     working_dir: None,
                     readiness_url: Some("http://127.0.0.1:1/health".to_owned()),
                     readiness_timeout_secs: Some(1),
+                    readiness_token_required: false,
                 }),
                 update: None,
             })
@@ -4160,6 +4588,7 @@ mod tests {
                     working_dir: None,
                     readiness_url: Some(format!("http://127.0.0.1:{port}/health")),
                     readiness_timeout_secs: Some(2),
+                    readiness_token_required: false,
                 }),
                 update: None,
             })
@@ -4411,6 +4840,270 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn recover_unattached_refuses_an_identityless_tcp_listener() {
+        let root = std::env::temp_dir().join(format!(
+            "nexus-agent-recover-identityless-tcp-{}-{}",
+            std::process::id(),
+            unix_time_seconds()
+        ));
+        let paths = NexusPaths::from_root(root.clone());
+        let listener = TcpListener::bind(("127.0.0.1", 0))
+            .await
+            .expect("unrelated listener binds");
+        let port = listener.local_addr().expect("listener address").port();
+        let server = tokio::spawn(async move {
+            loop {
+                let _ = listener.accept().await.expect("TCP readiness accepts");
+            }
+        });
+        ConfigStore::new(paths.clone())
+            .write(&NexusConfigFile {
+                harness: Some(HarnessLaunchSpec {
+                    mode: Default::default(),
+                    program: PathBuf::from("unused-harness"),
+                    args: Vec::new(),
+                    working_dir: None,
+                    readiness_url: Some(format!("tcp://127.0.0.1:{port}")),
+                    readiness_timeout_secs: Some(1),
+                    readiness_token_required: true,
+                }),
+                update: None,
+            })
+            .expect("Harness config writes");
+        RuntimeMetadataStore::new(paths.clone())
+            .update_harness(HarnessRuntimeInfo::starting(999, 10))
+            .expect("persisted Harness state writes");
+
+        let supervisor = HarnessSupervisor::new(paths).expect("supervisor creates");
+        let runtime = supervisor.recover_unattached().await;
+
+        assert_eq!(runtime.state, HarnessState::Failed);
+        assert_eq!(runtime.pid, None);
+        assert!(runtime.error.as_deref().is_some_and(|message| {
+            message.contains("Token-bound readiness cannot safely reattach")
+        }));
+
+        server.abort();
+        let _ = server.await;
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[tokio::test]
+    async fn recover_unattached_keeps_legacy_tcp_probe_without_token_requirement() {
+        let root = std::env::temp_dir().join(format!(
+            "nexus-agent-recover-legacy-tcp-{}-{}",
+            std::process::id(),
+            unix_time_seconds()
+        ));
+        let paths = NexusPaths::from_root(root.clone());
+        let listener = TcpListener::bind(("127.0.0.1", 0))
+            .await
+            .expect("legacy readiness listener binds");
+        let port = listener.local_addr().expect("listener address").port();
+        let server = tokio::spawn(async move {
+            loop {
+                let _ = listener.accept().await.expect("TCP readiness accepts");
+            }
+        });
+        ConfigStore::new(paths.clone())
+            .write(&NexusConfigFile {
+                harness: Some(HarnessLaunchSpec {
+                    mode: Default::default(),
+                    program: PathBuf::from("unused-harness"),
+                    args: Vec::new(),
+                    working_dir: None,
+                    readiness_url: Some(format!("tcp://127.0.0.1:{port}")),
+                    readiness_timeout_secs: Some(1),
+                    readiness_token_required: false,
+                }),
+                update: None,
+            })
+            .expect("Harness config writes");
+        RuntimeMetadataStore::new(paths.clone())
+            .update_harness(HarnessRuntimeInfo::starting(999, 10))
+            .expect("persisted Harness state writes");
+
+        let supervisor = HarnessSupervisor::new(paths).expect("supervisor creates");
+        let runtime = supervisor.recover_unattached().await;
+        assert_eq!(runtime.state, HarnessState::Running);
+        assert_eq!(runtime.pid, None);
+
+        server.abort();
+        let _ = server.await;
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[tokio::test]
+    async fn tcp_recovery_rejects_unrelated_listener_without_current_log_token() {
+        let root = std::env::temp_dir().join(format!(
+            "nexus-agent-tcp-recovery-token-boundary-{}-{}",
+            std::process::id(),
+            unix_time_seconds()
+        ));
+        let paths = NexusPaths::from_root(root.clone());
+        paths
+            .ensure_directories()
+            .expect("Nexus directories are available");
+        let listener = TcpListener::bind(("127.0.0.1", 0))
+            .await
+            .expect("unrelated listener binds");
+        let port = listener.local_addr().expect("listener address").port();
+        let server = tokio::spawn(async move {
+            loop {
+                let _ = listener.accept().await.expect("TCP readiness accepts");
+            }
+        });
+        let supervisor = HarnessSupervisor::new(paths).expect("supervisor creates");
+        let task = {
+            let mut inner = supervisor.inner.lock().await;
+            inner.generation = 9;
+            inner.log_session.generation = 9;
+            inner.log_session.run_id = "tcp-recovery-token-boundary-9".to_owned();
+            inner.log_session.launch_pending = true;
+            supervisor
+                .log_sessions
+                .write(&inner.log_session)
+                .expect("pending session writes");
+            inner.runtime = recovery_runtime(&HarnessRuntimeInfo::running(42, 10, 11));
+            let mut target = ReadinessTarget::parse(&format!("tcp://127.0.0.1:{port}"))
+                .expect("TCP target parses");
+            target.token_required = true;
+            inner.recovery = Some(RecoveryState {
+                generation: 9,
+                target,
+                deadline: Instant::now() + Duration::from_millis(150),
+                exit_code: Some(1),
+                task_started: false,
+            });
+            pending_recovery(&mut inner).expect("recovery task is pending")
+        };
+        supervisor.spawn_recovery(task);
+        sleep(Duration::from_millis(350)).await;
+
+        let runtime = supervisor.status().await;
+        assert_eq!(runtime.state, HarnessState::Failed);
+        assert_eq!(runtime.pid, None);
+        assert_eq!(runtime.exit_code, Some(1));
+
+        server.abort();
+        let _ = server.await;
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[tokio::test]
+    async fn token_bound_recovery_accepts_a_current_token_for_the_ready_port() {
+        let root = std::env::temp_dir().join(format!(
+            "nexus-agent-token-bound-recovery-positive-{}-{}",
+            std::process::id(),
+            unix_time_seconds()
+        ));
+        let paths = NexusPaths::from_root(root.clone());
+        paths
+            .ensure_directories()
+            .expect("Nexus directories are available");
+        let listener = TcpListener::bind(("127.0.0.1", 0))
+            .await
+            .expect("readiness listener binds");
+        let port = listener.local_addr().expect("listener address").port();
+        let server = tokio::spawn(async move {
+            loop {
+                let _ = listener.accept().await.expect("TCP readiness accepts");
+            }
+        });
+        let supervisor = HarnessSupervisor::new(paths.clone()).expect("supervisor creates");
+        let task = {
+            let mut inner = supervisor.inner.lock().await;
+            inner.generation = 10;
+            inner.log_session.generation = 10;
+            inner.log_session.run_id = "token-bound-recovery-positive-10".to_owned();
+            inner.log_session.launch_pending = true;
+            supervisor
+                .log_sessions
+                .write(&inner.log_session)
+                .expect("pending session writes");
+            fs::OpenOptions::new()
+                .append(true)
+                .open(paths.logs_dir.join(&inner.log_session.stdout_log_name))
+                .expect("current stdout opens")
+                .write_all(format!("dsh web: http://127.0.0.1:{port}/?token=current\n").as_bytes())
+                .expect("current token appends");
+            inner.runtime = recovery_runtime(&HarnessRuntimeInfo::running(42, 10, 11));
+            let mut target = ReadinessTarget::parse(&format!("tcp://127.0.0.1:{port}"))
+                .expect("TCP target parses");
+            target.token_required = true;
+            inner.recovery = Some(RecoveryState {
+                generation: 10,
+                target,
+                deadline: Instant::now() + Duration::from_secs(1),
+                exit_code: Some(1),
+                task_started: false,
+            });
+            pending_recovery(&mut inner).expect("recovery task is pending")
+        };
+        supervisor.spawn_recovery(task);
+        let runtime = timeout(Duration::from_secs(2), async {
+            loop {
+                let runtime = supervisor.status().await;
+                if runtime.state == HarnessState::Running {
+                    break runtime;
+                }
+                sleep(Duration::from_millis(25)).await;
+            }
+        })
+        .await
+        .expect("current token completes recovery");
+        assert_eq!(runtime.pid, None);
+        assert_eq!(runtime.error, None);
+
+        server.abort();
+        let _ = server.await;
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn token_bound_readiness_accepts_only_a_current_token_for_the_target_port() {
+        let root = std::env::temp_dir().join(format!(
+            "nexus-agent-tcp-recovery-token-match-{}-{}",
+            std::process::id(),
+            unix_time_seconds()
+        ));
+        let paths = NexusPaths::from_root(root.clone());
+        let supervisor = HarnessSupervisor::new(paths.clone()).expect("supervisor creates");
+        let session = supervisor
+            .log_sessions
+            .read()
+            .expect("session reads")
+            .expect("session exists");
+        let stdout_path = paths.logs_dir.join(&session.stdout_log_name);
+        fs::OpenOptions::new()
+            .append(true)
+            .open(&stdout_path)
+            .expect("current stdout opens")
+            .write_all(b"dsh web: http://127.0.0.1:31841/?token=current-token\n")
+            .expect("current token appends");
+
+        let mut observer = nexus_launcher_core::HarnessLogObserver::default();
+        let matching =
+            ReadinessTarget::parse("tcp://127.0.0.1:31841").expect("matching target parses");
+        assert!(readiness_has_current_token(
+            &paths,
+            &matching,
+            &session,
+            &mut observer
+        ));
+        let different_port =
+            ReadinessTarget::parse("tcp://127.0.0.1:31842").expect("different target parses");
+        assert!(!readiness_has_current_token(
+            &paths,
+            &different_port,
+            &session,
+            &mut observer
+        ));
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[tokio::test]
     async fn recover_unattached_does_not_resurrect_stopped_state() {
         let root = std::env::temp_dir().join(format!(
             "nexus-agent-recover-stopped-{}",
@@ -4493,6 +5186,7 @@ mod tests {
                     working_dir: None,
                     readiness_url: None,
                     readiness_timeout_secs: None,
+                    readiness_token_required: false,
                 }),
                 update: None,
             })
@@ -4572,6 +5266,7 @@ mod tests {
                     working_dir: None,
                     readiness_url: Some(format!("http://127.0.0.1:{}/health", address.port())),
                     readiness_timeout_secs: Some(2),
+                    readiness_token_required: false,
                 }),
                 update: None,
             })
@@ -4676,6 +5371,7 @@ mod tests {
                     working_dir: None,
                     readiness_url: Some(format!("http://127.0.0.1:{}/health", address.port())),
                     readiness_timeout_secs: Some(2),
+                    readiness_token_required: false,
                 }),
                 update: None,
             })
@@ -4750,6 +5446,7 @@ mod tests {
                     working_dir: None,
                     readiness_url: Some(format!("http://127.0.0.1:{}/health", address.port())),
                     readiness_timeout_secs: Some(2),
+                    readiness_token_required: false,
                 }),
                 update: None,
             })
@@ -4784,7 +5481,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn attached_running_advances_token_epoch_on_same_pid_readiness_gap() {
+    async fn attached_recovery_waits_for_a_fresh_token_after_same_pid_readiness_gap() {
         let root = std::env::temp_dir().join(format!(
             "nexus-agent-attached-readiness-{}-{}",
             std::process::id(),
@@ -4826,6 +5523,7 @@ mod tests {
                     working_dir: None,
                     readiness_url: Some(format!("http://127.0.0.1:{}/health", address.port())),
                     readiness_timeout_secs: Some(3),
+                    readiness_token_required: true,
                 }),
                 update: None,
             })
@@ -4834,6 +5532,24 @@ mod tests {
             HarnessSupervisor::with_graceful_wait(paths.clone(), Duration::from_millis(100))
                 .expect("supervisor creates");
         supervisor.start().await.expect("Harness starts");
+        let initial_session = supervisor
+            .log_sessions
+            .read()
+            .expect("initial session reads")
+            .expect("initial session exists");
+        let stdout_path = paths.logs_dir.join(&initial_session.stdout_log_name);
+        fs::OpenOptions::new()
+            .append(true)
+            .open(&stdout_path)
+            .expect("initial log opens")
+            .write_all(
+                format!(
+                    "dsh web: http://127.0.0.1:{}/?token=initial\n",
+                    address.port()
+                )
+                .as_bytes(),
+            )
+            .expect("initial token appends");
         let running = timeout(Duration::from_secs(3), async {
             loop {
                 let runtime = supervisor.status().await;
@@ -4881,7 +5597,11 @@ mod tests {
             .expect("old session reads")
             .expect("old session exists");
         let stdout_path = paths.logs_dir.join(&old_session.stdout_log_name);
-        fs::write(&stdout_path, "http://127.0.0.1:3080/?token=old\n").expect("old token appends");
+        fs::write(
+            &stdout_path,
+            format!("dsh web: http://127.0.0.1:{}/?token=old\n", address.port()),
+        )
+        .expect("old token appends");
         let old_length = fs::metadata(&stdout_path)
             .expect("old token metadata reads")
             .len();
@@ -4915,12 +5635,6 @@ mod tests {
             Err(HarnessSupervisorError::AlreadyRunning)
         ));
 
-        fs::OpenOptions::new()
-            .append(true)
-            .open(&stdout_path)
-            .expect("current log opens")
-            .write_all(b"http://127.0.0.1:3080/?token=new\n")
-            .expect("post-boundary token appends");
         let replacement_listener = TcpListener::bind(address)
             .await
             .expect("readiness service rebinds under the same Harness PID");
@@ -4937,6 +5651,20 @@ mod tests {
                     .await;
             }
         });
+        sleep(Duration::from_millis(600)).await;
+        assert_eq!(
+            supervisor.status().await.state,
+            HarnessState::Starting,
+            "a healthy endpoint alone must not complete attached token-bound recovery"
+        );
+        fs::OpenOptions::new()
+            .append(true)
+            .open(&stdout_path)
+            .expect("current log opens")
+            .write_all(
+                format!("dsh web: http://127.0.0.1:{}/?token=new\n", address.port()).as_bytes(),
+            )
+            .expect("post-boundary token appends");
         let recovered = timeout(Duration::from_secs(4), async {
             loop {
                 let runtime = supervisor.status().await;
@@ -5025,6 +5753,7 @@ mod tests {
                     working_dir: None,
                     readiness_url: Some(format!("http://127.0.0.1:{}/health", address.port())),
                     readiness_timeout_secs: Some(1),
+                    readiness_token_required: false,
                 }),
                 update: None,
             })
@@ -5150,6 +5879,7 @@ mod tests {
                     working_dir: None,
                     readiness_url: Some(format!("http://127.0.0.1:{}/health", address.port())),
                     readiness_timeout_secs: Some(2),
+                    readiness_token_required: false,
                 }),
                 update: None,
             })
@@ -5264,6 +5994,7 @@ mod tests {
                     working_dir: None,
                     readiness_url: Some(format!("http://127.0.0.1:{}/health", address.port())),
                     readiness_timeout_secs: Some(2),
+                    readiness_token_required: false,
                 }),
                 update: None,
             })

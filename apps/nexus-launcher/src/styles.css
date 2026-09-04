@@ -24,10 +24,10 @@
 
 * { box-sizing: border-box; }
 body { margin: 0; min-width: 320px; min-height: 100vh; background: radial-gradient(circle at 78% -18%, rgba(56, 121, 119, 0.2), transparent 34rem), var(--bg); }
-button, input { font: inherit; }
+button, input, textarea, select { font: inherit; }
 button { color: inherit; cursor: pointer; }
 button:disabled { cursor: wait; opacity: 0.48; }
-button:focus-visible, input:focus-visible, select:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 
 .app-shell { display: grid; grid-template-columns: 224px minmax(0, 1fr); min-height: 100vh; }
 .sidebar { display: flex; position: sticky; top: 0; flex-direction: column; height: 100vh; border-right: 1px solid var(--line); padding: 24px 14px 18px; background: rgba(11, 17, 23, 0.82); }
@@ -108,6 +108,7 @@ dd { overflow: hidden; margin: 5px 0 0; color: var(--text); font-size: 12px; fon
 .data-row > div { display: flex; align-items: center; flex-wrap: wrap; gap: 9px; min-width: 0; }
 .data-row strong { overflow: hidden; color: var(--text); font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
 .data-row > div > span:not(.status-pill) { color: var(--muted); font-size: 11px; }
+.data-row > div > span:not(.status-pill) { min-width: 0; overflow-wrap: anywhere; }
 .row-meta { flex: 0 0 auto; color: var(--subtle); font-size: 10px; }
 .panel-toolbar { justify-content: space-between; margin: -3px 0 13px; }
 .toolbar-count { color: var(--muted); font-size: 11px; }
@@ -151,6 +152,11 @@ dd { overflow: hidden; margin: 5px 0 0; color: var(--text); font-size: 12px; fon
 .form-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; margin-top: 2px; }
 .form-error { display: flex; align-items: flex-start; gap: 7px; border: 1px solid rgba(255, 149, 140, 0.3); border-radius: 8px; padding: 9px 10px; color: var(--danger); background: rgba(255, 149, 140, 0.08); font-size: 11px; line-height: 1.45; }
 .form-error svg { flex: 0 0 auto; margin-top: 1px; }
+.candidate-choice-summary { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 12px; border: 1px solid var(--line); border-radius: 9px; padding: 10px 11px; color: var(--muted); font-size: 11px; }
+.candidate-dialog { position: fixed; inset: 0; z-index: 20; display: grid; place-items: center; padding: 16px; background: rgba(4, 9, 13, 0.62); backdrop-filter: blur(3px); }
+.candidate-dialog-card { width: min(720px, calc(100vw - 32px)); max-height: min(720px, calc(100vh - 32px)); overflow: auto; border: 1px solid var(--line-strong); border-radius: 14px; padding: 19px; color: var(--text); background: var(--surface-raised); box-shadow: 0 24px 90px rgba(0, 0, 0, 0.42); }
+.candidate-dialog .panel-toolbar { margin-bottom: 13px; }
+.candidate-dialog .data-row { align-items: flex-start; }
 
 [data-theme="light"] {
   color-scheme: light;

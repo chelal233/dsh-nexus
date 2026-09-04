@@ -27,11 +27,16 @@ use axum::{
     Json, Router,
 };
 use nexus_core::{
-    data_root_identity, discover_harness_candidates_with_paths, new_instance_id, AgentState,
-    CheckpointRestoreIntent, CheckpointRestoreJournal, CheckpointRestoreJournalStore,
-    CheckpointRestorePhase, CheckpointStore, ConfigStore, DiagnosticsStore, HarnessLaunchSpec,
-    HarnessLogSession, HarnessLogSessionStore, NexusConfig, NexusConfigFile, NexusStateSnapshot,
-    ProfileCatalog, ProfileStore, ReleaseCatalog, ReleaseStore, UpdateSpec, DEFAULT_PROFILE,
+    data_root_identity, discover_harness_candidates_with_paths, load_harness_launch_spec,
+    load_update_spec, new_instance_id, AgentState, CheckpointRestoreIntent,
+    CheckpointRestoreJournal, CheckpointRestoreJournalStore, CheckpointRestorePhase,
+    CheckpointStore, ConfigStore, DiagnosticsStore, HarnessLaunchSpec, HarnessLogSession,
+    HarnessLogSessionStore, NexusConfig, NexusConfigFile, NexusStateSnapshot, ProfileCatalog,
+    ProfileStore, ReleaseCatalog, ReleaseStore, UpdateSpec, DEFAULT_PROFILE, HARNESS_ARGS_ENV,
+    HARNESS_PROGRAM_ENV, HARNESS_READINESS_TIMEOUT_ENV, HARNESS_READINESS_URL_ENV,
+    HARNESS_WORKING_DIR_ENV, UPDATE_BUILD_ARGS_ENV, UPDATE_BUILD_PROGRAM_ENV,
+    UPDATE_GIT_PROGRAM_ENV, UPDATE_REF_ENV, UPDATE_SOURCE_ENV, UPDATE_TIMEOUT_ENV,
+    UPDATE_VERIFY_ARGS_ENV, UPDATE_VERIFY_PROGRAM_ENV,
 };
 use nexus_launcher_core::{
     harness_observation_matches_session, read_harness_ui_info, unavailable_harness_ui_info,
@@ -1408,7 +1413,10 @@ async fn diagnostics_control(
 
 async fn config_status(State(state): State<AppState>) -> axum::response::Response {
     match state.config.load() {
-        Ok(document) => (StatusCode::OK, Json(config_response(document))).into_response(),
+        Ok(document) => match config_response_for_paths(&state.paths, document) {
+            Ok(response) => (StatusCode::OK, Json(response)).into_response(),
+            Err(error) => data_error_response(error, "config_unavailable"),
+        },
         Err(error) => data_error_response(error, "config_unavailable"),
     }
 }
@@ -1420,7 +1428,7 @@ async fn config_control(
     match command.action {
         ConfigAction::Status => config_status(State(state)).await,
         ConfigAction::SetHarness => {
-            let Some(payload) = command.harness else {
+            let Some(mut payload) = command.harness else {
                 return data_error_response(
                     io::Error::new(
                         io::ErrorKind::InvalidInput,
@@ -1429,6 +1437,31 @@ async fn config_control(
                     "config_invalid",
                 );
             };
+            if command.preserve_harness_readiness_url {
+                let existing = match state.config.load() {
+                    Ok(document) => document.harness.and_then(|harness| harness.readiness_url),
+                    Err(error) => return data_error_response(error, "config_unavailable"),
+                };
+                if let Some(existing) = existing {
+                    payload.readiness_url = Some(existing);
+                } else if env::var_os(HARNESS_READINESS_URL_ENV)
+                    .is_some_and(|value| !value.is_empty())
+                {
+                    // An environment-only URL is intentionally never copied
+                    // into Nexus config. Keep the persisted field empty while
+                    // the effective response continues to report the env
+                    // override in a redacted form.
+                    payload.readiness_url = None;
+                } else {
+                    return data_error_response(
+                        io::Error::new(
+                            io::ErrorKind::InvalidInput,
+                            "cannot preserve a readiness URL when no existing URL is configured",
+                        ),
+                        "config_invalid",
+                    );
+                }
+            }
             let harness = match HarnessLaunchSpec::from_payload(payload) {
                 Ok(harness) => harness,
                 Err(error) => return data_error_response(error, "config_invalid"),
@@ -1515,10 +1548,16 @@ async fn config_control(
 }
 
 fn config_response(document: NexusConfigFile) -> ConfigResponse {
+    let harness_readiness_url_redacted = document
+        .harness
+        .as_ref()
+        .and_then(|harness| harness.readiness_url.as_ref())
+        .is_some_and(|url| redact_config_url(Some(url.clone())).as_deref() != Some(url.as_str()));
     ConfigResponse::new(
         document.harness.map(|harness| {
             let mut payload = harness.to_payload();
             payload.args = redact_config_args(payload.args);
+            payload.readiness_url = redact_config_url(payload.readiness_url);
             payload
         }),
         document.update.map(|update| {
@@ -1528,6 +1567,45 @@ fn config_response(document: NexusConfigFile) -> ConfigResponse {
             payload
         }),
     )
+    .with_harness_readiness_url_redacted(harness_readiness_url_redacted)
+}
+
+fn config_response_for_paths(
+    paths: &nexus_core::NexusPaths,
+    document: NexusConfigFile,
+) -> io::Result<ConfigResponse> {
+    let harness_env_override = [
+        HARNESS_PROGRAM_ENV,
+        HARNESS_ARGS_ENV,
+        HARNESS_WORKING_DIR_ENV,
+        HARNESS_READINESS_URL_ENV,
+        HARNESS_READINESS_TIMEOUT_ENV,
+    ]
+    .iter()
+    .any(|key| env::var_os(key).is_some_and(|value| !value.is_empty()));
+    let update_env_override = [
+        UPDATE_SOURCE_ENV,
+        UPDATE_REF_ENV,
+        UPDATE_GIT_PROGRAM_ENV,
+        UPDATE_BUILD_PROGRAM_ENV,
+        UPDATE_BUILD_ARGS_ENV,
+        UPDATE_VERIFY_PROGRAM_ENV,
+        UPDATE_VERIFY_ARGS_ENV,
+        UPDATE_TIMEOUT_ENV,
+    ]
+    .iter()
+    .any(|key| env::var_os(key).is_some_and(|value| !value.is_empty()));
+
+    // Always go through the same effective loaders used by the supervisor so
+    // legacy official DSH configs receive inferred readiness fields in the
+    // GUI as well. The fallback keeps an in-memory document usable when the
+    // config file has not been written yet.
+    let effective = NexusConfigFile {
+        harness: load_harness_launch_spec(paths)?.or(document.harness),
+        update: load_update_spec(paths)?.or(document.update),
+    };
+    Ok(config_response(effective)
+        .with_environment_overrides(harness_env_override, update_env_override))
 }
 
 fn redact_config_args(values: Vec<String>) -> Vec<String> {
@@ -1548,7 +1626,13 @@ fn redact_config_args(values: Vec<String>) -> Vec<String> {
         }
 
         if is_sensitive_config_value(&value) {
-            if value.starts_with('-') {
+            if let Some((name, _)) = value.split_once('=') {
+                if is_sensitive_config_value(name) {
+                    redacted.push(format!("{name}=[REDACTED]"));
+                } else {
+                    redacted.push("[REDACTED]".to_owned());
+                }
+            } else if value.starts_with('-') {
                 redacted.push(value);
                 redact_next = true;
             } else {
@@ -1563,25 +1647,82 @@ fn redact_config_args(values: Vec<String>) -> Vec<String> {
 
 fn is_sensitive_config_value(value: &str) -> bool {
     let lower = value.to_ascii_lowercase();
-    [
-        "password",
-        "passwd",
-        "secret",
-        "authorization",
-        "api_key",
-        "apikey",
-        "access_token",
-        "refresh_token",
-        "cookie",
-        "private_key",
-    ]
-    .iter()
-    .any(|marker| lower.contains(marker))
+    // Header-style inline credentials are values even when the option name is
+    // innocuous (for example, `--header=Authorization: Bearer ...`).
+    if lower.contains("bearer ") || lower.contains("authorization:") || lower.contains("cookie:") {
+        return true;
+    }
+    let key = value
+        .split_once('=')
+        .map_or(value, |(name, _)| name)
+        .trim_start_matches('-')
+        .trim_matches(|character: char| !character.is_ascii_alphanumeric() && character != '_');
+    let mut normalized = String::with_capacity(key.len() + 4);
+    let mut previous_is_lower = false;
+    for character in key.chars() {
+        if character.is_ascii_uppercase() && previous_is_lower {
+            normalized.push('_');
+        }
+        if character.is_ascii_alphanumeric() {
+            normalized.push(character.to_ascii_lowercase());
+            previous_is_lower = character.is_ascii_lowercase() || character.is_ascii_digit();
+        } else {
+            normalized.push('_');
+            previous_is_lower = false;
+        }
+    }
+    let segments = normalized.split('_').filter(|segment| !segment.is_empty());
+    segments.clone().any(|segment| {
+        matches!(
+            segment,
+            "password"
+                | "passwd"
+                | "secret"
+                | "authorization"
+                | "token"
+                | "cookie"
+                | "bearer"
+                | "auth"
+                | "apikey"
+                | "key"
+        )
+    }) || ["access_token", "refresh_token", "api_key", "private_key"]
+        .iter()
+        .any(|marker| normalized == *marker)
+}
+
+/// Remove query/fragment credentials and userinfo before configuration is
+/// returned to a UI. The on-disk config remains unchanged; this is a display
+/// boundary only. Dropping the complete query is intentionally conservative:
+/// a readiness URL is never a place where Nexus needs to preserve arguments.
+fn redact_config_url(value: Option<String>) -> Option<String> {
+    let value = value?;
+    let query_start = value.find(['?', '#']).unwrap_or(value.len());
+    let base = &value[..query_start];
+    let Some(scheme_end) = base.find("://") else {
+        return Some(base.to_owned());
+    };
+    let authority_start = scheme_end + 3;
+    let authority_end = base[authority_start..]
+        .find('/')
+        .map_or(base.len(), |offset| authority_start + offset);
+    let authority = &base[authority_start..authority_end];
+    let authority = authority
+        .rsplit_once('@')
+        .map_or(authority, |(_, host)| host);
+    let mut sanitized = String::with_capacity(base.len());
+    sanitized.push_str(&base[..authority_start]);
+    sanitized.push_str(authority);
+    sanitized.push_str(&base[authority_end..]);
+    Some(sanitized)
 }
 
 fn write_config_response(state: &AppState, document: NexusConfigFile) -> axum::response::Response {
     match state.config.write(&document) {
-        Ok(()) => (StatusCode::OK, Json(config_response(document))).into_response(),
+        Ok(()) => match config_response_for_paths(&state.paths, document) {
+            Ok(response) => (StatusCode::OK, Json(response)).into_response(),
+            Err(error) => data_error_response(error, "config_unavailable"),
+        },
         Err(error) => data_error_response(error, "config_write_failed"),
     }
 }
@@ -1777,7 +1918,7 @@ mod cors_tests {
     use super::{
         acquire_runtime_lock, are_allowed_cors_headers, harness_ui_process_is_presentable,
         is_allowed_console_origin_for_port, is_allowed_cors_method, proxy_identity_values_match,
-        PROXY_DATA_ROOT_HEADER, PROXY_INSTANCE_HEADER,
+        redact_config_args, redact_config_url, PROXY_DATA_ROOT_HEADER, PROXY_INSTANCE_HEADER,
     };
     use nexus_core::HarnessLogSession;
     use nexus_core::NexusPaths;
@@ -1828,6 +1969,44 @@ mod cors_tests {
         assert!(are_allowed_cors_headers("Content-Type, accept"));
         assert!(!are_allowed_cors_headers("authorization"));
         assert!(!are_allowed_cors_headers("content-type, x-client-secret"));
+    }
+
+    #[test]
+    fn redacts_token_shaped_config_values_and_readiness_credentials() {
+        assert_eq!(
+            redact_config_args(vec![
+                "--token".to_owned(),
+                "secret".to_owned(),
+                "token=inline-secret".to_owned(),
+                "--api-key=api-secret".to_owned(),
+                "--accessToken".to_owned(),
+                "camel-secret".to_owned(),
+                "--header=Authorization: Bearer header-secret".to_owned(),
+                "--tokenize".to_owned(),
+                "safe".to_owned(),
+            ]),
+            vec![
+                "--token".to_owned(),
+                "[REDACTED]".to_owned(),
+                "token=[REDACTED]".to_owned(),
+                "--api-key=[REDACTED]".to_owned(),
+                "--accessToken".to_owned(),
+                "[REDACTED]".to_owned(),
+                "[REDACTED]".to_owned(),
+                "--tokenize".to_owned(),
+                "safe".to_owned(),
+            ]
+        );
+        assert_eq!(
+            redact_config_url(Some(
+                "http://user:password@127.0.0.1:3080/?token=secret#auth=secret".to_owned()
+            )),
+            Some("http://127.0.0.1:3080/".to_owned())
+        );
+        assert_eq!(
+            redact_config_url(Some("tcp://127.0.0.1:3080?token=secret".to_owned())),
+            Some("tcp://127.0.0.1:3080".to_owned())
+        );
     }
 
     #[test]
@@ -2148,6 +2327,7 @@ mod checkpoint_tests {
                     working_dir: None,
                     readiness_url: None,
                     readiness_timeout_secs: None,
+                    readiness_token_required: false,
                 }),
                 update: None,
             })

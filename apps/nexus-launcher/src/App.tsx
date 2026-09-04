@@ -207,9 +207,9 @@ export function credentialInvalidationCanSettle(
   return previousSessionKey === undefined || nextSessionKey !== previousSessionKey;
 }
 
-function formatTimestamp(value: unknown, unavailable: string): string {
+function formatTimestamp(value: unknown, unavailable: string, locale: Locale): string {
   if (typeof value !== "number" || value <= 0) return unavailable;
-  return new Date(value * 1000).toLocaleString();
+  return new Date(value * 1000).toLocaleString(locale === "zh" ? "zh-CN" : "en-US");
 }
 
 function errorMessage(error: unknown): string {
@@ -246,6 +246,39 @@ function localizeBackendError(message: string, t: Translator): string {
   }
   if (normalized.includes("harness changed state while its token was being observed")) {
     return t("Harness changed state while its token was being observed. Refresh after it is running.");
+  }
+  if (normalized.includes("harness node launch mode requires a node runtime program")) {
+    return t("Node mode requires a Node runtime executable.");
+  }
+  if (normalized.includes("harness node launch mode requires an entry script") || normalized.includes("harness node entry must be non-empty")) {
+    return t("A Harness entry is required for Node mode.");
+  }
+  if (normalized.includes("only http:// or tcp:// loopback readiness urls")) {
+    return t("Readiness target must use HTTP or TCP loopback.");
+  }
+  if (normalized.includes("tcp readiness urls cannot contain a path")) {
+    return t("TCP readiness targets cannot contain a path.");
+  }
+  if (normalized.includes("tcp readiness urls cannot contain a query")) {
+    return t("TCP readiness targets cannot contain a query.");
+  }
+  if (normalized.includes("readiness urls cannot contain a fragment")) {
+    return t("Readiness targets cannot contain a fragment.");
+  }
+  if (normalized.includes("tcp readiness urls must include an explicit port")) {
+    return t("TCP readiness targets require an explicit port.");
+  }
+  if (normalized.includes("readiness url has no host")) {
+    return t("Readiness target must include a host.");
+  }
+  if (normalized.includes("readiness url has an invalid") || normalized.includes("readiness url port must be")) {
+    return t("Readiness target has an invalid port or host.");
+  }
+  if (normalized.includes("readiness url must target localhost")) {
+    return t("Readiness target must use a loopback host.");
+  }
+  if (normalized.includes("harness token-bound readiness requires a readiness url")) {
+    return t("Token-bound readiness requires a readiness URL.");
   }
   if (normalized.includes("agent is not responding at") || normalized.includes("agent api is not responding")) {
     return t("The Agent API is not responding on its loopback port.");
@@ -285,7 +318,7 @@ function updateStateLabel(update: JsonObject, t: Translator): string {
   return state ? localizedRuntimeState(state, t) : t("Update queue idle");
 }
 
-function isRecoverableNoopError(message: string): boolean {
+export function isRecoverableNoopError(message: string): boolean {
   const normalized = message.toLowerCase();
   return normalized.includes("already running")
     || normalized.includes("already stopped")
@@ -311,23 +344,45 @@ function systemTheme(): "light" | "dark" {
   return window.matchMedia("(prefers-color-scheme: light)").matches ? "light" : "dark";
 }
 
-function isLoopbackUrl(value: string | undefined): value is string {
+export function isLoopbackReadinessTarget(value: string | undefined): value is string {
   if (!value) return false;
   try {
     const url = new URL(value);
-    return (
-      url.protocol === "http:" &&
-      ["127.0.0.1", "localhost", "[::1]"].includes(url.hostname) &&
-      !url.username &&
-      !url.password &&
-      !/[\u0000-\u001f\u007f]/.test(value)
-    );
+    if (!["http:", "tcp:"].includes(url.protocol)
+      || !["127.0.0.1", "localhost", "[::1]"].includes(url.hostname)
+      || url.username
+      || url.password
+      || /[\u0000-\u001f\u007f]/.test(value)) return false;
+    const port = Number(url.port || (url.protocol === "http:" ? "80" : "0"));
+    if (!Number.isInteger(port) || port <= 0 || port > 65535) return false;
+    if (url.protocol === "tcp:") {
+      return Boolean(url.port) && (url.pathname === "" || url.pathname === "/") && !url.search && !url.hash;
+    }
+    return !url.hash;
   } catch {
     return false;
   }
 }
 
-type HarnessConfigDraft = {
+function booleanValue(value: unknown, key: string): boolean {
+  return asObject(value)[key] === true;
+}
+
+function isLoopbackUrl(value: string | undefined): value is string {
+  if (!value) return false;
+  try {
+    const url = new URL(value);
+    return url.protocol === "http:"
+      && ["127.0.0.1", "localhost", "[::1]"].includes(url.hostname)
+      && !url.username
+      && !url.password
+      && !/[\u0000-\u001f\u007f]/.test(value);
+  } catch {
+    return false;
+  }
+}
+
+export type HarnessConfigDraft = {
   mode: HarnessLaunchMode;
   program: string;
   entry: string;
@@ -335,6 +390,8 @@ type HarnessConfigDraft = {
   workingDir: string;
   readinessUrl: string;
   timeout: string;
+  readinessTokenRequired: boolean;
+  readinessUrlRedacted: boolean;
   argsRedacted: boolean;
   replaceRedactedArgs: boolean;
 };
@@ -347,6 +404,8 @@ const emptyHarnessDraft: HarnessConfigDraft = {
   workingDir: "",
   readinessUrl: "",
   timeout: "",
+  readinessTokenRequired: false,
+  readinessUrlRedacted: false,
   argsRedacted: false,
   replaceRedactedArgs: false,
 };
@@ -367,6 +426,8 @@ export function harnessDraftFromConfig(config: JsonObject): HarnessConfigDraft {
     workingDir: stringValue(harness, "working_dir") || "",
     readinessUrl: stringValue(harness, "readiness_url") || "",
     timeout: numberValue(harness, "readiness_timeout_secs")?.toString() || "",
+    readinessTokenRequired: booleanValue(harness, "readiness_token_required"),
+    readinessUrlRedacted: booleanValue(config, "harness_readiness_url_redacted"),
     argsRedacted,
     replaceRedactedArgs: false,
   };
@@ -386,6 +447,7 @@ export type HarnessCandidate = {
   workingDir: string;
   readinessUrl: string;
   readinessTimeout: string;
+  readinessTokenRequired: boolean;
   version: string;
   source: string;
   displayName: string;
@@ -411,6 +473,7 @@ export function harnessCandidates(value: unknown): HarnessCandidate[] {
     const workingDir = stringValue(item, "working_dir") || stringValue(item, "project_dir") || "";
     const readinessUrl = stringValue(item, "readiness_url") || "";
     const readinessTimeout = numberValue(item, "readiness_timeout_secs")?.toString() || "";
+    const readinessTokenRequired = booleanValue(item, "readiness_token_required");
     const id = stringValue(item, "id") || `${mode}:${program}:${entry}:${index}`;
     return {
       id,
@@ -421,6 +484,7 @@ export function harnessCandidates(value: unknown): HarnessCandidate[] {
       workingDir,
       readinessUrl,
       readinessTimeout,
+      readinessTokenRequired,
       version: stringValue(item, "version") || "",
       source: stringValue(item, "source") || "",
       displayName: stringValue(item, "display_name") || stringValue(item, "name") || program || id,
@@ -430,6 +494,39 @@ export function harnessCandidates(value: unknown): HarnessCandidate[] {
 
 function candidateModeLabel(mode: HarnessLaunchMode, t: Translator): string {
   return mode === "node" ? t("Node runtime") : t("Direct executable");
+}
+
+/** Serialize the editor's split Node fields at the compatibility boundary. */
+export function harnessConfigPayloadFromDraft(draft: HarnessConfigDraft): JsonObject {
+  const entry = draft.entry.trim();
+  const additionalArgs = draft.args
+    .split(/\r?\n/)
+    .map((value) => value.trim())
+    .filter(Boolean);
+  return {
+    mode: draft.mode,
+    program: draft.program.trim(),
+    entry: draft.mode === "node" ? entry : null,
+    args: additionalArgs,
+    args_are_additional: draft.mode === "node",
+    working_dir: draft.workingDir.trim() || null,
+    readiness_url: draft.readinessUrl.trim() || null,
+    readiness_timeout_secs: draft.timeout.trim() ? Number(draft.timeout.trim()) : null,
+    readiness_token_required: draft.readinessTokenRequired,
+  };
+}
+
+function discoverySourceLabel(source: string, t: Translator): string {
+  switch (source) {
+    case "configured": return t("Configured search root");
+    case "current_dir": return t("Current directory");
+    case "current_exe": return t("Launcher directory");
+    case "data_root": return t("Nexus data directory");
+    case "data_root_parent": return t("Nexus data parent");
+    case "home": return t("User home");
+    case "path": return t("PATH");
+    default: return t("Local search");
+  }
 }
 
 async function proxyRequest<T = JsonObject>(
@@ -549,6 +646,13 @@ function App() {
     // webview language. The command is intentionally best-effort so the same
     // React bundle remains usable in a browser-only development preview.
     void invoke("set_native_locale", { locale }).catch(() => undefined);
+  }, [locale]);
+
+  useEffect(() => {
+    // These messages are rendered strings rather than translation keys. Clear
+    // them on a language switch so a previous locale never remains visible.
+    setNotice(null);
+    setError(null);
   }, [locale]);
 
   useEffect(() => {
@@ -676,7 +780,8 @@ function App() {
   }, [refresh]);
 
   const runAction = useCallback(async (label: string, path: string, body: JsonObject): Promise<boolean> => {
-    if (snapshot.startup?.available !== true) {
+    const isNativeAgentLifecycle = path === "/v1/agent";
+    if (snapshot.startup === null || (snapshot.startup.available !== true && !isNativeAgentLifecycle)) {
       setError(t("Launcher controls are disabled until the Agent identity is verified."));
       return false;
     }
@@ -700,13 +805,15 @@ function App() {
       beginAction();
     }
     let actionError: string | null = null;
+    let rawActionError: string | null = null;
     let actionSucceeded = false;
     try {
       await proxyRequest(path, "POST", body);
       actionSucceeded = true;
       setNotice(`${label} ${t("complete")}`);
     } catch (cause) {
-      actionError = `${label} ${t("failed")}: ${localizeBackendError(errorMessage(cause), t)}`;
+      rawActionError = errorMessage(cause);
+      actionError = `${label} ${t("failed")}: ${localizeBackendError(rawActionError, t)}`;
     } finally {
       // Refresh after both successful and failed POSTs. The Agent may have
       // advanced a generation before returning an error (for example an
@@ -716,7 +823,10 @@ function App() {
         // A rejected no-op (for example Start while Harness is already
         // running) did not cross a lifecycle boundary. Restore the current
         // session instead of leaving the token/iframe locked forever.
-        if (invalidatesCredentials && isRecoverableNoopError(actionError)) {
+        // Match the stable backend English error before localization. The
+        // localized text intentionally changes with the selected UI language
+        // and must never affect lifecycle/credential state handling.
+        if (invalidatesCredentials && rawActionError !== null && isRecoverableNoopError(rawActionError)) {
           credentialInvalidation.current = null;
           setCredentialInvalidationPending(false);
         }
@@ -828,9 +938,10 @@ export function OverviewView({ snapshot, busyAction, credentialInvalidationPendi
   const controlsDisabled = busyAction !== null || snapshot.startup?.available !== true;
   const agentStarting = agentLifecycle === "starting";
   const agentStopping = agentLifecycle === "stopping";
-  const agentStartDisabled = controlsDisabled || agentRunning || agentStarting || agentStopping;
-  const agentRestartDisabled = controlsDisabled || agentStarting || agentStopping;
-  const agentStopDisabled = controlsDisabled || (!agentRunning && !agentStarting);
+  const agentControlsUnavailable = busyAction !== null || snapshot.startup === null;
+  const agentStartDisabled = agentControlsUnavailable || agentRunning || agentStarting || agentStopping;
+  const agentRestartDisabled = agentControlsUnavailable || agentStarting || agentStopping;
+  const agentStopDisabled = agentControlsUnavailable || (!agentRunning && !agentStarting);
   return (
     <>
       <div className="page-heading"><div><span className="kicker">{t("Runtime / Overview")}</span><h1>{t("Local control plane")}</h1><p>{t("Observe and operate the independent Agent and its immutable Harness runtime.")}</p></div><StatusPill label={agentRunning ? t("Running") : t("Standby")} tone={agentRunning ? "good" : "warn"} /></div>
@@ -891,7 +1002,7 @@ function HarnessControlPanel({ snapshot, busyAction, runAction, openSettings }: 
 }
 
 function HarnessAuthPanel({ snapshot, busyAction, credentialInvalidationPending, runAction }: HarnessAuthPanelProps) {
-  const { t } = useI18n();
+  const { locale, t } = useI18n();
   const info = asObject(snapshot.harnessUi);
   const currentUiAvailable = harnessUiMatchesRuntime(
     snapshot.harnessRuntime,
@@ -917,7 +1028,7 @@ function HarnessAuthPanel({ snapshot, busyAction, credentialInvalidationPending,
             <div className="token-row"><input id="harness-token" readOnly type={showToken ? "text" : "password"} value={token} aria-describedby="token-help" /><button className="button subtle" onClick={() => setRevealedSessionKey(showToken ? undefined : sessionKey)}>{showToken ? t("Hide") : t("Reveal")}</button></div>
             <p className="field-help" id="token-help">{t("Read from a bounded Nexus-owned Harness log tail. It is not written to Nexus state.")}</p>
           </> : <EmptyState title={t("No token observed")} detail={info.message ? localizeBackendError(stringValue(info, "message") || "", t) : t("Start Harness and refresh when its loopback URL is ready.")} />}
-          <div className="metadata-grid"><div><span>{t("Source")}</span><strong>{stringValue(info, "source") || t("Not available")}</strong></div><div><span>{t("Observed")}</span><strong>{formatTimestamp(numberValue(info, "observed_at_unix"), t("Not available"))}</strong></div></div>
+          <div className="metadata-grid"><div><span>{t("Source")}</span><strong>{stringValue(info, "source") || t("Not available")}</strong></div><div><span>{t("Observed")}</span><strong>{formatTimestamp(numberValue(info, "observed_at_unix"), t("Not available"), locale)}</strong></div></div>
           <div className="button-row"><ActionButton disabled={!token || controlsDisabled} onClick={() => void navigator.clipboard?.writeText(token || "")}><ClipboardText size={16} />{t("Copy token")}</ActionButton><ActionButton tone="primary" disabled={!uiUrl || controlsDisabled} onClick={openSystemBrowser}><RocketLaunch size={16} />{t("Open in system browser")}</ActionButton></div>
     </Panel>
   );
@@ -931,7 +1042,7 @@ function HarnessWebPanel({ snapshot, credentialInvalidationPending }: HarnessWeb
     : undefined;
   const safeUrl = isLoopbackUrl(uiUrl) ? uiUrl : undefined;
   return <Panel title={t("Embedded Harness Web")} icon={<MonitorPlay size={18} />}>
-    {safeUrl ? <iframe className="harness-frame" title={t("Harness Web interface")} src={safeUrl} referrerPolicy="no-referrer" sandbox="allow-forms allow-scripts allow-same-origin" /> : <EmptyState title={t("Harness view is not ready")} detail={t("A validated loopback HTTP URL will appear here when Harness reports its web interface.")} />}
+    {safeUrl ? <iframe className="harness-frame" title={t("Harness Web interface")} src={safeUrl} referrerPolicy="no-referrer" sandbox="allow-forms allow-scripts allow-same-origin allow-downloads allow-popups allow-popups-to-escape-sandbox" /> : <EmptyState title={t("Harness view is not ready")} detail={t("A validated loopback HTTP URL will appear here when Harness reports its web interface.")} />}
   </Panel>;
 }
 
@@ -943,10 +1054,10 @@ function ProfilesView({ snapshot }: ViewProps) {
 }
 
 export function CheckpointsView({ snapshot, busyAction, runAction }: ViewProps) {
-  const { t } = useI18n();
+  const { locale, t } = useI18n();
   const items = arrayValue(snapshot.checkpoints, "checkpoints");
   const controlsDisabled = busyAction !== null || snapshot.startup?.available !== true;
-  return <><PageIntro kicker={t("State / Checkpoints")} title={t("Checkpoints")} detail={t("Checkpoint manifests contain only Harness profile/release selection. Agent lifecycle and Harness runtime are never saved or restored.")} /><Panel title={t("Saved checkpoints")} icon={<ListChecks size={18} />}><div className="panel-toolbar"><span className="toolbar-count">{t("{count} saved", { count: items.length })}</span><ActionButton tone="primary" disabled={controlsDisabled} onClick={() => void runAction(t("Checkpoint creation"), "/v1/checkpoints", { action: "create", note: t("Native launcher checkpoint") })}><CheckCircle size={16} />{t("Create checkpoint")}</ActionButton></div><DataList items={items} emptyTitle={t("No checkpoints yet")} emptyDetail={t("Create a checkpoint after the Agent has a stable profile and release state.")} render={(item) => <><div><strong>{stringValue(item, "id") || t("Checkpoint")}</strong><span>{stringValue(item, "profile") || t("No profile")}</span></div><span className="row-meta">{formatTimestamp(numberValue(item, "created_at_unix"), t("Not available"))}</span></>} /></Panel></>;
+  return <><PageIntro kicker={t("State / Checkpoints")} title={t("Checkpoints")} detail={t("Checkpoint manifests contain only Harness profile/release selection. Agent lifecycle and Harness runtime are never saved or restored.")} /><Panel title={t("Saved checkpoints")} icon={<ListChecks size={18} />}><div className="panel-toolbar"><span className="toolbar-count">{t("{count} saved", { count: items.length })}</span><ActionButton tone="primary" disabled={controlsDisabled} onClick={() => void runAction(t("Checkpoint creation"), "/v1/checkpoints", { action: "create", note: t("Native launcher checkpoint") })}><CheckCircle size={16} />{t("Create checkpoint")}</ActionButton></div><DataList items={items} emptyTitle={t("No checkpoints yet")} emptyDetail={t("Create a checkpoint after the Agent has a stable profile and release state.")} render={(item) => <><div><strong>{stringValue(item, "id") || t("Checkpoint")}</strong><span>{stringValue(item, "profile") || t("No profile")}</span></div><span className="row-meta">{formatTimestamp(numberValue(item, "created_at_unix"), t("Not available"), locale)}</span></>} /></Panel></>;
 }
 
 function UpdatesView({ snapshot }: ViewProps) {
@@ -959,10 +1070,10 @@ function UpdatesView({ snapshot }: ViewProps) {
 }
 
 function DiagnosticsView({ snapshot, busyAction, runAction }: ViewProps) {
-  const { t } = useI18n();
+  const { locale, t } = useI18n();
   const items = arrayValue(snapshot.diagnostics, "bundles");
   const controlsDisabled = busyAction !== null || snapshot.startup?.available !== true;
-  return <><PageIntro kicker={t("Observability / Diagnostics")} title={t("Diagnostics")} detail={t("Bundles are bounded, redacted, and limited to Nexus-owned metadata and text logs.")} /><Panel title={t("Diagnostic bundles")} icon={<TerminalWindow size={18} />}><div className="panel-toolbar"><span className="toolbar-count">{t("{count} bundles", { count: items.length })}</span><ActionButton tone="primary" disabled={controlsDisabled} onClick={() => void runAction(t("Diagnostic collection"), "/v1/diagnostics", { action: "collect", note: t("Native launcher collection") })}><TerminalWindow size={16} />{t("Collect diagnostics")}</ActionButton></div><DataList items={items} emptyTitle={t("No diagnostic bundles")} emptyDetail={t("Collect a bounded bundle when a runtime issue needs review.")} render={(item) => <><div><strong>{stringValue(item, "id") || t("Bundle")}</strong><span>{t("{count} files", { count: arrayValue(item, "files").length })}</span></div><span className="row-meta">{formatTimestamp(numberValue(item, "created_at_unix"), t("Not available"))}</span></>} /></Panel></>;
+  return <><PageIntro kicker={t("Observability / Diagnostics")} title={t("Diagnostics")} detail={t("Bundles are bounded, redacted, and limited to Nexus-owned metadata and text logs.")} /><Panel title={t("Diagnostic bundles")} icon={<TerminalWindow size={18} />}><div className="panel-toolbar"><span className="toolbar-count">{t("{count} bundles", { count: items.length })}</span><ActionButton tone="primary" disabled={controlsDisabled} onClick={() => void runAction(t("Diagnostic collection"), "/v1/diagnostics", { action: "collect", note: t("Native launcher collection") })}><TerminalWindow size={16} />{t("Collect diagnostics")}</ActionButton></div><DataList items={items} emptyTitle={t("No diagnostic bundles")} emptyDetail={t("Collect a bounded bundle when a runtime issue needs review.")} render={(item) => <><div><strong>{stringValue(item, "id") || t("Bundle")}</strong><span>{t("{count} files", { count: arrayValue(item, "files").length })}</span></div><span className="row-meta">{formatTimestamp(numberValue(item, "created_at_unix"), t("Not available"), locale)}</span></>} /></Panel></>;
 }
 
 function HarnessDiscoveryPanel({
@@ -971,6 +1082,7 @@ function HarnessDiscoveryPanel({
   error,
   disabled,
   selectedId,
+  suppressAutoOpen,
   onDetect,
   onSelect,
 }: {
@@ -979,11 +1091,96 @@ function HarnessDiscoveryPanel({
   error: string | null;
   disabled: boolean;
   selectedId: string | undefined;
+  suppressAutoOpen: boolean;
   onDetect: () => void;
   onSelect: (candidate: HarnessCandidate) => void;
 }) {
   const { t } = useI18n();
   const candidates = harnessCandidates(value);
+  const [pickerOpen, setPickerOpen] = useState(false);
+  const pickerRef = useRef<HTMLDivElement>(null);
+  const lastFocusRef = useRef<HTMLElement | null>(null);
+  const autoOpenedValueRef = useRef<JsonObject | null>(null);
+
+  useEffect(() => {
+    if (candidates.length <= 1) {
+      setPickerOpen(false);
+      return;
+    }
+    // Auto-open only for a newly returned candidate set. Once the user closes
+    // the picker or edits the manual form, do not interrupt that fallback path
+    // by reopening it on every render.
+    if (!suppressAutoOpen && !selectedId && autoOpenedValueRef.current !== value) {
+      autoOpenedValueRef.current = value;
+      setPickerOpen(true);
+    }
+  }, [candidates.length, selectedId, suppressAutoOpen, value]);
+
+  useEffect(() => {
+    if (pickerOpen) {
+      lastFocusRef.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+      requestAnimationFrame(() => pickerRef.current?.focus());
+    } else {
+      lastFocusRef.current?.focus();
+      lastFocusRef.current = null;
+    }
+  }, [pickerOpen]);
+
+  const selectCandidate = (candidate: HarnessCandidate) => {
+    onSelect(candidate);
+    setPickerOpen(false);
+  };
+
+  const handlePickerKeyDown = (event: React.KeyboardEvent<HTMLDivElement>) => {
+    if (event.key === "Escape") {
+      setPickerOpen(false);
+      return;
+    }
+    if (event.key !== "Tab") return;
+    const focusable = Array.from(
+      pickerRef.current?.querySelectorAll<HTMLElement>(
+        "button:not([disabled]), [href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex=\"-1\"])",
+      ) ?? [],
+    );
+    if (!focusable.length) return;
+    const activeIndex = focusable.indexOf(document.activeElement as HTMLElement);
+    if (event.shiftKey && (activeIndex <= 0 || activeIndex === -1)) {
+      event.preventDefault();
+      focusable[focusable.length - 1].focus();
+    } else if (!event.shiftKey && (activeIndex === focusable.length - 1 || activeIndex === -1)) {
+      event.preventDefault();
+      focusable[0].focus();
+    }
+  };
+
+  const candidateList = () => <div className="data-list" role="list">
+    {candidates.map((candidate) => <div className="data-row" key={candidate.id} role="listitem">
+      <div>
+        <strong>{candidate.displayName}</strong>
+        <span>{candidateModeLabel(candidate.mode, t)}</span>
+        {candidate.version && <span>{candidate.version}</span>}
+        <span>{t("Path")}: {candidate.program}</span>
+        {candidate.mode === "node" && candidate.entry && <span>{t("Entry")}: {candidate.entry}</span>}
+        {candidate.workingDir && <span>{t("Working directory")}: {candidate.workingDir}</span>}
+        {candidate.source && <span>{t("Search source")}: {discoverySourceLabel(candidate.source, t)}</span>}
+      </div>
+      <button type="button" className={`button ${selectedId === candidate.id ? "primary" : "subtle"}`} onClick={() => selectCandidate(candidate)} disabled={disabled} aria-pressed={selectedId === candidate.id} aria-label={t("Use this Harness: {name}", { name: `${candidate.displayName}: ${candidate.program}` })}>
+        {selectedId === candidate.id ? t("Selected") : t("Use this Harness")}
+      </button>
+    </div>)}
+  </div>;
+
+  let candidateContent: React.ReactNode = null;
+  if (loading && !candidates.length) {
+    candidateContent = <div className="state-card loading-state" role="status" aria-live="polite"><Pulse size={20} className="spin" /><div><strong>{t("Detecting Harness installations...")}</strong><span>{t("Run a scan to refresh the local candidate list.")}</span></div></div>;
+  } else if (candidates.length === 1) {
+    candidateContent = <><span className="field-label">{t("Detected candidates")}</span>{candidateList()}</>;
+   } else if (candidates.length > 1) {
+     candidateContent = <><span className="field-label">{t("Detected candidates")}</span><div className="candidate-choice-summary"><span>{t("Multiple Harness installations were found. Choose one before saving.")}</span><button type="button" className="button subtle" onClick={() => setPickerOpen(true)} disabled={disabled}>{t("Choose a Harness installation")}</button></div>{selectedId && <p className="field-help">{t("A candidate is selected. You can change it before saving.")}</p>}{pickerOpen && <div className="candidate-dialog" role="dialog" aria-modal="true" aria-labelledby="candidate-picker-title" tabIndex={-1} ref={pickerRef} onKeyDown={handlePickerKeyDown}><div className="candidate-dialog-card"><div className="panel-toolbar"><strong id="candidate-picker-title">{t("Choose a Harness installation")}</strong><button type="button" className="icon-button" onClick={() => setPickerOpen(false)} aria-label={t("Close candidate picker")}><X size={16} /></button></div>{candidateList()}</div></div>}</>;
+  } else if (value !== null) {
+    candidateContent = <EmptyState title={t("No Harness candidates found")} detail={t("No installation was found in the bounded local search paths. You can still specify a path or command manually.")} />;
+  }
+
   return <div className="form-field full">
     <div className="panel-toolbar">
       <strong>{t("Automatic detection")}</strong>
@@ -994,25 +1191,7 @@ function HarnessDiscoveryPanel({
     </div>
     <p className="field-help">{t("Automatic detection is preferred. Select a detected Harness or use manual configuration below.")}</p>
     {error && <div className="form-error" role="alert"><WarningCircle size={16} />{t("Harness detection failed: {message}", { message: compactError(error) })}</div>}
-    {loading && !candidates.length ? <div className="state-card loading-state" role="status" aria-live="polite"><Pulse size={20} className="spin" /><div><strong>{t("Detecting Harness installations...")}</strong><span>{t("Run a scan to refresh the local candidate list.")}</span></div></div> : candidates.length ? <>
-      <span className="field-label">{t("Detected candidates")}</span>
-      <div className="data-list" role="list">
-        {candidates.map((candidate) => <div className="data-row" key={candidate.id} role="listitem">
-          <div>
-            <strong>{candidate.displayName}</strong>
-            <span>{candidateModeLabel(candidate.mode, t)}</span>
-            {candidate.version && <span>{candidate.version}</span>}
-            <span>{t("Path")}: {candidate.program}</span>
-            {candidate.mode === "node" && candidate.entry && <span>{t("Entry")}: {candidate.entry}</span>}
-            {candidate.workingDir && <span>{t("Working directory")}: {candidate.workingDir}</span>}
-            {candidate.source && <span>{t("Search source")}: {candidate.source}</span>}
-          </div>
-          <button type="button" className={`button ${selectedId === candidate.id ? "primary" : "subtle"}`} onClick={() => onSelect(candidate)} disabled={disabled} aria-pressed={selectedId === candidate.id}>
-            {selectedId === candidate.id ? t("Selected") : t("Use this Harness")}
-          </button>
-        </div>)}
-      </div>
-    </> : value !== null && <EmptyState title={t("No Harness candidates found")} detail={t("No installation was found in the bounded local search paths. You can still specify a path or command manually.")} />}
+    {candidateContent}
   </div>;
 }
 
@@ -1021,6 +1200,8 @@ function SettingsView({ snapshot, themeMode, setThemeMode, busyAction, runAction
   const config = asObject(snapshot.config);
   const harness = nestedValue(config, "harness");
   const update = nestedValue(config, "update");
+  const harnessEnvOverride = booleanValue(config, "harness_env_override");
+  const updateEnvOverride = booleanValue(config, "update_env_override");
   const hasHarnessConfig = Object.keys(harness).length > 0;
   const harnessRuntime = harnessRuntimeValue(snapshot.harnessRuntime);
   const harnessState = stringValue(harnessRuntime, "state");
@@ -1034,6 +1215,15 @@ function SettingsView({ snapshot, themeMode, setThemeMode, busyAction, runAction
   const [discoveryLoading, setDiscoveryLoading] = useState(false);
   const [discoveryError, setDiscoveryError] = useState<string | null>(null);
   const [selectedCandidateId, setSelectedCandidateId] = useState<string | undefined>(undefined);
+  const draftDirtyRef = useRef(false);
+
+  useEffect(() => {
+    setFormError(null);
+  }, [locale]);
+
+  useEffect(() => {
+    draftDirtyRef.current = draftDirty;
+  }, [draftDirty]);
 
   useEffect(() => {
     if (!draftDirty) {
@@ -1043,8 +1233,17 @@ function SettingsView({ snapshot, themeMode, setThemeMode, busyAction, runAction
   }, [draftDirty, snapshot.config]);
 
   const updateDraft = (field: keyof HarnessConfigDraft, value: string | boolean) => {
-    setDraft((current) => ({ ...current, [field]: value }));
+    setDraft((current) => ({
+      ...current,
+      [field]: value,
+      ...(field === "readinessUrl" && typeof value === "string" && !value.trim()
+        ? { readinessTokenRequired: false }
+        : {}),
+      ...(field === "readinessUrl" ? { readinessUrlRedacted: false } : {}),
+    }));
+    draftDirtyRef.current = true;
     setDraftDirty(true);
+    setSelectedCandidateId(undefined);
     setFormError(null);
   };
 
@@ -1059,7 +1258,10 @@ function SettingsView({ snapshot, themeMode, setThemeMode, busyAction, runAction
         return {
           ...current,
           mode,
-          entry: current.entry || args.shift() || "",
+          // A direct command's first argument is not necessarily a JavaScript
+          // entry point. Preserve it as a Node argument and require the user
+          // to choose the entry explicitly.
+          entry: "",
           args: args.join("\n"),
         };
       }
@@ -1070,7 +1272,9 @@ function SettingsView({ snapshot, themeMode, setThemeMode, busyAction, runAction
         args: [current.entry, ...args].filter(Boolean).join("\n"),
       };
     });
+    draftDirtyRef.current = true;
     setDraftDirty(true);
+    setSelectedCandidateId(undefined);
     setFormError(null);
   };
 
@@ -1084,9 +1288,12 @@ function SettingsView({ snapshot, themeMode, setThemeMode, busyAction, runAction
       workingDir: candidate.workingDir,
       readinessUrl: candidate.readinessUrl,
       timeout: candidate.readinessTimeout,
+      readinessTokenRequired: candidate.readinessTokenRequired,
+      readinessUrlRedacted: false,
       argsRedacted: false,
       replaceRedactedArgs: false,
     }));
+    draftDirtyRef.current = true;
     setDraftDirty(true);
     setSelectedCandidateId(candidate.id);
     setFormError(null);
@@ -1100,9 +1307,12 @@ function SettingsView({ snapshot, themeMode, setThemeMode, busyAction, runAction
       const result = await proxyRequest<JsonObject>("/v1/harness/discover");
       const candidates = harnessCandidates(result);
       setDiscovery(result);
+      if (selectedCandidateId && !candidates.some((candidate) => candidate.id === selectedCandidateId)) {
+        setSelectedCandidateId(undefined);
+      }
       // A single unconfigured result is safe to pre-fill, but saving remains
       // an explicit user action. Multiple results stay visible for selection.
-      if (!hasHarnessConfig && !draftDirty && candidates.length === 1) {
+      if (!hasHarnessConfig && !draftDirtyRef.current && candidates.length === 1) {
         applyCandidate(candidates[0]);
       }
     } catch (cause) {
@@ -1111,7 +1321,7 @@ function SettingsView({ snapshot, themeMode, setThemeMode, busyAction, runAction
     } finally {
       setDiscoveryLoading(false);
     }
-  }, [applyCandidate, draftDirty, hasHarnessConfig]);
+  }, [applyCandidate, hasHarnessConfig, selectedCandidateId]);
 
   useEffect(() => {
     if (!editingHarness || snapshot.startup?.available !== true || discovery !== null || discoveryLoading) return;
@@ -1121,7 +1331,9 @@ function SettingsView({ snapshot, themeMode, setThemeMode, busyAction, runAction
   const openEditor = () => {
     setDraft(harnessDraftFromConfig(config));
     // Keep the editor open while the background poll refreshes runtime data.
+    draftDirtyRef.current = true;
     setDraftDirty(true);
+    setSelectedCandidateId(undefined);
     setFormError(null);
     setEditingHarness(true);
   };
@@ -1139,16 +1351,24 @@ function SettingsView({ snapshot, themeMode, setThemeMode, busyAction, runAction
       setFormError(t("A Harness entry is required for Node mode."));
       return;
     }
+    if (draft.mode === "node" && (numberValue(snapshot.health, "harness_config_wire_version") ?? 0) < 2) {
+      setFormError(t("This Agent does not advertise the explicit Node Harness configuration contract. Update Agent before saving Node mode."));
+      return;
+    }
+    if (draft.args.includes("[REDACTED]") || entry.includes("[REDACTED]")) {
+      setFormError(t("Replace hidden arguments before saving."));
+      return;
+    }
     const readinessUrl = draft.readinessUrl.trim();
-    if (readinessUrl && !isLoopbackUrl(readinessUrl)) {
-      setFormError(t("Readiness URL must be an HTTP loopback URL."));
+    if (readinessUrl && !isLoopbackReadinessTarget(readinessUrl)) {
+      setFormError(t("Readiness target must be an HTTP or TCP loopback URL."));
       return;
     }
     const timeoutText = draft.timeout.trim();
     let timeout: number | undefined;
     if (timeoutText) {
       const parsed = Number(timeoutText);
-      if (!Number.isInteger(parsed) || parsed <= 0) {
+      if (!Number.isInteger(parsed) || parsed <= 0 || parsed > 86400) {
         setFormError(t("Timeout must be a positive integer."));
         return;
       }
@@ -1158,23 +1378,16 @@ function SettingsView({ snapshot, themeMode, setThemeMode, busyAction, runAction
       setFormError(t("Existing sensitive arguments are hidden. Enable replacement before saving."));
       return;
     }
-    const additionalArgs = draft.args
-      .split(/\r?\n/)
-      .map((value) => value.trim())
-      .filter(Boolean);
-    const args = draft.mode === "node" ? [entry, ...additionalArgs] : additionalArgs;
+    const harnessPayload = harnessConfigPayloadFromDraft(draft);
+    harnessPayload.readiness_url = readinessUrl || null;
+    harnessPayload.readiness_timeout_secs = timeout ?? null;
     const saved = await runAction(t("Save Harness configuration"), "/v1/config", {
       action: "set_harness",
-      harness: {
-        mode: draft.mode,
-        program,
-        args,
-        working_dir: draft.workingDir.trim() || null,
-        readiness_url: readinessUrl || null,
-        readiness_timeout_secs: timeout ?? null,
-      },
+      harness: harnessPayload,
+      preserve_harness_readiness_url: draft.readinessUrlRedacted && Boolean(readinessUrl),
     });
     if (saved === true) {
+      draftDirtyRef.current = false;
       setDraftDirty(false);
       setEditingHarness(false);
       setFormError(null);
@@ -1187,6 +1400,7 @@ function SettingsView({ snapshot, themeMode, setThemeMode, busyAction, runAction
     const cleared = await runAction(t("Clear Harness configuration"), "/v1/config", { action: "clear_harness" });
     if (cleared === true) {
       setDraft(emptyHarnessDraft);
+      draftDirtyRef.current = false;
       setDraftDirty(false);
       setEditingHarness(true);
       setFormError(null);
@@ -1218,11 +1432,12 @@ function SettingsView({ snapshot, themeMode, setThemeMode, busyAction, runAction
       </Panel>
       <Panel title={t("Harness configuration")} icon={<Gear size={18} />}>
         <p className="panel-description">{t("Configure the external Harness here. Editing config.json is only a fallback.")}</p>
+        {harnessEnvOverride && <p className="field-help" role="status">{t("Environment variables override part of this Harness configuration. Saved file values remain in place, but the override wins at launch time.")}</p>}
         {!editingHarness && hasHarnessConfig ? <>
-          <dl className="detail-list"><div><dt>{t("Launch mode")}</dt><dd>{candidateModeLabel(configuredMode, t)}</dd></div><div><dt>{configuredMode === "node" ? t("Node executable") : t("Program")}</dt><dd>{stringValue(harness, "program") || t("Not configured")}</dd></div>{configuredMode === "node" && <div><dt>{t("Harness entry")}</dt><dd>{configuredEntry}</dd></div>}<div><dt>{t("Working directory")}</dt><dd>{stringValue(harness, "working_dir") || t("Default")}</dd></div><div><dt>{t("Readiness URL")}</dt><dd>{isLoopbackUrl(stringValue(harness, "readiness_url")) ? stringValue(harness, "readiness_url") : t("Not shown")}</dd></div></dl>
+          <dl className="detail-list"><div><dt>{t("Launch mode")}</dt><dd>{candidateModeLabel(configuredMode, t)}</dd></div><div><dt>{configuredMode === "node" ? t("Node executable") : t("Program")}</dt><dd>{stringValue(harness, "program") || t("Not configured")}</dd></div>{configuredMode === "node" && <div><dt>{t("Harness entry")}</dt><dd>{configuredEntry}</dd></div>}<div><dt>{t("Working directory")}</dt><dd>{stringValue(harness, "working_dir") || t("Default")}</dd></div><div><dt>{t("Readiness URL")}</dt><dd>{isLoopbackReadinessTarget(stringValue(harness, "readiness_url")) ? stringValue(harness, "readiness_url") : t("Not shown")}</dd></div></dl>
           <div className="form-actions"><button type="button" className="button" disabled={configControlsDisabled} onClick={openEditor}>{t("Edit configuration")}</button><button type="button" className="button danger" disabled={configControlsDisabled} onClick={() => void clearHarness()}>{t("Clear configuration")}</button></div>
         </> : <form className="config-form" onSubmit={(event) => void saveHarness(event)}>
-          <HarnessDiscoveryPanel value={discovery} loading={discoveryLoading} error={discoveryError} disabled={configControlsDisabled} selectedId={selectedCandidateId} onDetect={() => void detectHarness()} onSelect={applyCandidate} />
+          <HarnessDiscoveryPanel value={discovery} loading={discoveryLoading} error={discoveryError} disabled={configControlsDisabled} selectedId={selectedCandidateId} suppressAutoOpen={draftDirty} onDetect={() => void detectHarness()} onSelect={applyCandidate} />
           <div className="panel-toolbar"><strong>{t("Manual configuration")}</strong></div>
           <div className="form-grid">
             <label className="form-field full"><span className="field-label">{t("Launch mode")}</span><select className="theme-select" value={draft.mode} onChange={(event) => updateLaunchMode(event.target.value as HarnessLaunchMode)} disabled={configControlsDisabled}><option value="direct">{t("Direct executable")}</option><option value="node">{t("Node runtime")}</option></select><span className="field-help">{t("Select how the external Harness is started. Direct runs the executable or command; Node runs the selected entry through the Node runtime.")}</span></label>
@@ -1230,19 +1445,22 @@ function SettingsView({ snapshot, themeMode, setThemeMode, busyAction, runAction
             {draft.mode === "node" && <label className="form-field full"><span className="field-label">{t("Harness entry")}</span><input className="form-input" value={draft.entry} onChange={(event) => updateDraft("entry", event.target.value)} placeholder={t("Harness entry script or package")} disabled={configControlsDisabled} required /></label>}
             <label className="form-field"><span className="field-label">{draft.mode === "node" ? t("Node project directory") : t("Working directory")} <em>{t("Optional")}</em></span><input className="form-input" value={draft.workingDir} onChange={(event) => updateDraft("workingDir", event.target.value)} placeholder={t("Agent default")} disabled={configControlsDisabled} /></label>
             <label className="form-field"><span className="field-label">{t("Readiness timeout (seconds)")} <em>{t("Optional")}</em></span><input className="form-input" inputMode="numeric" value={draft.timeout} onChange={(event) => updateDraft("timeout", event.target.value)} placeholder={t("Agent default")} disabled={configControlsDisabled} /></label>
-            <label className="form-field full"><span className="field-label">{t("Readiness URL")} <em>{t("Optional")}</em></span><input className="form-input" type="url" value={draft.readinessUrl} onChange={(event) => updateDraft("readinessUrl", event.target.value)} placeholder="http://127.0.0.1:3080/" disabled={configControlsDisabled} /></label>
+            <label className="form-field full"><span className="field-label">{t("Readiness URL")} <em>{t("Optional")}</em></span><input className="form-input" type="text" value={draft.readinessUrl} onChange={(event) => updateDraft("readinessUrl", event.target.value)} placeholder={t("Readiness URL example")} disabled={configControlsDisabled} /><span className="field-help">{t("Use an HTTP loopback URL for a 2xx check, or tcp://127.0.0.1:PORT when the Harness protects its page with authentication.")}</span></label>
+            <label className="form-check full"><input type="checkbox" checked={draft.readinessTokenRequired} onChange={(event) => updateDraft("readinessTokenRequired", event.target.checked)} disabled={configControlsDisabled || !draft.readinessUrl.trim()} /><span>{t("Require a fresh Harness token before accepting readiness")}</span></label>
+            <p className="field-help full">{t("Enable this for token-protected Harness services. A listener alone is not enough; the Agent must observe a fresh URL in its current Harness log session.")}</p>
             <label className="form-field full"><span className="field-label">{draft.mode === "node" ? t("Node arguments") : t("Arguments")}</span><textarea className="form-textarea" value={draft.args} onChange={(event) => updateDraft("args", event.target.value)} placeholder={draft.mode === "node" ? t("Arguments passed to the Node Harness entry, one per line. Use {profile}, {release}, or {release_root} when needed.") : t("One argument per line. Use {profile}, {release}, or {release_root} when needed.")} disabled={configControlsDisabled || (draft.argsRedacted && !draft.replaceRedactedArgs)} /></label>
           </div>
           <p className="field-help">{draft.mode === "node" ? t("Arguments passed to the Node Harness entry, one per line. Use {profile}, {release}, or {release_root} when needed.") : t("One argument per line. Use {profile}, {release}, or {release_root} when needed.")}</p>
           {draft.argsRedacted && <label className="form-check"><input type="checkbox" checked={draft.replaceRedactedArgs} onChange={(event) => updateDraft("replaceRedactedArgs", event.target.checked)} disabled={configControlsDisabled} /><span>{t("Replace hidden arguments")}</span></label>}
           {formError && <div className="form-error" role="alert"><WarningCircle size={16} />{formError}</div>}
           {harnessState === "running" && <p className="field-help" role="status">{t("Stop Harness before changing its launch configuration.")}</p>}
-          <div className="form-actions"><button type="submit" className="button primary" disabled={configControlsDisabled}>{t("Save configuration")}</button>{hasHarnessConfig && <button type="button" className="button" disabled={configControlsDisabled} onClick={() => { setDraftDirty(false); setFormError(null); setEditingHarness(false); }}>{t("Cancel")}</button>}{hasHarnessConfig && <button type="button" className="button danger" disabled={configControlsDisabled} onClick={() => void clearHarness()}>{t("Clear configuration")}</button>}</div>
+          <div className="form-actions"><button type="submit" className="button primary" disabled={configControlsDisabled}>{t("Save configuration")}</button>{hasHarnessConfig && <button type="button" className="button" disabled={configControlsDisabled} onClick={() => { draftDirtyRef.current = false; setDraftDirty(false); setSelectedCandidateId(undefined); setFormError(null); setEditingHarness(false); }}>{t("Cancel")}</button>}{hasHarnessConfig && <button type="button" className="button danger" disabled={configControlsDisabled} onClick={() => void clearHarness()}>{t("Clear configuration")}</button>}</div>
         </form>}
         {!hasHarnessConfig && !editingHarness && <EmptyState title={t("Harness is not configured")} detail={t("The Agent remains usable as a control plane until an external Harness is configured.")} />}
       </Panel>
       <Panel title={t("Update configuration")} icon={<CloudArrowUp size={18} />}>
-        {Object.keys(update).length ? <dl className="detail-list"><div><dt>{t("Source")}</dt><dd>{stringValue(update, "source") || t("Not shown")}</dd></div><div><dt>{t("Ref")}</dt><dd>{stringValue(update, "ref_name") || t("Default")}</dd></div><div><dt>{t("Git program")}</dt><dd>{stringValue(update, "git_program") || "git"}</dd></div></dl> : <EmptyState title={t("Updates are not configured")} detail={t("Release metadata and current runtime remain available without an update source.")} />}
+        {updateEnvOverride && <p className="field-help" role="status">{t("Environment variables override part of this update configuration.")}</p>}
+        {Object.keys(update).length ? <dl className="detail-list"><div><dt>{t("Source")}</dt><dd>{stringValue(update, "source") || t("Not shown")}</dd></div><div><dt>{t("Ref")}</dt><dd>{stringValue(update, "ref_name") || t("Default")}</dd></div><div><dt>{t("Git program")}</dt><dd>{stringValue(update, "git_program") || t("Default")}</dd></div></dl> : <EmptyState title={t("Updates are not configured")} detail={t("Release metadata and current runtime remain available without an update source.")} />}
       </Panel>
     </div>
     <Panel title={t("Native integration")} icon={<Bell size={18} />}><div className="integration-list"><div><CheckCircle size={18} /><span>{t("Single instance guard")}</span><strong>{t("Enabled")}</strong></div><div><Bell size={18} /><span>{t("Desktop notifications")}</span><strong>{t("Available through Tauri")}</strong></div><div><Key size={18} /><span>{t("API transport")}</span><strong>{t("Rust loopback proxy")}</strong></div></div></Panel>

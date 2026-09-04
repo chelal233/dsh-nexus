@@ -97,8 +97,46 @@ async fn startup_status(state: tauri::State<'_, AppState>) -> Result<AgentStatus
             status.message = Some(error.to_string());
             return Ok(status);
         }
+        start_configured_harness(&state).await;
     }
     Ok(state.runtime.status().await)
+}
+
+/// The GUI is the user-facing launcher, so its first successful Agent
+/// handshake also performs the configured Harness bootstrap. Harness remains
+/// an independent child of Agent; this is only orchestration and a 409 means
+/// another owner already has it running.
+async fn start_configured_harness(state: &AppState) {
+    let health = match state.runtime.probe().await {
+        Ok(health) => health,
+        Err(error) => {
+            eprintln!("nexus-launcher-app: Harness auto-start skipped: {error}");
+            return;
+        }
+    };
+    let client = state
+        .runtime
+        .client()
+        .with_expected_identity(AgentIdentity::from(&health));
+    let config = match client.get_json::<Value>("/v1/config").await {
+        Ok(config) => config,
+        Err(error) => {
+            eprintln!("nexus-launcher-app: Harness auto-start config check failed: {error}");
+            return;
+        }
+    };
+    if !config.get("harness").is_some_and(|value| !value.is_null()) {
+        return;
+    }
+    if let Err(error) = client
+        .post_json::<_, Value>("/v1/harness", &json!({ "action": "start" }))
+        .await
+    {
+        let message = error.to_string();
+        if !message.contains("HTTP 409") {
+            eprintln!("nexus-launcher-app: Harness auto-start failed: {message}");
+        }
+    }
 }
 
 #[tauri::command]
@@ -225,6 +263,11 @@ async fn execute_agent_action(state: &AppState, body: Option<&Value>) -> Result<
                 .action(action, START_WAIT_SECS)
                 .await
                 .map_err(|error| error.to_string())?;
+            // A restarted Agent starts with a fresh Harness supervisor.  Run
+            // the same best-effort configured-Harness bootstrap used during
+            // the first GUI handshake so an explicit Agent restart does not
+            // leave the saved Harness idle.
+            start_configured_harness(state).await;
             Ok(json!({ "accepted": true, "action": command.action }))
         }
         AgentAction::Stop => {

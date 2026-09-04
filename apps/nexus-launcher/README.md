@@ -78,7 +78,7 @@ PowerShell:
 
 ```text
 $env:NEXUS_AGENT_BIN = 'C:\Program Files\Nexus Agent\nexus-agent.exe'
-$env:NEXUS_CONSOLE_PORT = '3091'
+$env:NEXUS_AGENT_PORT = '3090'
 ```
 
 ## Native behavior

@@ -31,8 +31,10 @@ activation. These responsibilities must remain usable without any GUI.
 
 The Agent state now reports its own lifecycle and the externally supervised
 Harness process. Harness remains an immutable, replaceable upstream binary;
-Nexus starts it only when a caller requests it and never auto-starts it during
-Agent boot.
+the Agent itself never auto-starts it during headless boot, while the native
+Launcher performs one best-effort Harness start after its Agent handshake when
+a saved Harness configuration exists. A caller can still start/restart it
+explicitly through the Agent API.
 
 ### Agent is the host; native GUI is replaceable
 
@@ -343,7 +345,8 @@ accepted):
     "args": ["--headless"],
     "working_dir": "/opt/dsh-harness",
     "readiness_url": "http://127.0.0.1:8080/health",
-    "readiness_timeout_secs": 30
+    "readiness_timeout_secs": 30,
+    "readiness_token_required": false
   }
 }
 ```
@@ -354,6 +357,21 @@ and `args` contains only arguments after that entry. Nexus normalizes the
 entry into the supervised process argument vector without changing the
 upstream Harness. The Settings view exposes both modes and keeps manual
 configuration as a fallback.
+
+`readiness_url` accepts either an HTTP loopback URL (the supervisor requires a
+2xx response) or an explicit `tcp://127.0.0.1:<port>`/`tcp://[::1]:<port>`
+listener target. The latter is used by the automatically detected DSH Web
+candidate because its token-protected root intentionally returns 401 until a
+browser presents the launch token. TCP readiness confirms only that the local
+listener is available; the token URL is still read from the current Agent log
+session and is never persisted in Nexus configuration responses.
+
+For a legacy config that names the official `deepseek-harness` or `dsh-harness`
+binary (or a Node entry/working directory under the official DSH checkout) but
+does not yet contain readiness fields, the Agent supplies the same 3080/TCP and
+fresh-token contract in memory. Explicit readiness fields always take
+precedence, and the inferred values are shown in the GUI so an Agent restart
+does not silently lose Harness supervision.
 
 `GET /v1/harness/discover` is an advisory, read-only scan. It inspects bounded
 local anchors (the Agent data-root parent, configured Harness roots, the
@@ -380,6 +398,12 @@ root containing `config.json`, `state.json`, `profiles.json`, `checkpoints/`,
 `releases/`, `downloads/`, `update-state.json`, `diagnostics/`, and `logs`; it does not select or
 copy `$HOME/.dsh`, `DSH_HOME`, Harness credentials, or Harness session data.
 Nexus never defaults to `$HOME/.dsh`.
+
+`GET /v1/config` reports the effective launch values after these environment
+overrides and marks `harness_env_override`/`update_env_override` so the GUI can
+explain why a saved file value is not active. Sensitive arguments and URL
+queries remain redacted at this response boundary; an environment-only
+readiness URL is never copied into `config.json` by a preserve operation.
 
 The Launcher reads an optional `<data-root>/launcher.json` independently of
 the Agent-owned `config.json`:
