@@ -2185,11 +2185,11 @@ mod tests {
 
     use super::{
         discover_harness_candidates_in_roots, is_within, load_harness_launch_spec,
-        read_runtime_metadata, write_runtime_metadata, AgentState, CheckpointRestoreIntent,
-        CheckpointRestoreJournalStore, CheckpointRestorePhase, CheckpointStore, ConfigStore,
-        DiagnosticsStore, HarnessLaunchSpec, HarnessLogSession, HarnessLogSessionStore,
-        NexusConfig, NexusConfigFile, NexusPaths, NexusRuntimeMetadata, ProfileCatalog,
-        ProfileStore, ReleaseStore, UpdateSpec,
+        normalize_discovery_path, read_runtime_metadata, write_runtime_metadata, AgentState,
+        CheckpointRestoreIntent, CheckpointRestoreJournalStore, CheckpointRestorePhase,
+        CheckpointStore, ConfigStore, DiagnosticsStore, HarnessLaunchSpec, HarnessLogSession,
+        HarnessLogSessionStore, NexusConfig, NexusConfigFile, NexusPaths, NexusRuntimeMetadata,
+        ProfileCatalog, ProfileStore, ReleaseStore, UpdateSpec,
     };
 
     #[test]
@@ -2822,6 +2822,18 @@ mod tests {
         fs::write(ignored_package.join("lib").join("bin.js"), b"ignored")
             .expect("ignored entry writes");
 
+        let internal_package = root
+            .join("deepseek-harness")
+            .join("packages")
+            .join("internal");
+        fs::create_dir_all(&internal_package).expect("internal package creates");
+        fs::write(
+            internal_package.join("package.json"),
+            r#"{"name":"@deepseek-ai/dsh-internal","version":"ignored","main":"index.js"}"#,
+        )
+        .expect("internal manifest writes");
+        fs::write(internal_package.join("index.js"), b"internal").expect("internal entry writes");
+
         let roots = vec![(root.clone(), "fixture".to_owned())];
         let candidates = discover_harness_candidates_in_roots(&roots, Some(&node_program));
         let direct = candidates
@@ -2836,9 +2848,10 @@ mod tests {
         assert_eq!(node.version.as_deref(), Some("alpha.3"));
         assert_eq!(
             node.program,
-            fs::canonicalize(&node_program)
-                .expect("node path canonicalizes")
-                .to_string_lossy()
+            normalize_discovery_path(
+                &fs::canonicalize(&node_program).expect("node path canonicalizes")
+            )
+            .to_string_lossy()
         );
         assert_eq!(
             node.args,
@@ -2867,6 +2880,11 @@ mod tests {
                 .entry
                 .as_deref()
                 .is_some_and(|path| path.contains("node_modules"))
+        }));
+        assert!(!candidates.iter().any(|candidate| {
+            candidate.entry.as_deref().is_some_and(|path| {
+                path.contains("packages\\internal") || path.contains("packages/internal")
+            })
         }));
 
         assert!(discover_harness_candidates_in_roots(&[], Some(&node_program)).is_empty());
@@ -3187,10 +3205,9 @@ const HARNESS_DISCOVERY_MAX_MANIFEST_BYTES: u64 = 512 * 1024;
 pub fn discover_harness_candidates() -> HarnessDiscoveryResponse {
     let roots = discovery_roots();
     let node_program = find_on_path(&["node", "node.exe", "nodejs", "nodejs.exe"]);
-    HarnessDiscoveryResponse::new(discover_harness_candidates_in_roots(
-        &roots,
-        node_program.as_deref(),
-    ))
+    let mut candidates = discover_harness_candidates_in_roots(&roots, node_program.as_deref());
+    append_path_direct_candidates(&mut candidates);
+    HarnessDiscoveryResponse::new(candidates)
 }
 
 /// Discover using the Agent's configured data root as an additional bounded
@@ -3211,10 +3228,9 @@ pub fn discover_harness_candidates_with_paths(paths: &NexusPaths) -> HarnessDisc
         push_discovery_root(&mut roots, root, &source);
     }
     let node_program = find_on_path(&["node", "node.exe", "nodejs", "nodejs.exe"]);
-    HarnessDiscoveryResponse::new(discover_harness_candidates_in_roots(
-        &roots,
-        node_program.as_deref(),
-    ))
+    let mut candidates = discover_harness_candidates_in_roots(&roots, node_program.as_deref());
+    append_path_direct_candidates(&mut candidates);
+    HarnessDiscoveryResponse::new(candidates)
 }
 
 fn discovery_roots() -> Vec<(PathBuf, String)> {
@@ -3398,6 +3414,8 @@ fn add_direct_candidate(
     let Some(parent) = program.parent() else {
         return;
     };
+    let program = normalize_discovery_path(&program);
+    let parent = normalize_discovery_path(parent);
     let program_text = program.to_string_lossy().into_owned();
     let id = discovery_candidate_id(HarnessLaunchMode::Direct, &program_text, None);
     if !seen.insert(id.clone()) {
@@ -3467,7 +3485,7 @@ fn add_node_manifest_candidate(
         // package and is enough for the bounded discovery check.
         bin_name = Some(package_name.to_owned());
     }
-    if !looks_like_harness_package(package_name, bin_name.as_deref(), directory, root) {
+    if !looks_like_harness_package(package_name, bin_name.as_deref(), directory) {
         return;
     }
     let Some(entry) = node_manifest_entry(&manifest, bin_name.as_deref()) else {
@@ -3479,6 +3497,9 @@ fn add_node_manifest_candidate(
     let Some(package_dir) = manifest_path.parent() else {
         return;
     };
+    let node_program = normalize_discovery_path(&node_program);
+    let entry = normalize_discovery_path(&entry);
+    let package_dir = normalize_discovery_path(package_dir);
     let node_program = node_program.to_string_lossy().into_owned();
     let entry_text = entry.to_string_lossy().into_owned();
     let id = discovery_candidate_id(HarnessLaunchMode::Node, &node_program, Some(&entry_text));
@@ -3563,7 +3584,6 @@ fn looks_like_harness_package(
     package_name: &str,
     bin_name: Option<&str>,
     directory: &Path,
-    root: &Path,
 ) -> bool {
     [Some(package_name), bin_name]
         .into_iter()
@@ -3577,13 +3597,15 @@ fn looks_like_harness_package(
                 || name == "harness"
                 || name.ends_with("-harness")
         })
+        // A checkout may contain many internal `@deepseek-ai/dsh-*`
+        // packages. Only the directory itself may provide the generic
+        // `dsh`/`deepseek-harness` hint; accepting any ancestor would turn
+        // every library below a Harness checkout into a launch candidate.
         || directory
-            .ancestors()
-            .take_while(|ancestor| is_within(root, ancestor))
-            .filter_map(Path::file_name)
-            .filter_map(|name| name.to_str())
+            .file_name()
+            .and_then(|name| name.to_str())
             .map(str::to_ascii_lowercase)
-            .any(|name| name == "dsh" || name.contains("deepseek-harness"))
+            .is_some_and(|name| name == "dsh" || name == "deepseek-harness")
 }
 
 fn is_official_dsh_package(package_name: &str) -> bool {
@@ -3600,6 +3622,21 @@ fn canonical_file_within(root: &Path, path: &Path) -> Option<PathBuf> {
     } else {
         None
     }
+}
+
+/// Windows canonicalization may return a verbatim `\\?\` path. It is valid
+/// for Win32 APIs but noisy in a user-facing candidate list and less portable
+/// when the selection is copied into a config file. Keep containment checks on
+/// the canonical path, then normalize only the advisory payload.
+fn normalize_discovery_path(path: &Path) -> PathBuf {
+    let text = path.to_string_lossy();
+    if let Some(rest) = text.strip_prefix("\\\\?\\UNC\\") {
+        return PathBuf::from(format!("\\\\{rest}"));
+    }
+    if let Some(rest) = text.strip_prefix("\\\\?\\") {
+        return PathBuf::from(rest);
+    }
+    path.to_path_buf()
 }
 
 fn discovery_candidate_id(mode: HarnessLaunchMode, program: &str, entry: Option<&str>) -> String {
@@ -3627,6 +3664,47 @@ fn find_on_path(names: &[&str]) -> Option<PathBuf> {
         }
     }
     None
+}
+
+fn append_path_direct_candidates(candidates: &mut Vec<HarnessCandidate>) {
+    if candidates.len() >= HARNESS_DISCOVERY_MAX_CANDIDATES {
+        return;
+    }
+    let Some(path) = env::var_os("PATH") else {
+        return;
+    };
+    let mut seen: HashSet<String> = candidates
+        .iter()
+        .map(|candidate| candidate.id.clone())
+        .collect();
+    for directory in env::split_paths(&path) {
+        for name in [
+            "deepseek-harness",
+            "deepseek-harness.exe",
+            "dsh-harness",
+            "dsh-harness.exe",
+            "harness",
+            "harness.exe",
+        ] {
+            if candidates.len() >= HARNESS_DISCOVERY_MAX_CANDIDATES {
+                candidates.sort_by(|left, right| left.id.cmp(&right.id));
+                return;
+            }
+            let candidate = directory.join(name);
+            let Ok(candidate) = fs::canonicalize(candidate) else {
+                continue;
+            };
+            let Some(parent) = candidate.parent() else {
+                continue;
+            };
+            let before = candidates.len();
+            add_direct_candidate(parent, &candidate, "path", candidates, &mut seen);
+            if candidates.len() == before {
+                continue;
+            }
+        }
+    }
+    candidates.sort_by(|left, right| left.id.cmp(&right.id));
 }
 
 fn validate_launch_args(args: &[String], label: &str) -> io::Result<()> {
