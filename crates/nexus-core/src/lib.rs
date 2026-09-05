@@ -399,13 +399,19 @@ pub fn resolve_runtime_command(
             // path segment and attempts to lstat `C:`. Keep the configured
             // path unchanged for identity and containment, but pass the
             // ordinary drive/UNC spelling at this process boundary.
-            prefix_args: vec![normalize_discovery_path(&pin.path).into_os_string()],
+            prefix_args: vec![node_script_argument(&pin.path)],
         }));
     }
     Ok(Some(RuntimeCommandSpec {
         program: pin.path.clone(),
         prefix_args: Vec::new(),
     }))
+}
+
+/// Convert an already validated script path at the Node process boundary.
+/// The stored/canonical path remains unchanged for containment and identity.
+pub fn node_script_argument(path: &Path) -> OsString {
+    normalize_discovery_path(path).into_os_string()
 }
 
 pub const PNPM_MINIMUM_RELEASE_AGE_ARG: &str = "--config.minimumReleaseAge=0";

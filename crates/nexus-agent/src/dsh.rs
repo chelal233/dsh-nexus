@@ -294,15 +294,16 @@ pub(crate) fn native_profile(dsh_home: &Path, profile: &str) -> io::Result<Nativ
         }
         bundles.push(bundle.to_owned());
     }
-    let dependencies = value
-        .get("dependencies")
-        .and_then(serde_json::Value::as_object)
-        .ok_or_else(|| {
+    let empty_dependencies = serde_json::Map::new();
+    let dependencies = match value.get("dependencies") {
+        None => &empty_dependencies,
+        Some(value) => value.as_object().ok_or_else(|| {
             io::Error::new(
                 io::ErrorKind::InvalidData,
-                "profile manifest has no dependencies object",
+                "profile manifest dependencies must be an object",
             )
-        })?;
+        })?,
+    };
     let mut versions = BTreeMap::new();
     for (package, version) in dependencies {
         if !valid_package_name(package) {
@@ -411,7 +412,7 @@ fn remove_profile_plugin_with_runner(
     let cli = locate_built_cli(release_root)?;
     let mut args = node.prefix_args;
     args.extend([
-        cli.into_os_string(),
+        nexus_core::node_script_argument(&cli),
         OsString::from("plugin"),
         OsString::from("--profile"),
         OsString::from(profile),
@@ -1094,6 +1095,23 @@ mod tests {
     }
 
     #[test]
+    fn native_manifest_accepts_dependencies_omitted_after_last_removal() {
+        let (root, _paths, home, _release) = plugin_fixture();
+        let package = home.join("profiles/web/package.json");
+        let mut manifest: serde_json::Value =
+            serde_json::from_slice(&fs::read(&package).unwrap()).unwrap();
+        manifest.as_object_mut().unwrap().remove("dependencies");
+        fs::write(&package, serde_json::to_vec(&manifest).unwrap()).unwrap();
+        let profile = native_profile(&home, "web").expect("no dependencies remains valid");
+        assert_eq!(profile.plugins.len(), 2);
+        assert!(profile.plugins.iter().all(|plugin| plugin.builtin && !plugin.removable));
+        manifest["dependencies"] = serde_json::Value::Null;
+        fs::write(&package, serde_json::to_vec(&manifest).unwrap()).unwrap();
+        assert!(native_profile(&home, "web").is_err());
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
     fn plugin_remove_runner_receives_fixed_argv_bound_env_and_preserves_failure() {
         let (root, paths, home, release) = plugin_fixture();
         let runner = FakePluginRunner {
@@ -1120,6 +1138,8 @@ mod tests {
             ["plugin", "--profile", "web", "remove", "dsh-extra"]
         );
         assert!(args[0].replace('\\', "/").ends_with("apps/cli/lib/bin.js"));
+        #[cfg(windows)]
+        assert!(!args[0].starts_with(r"\\?\"));
         assert!(same_native_path(
             Path::new(
                 seen[0]

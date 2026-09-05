@@ -112,3 +112,7 @@ UTF-8 character boundary. The truncation flag remains derived from the
 metadata/read sentinel, including newline-free concurrent growth. Focused
 coverage includes 16,385 newline-free bytes, multibyte UTF-8, and invalid
 UTF-8 payloads.
+
+## Real isolated plugin acceptance
+
+A local file-only test package was installed offline into an isolated native profile. Real official CLI removal exposed the same Node verbatim-script-path incompatibility; a shared node_script_argument boundary now serves both pnpm and the verified built CLI while canonical identity remains unchanged. Removing the final dependency also showed pnpm omits the dependencies key. Read-only native inventory now treats an absent dependencies object as empty while rejecting an explicitly invalid value. Both focused regressions pass. The real repeated removal returned removed=true, exit_code=0, refreshed inventory successfully, and the selected profile was returned to web. No user profile or external package was modified.
