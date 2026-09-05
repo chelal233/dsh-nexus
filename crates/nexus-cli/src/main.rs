@@ -497,11 +497,17 @@ async fn run(options: Options) -> Result<(), String> {
                 action: ProfileAction::Select,
                 profile: profile.clone(),
                 package: None,
-            })
+            
+                target: None,})
             .send()
             .await
             .map_err(|error| format!("agent is unavailable: {error}"))?,
-        Command::Profile(ProfileAction::PluginInventory | ProfileAction::PluginRemove, _) => {
+        Command::Profile(
+            ProfileAction::PluginInventory
+            | ProfileAction::PluginRemove
+            | ProfileAction::OpenPath,
+            _,
+        ) => {
             return Err("invalid internal profile command".to_owned())
         }
         Command::ProfileRemove(profile, package) => client
@@ -510,7 +516,8 @@ async fn run(options: Options) -> Result<(), String> {
                 action: ProfileAction::PluginRemove,
                 profile: Some(profile.clone()),
                 package: Some(package.clone()),
-            })
+            
+                target: None,})
             .send()
             .await
             .map_err(|error| format!("agent is unavailable: {error}"))?,
