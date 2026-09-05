@@ -13,6 +13,22 @@ eleases\...` 双路径 → Harness 启动 os error 267（目录名称无效）
 
 ActionButton 全局补 `type="button"`：此前所有 ActionButton 在 `<form>` 内默认为 submit，「添加参数/移除参数」点击会触发表单提交（表现为变成保存/取消）。submit 专用按钮本就是原生 `<button type="submit">`，不受影响。
 
+## 深度 review（2026-09-06，四线并行审查）与修复
+
+四条审查线（路径/占位符、配置写入+进程生命周期、状态机+端点、前端表单+i18n）确认了 12+ 个问题。已修复（提交 fix: enforce launch placeholder invariant and harden retarget）：
+
+1. **占位符不变量下沉到 core**：`ReleaseStore::{promote,rollback,restore_checkpoint_release}` 全部在发布指针前调用新增的 `retarget_launch_placeholder`（config transaction 原子改写）——此前只有 switch_tag 一条路径有 retarget，cold promote/ReleaseAction::Promote/Rollback/checkpoint restore 都会把启动配置留在旧槽位（与实测钉死 bug 同类）
+2. **cold 发布改用 `{release_root}` 占位符**（原 cold.rs:813-833 写死具体槽位路径，是新配置钉死问题的源头）
+3. **retarget 加固**：大小写不敏感（Windows 路径）+ 边界校验（rc1 不匹配 rc10）+ 改用 ConfigStore::transaction（原 load-modify-write 会覆盖用户并发保存）；updater 里的重复实现删除，收敛到 core 单点
+4. **前端 kv 编辑器**：未填完的参数行保存时明确报错（此前产生裸 `--` token 进 config，实测踩过）；脱敏参数分支不再把 [REDACTED] 字面量发给后端；readiness URL 脱敏时 preserve 标志修正（此前永远不生效，保存会静默清空已存 URL）
+
+审查确认但延后到 P1 的：
+- **agent 无构建版本握手**：launcher 复用旧 agent 进程不校验二进制新旧（实测踩坑根源），需 HealthResponse 加版本 + AgentRuntime 比对
+- **Harness spawn 未用 Job Object**：stop/kill 只杀直接子进程，node 孙子进程（插件/esbuild）泄漏占端口；runtime-supply 已有 Job Object 设施未接到 supervisor
+- **Windows graceful stop 永不优雅**：无信号投递，必耗满 5s 后 kill；且 stop 持 lifecycle 锁 5s 阻塞全部 GET 端点
+- **failed 无快循环**：崩溃后 UI 最长 8s 才显示失败
+- recovery 期间（无 PID）stop 被拒的死锁窗口；retarget 不覆盖 runtimes 目录的 node pin 变化
+
 ## P0 状态机核查结论（2026-09-06）
 
 - 实测显式 stop：终态 = stopped（"graceful stop 超时后强杀"，Windows 下 Harness 不响应优雅停止，exit 1 如实记录）——**此前怀疑的 stop→failed bug 不存在**，当时是 Harness 已自行崩溃（插件树损坏），stop 返回既有 failed 状态。撤回该 bug 报告
