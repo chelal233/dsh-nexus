@@ -225,6 +225,43 @@ function errorMessage(error: unknown): string {
 
 function localizeBackendError(message: string, t: Translator): string {
   const normalized = message.toLowerCase();
+  // Characteristic failure signatures map to plain-language causes with the
+  // recovery action that actually applies; anything else falls through to
+  // the backend's own message.
+  if (normalized.includes("plugin tree failed to load") || normalized.includes("loader entries failed to apply")) {
+    return t("Plugins failed to load, likely a version mismatch between installed plugins and this Harness build. Open Recovery to remove the affected plugins or restore a healthy snapshot.");
+  }
+  if (normalized.includes("does not provide an export named")) {
+    return t("A plugin expects module APIs this Harness build does not have: the installed plugin set and the Harness version are out of sync. Restore a healthy snapshot or update the plugins.");
+  }
+  if (normalized.includes("duplicate loader entry")) {
+    return t("A profile plugin duplicates a plugin this Harness now ships built-in. Remove the older copy from the profile's plugin inventory.");
+  }
+  if (normalized.includes("illegal operation on a directory") || normalized.includes("os error 267") || normalized.includes("目录名称无效")) {
+    return t("A path is invalid, likely a leftover from a previous version switch. Restore a healthy snapshot to rebuild the profile.");
+  }
+  if (normalized.includes("release slots are full")) {
+    return t("All release slots are full. Remove a slot you no longer need, then try again.");
+  }
+  if (normalized.includes("release_slot_protected") || normalized.includes("is the current slot") || normalized.includes("is the last-known-good slot")) {
+    return t("That slot is still in use (current or last-known-good). Switch to another version first.");
+  }
+  if (normalized.includes("snapshot_release_not_installed")) {
+    return t("This snapshot's Harness version is not installed. Cold-switch to that tag first, then restore.");
+  }
+  if (normalized.includes("eisdir")) {
+    return t("A directory was used where a file was expected, usually a leftover from a crashed run. Restore a healthy snapshot to rebuild the profile.");
+  }
+  const fallbacks: Array<[RegExp, string]> = [
+    [/refused to connect|connection refused|econnrefused/, t("The local service is not responding. Retry, and check the Agent status on the Overview page.")],
+    [/timed out|timeout/, t("The operation timed out, often a network issue. Check your connection or proxy settings, then retry.")],
+    [/os error 5|access is denied/, t("Access denied: the file may be locked by another process. Close programs using it and retry.")],
+  ];
+  for (const [pattern, text] of fallbacks) {
+    if (pattern.test(normalized)) {
+      return text;
+    }
+  }
   if (normalized.includes("harness is not configured")) {
     return t("Harness is not configured. Open Settings to configure it.");
   }
