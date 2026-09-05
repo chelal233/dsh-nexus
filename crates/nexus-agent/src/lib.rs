@@ -92,7 +92,7 @@ struct AppState {
     #[cfg(test)]
     checkpoint_transition_gate: Arc<Mutex<Option<CheckpointTransitionGate>>>,
     #[cfg(test)]
-    checkpoint_agent_persist_failure: Arc<std::sync::atomic::AtomicBool>,
+    agent_persist_failure: Arc<std::sync::atomic::AtomicBool>,
     #[cfg(test)]
     checkpoint_commit_result_failure: Arc<std::sync::atomic::AtomicBool>,
     shutdown: watch::Sender<bool>,
@@ -229,7 +229,7 @@ pub async fn run_with_instance_id(
         #[cfg(test)]
         checkpoint_transition_gate: Arc::new(Mutex::new(None)),
         #[cfg(test)]
-        checkpoint_agent_persist_failure: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+        agent_persist_failure: Arc::new(std::sync::atomic::AtomicBool::new(false)),
         #[cfg(test)]
         checkpoint_commit_result_failure: Arc::new(std::sync::atomic::AtomicBool::new(false)),
         shutdown,
@@ -821,7 +821,7 @@ where
         #[cfg(test)]
         if inject_checkpoint_persist_failure
             && state
-                .checkpoint_agent_persist_failure
+                .agent_persist_failure
                 .swap(false, std::sync::atomic::Ordering::SeqCst)
         {
             return Err(HarnessSupervisorError::Persistence(io::Error::other(
@@ -1459,18 +1459,28 @@ async fn apply_release_catalog(
     state: &AppState,
     catalog: ReleaseCatalog,
 ) -> axum::response::Response {
-    let current_release = catalog.current_release.clone();
-    if let Err(error) = update_agent_state(state, |current| {
-        current.set_release(current_release);
-    })
-    .await
-    {
+    if let Err(error) = persist_release_catalog_state(state, &catalog, false).await {
         return data_error_response(
             io::Error::other(error.to_string()),
             "release_state_persistence_failed",
         );
     }
     (StatusCode::OK, Json(release_list_response(catalog))).into_response()
+}
+
+async fn persist_release_catalog_state(
+    state: &AppState,
+    catalog: &ReleaseCatalog,
+    inject_agent_persist_failure: bool,
+) -> Result<(), HarnessSupervisorError> {
+    let current_release = catalog.current_release.clone();
+    update_agent_state_inner(
+        state,
+        |current| current.set_release(current_release),
+        inject_agent_persist_failure,
+    )
+    .await
+    .map(|_| ())
 }
 
 async fn update_status(State(state): State<AppState>) -> axum::response::Response {
@@ -1517,18 +1527,65 @@ async fn update_control(
             {
                 return response;
             }
-            drop(lifecycle);
-            match state.updater.switch_tag(tag).await {
-                Ok(response) => {
-                    if let Ok(catalog) = state.releases.load() {
-                        apply_release_catalog(&state, catalog).await;
-                    }
-                    (StatusCode::CREATED, Json(response)).into_response()
-                }
-                Err(error) => update_error_response(error),
+            let update_gate = match state.updater.try_acquire_gate() {
+                Ok(gate) => gate,
+                Err(error) => return update_error_response(error),
+            };
+            let (result_tx, result_rx) = tokio::sync::oneshot::channel();
+            let owner_state = state.clone();
+            tokio::spawn(async move {
+                let response = complete_release_switch(owner_state, tag, update_gate).await;
+                drop(lifecycle);
+                let _ = result_tx.send(response);
+            });
+            match result_rx.await {
+                Ok(response) => response,
+                Err(_) => update_error_response(UpdateExecutorError::Persistence(
+                    io::Error::other("detached switch owner exited without a terminal result"),
+                )),
             }
         }
     }
+}
+
+async fn complete_release_switch(
+    state: AppState,
+    tag: String,
+    update_gate: tokio::sync::OwnedMutexGuard<()>,
+) -> axum::response::Response {
+    let response = match state.updater.switch_tag_owned(tag, &update_gate).await {
+        Ok(response) => response,
+        Err(error) => return update_error_response(error),
+    };
+    let catalog = match state.releases.load() {
+        Ok(catalog) => catalog,
+        Err(error) => {
+            let error = UpdateExecutorError::Persistence(io::Error::new(
+                error.kind(),
+                format!("failed to load promoted release catalog: {error}"),
+            ));
+            let error = state.updater.record_switch_failure(
+                response.update.release_id.clone(),
+                response.update.started_at_unix,
+                error,
+                &update_gate,
+            );
+            return update_error_response(error);
+        }
+    };
+    if let Err(error) = persist_release_catalog_state(&state, &catalog, true).await {
+        let error = UpdateExecutorError::Persistence(io::Error::other(format!(
+            "failed to persist Agent current release after promotion: {error}"
+        )));
+        let error = state.updater.record_switch_failure(
+            response.update.release_id.clone(),
+            response.update.started_at_unix,
+            error,
+            &update_gate,
+        );
+        return update_error_response(error);
+    }
+    (StatusCode::CREATED, Json(response)).into_response()
 }
 
 async fn diagnostics_status(State(state): State<AppState>) -> axum::response::Response {
@@ -2525,7 +2582,7 @@ mod checkpoint_tests {
                 reached: transition_reached,
                 release: transition_release_rx,
             }))),
-            checkpoint_agent_persist_failure: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            agent_persist_failure: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             checkpoint_commit_result_failure: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             shutdown,
             data_root_id: data_root_identity(&paths).expect("data-root identity reads"),
@@ -2647,7 +2704,7 @@ mod checkpoint_tests {
             release: failure_transition_release_rx,
         });
         state
-            .checkpoint_agent_persist_failure
+            .agent_persist_failure
             .store(true, std::sync::atomic::Ordering::SeqCst);
         let failing_restore_state = state.clone();
         let failing_checkpoint_id = checkpoint.id.clone();
@@ -2788,6 +2845,360 @@ mod checkpoint_tests {
             .load()
             .expect("launch-pending journal reads")
             .is_none());
+        let _ = fs::remove_dir_all(root);
+    }
+}
+
+#[cfg(test)]
+mod switch_ownership_tests {
+    use std::{
+        fs,
+        path::PathBuf,
+        sync::{atomic::AtomicU64, Arc},
+        time::Duration,
+    };
+
+    use axum::{extract::State, Json};
+    use nexus_core::{
+        data_root_identity, AgentState, CheckpointRestoreJournalStore, CheckpointStore,
+        ConfigStore, DiagnosticsStore, HarnessLaunchSpec, NexusConfigFile, NexusPaths,
+        ProfileStore, ReleaseStore, UpdateSpec,
+    };
+    use nexus_protocol::{
+        ConfigAction, ConfigCommand, HarnessAction, UpdateAction, UpdateCommand, UpdateState,
+    };
+    use tokio::{
+        sync::{oneshot, watch, Mutex, RwLock},
+        time::timeout,
+    };
+
+    use super::{
+        config_control, execute_harness_action, update_control, AppState, HarnessSupervisor,
+        UpdateExecutor,
+    };
+
+    fn switch_test_state(label: &str) -> AppState {
+        let root = std::env::temp_dir().join(format!(
+            "nexus-switch-{label}-{}-{}",
+            std::process::id(),
+            nexus_core::unix_time_nanos_for_update()
+        ));
+        let paths = NexusPaths::from_root(root);
+        paths.ensure_directories().expect("test directories create");
+        let update = UpdateSpec {
+            source: "https://example.invalid/repo".to_owned(),
+            ref_name: "main".to_owned(),
+            git_program: if cfg!(windows) {
+                PathBuf::from("cmd.exe")
+            } else {
+                PathBuf::from("/bin/false")
+            },
+            build_program: None,
+            build_args: Vec::new(),
+            verify_program: None,
+            verify_args: Vec::new(),
+            timeout_secs: Some(5),
+        };
+        let config = ConfigStore::new(paths.clone());
+        config
+            .write(&NexusConfigFile {
+                harness: None,
+                update: Some(update),
+                releases: None,
+            })
+            .expect("update config writes");
+        let releases = ReleaseStore::new(paths.clone());
+        let profiles = ProfileStore::new(paths.clone());
+        profiles.load().expect("default profile creates");
+        let supervisor = HarnessSupervisor::new(paths.clone()).expect("supervisor creates");
+        let mut runtime = AgentState::starting();
+        runtime.mark_running();
+        let (shutdown, _) = watch::channel(false);
+        AppState {
+            paths: paths.clone(),
+            runtime: Arc::new(RwLock::new(runtime)),
+            agent_revision: Arc::new(AtomicU64::new(0)),
+            profiles,
+            checkpoints: CheckpointStore::new(paths.clone()),
+            checkpoint_restores: CheckpointRestoreJournalStore::new(paths.clone()),
+            releases: releases.clone(),
+            diagnostics: DiagnosticsStore::new(paths.clone()),
+            config,
+            updater: UpdateExecutor::new(paths.clone(), releases),
+            supervisor,
+            harness_sync: Arc::new(Mutex::new(())),
+            checkpoint_transition_gate: Arc::new(Mutex::new(None)),
+            agent_persist_failure: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            checkpoint_commit_result_failure: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            shutdown,
+            data_root_id: data_root_identity(&paths).expect("data-root identity reads"),
+            instance_id: "switch-test-agent".to_owned(),
+        }
+    }
+
+    #[tokio::test]
+    async fn cancelled_switch_keeps_lifecycle_and_update_gate_with_detached_owner() {
+        let state = switch_test_state("cancel-owner");
+        let root = state.paths.root.clone();
+        let (command_reached, command_reached_rx) = oneshot::channel();
+        let (command_release, command_release_rx) = oneshot::channel();
+        state
+            .updater
+            .observe_next_command(command_reached, command_release_rx)
+            .await;
+
+        let request_state = state.clone();
+        let request = tokio::spawn(async move {
+            update_control(
+                State(request_state),
+                Json(UpdateCommand {
+                    action: UpdateAction::Switch,
+                    release_id: None,
+                    version: None,
+                    tag: Some("v-test".to_owned()),
+                }),
+            )
+            .await
+        });
+        timeout(Duration::from_secs(3), command_reached_rx)
+            .await
+            .expect("switch command starts before deadline")
+            .expect("switch command start signal arrives");
+
+        let (start_attempt, start_attempt_rx) = oneshot::channel();
+        state
+            .supervisor
+            .observe_next_lifecycle_wait(start_attempt)
+            .await;
+        let start_state = state.clone();
+        let start = tokio::spawn(async move {
+            execute_harness_action(&start_state, HarnessAction::Start).await
+        });
+        timeout(Duration::from_secs(3), start_attempt_rx)
+            .await
+            .expect("Harness start attempts lifecycle before deadline")
+            .expect("Harness lifecycle attempt signal arrives");
+        let start_waited = !start.is_finished();
+
+        let second_update = update_control(
+            State(state.clone()),
+            Json(UpdateCommand {
+                action: UpdateAction::Install,
+                release_id: Some("second-update".to_owned()),
+                version: Some("test".to_owned()),
+                tag: None,
+            }),
+        )
+        .await;
+        let update_payload = state
+            .config
+            .load()
+            .expect("config loads")
+            .update
+            .expect("update config exists")
+            .to_payload();
+        let set_update = config_control(
+            State(state.clone()),
+            Json(ConfigCommand {
+                action: ConfigAction::SetUpdate,
+                update: Some(update_payload),
+                ..Default::default()
+            }),
+        )
+        .await;
+        let clear_update = config_control(
+            State(state.clone()),
+            Json(ConfigCommand {
+                action: ConfigAction::ClearUpdate,
+                ..Default::default()
+            }),
+        )
+        .await;
+
+        request.abort();
+        assert!(request
+            .await
+            .expect_err("request cancellation aborts handler")
+            .is_cancelled());
+        let gate_stayed_owned = match state.updater.try_acquire_gate() {
+            Err(super::UpdateExecutorError::AlreadyRunning) => true,
+            Ok(guard) => {
+                drop(guard);
+                false
+            }
+            Err(error) => panic!("unexpected update gate error: {error}"),
+        };
+        let owner_received_release = command_release.send(()).is_ok();
+        let terminal = timeout(Duration::from_secs(3), async {
+            loop {
+                let update = state.updater.status().expect("update state loads");
+                if update.state != UpdateState::Running {
+                    break update;
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await;
+        if start_waited {
+            let _ = timeout(Duration::from_secs(3), start)
+                .await
+                .expect("Harness start resumes after switch owner releases lifecycle")
+                .expect("Harness start task joins");
+        }
+        let gate_released_after_terminal = state.updater.try_acquire_gate().is_ok();
+        let _ = fs::remove_dir_all(root);
+
+        assert!(
+            start_waited,
+            "Harness start must wait for the switch lifecycle owner"
+        );
+        assert_eq!(second_update.status(), axum::http::StatusCode::CONFLICT);
+        assert_eq!(set_update.status(), axum::http::StatusCode::CONFLICT);
+        assert_eq!(clear_update.status(), axum::http::StatusCode::CONFLICT);
+        assert!(
+            gate_stayed_owned,
+            "request cancellation must not release the update gate"
+        );
+        assert!(
+            owner_received_release,
+            "detached owner must retain the command wait"
+        );
+        assert_eq!(
+            terminal
+                .expect("detached owner publishes a terminal state")
+                .state,
+            UpdateState::Failed
+        );
+        assert!(
+            gate_released_after_terminal,
+            "terminal owner must release the update gate"
+        );
+    }
+
+    #[tokio::test]
+    async fn set_harness_waits_for_lifecycle_while_update_config_stays_try_gate_only() {
+        let state = switch_test_state("set-harness-lifecycle");
+        let root = state.paths.root.clone();
+        let lifecycle = state.supervisor.acquire_lifecycle().await;
+        let update_payload = state
+            .config
+            .load()
+            .expect("config loads")
+            .update
+            .expect("update config exists")
+            .to_payload();
+        let set_update = timeout(
+            Duration::from_secs(3),
+            config_control(
+                State(state.clone()),
+                Json(ConfigCommand {
+                    action: ConfigAction::SetUpdate,
+                    update: Some(update_payload),
+                    ..Default::default()
+                }),
+            ),
+        )
+        .await
+        .expect("SetUpdate does not wait for lifecycle");
+        let clear_update = timeout(
+            Duration::from_secs(3),
+            config_control(
+                State(state.clone()),
+                Json(ConfigCommand {
+                    action: ConfigAction::ClearUpdate,
+                    ..Default::default()
+                }),
+            ),
+        )
+        .await
+        .expect("ClearUpdate does not wait for lifecycle");
+        assert_eq!(set_update.status(), axum::http::StatusCode::OK);
+        assert_eq!(clear_update.status(), axum::http::StatusCode::OK);
+        let (set_harness_attempt, set_harness_attempt_rx) = oneshot::channel();
+        state
+            .supervisor
+            .observe_next_lifecycle_wait(set_harness_attempt)
+            .await;
+        let set_harness_state = state.clone();
+        let set_harness_payload =
+            HarnessLaunchSpec::new(PathBuf::from("missing-switch-test-harness")).to_payload();
+        let set_harness = tokio::spawn(async move {
+            config_control(
+                State(set_harness_state),
+                Json(ConfigCommand {
+                    action: ConfigAction::SetHarness,
+                    harness: Some(set_harness_payload),
+                    ..Default::default()
+                }),
+            )
+            .await
+        });
+        timeout(Duration::from_secs(3), set_harness_attempt_rx)
+            .await
+            .expect("SetHarness attempts lifecycle before deadline")
+            .expect("SetHarness lifecycle wait signal arrives");
+        assert!(
+            !set_harness.is_finished(),
+            "SetHarness must wait for lifecycle"
+        );
+        drop(lifecycle);
+        let response = timeout(Duration::from_secs(3), set_harness)
+            .await
+            .expect("SetHarness resumes after lifecycle releases")
+            .expect("SetHarness task joins");
+        assert_eq!(response.status(), axum::http::StatusCode::OK);
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[tokio::test]
+    async fn switch_returns_agent_release_persistence_failure() {
+        let state = switch_test_state("agent-persistence");
+        let root = state.paths.root.clone();
+        state
+            .releases
+            .register("fast-slot", "v-fast", None, None)
+            .expect("fast slot registers");
+        state
+            .agent_persist_failure
+            .store(true, std::sync::atomic::Ordering::SeqCst);
+
+        let response = update_control(
+            State(state.clone()),
+            Json(UpdateCommand {
+                action: UpdateAction::Switch,
+                release_id: None,
+                version: None,
+                tag: Some("v-fast".to_owned()),
+            }),
+        )
+        .await;
+        assert_eq!(
+            response.status(),
+            axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+            "Agent current-release persistence failures must reach the caller"
+        );
+        assert_eq!(
+            state.updater.status().expect("switch state loads").state,
+            UpdateState::Failed,
+            "Agent synchronization failure must replace the provisional switch success"
+        );
+        assert!(state
+            .updater
+            .status()
+            .expect("failed switch state reloads")
+            .error
+            .as_deref()
+            .is_some_and(|message| message.contains("failed to persist Agent current release")));
+        assert_eq!(
+            state
+                .releases
+                .load()
+                .expect("release selection loads")
+                .current_release
+                .as_deref(),
+            Some("fast-slot")
+        );
+        assert!(state.updater.try_acquire_gate().is_ok());
         let _ = fs::remove_dir_all(root);
     }
 }

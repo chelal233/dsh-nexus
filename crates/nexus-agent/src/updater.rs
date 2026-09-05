@@ -4,8 +4,8 @@ use std::{fmt, fs, io, path::Path, process::Stdio, sync::Arc, time::Duration};
 
 use nexus_core::{
     load_update_spec, unix_time_nanos_for_update, unix_time_seconds, validate_release_id,
-    validate_release_version, validate_update_ref, validate_update_source, ConfigStore,
-    NexusPaths, ReleaseStore, UpdateSpec, UpdateStateStore,
+    validate_release_version, validate_update_ref, validate_update_source, ConfigStore, NexusPaths,
+    ReleaseCatalog, ReleaseStore, UpdateSpec, UpdateStateStore,
 };
 use nexus_protocol::{ReleaseManifest, UpdateResponse, UpdateRuntimeInfo, UpdateState};
 use tokio::{
@@ -70,6 +70,10 @@ pub struct UpdateExecutor {
     gate: Arc<Mutex<()>>,
     #[cfg(test)]
     command_gate: Arc<Mutex<Option<UpdateCommandGate>>>,
+    #[cfg(test)]
+    switch_promotion_gate: Arc<Mutex<Option<UpdateCommandGate>>>,
+    #[cfg(test)]
+    switch_promotion_failure: Arc<std::sync::atomic::AtomicBool>,
 }
 
 #[cfg(test)]
@@ -87,6 +91,10 @@ impl UpdateExecutor {
             gate: Arc::new(Mutex::new(())),
             #[cfg(test)]
             command_gate: Arc::new(Mutex::new(None)),
+            #[cfg(test)]
+            switch_promotion_gate: Arc::new(Mutex::new(None)),
+            #[cfg(test)]
+            switch_promotion_failure: Arc::new(std::sync::atomic::AtomicBool::new(false)),
         }
     }
 
@@ -109,7 +117,7 @@ impl UpdateExecutor {
     }
 
     #[cfg(test)]
-    async fn observe_next_command(
+    pub(crate) async fn observe_next_command(
         &self,
         reached: tokio::sync::oneshot::Sender<()>,
         release: tokio::sync::oneshot::Receiver<()>,
@@ -117,14 +125,32 @@ impl UpdateExecutor {
         *self.command_gate.lock().await = Some(UpdateCommandGate { reached, release });
     }
 
+    #[cfg(test)]
+    pub(crate) async fn observe_next_switch_promotion(
+        &self,
+        reached: tokio::sync::oneshot::Sender<()>,
+        release: tokio::sync::oneshot::Receiver<()>,
+    ) {
+        *self.switch_promotion_gate.lock().await = Some(UpdateCommandGate { reached, release });
+    }
+
+    #[cfg(test)]
+    fn fail_next_switch_promotion(&self) {
+        self.switch_promotion_failure
+            .store(true, std::sync::atomic::Ordering::SeqCst);
+    }
+
     /// One-click tag switch. The tag becomes the update ref (persisted while
     /// holding the executor gate), then either promotes an already-installed
     /// slot with that version (fast path) or installs it and promotes the new
     /// slot. The caller must ensure Harness is quiescent; promotion here does
     /// not re-check supervisor state.
-    pub async fn switch_tag(&self, tag: String) -> Result<UpdateResponse, UpdateExecutorError> {
+    pub(crate) async fn switch_tag_owned(
+        &self,
+        tag: String,
+        _guard: &OwnedMutexGuard<()>,
+    ) -> Result<UpdateResponse, UpdateExecutorError> {
         validate_update_ref(&tag).map_err(UpdateExecutorError::Configuration)?;
-        let guard = self.try_acquire_gate()?;
         let config_store = ConfigStore::new(self.paths.clone());
         let mut document = config_store
             .load()
@@ -141,14 +167,22 @@ impl UpdateExecutor {
                 .map_err(UpdateExecutorError::Configuration)?;
         }
         if let Some(manifest) = self.latest_slot_for_tag(&tag)? {
-            let catalog = self
-                .releases
-                .promote(&manifest.id)
-                .map_err(UpdateExecutorError::Persistence)?;
+            let started_at = unix_time_seconds();
+            let catalog = match self.promote_for_switch(&manifest.id).await {
+                Ok(catalog) => catalog,
+                Err(error) => {
+                    return Err(self.record_switch_failure(
+                        Some(manifest.id),
+                        Some(started_at),
+                        error,
+                        _guard,
+                    ));
+                }
+            };
             let finished = UpdateRuntimeInfo {
                 state: UpdateState::Succeeded,
                 release_id: Some(manifest.id.clone()),
-                started_at_unix: Some(unix_time_seconds()),
+                started_at_unix: Some(started_at),
                 finished_at_unix: Some(unix_time_seconds()),
                 exit_code: Some(0),
                 error: None,
@@ -161,19 +195,131 @@ impl UpdateExecutor {
                 catalog.find(&manifest.id).cloned(),
             ));
         }
-        let response = self.install_owned(None, None, guard).await?;
-        let manifest = self
-            .latest_slot_for_tag(&tag)?
-            .ok_or_else(|| {
-                UpdateExecutorError::Persistence(io::Error::new(
+        self.state
+            .recover_unattached()
+            .map_err(UpdateExecutorError::Persistence)?;
+        let spec = load_update_spec(&self.paths)
+            .map_err(UpdateExecutorError::Configuration)?
+            .ok_or(UpdateExecutorError::NotConfigured)?;
+        let release_id = resolve_release_id(None, &spec)?;
+        let version = resolve_release_version(None, &spec)?;
+        let started_at = unix_time_seconds();
+        let running = UpdateRuntimeInfo::running(release_id.clone(), started_at);
+        self.state
+            .write(&running)
+            .map_err(UpdateExecutorError::Persistence)?;
+        let candidate = self.paths.downloads_dir.join(format!(
+            ".update-{release_id}-{}",
+            unix_time_nanos_for_update()
+        ));
+        if let Err(error) = self
+            .install_inner(&spec, &candidate, &release_id, &version)
+            .await
+        {
+            let _ = fs::remove_dir_all(&candidate);
+            return Err(self.record_switch_failure(
+                Some(release_id),
+                Some(started_at),
+                error,
+                _guard,
+            ));
+        }
+        let manifest = match self.latest_slot_for_tag(&tag) {
+            Ok(Some(manifest)) => manifest,
+            Ok(None) => {
+                let error = UpdateExecutorError::Persistence(io::Error::new(
                     io::ErrorKind::InvalidData,
                     format!("installed release for tag {tag} was not found in the catalog"),
-                ))
-            })?;
-        self.releases
-            .promote(&manifest.id)
+                ));
+                return Err(self.record_switch_failure(
+                    Some(release_id),
+                    Some(started_at),
+                    error,
+                    _guard,
+                ));
+            }
+            Err(error) => {
+                return Err(self.record_switch_failure(
+                    Some(release_id),
+                    Some(started_at),
+                    error,
+                    _guard,
+                ));
+            }
+        };
+        let catalog = match self.promote_for_switch(&manifest.id).await {
+            Ok(catalog) => catalog,
+            Err(error) => {
+                return Err(self.record_switch_failure(
+                    Some(release_id),
+                    Some(started_at),
+                    error,
+                    _guard,
+                ));
+            }
+        };
+        let finished = UpdateRuntimeInfo {
+            state: UpdateState::Succeeded,
+            release_id: Some(manifest.id.clone()),
+            started_at_unix: Some(started_at),
+            finished_at_unix: Some(unix_time_seconds()),
+            exit_code: Some(0),
+            error: None,
+        };
+        self.state
+            .write(&finished)
             .map_err(UpdateExecutorError::Persistence)?;
-        Ok(response)
+        Ok(UpdateResponse::new(
+            finished,
+            catalog.find(&manifest.id).cloned(),
+        ))
+    }
+
+    async fn promote_for_switch(
+        &self,
+        release_id: &str,
+    ) -> Result<ReleaseCatalog, UpdateExecutorError> {
+        #[cfg(test)]
+        if let Some(gate) = self.switch_promotion_gate.lock().await.take() {
+            let _ = gate.reached.send(());
+            let _ = gate.release.await;
+        }
+        #[cfg(test)]
+        if self
+            .switch_promotion_failure
+            .swap(false, std::sync::atomic::Ordering::SeqCst)
+        {
+            return Err(UpdateExecutorError::Persistence(io::Error::other(
+                "injected switch promotion failure",
+            )));
+        }
+        self.releases
+            .promote(release_id)
+            .map_err(UpdateExecutorError::Persistence)
+    }
+
+    pub(crate) fn record_switch_failure(
+        &self,
+        release_id: Option<String>,
+        started_at: Option<u64>,
+        error: UpdateExecutorError,
+        _guard: &OwnedMutexGuard<()>,
+    ) -> UpdateExecutorError {
+        let failed = UpdateRuntimeInfo {
+            state: UpdateState::Failed,
+            release_id,
+            started_at_unix: started_at,
+            finished_at_unix: Some(unix_time_seconds()),
+            exit_code: error_exit_code(&error),
+            error: Some(error.to_string()),
+        };
+        match self.state.write(&failed) {
+            Ok(()) => error,
+            Err(persistence) => UpdateExecutorError::Persistence(io::Error::new(
+                persistence.kind(),
+                format!("{error}; failed to persist terminal update state: {persistence}"),
+            )),
+        }
     }
 
     fn latest_slot_for_tag(&self, tag: &str) -> Result<Option<ReleaseManifest>, UpdateExecutorError> {
@@ -557,6 +703,48 @@ def	refs/tags/v0.9.0^{}
     use std::{fs, path::PathBuf, time::Duration};
     use tokio::{sync::oneshot, time::timeout};
 
+    fn fake_git_program(root: &std::path::Path) -> PathBuf {
+        #[cfg(windows)]
+        {
+            let program = root.join("fake-git.cmd");
+            fs::write(&program, "@echo off\r\nmkdir \"%~8\"\r\nexit /b 0\r\n")
+                .expect("fake git command writes");
+            program
+        }
+        #[cfg(not(windows))]
+        {
+            use std::os::unix::fs::PermissionsExt;
+
+            let program = root.join("fake-git.sh");
+            fs::write(&program, "#!/bin/sh\nmkdir -p \"$8\"\n").expect("fake git command writes");
+            let mut permissions = fs::metadata(&program)
+                .expect("fake git metadata reads")
+                .permissions();
+            permissions.set_mode(0o700);
+            fs::set_permissions(&program, permissions).expect("fake git becomes executable");
+            program
+        }
+    }
+
+    fn write_test_update(paths: &NexusPaths, git_program: PathBuf) {
+        ConfigStore::new(paths.clone())
+            .write(&NexusConfigFile {
+                harness: None,
+                update: Some(UpdateSpec {
+                    source: "https://example.invalid/repo".to_owned(),
+                    ref_name: "main".to_owned(),
+                    git_program,
+                    build_program: None,
+                    build_args: Vec::new(),
+                    verify_program: None,
+                    verify_args: Vec::new(),
+                    timeout_secs: Some(5),
+                }),
+                releases: None,
+            })
+            .expect("update config writes");
+    }
+
     #[test]
     fn derived_release_identifiers_are_safe() {
         let spec = UpdateSpec {
@@ -664,6 +852,161 @@ def	refs/tags/v0.9.0^{}
         .await
         .expect("detached owner reaps child and publishes terminal state");
         assert_eq!(terminal.state, UpdateState::Failed);
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[tokio::test]
+    async fn cold_switch_promotes_before_success_and_reports_promotion_failure() {
+        let root = std::env::temp_dir().join(format!(
+            "nexus-switch-promote-{}-{}",
+            std::process::id(),
+            nexus_core::unix_time_nanos_for_update()
+        ));
+        let paths = NexusPaths::from_root(root.clone());
+        paths.ensure_directories().expect("test directories create");
+        write_test_update(&paths, fake_git_program(&root));
+        let releases = ReleaseStore::new(paths.clone());
+        let executor = UpdateExecutor::new(paths.clone(), releases.clone());
+
+        let installed = executor
+            .install(
+                Some("install-only".to_owned()),
+                Some("v-install".to_owned()),
+            )
+            .await
+            .expect("ordinary install succeeds");
+        assert_eq!(installed.update.state, UpdateState::Succeeded);
+        assert!(
+            releases
+                .load()
+                .expect("install-only catalog loads")
+                .current_release
+                .is_none(),
+            "ordinary install must remain install-only"
+        );
+
+        let (promotion_reached, promotion_reached_rx) = oneshot::channel();
+        let (promotion_release, promotion_release_rx) = oneshot::channel();
+        executor
+            .observe_next_switch_promotion(promotion_reached, promotion_release_rx)
+            .await;
+        executor.fail_next_switch_promotion();
+        let owner = executor.clone();
+        let switch = tokio::spawn(async move {
+            let guard = owner.try_acquire_gate()?;
+            owner.switch_tag_owned("v-switch".to_owned(), &guard).await
+        });
+        timeout(Duration::from_secs(3), promotion_reached_rx)
+            .await
+            .expect("cold switch reaches promotion before deadline")
+            .expect("promotion signal arrives");
+        assert_eq!(
+            executor.status().expect("running switch state loads").state,
+            UpdateState::Running,
+            "a prepared cold release must not publish Succeeded before promotion"
+        );
+        assert!(matches!(
+            executor.try_acquire_gate(),
+            Err(UpdateExecutorError::AlreadyRunning)
+        ));
+        promotion_release
+            .send(())
+            .expect("promotion failure path releases");
+        assert!(matches!(
+            switch.await.expect("switch task joins"),
+            Err(UpdateExecutorError::Persistence(_))
+        ));
+        let terminal = executor.status().expect("failed switch state loads");
+        assert_eq!(terminal.state, UpdateState::Failed);
+        assert!(terminal
+            .error
+            .as_deref()
+            .is_some_and(|message| message.contains("injected switch promotion failure")));
+        assert!(
+            releases
+                .load()
+                .expect("failed-promotion catalog loads")
+                .current_release
+                .is_none(),
+            "failed promotion must not select the prepared release"
+        );
+        assert!(
+            executor.try_acquire_gate().is_ok(),
+            "terminal failure releases gate"
+        );
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[tokio::test]
+    async fn fast_switch_preserves_validation_and_configuration_errors() {
+        let root = std::env::temp_dir().join(format!(
+            "nexus-switch-fast-{}-{}",
+            std::process::id(),
+            nexus_core::unix_time_nanos_for_update()
+        ));
+        let paths = NexusPaths::from_root(root.clone());
+        paths.ensure_directories().expect("test directories create");
+        write_test_update(&paths, fake_git_program(&root));
+        let releases = ReleaseStore::new(paths.clone());
+        releases
+            .register("fast-slot", "v-fast", None, None)
+            .expect("fast slot registers");
+        let executor = UpdateExecutor::new(paths.clone(), releases.clone());
+
+        let guard = executor.try_acquire_gate().expect("switch gate acquires");
+        let response = executor
+            .switch_tag_owned("v-fast".to_owned(), &guard)
+            .await
+            .expect("fast switch succeeds");
+        drop(guard);
+        assert_eq!(response.update.state, UpdateState::Succeeded);
+        assert_eq!(response.update.release_id.as_deref(), Some("fast-slot"));
+        assert_eq!(
+            releases
+                .load()
+                .expect("fast catalog loads")
+                .current_release
+                .as_deref(),
+            Some("fast-slot")
+        );
+        assert_eq!(
+            ConfigStore::new(paths.clone())
+                .load()
+                .expect("switched config loads")
+                .update
+                .expect("switched update exists")
+                .ref_name,
+            "v-fast"
+        );
+
+        let guard = executor
+            .try_acquire_gate()
+            .expect("validation gate acquires");
+        assert!(matches!(
+            executor
+                .switch_tag_owned("bad tag".to_owned(), &guard)
+                .await,
+            Err(UpdateExecutorError::Configuration(_))
+        ));
+        drop(guard);
+        ConfigStore::new(paths.clone())
+            .write(&NexusConfigFile {
+                harness: None,
+                update: None,
+                releases: None,
+            })
+            .expect("update config clears");
+        let guard = executor
+            .try_acquire_gate()
+            .expect("missing-config gate acquires");
+        assert!(matches!(
+            executor
+                .switch_tag_owned("v-missing".to_owned(), &guard)
+                .await,
+            Err(UpdateExecutorError::NotConfigured)
+        ));
+        drop(guard);
+        assert!(executor.try_acquire_gate().is_ok());
         let _ = fs::remove_dir_all(root);
     }
 }
