@@ -405,6 +405,58 @@ async fn exact_corepack_cache_is_read_only_and_content_bound() {
     assert!(error.to_string().contains("Corepack candidate changed"));
 }
 
+#[tokio::test]
+async fn node_v_prefix_with_exact_corepack_cache_round_trips_plan_and_execute() {
+    let temp = TempDir::new().unwrap();
+    let cache = temp.path().join("runtimes");
+    let corepack = temp.path().join("corepack");
+    let package = corepack.join("v1/pnpm/11.7.0");
+    fs::create_dir_all(package.join("bin")).unwrap();
+    fs::write(
+        package.join("package.json"),
+        r#"{"name":"pnpm","version":"11.7.0","bin":{"pnpm":"bin/pnpm.mjs"}}"#,
+    )
+    .unwrap();
+    fs::write(package.join("bin/pnpm.mjs"), "console.log('11.7.0')").unwrap();
+
+    let downloader = MockDownloader::default();
+    let runner = MockRunner::default();
+    let mut foundation = runtime_plan(temp.path(), false);
+    foundation.tools[0].version = Some("v24.19.0".to_owned());
+    let planner = RuntimeSupplyPlanner::new(
+        &downloader,
+        RuntimeSource::Official,
+        host(),
+        cache.clone(),
+        Some(corepack.clone()),
+    )
+    .unwrap();
+    let plan = planner
+        .plan(&foundation, &CancellationToken::default())
+        .await
+        .unwrap();
+    assert_eq!(plan.node.version, "24.19.0");
+    assert_eq!(plan.pnpm.version, "11.7.0");
+    assert_eq!(plan.pnpm.disposition, SupplyDisposition::ReuseCorepackCache);
+
+    let supplier =
+        RuntimeSupplier::new(&downloader, &runner, host(), cache, Some(corepack)).unwrap();
+    let outcome = supplier
+        .execute_confirmed(
+            &foundation,
+            &plan,
+            &plan.supply_plan_id,
+            &CancellationToken::default(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(outcome.node_disposition, SupplyDisposition::ReuseExisting);
+    assert_eq!(
+        outcome.pnpm_disposition,
+        SupplyDisposition::ReuseCorepackCache
+    );
+}
+
 #[test]
 fn zip_traversal_and_case_collisions_are_rejected_without_escape() {
     let temp = TempDir::new().unwrap();

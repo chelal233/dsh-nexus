@@ -157,8 +157,9 @@ pub(crate) async fn build_supply_plan<D: DownloadClient + ?Sized>(
             .version
             .as_deref()
             .ok_or_else(|| SupplyError::InvalidPlan("reusable Node lacks a version".to_owned()))?;
+        let version = normalize_node_version(version)?;
         for requirement in &runtime_plan.requirements.node {
-            if !node_version_satisfies(&requirement.range, version)? {
+            if !node_version_satisfies(&requirement.range, &version)? {
                 return Err(SupplyError::InvalidPlan(
                     "foundation marked an incompatible Node runtime reusable".to_owned(),
                 ));
@@ -192,7 +193,12 @@ pub(crate) async fn build_supply_plan<D: DownloadClient + ?Sized>(
             mode: runtime_plan.mode,
             host,
             destination_root: cache_root.to_owned(),
-            node: existing_tool(node)?,
+            node: existing_tool_with_version(
+                node,
+                normalize_node_version(node.version.as_deref().ok_or_else(|| {
+                    SupplyError::InvalidPlan("reusable Node lacks a version".to_owned())
+                })?)?,
+            )?,
             pnpm: existing_tool(pnpm)?,
             supply_plan_id: String::new(),
         });
@@ -200,7 +206,7 @@ pub(crate) async fn build_supply_plan<D: DownloadClient + ?Sized>(
 
     cancellation.check()?;
     let node_version = match reusable_node.and_then(|tool| tool.version.clone()) {
-        Some(version) => version,
+        Some(version) => normalize_node_version(&version)?,
         None => {
             select_node_version(
                 downloader,
@@ -215,7 +221,7 @@ pub(crate) async fn build_supply_plan<D: DownloadClient + ?Sized>(
     };
 
     let node = if let Some(existing) = reusable_node {
-        existing_tool(existing)?
+        existing_tool_with_version(existing, node_version.clone())?
     } else {
         let identity = resolve_node_artifact(
             downloader,
@@ -355,6 +361,13 @@ fn reusable_tool<'a>(
 }
 
 fn existing_tool(tool: &RuntimePlanTool) -> Result<PlannedTool> {
+    let version = tool.version.clone().ok_or_else(|| {
+        SupplyError::InvalidPlan(format!("reusable {} lacks a version", tool.name))
+    })?;
+    existing_tool_with_version(tool, version)
+}
+
+fn existing_tool_with_version(tool: &RuntimePlanTool, version: String) -> Result<PlannedTool> {
     let path = tool
         .path
         .as_ref()
@@ -365,9 +378,7 @@ fn existing_tool(tool: &RuntimePlanTool) -> Result<PlannedTool> {
         })?;
     Ok(PlannedTool {
         name: tool.name.clone(),
-        version: tool.version.clone().ok_or_else(|| {
-            SupplyError::InvalidPlan(format!("reusable {} lacks a version", tool.name))
-        })?,
+        version,
         disposition: SupplyDisposition::ReuseExisting,
         path,
         ownership: tool.ownership.ok_or_else(|| {
@@ -376,6 +387,12 @@ fn existing_tool(tool: &RuntimePlanTool) -> Result<PlannedTool> {
         artifacts: Vec::new(),
         cache_identity: None,
     })
+}
+
+fn normalize_node_version(version: &str) -> Result<String> {
+    let normalized = version.strip_prefix('v').unwrap_or(version);
+    validate_exact_version(normalized)?;
+    Ok(normalized.to_owned())
 }
 
 fn owned_tool(
@@ -664,7 +681,15 @@ fn revalidate_existing(fresh: &RuntimePlanResponse, planned: &PlannedTool) -> Re
     }
     let current = reusable_tool(fresh, &planned.name)?
         .ok_or_else(|| SupplyError::InvalidPlan(format!("reusable {} changed", planned.name)))?;
-    let expected = existing_tool(current)?;
+    let expected = if planned.name == "node" {
+        let version = current
+            .version
+            .as_deref()
+            .ok_or_else(|| SupplyError::InvalidPlan("reusable Node lacks a version".to_owned()))?;
+        existing_tool_with_version(current, normalize_node_version(version)?)?
+    } else {
+        existing_tool(current)?
+    };
     if &expected != planned {
         return Err(SupplyError::InvalidPlan(format!(
             "reusable {} observation changed",
