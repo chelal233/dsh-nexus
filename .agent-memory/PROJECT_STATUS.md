@@ -13,6 +13,8 @@ eleases\...` 双路径 → Harness 启动 os error 267（目录名称无效）
 
 ActionButton 全局补 `type="button"`：此前所有 ActionButton 在 `<form>` 内默认为 submit，「添加参数/移除参数」点击会触发表单提交（表现为变成保存/取消）。submit 专用按钮本就是原生 `<button type="submit">`，不受影响。
 
+## [进行中] 自动化工作实例：冷切换 dsh-v0.1.3-alpha.1 验证中
+
 ## 深度 review（2026-09-06，四线并行审查）与修复
 
 四条审查线（路径/占位符、配置写入+进程生命周期、状态机+端点、前端表单+i18n）确认了 12+ 个问题。已修复（提交 fix: enforce launch placeholder invariant and harden retarget）：
@@ -35,6 +37,15 @@ ActionButton 全局补 `type="button"`：此前所有 ActionButton 在 `<form>` 
 - /v1/harness（8s 轮询快照）与 /v1/harness/ui（fail-closed 实时双同步）的不一致 = 崩溃窗口内的轮询时差（≤8s），非状态源缺陷；认证面板的 Failed 是真相
 - 启动中/停止中的 i18n 与状态机均正确；用户观察到的错误状态源自插件树崩溃窗口
 - 当前唯一阻断不变：desktop 配置档插件树损坏 → 用户走快照恢复（rc.1 时期健康快照）即愈
+
+## P0 解析链完整定位（2026-09-06 凌晨，自动化）
+
+- **解析链实锤**：配置档插件（desktop/node_modules/...）import `@deepseek-ai/dsh-settings` → 命中 **`C:\Users\PC\.dsh\profiles\node_modules\@deepseek-ai\dsh-settings`**（profiles 级 pnpm 工作区共享 node_modules）——该共享树在 alpha.1 启动时被重新物化为 alpha.1 版本（0.1.3-alpha.1，无 settingsNamespace/deepEqualJson 导出）
+- **切回 rc.1 不自愈的原因**：rc.1 启动在插件树加载阶段就崩溃，共享树的重新物化（harness boot 物化器 + lockfile）没有机会把版本拉回 rc.1；且 profiles 级 pnpm-lock.yaml 已被 alpha.1 启动改写，pnpm install 会按 alpha.1 锁定文件继续装错版本
+- **验证手段已留**：`%TEMP%\resolve-test.cjs` 可随时查插件上下文解析到的 dsh-settings 版本
+- **恢复方案（下一轮自动化执行）**：1) GET /v1/checkpoints {action:"detail", id:"snapshot-1788614094193"} 取 rc.1 时期健康快照的文件内容（应含 profiles 级或 profile 级 pnpm-lock.yaml/package.json）；2) 将对应锁文件写回 `~/.dsh/profiles/`（先备份现值）；3) 用便携 pnpm 在 profiles 目录跑 install 重新物化；4) 启动 Harness 验证；5) 若快照不含 profiles 级锁文件，改为检查 harness 物化器的触发条件并从槽位侧修复
+- **新发现的设计缺口（P1 项）**：健康快照（3 个）在 UI 只有 详情/检查 没有直接恢复入口，恢复仅能通过 checkpoint——需确认健康快照是否可直接恢复，不能则补齐（desktop 模型里 3 个健康槽位本身就是恢复点）
+- 今日冷切换实战验证通过：switch→confirm→install→build→promote 全链路 3 分钟，占位符/retarget 修复实战有效
 
 ## P0 启动失败最终定性（2026-09-06，版本偏斜）
 
