@@ -2906,7 +2906,8 @@ mod tests {
                     readiness_token_required: false,
                 }),
                 update: None,
-            })
+            
+                releases: None,})
             .expect("Harness config writes");
 
         let supervisor = HarnessSupervisor::new(paths.clone()).expect("supervisor creates");
@@ -2965,7 +2966,8 @@ mod tests {
                     readiness_token_required: false,
                 }),
                 update: None,
-            })
+            
+                releases: None,})
             .expect("Harness config writes");
         let supervisor = HarnessSupervisor::new(paths).expect("supervisor creates");
         let mut foreign = supervisor
@@ -3089,7 +3091,8 @@ mod tests {
                     readiness_token_required: false,
                 }),
                 update: None,
-            })
+            
+                releases: None,})
             .expect("Harness config writes");
         let supervisor = HarnessSupervisor::new(paths).expect("supervisor creates");
         supervisor.start().await.expect("direct Harness spawns");
@@ -3185,7 +3188,8 @@ mod tests {
                     readiness_token_required: false,
                 }),
                 update: None,
-            })
+            
+                releases: None,})
             .expect("Harness config writes");
         RuntimeMetadataStore::new(paths.clone())
             .update_harness(HarnessRuntimeInfo::starting(999, 10))
@@ -3291,7 +3295,8 @@ mod tests {
                     readiness_token_required: false,
                 }),
                 update: None,
-            })
+            
+                releases: None,})
             .expect("Harness config writes");
         let supervisor = HarnessSupervisor::new(paths).expect("supervisor creates");
         let listener = TcpListener::bind(("127.0.0.1", 0))
@@ -3512,7 +3517,8 @@ mod tests {
                     readiness_token_required: false,
                 }),
                 update: None,
-            })
+            
+                releases: None,})
             .expect("Harness config writes");
 
         let supervisor = HarnessSupervisor::with_graceful_wait(paths, Duration::from_millis(500))
@@ -3584,7 +3590,8 @@ mod tests {
                     readiness_token_required: false,
                 }),
                 update: None,
-            })
+            
+                releases: None,})
             .expect("Harness config writes");
 
         let supervisor = HarnessSupervisor::with_graceful_wait(paths, Duration::from_millis(500))
@@ -3660,7 +3667,8 @@ mod tests {
                     readiness_token_required: true,
                 }),
                 update: None,
-            })
+            
+                releases: None,})
             .expect("Harness config writes");
         let supervisor = HarnessSupervisor::new(paths.clone()).expect("supervisor creates");
         assert_eq!(
@@ -3729,7 +3737,8 @@ mod tests {
                     readiness_token_required: true,
                 }),
                 update: None,
-            })
+            
+                releases: None,})
             .expect("Harness config writes");
         let supervisor = HarnessSupervisor::new(paths.clone()).expect("supervisor creates");
         supervisor.start().await.expect("Harness starts");
@@ -3793,7 +3802,8 @@ mod tests {
                     readiness_token_required: false,
                 }),
                 update: None,
-            })
+            
+                releases: None,})
             .expect("Harness config writes");
 
         let supervisor = HarnessSupervisor::with_graceful_wait(paths, Duration::from_millis(500))
@@ -3871,7 +3881,8 @@ mod tests {
                     readiness_token_required: false,
                 }),
                 update: None,
-            })
+            
+                releases: None,})
             .expect("Harness config writes");
         let supervisor = HarnessSupervisor::new(paths).expect("supervisor creates");
         let (gate_reached_tx, gate_reached_rx) = oneshot::channel();
@@ -3961,7 +3972,8 @@ mod tests {
                     readiness_token_required: false,
                 }),
                 update: None,
-            })
+            
+                releases: None,})
             .expect("Harness config writes");
         let supervisor = HarnessSupervisor::new(paths.clone()).expect("supervisor creates");
         let (gate_reached_tx, gate_reached_rx) = oneshot::channel();
@@ -4047,7 +4059,8 @@ mod tests {
                     readiness_token_required: false,
                 }),
                 update: None,
-            })
+            
+                releases: None,})
             .expect("Harness config writes");
         let supervisor =
             HarnessSupervisor::with_graceful_wait(paths.clone(), Duration::from_millis(100))
@@ -4106,7 +4119,8 @@ mod tests {
                     readiness_token_required: false,
                 }),
                 update: None,
-            })
+            
+                releases: None,})
             .expect("Harness config writes");
         let supervisor = HarnessSupervisor::new(paths.clone()).expect("supervisor creates");
         fs::create_dir_all(&paths.state_file).expect("state path becomes unwritable");
@@ -4162,7 +4176,8 @@ mod tests {
                     readiness_token_required: false,
                 }),
                 update: None,
-            })
+            
+                releases: None,})
             .expect("Harness config writes");
         let supervisor = HarnessSupervisor::with_graceful_wait(paths, Duration::from_millis(100))
             .expect("supervisor creates");
@@ -4211,7 +4226,8 @@ mod tests {
                     readiness_token_required: false,
                 }),
                 update: None,
-            })
+            
+                releases: None,})
             .expect("Harness config writes");
         let supervisor = HarnessSupervisor::with_graceful_wait(paths, Duration::from_millis(500))
             .expect("supervisor creates");
@@ -4294,7 +4310,8 @@ mod tests {
                     readiness_token_required: false,
                 }),
                 update: None,
-            })
+            
+                releases: None,})
             .expect("Harness config writes");
         let supervisor = HarnessSupervisor::with_graceful_wait(paths, Duration::from_millis(100))
             .expect("supervisor creates");
@@ -4404,7 +4421,8 @@ mod tests {
                     readiness_token_required: false,
                 }),
                 update: None,
-            })
+            
+                releases: None,})
             .expect("Harness config writes");
         let supervisor = HarnessSupervisor::new(paths).expect("supervisor creates");
         let _ = supervisor.start().await.expect("process spawns");
@@ -4450,7 +4468,8 @@ mod tests {
                     readiness_token_required: false,
                 }),
                 update: None,
-            })
+            
+                releases: None,})
             .expect("Harness config writes");
         let supervisor = HarnessSupervisor::new(paths).expect("supervisor creates");
         let previous = HarnessRuntimeInfo::running(42, 10, 11);
@@ -4504,7 +4523,8 @@ mod tests {
                     readiness_token_required: false,
                 }),
                 update: None,
-            })
+            
+                releases: None,})
             .expect("Harness config writes");
         let supervisor = HarnessSupervisor::new(paths).expect("supervisor creates");
         {
@@ -4591,7 +4611,8 @@ mod tests {
                     readiness_token_required: false,
                 }),
                 update: None,
-            })
+            
+                releases: None,})
             .expect("Harness config writes");
         let supervisor = HarnessSupervisor::new(paths).expect("supervisor creates");
         let mut short = if cfg!(windows) {
@@ -4868,7 +4889,8 @@ mod tests {
                     readiness_token_required: true,
                 }),
                 update: None,
-            })
+            
+                releases: None,})
             .expect("Harness config writes");
         RuntimeMetadataStore::new(paths.clone())
             .update_harness(HarnessRuntimeInfo::starting(999, 10))
@@ -4917,7 +4939,8 @@ mod tests {
                     readiness_token_required: false,
                 }),
                 update: None,
-            })
+            
+                releases: None,})
             .expect("Harness config writes");
         RuntimeMetadataStore::new(paths.clone())
             .update_harness(HarnessRuntimeInfo::starting(999, 10))
@@ -5189,7 +5212,8 @@ mod tests {
                     readiness_token_required: false,
                 }),
                 update: None,
-            })
+            
+                releases: None,})
             .expect("Harness config writes");
         let first = HarnessSupervisor::new(paths.clone()).expect("first supervisor creates");
         let mut prepared = first
@@ -5269,7 +5293,8 @@ mod tests {
                     readiness_token_required: false,
                 }),
                 update: None,
-            })
+            
+                releases: None,})
             .expect("Harness config writes");
 
         let supervisor = HarnessSupervisor::new(paths).expect("supervisor creates");
@@ -5374,7 +5399,8 @@ mod tests {
                     readiness_token_required: false,
                 }),
                 update: None,
-            })
+            
+                releases: None,})
             .expect("Harness config writes");
         let supervisor = HarnessSupervisor::new(paths.clone()).expect("supervisor creates");
         supervisor.start().await.expect("bootstrap starts");
@@ -5449,7 +5475,8 @@ mod tests {
                     readiness_token_required: false,
                 }),
                 update: None,
-            })
+            
+                releases: None,})
             .expect("Harness config writes");
         let first = HarnessSupervisor::new(paths.clone()).expect("first supervisor creates");
         let mut prepared = first
@@ -5526,7 +5553,8 @@ mod tests {
                     readiness_token_required: true,
                 }),
                 update: None,
-            })
+            
+                releases: None,})
             .expect("Harness config writes");
         let supervisor =
             HarnessSupervisor::with_graceful_wait(paths.clone(), Duration::from_millis(100))
@@ -5756,7 +5784,8 @@ mod tests {
                     readiness_token_required: false,
                 }),
                 update: None,
-            })
+            
+                releases: None,})
             .expect("Harness config writes");
         let supervisor =
             HarnessSupervisor::with_graceful_wait(paths.clone(), Duration::from_millis(100))
@@ -5882,7 +5911,8 @@ mod tests {
                     readiness_token_required: false,
                 }),
                 update: None,
-            })
+            
+                releases: None,})
             .expect("Harness config writes");
         RuntimeMetadataStore::new(paths.clone())
             .update_harness(HarnessRuntimeInfo::running(999, 10, 11))
@@ -5997,7 +6027,8 @@ mod tests {
                     readiness_token_required: false,
                 }),
                 update: None,
-            })
+            
+                releases: None,})
             .expect("Harness config writes");
         let supervisor = HarnessSupervisor::new(paths.clone()).expect("supervisor creates");
         let target = ReadinessTarget::parse(&format!("http://127.0.0.1:{}/health", address.port()))

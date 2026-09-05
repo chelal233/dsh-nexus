@@ -804,10 +804,16 @@ struct ReleasePointerDocument {
 
 /// Durable store for immutable release manifests and atomic current/LKG
 /// pointers. It never downloads, builds, or edits Harness source.
+/// Release slots are bounded so an unbounded stream of installed upstream
+/// tags can never fill the data root silently. The user removes slots
+/// explicitly; Nexus never auto-deletes one.
+pub const DEFAULT_MAX_RELEASE_SLOTS: usize = 3;
+
 #[derive(Clone)]
 pub struct ReleaseStore {
     paths: NexusPaths,
     write_gate: Arc<Mutex<()>>,
+    max_slots: usize,
 }
 
 impl ReleaseStore {
@@ -815,7 +821,29 @@ impl ReleaseStore {
         Self {
             paths,
             write_gate: Arc::new(Mutex::new(())),
+            max_slots: DEFAULT_MAX_RELEASE_SLOTS,
         }
+    }
+
+    pub fn with_max_slots(mut self, max_slots: usize) -> Self {
+        self.max_slots = max_slots.max(1);
+        self
+    }
+
+    fn ensure_slot_capacity(&self, catalog: &ReleaseCatalog) -> io::Result<()> {
+        if catalog.releases.len() >= self.max_slots {
+            let ids: Vec<&str> = catalog.releases.iter().map(|item| item.id.as_str()).collect();
+            return Err(io::Error::new(
+                io::ErrorKind::ResourceBusy,
+                format!(
+                    "release slots are full ({}/{}); remove a slot first: {}",
+                    catalog.releases.len(),
+                    self.max_slots,
+                    ids.join(", ")
+                ),
+            ));
+        }
+        Ok(())
     }
 
     pub fn paths(&self) -> &NexusPaths {
@@ -888,6 +916,7 @@ impl ReleaseStore {
                 format!("release {id} is already registered"),
             ));
         }
+        self.ensure_slot_capacity(&catalog)?;
         let manifest = ReleaseManifest {
             id: id.to_owned(),
             version: version.to_owned(),
@@ -944,6 +973,7 @@ impl ReleaseStore {
             ));
         }
 
+        self.ensure_slot_capacity(&catalog)?;
         let slot_dir = self.slot_dir(id)?;
         if slot_dir.exists() {
             return Err(io::Error::new(
@@ -988,6 +1018,39 @@ impl ReleaseStore {
             }
             self.write_pointers(&catalog)?;
         }
+        Ok(catalog)
+    }
+
+    /// Remove one non-selected release slot. The current and last-known-good
+    /// slots are protected: promoting another slot first is the explicit path.
+    /// The manifest-bearing directory is the disk truth, so removing it is the
+    /// whole operation; pointers never referenced the removed id here.
+    pub fn remove(&self, id: &str) -> io::Result<ReleaseCatalog> {
+        validate_release_id(id)?;
+        let _guard = self.lock_gate()?;
+        let mut catalog = self.load_unlocked()?;
+        if catalog.find(id).is_none() {
+            return Err(io::Error::new(
+                io::ErrorKind::NotFound,
+                format!("release {id} was not found"),
+            ));
+        }
+        if catalog.current_release.as_deref() == Some(id) {
+            return Err(io::Error::new(
+                io::ErrorKind::ResourceBusy,
+                format!("release {id} is the current slot; promote another release first"),
+            ));
+        }
+        if catalog.last_known_good.as_deref() == Some(id) {
+            return Err(io::Error::new(
+                io::ErrorKind::ResourceBusy,
+                format!("release {id} is the last-known-good slot; promote another release first"),
+            ));
+        }
+        let slot_dir = self.slot_dir(id)?;
+        fs::remove_dir_all(&slot_dir)?;
+        catalog.releases.retain(|item| item.id != id);
+        catalog.normalize()?;
         Ok(catalog)
     }
 
@@ -2484,6 +2547,52 @@ mod tests {
     }
 
     #[test]
+    fn release_store_rejects_register_when_slots_full() {
+        let root = unique_test_root("releases-full");
+        let paths = NexusPaths::from_root(root.clone());
+        let store = super::ReleaseStore::new(paths.clone()).with_max_slots(2);
+        store
+            .register("harness-a", "1", None, None)
+            .expect("first slot registers");
+        store
+            .register("harness-b", "2", None, None)
+            .expect("second slot registers");
+        let error = store
+            .register("harness-c", "3", None, None)
+            .expect_err("third slot must be rejected when full");
+        assert_eq!(error.kind(), std::io::ErrorKind::ResourceBusy);
+        assert!(error.to_string().contains("release slots are full (2/2)"));
+        let catalog = store.load().expect("catalog still loads");
+        assert_eq!(catalog.releases.len(), 2);
+    }
+
+    #[test]
+    fn release_store_remove_rejects_selected_slots_and_deletes_free_ones() {
+        let root = unique_test_root("releases-remove");
+        let paths = NexusPaths::from_root(root.clone());
+        let store = super::ReleaseStore::new(paths.clone());
+        store
+            .register("harness-a", "1", None, None)
+            .expect("alpha registers");
+        store
+            .register("harness-b", "2", None, None)
+            .expect("beta registers");
+        store.promote("harness-a").expect("alpha promoted");
+
+        let protected = store.remove("harness-a").expect_err("current is protected");
+        assert_eq!(protected.kind(), std::io::ErrorKind::ResourceBusy);
+        assert!(paths.releases_dir.join("harness-a").exists());
+
+        let removed = store.remove("harness-b").expect("free slot is removed");
+        assert!(removed.find("harness-b").is_none());
+        assert!(!paths.releases_dir.join("harness-b").exists());
+        assert_eq!(removed.current_release.as_deref(), Some("harness-a"));
+
+        let missing = store.remove("harness-b").expect_err("already removed");
+        assert_eq!(missing.kind(), std::io::ErrorKind::NotFound);
+    }
+
+    #[test]
     fn release_store_registers_promotes_and_rolls_back_atomically() {
         let root = unique_test_root("releases");
         let paths = NexusPaths::from_root(root.clone());
@@ -3077,6 +3186,7 @@ mod tests {
                 verify_args: Vec::new(),
                 timeout_secs: Some(30),
             }),
+            releases: None,
         };
 
         store.write(&document).expect("config writes");
@@ -4168,6 +4278,25 @@ pub struct NexusConfigFile {
     pub harness: Option<HarnessLaunchSpec>,
     #[serde(default)]
     pub update: Option<UpdateSpec>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub releases: Option<ReleasesConfig>,
+}
+
+/// Nexus-owned release slot capacity settings.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ReleasesConfig {
+    #[serde(default = "default_max_release_slots")]
+    pub max_slots: u32,
+}
+
+impl ReleasesConfig {
+    pub fn max_slots_usize(&self) -> usize {
+        self.max_slots as usize
+    }
+}
+
+fn default_max_release_slots() -> u32 {
+    DEFAULT_MAX_RELEASE_SLOTS as u32
 }
 
 /// Nexus-owned configuration writer. It owns only `config.json`; Harness
@@ -4221,6 +4350,14 @@ fn validate_config_document(document: &NexusConfigFile) -> io::Result<()> {
     }
     if let Some(update) = &document.update {
         update.validate()?;
+    }
+    if let Some(releases) = &document.releases {
+        if releases.max_slots == 0 || releases.max_slots > 32 {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "releases.max_slots must be between 1 and 32",
+            ));
+        }
     }
     Ok(())
 }

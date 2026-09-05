@@ -32,7 +32,8 @@ use nexus_core::{
     CheckpointRestoreJournal, CheckpointRestoreJournalStore, CheckpointRestorePhase,
     CheckpointStore, ConfigStore, DiagnosticsStore, HarnessLaunchSpec, HarnessLogSession,
     HarnessLogSessionStore, NexusConfig, NexusConfigFile, NexusStateSnapshot, ProfileCatalog,
-    ProfileStore, ReleaseCatalog, ReleaseStore, UpdateSpec, DEFAULT_PROFILE, HARNESS_ARGS_ENV,
+    ProfileStore, ReleaseCatalog, ReleaseStore, UpdateSpec, DEFAULT_MAX_RELEASE_SLOTS,
+    DEFAULT_PROFILE, HARNESS_ARGS_ENV,
     HARNESS_PROGRAM_ENV, HARNESS_READINESS_TIMEOUT_ENV, HARNESS_READINESS_URL_ENV,
     HARNESS_WORKING_DIR_ENV, UPDATE_BUILD_ARGS_ENV, UPDATE_BUILD_PROGRAM_ENV,
     UPDATE_GIT_PROGRAM_ENV, UPDATE_REF_ENV, UPDATE_SOURCE_ENV, UPDATE_TIMEOUT_ENV,
@@ -180,7 +181,16 @@ pub async fn run_with_instance_id(
 
     let profiles = ProfileStore::new(paths.clone());
     let checkpoints = CheckpointStore::new(paths.clone());
-    let releases = ReleaseStore::new(paths.clone());
+    let releases = {
+        let config_store = ConfigStore::new(paths.clone());
+        let max_slots = config_store
+            .load()
+            .ok()
+            .and_then(|config| config.releases)
+            .map(|releases| releases.max_slots_usize())
+            .unwrap_or(DEFAULT_MAX_RELEASE_SLOTS);
+        ReleaseStore::new(paths.clone()).with_max_slots(max_slots)
+    };
     let checkpoint_restores = CheckpointRestoreJournalStore::new(paths.clone());
     recover_checkpoint_restore_startup(&checkpoint_restores, &profiles, &releases)?;
     let profile_catalog = profiles.load()?;
@@ -1306,6 +1316,9 @@ async fn release_control(
                 Ok(catalog) => {
                     (StatusCode::CREATED, Json(release_list_response(catalog))).into_response()
                 }
+                Err(error) if error.kind() == io::ErrorKind::ResourceBusy => {
+                    data_error_response(error, "release_slots_full")
+                }
                 Err(error) => data_error_response(error, "release_register_failed"),
             }
         }
@@ -1336,6 +1349,42 @@ async fn release_control(
             let catalog = match state.releases.promote(id) {
                 Ok(catalog) => catalog,
                 Err(error) => return data_error_response(error, "release_promote_failed"),
+            };
+            apply_release_catalog(&state, catalog).await
+        }
+        ReleaseAction::Remove => {
+            let Some(id) = command.id.as_deref() else {
+                return data_error_response(
+                    io::Error::new(io::ErrorKind::InvalidInput, "release id is required"),
+                    "release_invalid",
+                );
+            };
+            let lifecycle = state.supervisor.acquire_lifecycle().await;
+            if let Err(error) = settle_checkpoint_restore(&state).await {
+                return data_error_response(
+                    io::Error::other(error.to_string()),
+                    "checkpoint_recovery_failed",
+                );
+            }
+            if let Err(response) = ensure_harness_selection_quiescent(
+                &state,
+                &lifecycle,
+                "release_change_conflict",
+                "cannot remove a release until Harness is positively stopped and unowned",
+            )
+            .await
+            {
+                return response;
+            }
+            let catalog = match state.releases.remove(id) {
+                Ok(catalog) => catalog,
+                Err(error) if error.kind() == io::ErrorKind::ResourceBusy => {
+                    return data_error_response(error, "release_slot_protected");
+                }
+                Err(error) if error.kind() == io::ErrorKind::NotFound => {
+                    return data_error_response(error, "release_not_found");
+                }
+                Err(error) => return data_error_response(error, "release_remove_failed"),
             };
             apply_release_catalog(&state, catalog).await
         }
@@ -1629,6 +1678,7 @@ fn config_response_for_paths(
     let effective = NexusConfigFile {
         harness: load_harness_launch_spec(paths)?.or(document.harness),
         update: load_update_spec(paths)?.or(document.update),
+        releases: None,
     };
     Ok(config_response(effective)
         .with_environment_overrides(harness_env_override, update_env_override))
@@ -1816,7 +1866,7 @@ fn data_error_response(error: io::Error, fallback_code: &str) -> axum::response:
     let status = match error.kind() {
         io::ErrorKind::InvalidInput | io::ErrorKind::InvalidData => StatusCode::BAD_REQUEST,
         io::ErrorKind::NotFound => StatusCode::NOT_FOUND,
-        io::ErrorKind::AlreadyExists => StatusCode::CONFLICT,
+        io::ErrorKind::AlreadyExists | io::ErrorKind::ResourceBusy => StatusCode::CONFLICT,
         _ => StatusCode::INTERNAL_SERVER_ERROR,
     };
     api_error_response(status, fallback_code, error.to_string())
@@ -1941,7 +1991,7 @@ async fn wait_for_shutdown(mut receiver: watch::Receiver<bool>) {
 
 #[cfg(test)]
 mod cors_tests {
-    use super::{
+    use super::{DEFAULT_MAX_RELEASE_SLOTS, 
         acquire_runtime_lock, are_allowed_cors_headers, harness_ui_process_is_presentable,
         is_allowed_console_origin_for_port, is_allowed_cors_method, proxy_identity_values_match,
         redact_config_args, redact_config_url, PROXY_DATA_ROOT_HEADER, PROXY_INSTANCE_HEADER,
@@ -2164,7 +2214,7 @@ mod checkpoint_tests {
     };
 
     use super::{
-        checkpoint_create, checkpoint_restore, execute_harness_action,
+        checkpoint_create, checkpoint_restore, execute_harness_action, DEFAULT_MAX_RELEASE_SLOTS,
         recover_checkpoint_restore_startup, sync_harness_state, update_agent_state, AppState,
         CheckpointTransitionGate, HarnessSupervisor, UpdateExecutor,
     };
@@ -2223,7 +2273,16 @@ mod checkpoint_tests {
         ));
         let paths = NexusPaths::from_root(root.clone());
         let profiles = ProfileStore::new(paths.clone());
-        let releases = ReleaseStore::new(paths.clone());
+        let releases = {
+        let config_store = ConfigStore::new(paths.clone());
+        let max_slots = config_store
+            .load()
+            .ok()
+            .and_then(|config| config.releases)
+            .map(|releases| releases.max_slots_usize())
+            .unwrap_or(DEFAULT_MAX_RELEASE_SLOTS);
+        ReleaseStore::new(paths.clone()).with_max_slots(max_slots)
+    };
         let journals = CheckpointRestoreJournalStore::new(paths.clone());
         releases
             .register("harness-a", "a", None, None)
@@ -2318,7 +2377,16 @@ mod checkpoint_tests {
         ));
         let paths = NexusPaths::from_root(root.clone());
         paths.ensure_directories().expect("directories create");
-        let releases = ReleaseStore::new(paths.clone());
+        let releases = {
+        let config_store = ConfigStore::new(paths.clone());
+        let max_slots = config_store
+            .load()
+            .ok()
+            .and_then(|config| config.releases)
+            .map(|releases| releases.max_slots_usize())
+            .unwrap_or(DEFAULT_MAX_RELEASE_SLOTS);
+        ReleaseStore::new(paths.clone()).with_max_slots(max_slots)
+    };
         releases
             .register("harness-a", "a", None, None)
             .expect("release A registers");
@@ -2356,7 +2424,8 @@ mod checkpoint_tests {
                     readiness_token_required: false,
                 }),
                 update: None,
-            })
+            
+                releases: None,})
             .expect("Harness config writes");
         let profiles = ProfileStore::new(paths.clone());
         profiles.load().expect("default profile creates");

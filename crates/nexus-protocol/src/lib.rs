@@ -567,6 +567,7 @@ pub enum ReleaseAction {
     Register,
     Promote,
     Rollback,
+    Remove,
 }
 
 impl Default for ReleaseAction {

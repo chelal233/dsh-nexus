@@ -555,7 +555,8 @@ def	refs/tags/v0.9.0^{}
                     verify_args: Vec::new(),
                     timeout_secs: Some(5),
                 }),
-            })
+            
+                releases: None,})
             .expect("update config writes");
         let executor = UpdateExecutor::new(paths.clone(), ReleaseStore::new(paths));
         let (started, started_rx) = oneshot::channel();
