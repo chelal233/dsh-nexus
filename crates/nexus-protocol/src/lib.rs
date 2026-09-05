@@ -539,6 +539,42 @@ impl ReleaseListResponse {
     }
 }
 
+/// Status of one external runtime tool as observed on this machine.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct RuntimeToolStatus {
+    pub name: String,
+    pub available: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub version: Option<String>,
+    /// "system" when resolved from PATH, "nexus" when a Nexus-owned portable
+    /// runtime. For an unusable candidate, source/path identify what was
+    /// rejected; both are absent when no candidate was found.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub path: Option<String>,
+    /// Stable machine-readable reason when a discovered candidate is not
+    /// usable, for example `not_found` or `corepack_shim_unverified`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
+}
+
+/// Read-only runtime environment observation for the settings UI.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct RuntimeListResponse {
+    pub api_version: String,
+    pub tools: Vec<RuntimeToolStatus>,
+}
+
+impl RuntimeListResponse {
+    pub fn new(tools: Vec<RuntimeToolStatus>) -> Self {
+        Self {
+            api_version: API_VERSION.to_owned(),
+            tools,
+        }
+    }
+}
+
 /// Read-only enumeration of upstream git tags for the configured update
 /// source. Tag names are rendered without the `refs/tags/` prefix and without
 /// peeled `^{}` duplicates.
@@ -935,7 +971,8 @@ mod tests {
         HarnessCommand, HarnessConfigPayload, HarnessLaunchMode, HarnessResponse,
         HarnessRuntimeInfo, HarnessState, LifecycleAction, LifecycleCommand, ProfileListResponse,
         ProfileSelectRequest, ReleaseAction, ReleaseCommand, ReleaseListResponse, ReleaseManifest,
-        UpdateAction, UpdateCommand, UpdateResponse, UpdateRuntimeInfo,
+        RuntimeListResponse, RuntimeToolStatus, UpdateAction, UpdateCommand, UpdateResponse,
+        UpdateRuntimeInfo,
     };
 
     #[test]
@@ -1009,6 +1046,53 @@ mod tests {
         assert_eq!(runtime.exit_code, Some(17));
         assert_eq!(runtime.error.as_deref(), Some("child exited"));
         assert_eq!(runtime.pid, None);
+    }
+
+    #[test]
+    fn runtime_list_round_trips_sources_paths_and_unavailable_tools() {
+        let response = RuntimeListResponse::new(vec![
+            RuntimeToolStatus {
+                name: "node".to_owned(),
+                available: true,
+                version: Some("v24.19.0".to_owned()),
+                source: Some("system".to_owned()),
+                path: Some("C:\\Program Files\\nodejs\\node.exe".to_owned()),
+                reason: None,
+            },
+            RuntimeToolStatus {
+                name: "pnpm".to_owned(),
+                available: true,
+                version: Some("10.15.0".to_owned()),
+                source: Some("nexus".to_owned()),
+                path: Some("C:\\Users\\test\\Nexus\\runtimes\\pnpm.cmd".to_owned()),
+                reason: None,
+            },
+            RuntimeToolStatus {
+                name: "git".to_owned(),
+                available: false,
+                version: None,
+                source: None,
+                path: None,
+                reason: Some("not_found".to_owned()),
+            },
+        ]);
+        let json = serde_json::to_value(&response).expect("runtime list serializes");
+        assert_eq!(json["api_version"], "v1");
+        assert_eq!(json["tools"][0]["source"], "system");
+        assert_eq!(json["tools"][1]["source"], "nexus");
+        assert!(json["tools"][2].get("version").is_none());
+        assert!(json["tools"][2].get("path").is_none());
+
+        let decoded: RuntimeListResponse =
+            serde_json::from_value(json).expect("runtime list deserializes");
+        assert_eq!(decoded, response);
+
+        let legacy: RuntimeToolStatus = serde_json::from_value(serde_json::json!({
+            "name": "git",
+            "available": false
+        }))
+        .expect("legacy runtime status deserializes");
+        assert_eq!(legacy.reason, None);
     }
 
     #[test]

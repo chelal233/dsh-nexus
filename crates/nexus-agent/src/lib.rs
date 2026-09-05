@@ -56,6 +56,7 @@ use tokio::{
     sync::{watch, Mutex, RwLock},
 };
 
+mod runtime;
 mod supervisor;
 mod updater;
 
@@ -277,6 +278,7 @@ fn build_router(state: AppState) -> Router {
         )
         .route("/v1/releases", get(release_list).post(release_control))
         .route("/v1/releases/tags", get(release_tags))
+        .route("/v1/runtime", get(runtime_status))
         .route("/v1/updates", get(update_status).post(update_control))
         .route(
             "/v1/diagnostics",
@@ -1263,6 +1265,44 @@ async fn release_list(State(state): State<AppState>) -> axum::response::Response
         Ok(catalog) => (StatusCode::OK, Json(release_list_response(catalog))).into_response(),
         Err(error) => data_error_response(error, "release_catalog_unavailable"),
     }
+}
+
+async fn runtime_status(State(state): State<AppState>) -> axum::response::Response {
+    runtime_status_for_paths(&state.paths).await
+}
+
+#[cfg(test)]
+mod runtime_route_tests {
+    use super::runtime_status_for_paths;
+    use axum::{body::to_bytes, http::StatusCode};
+    use nexus_core::NexusPaths;
+
+    #[tokio::test]
+    async fn runtime_route_returns_versioned_tool_list() {
+        let root = std::env::temp_dir().join(format!(
+            "nexus-agent-runtime-route-{}",
+            std::process::id()
+        ));
+        let paths = NexusPaths::from_root(root.clone());
+        std::fs::create_dir_all(paths.root.join("runtimes")).expect("runtime root creates");
+
+        let response = runtime_status_for_paths(&paths).await;
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = to_bytes(response.into_body(), 64 * 1024)
+            .await
+            .expect("runtime response body reads");
+        let body = std::str::from_utf8(&body).expect("runtime response is UTF-8");
+        assert!(body.contains("\"api_version\":\"v1\""));
+        assert!(body.contains("\"name\":\"git\""));
+        assert!(body.contains("\"name\":\"node\""));
+        assert!(body.contains("\"name\":\"pnpm\""));
+        let _ = std::fs::remove_dir_all(root);
+    }
+}
+
+async fn runtime_status_for_paths(paths: &nexus_core::NexusPaths) -> axum::response::Response {
+    let response = runtime::observe_runtimes(paths).await;
+    (StatusCode::OK, Json(response)).into_response()
 }
 
 async fn release_tags(State(state): State<AppState>) -> axum::response::Response {
