@@ -2,6 +2,14 @@ updated: 2026-09-05 by Codex (P0 快照内容引擎已接入 Agent，恢复事�
 
 # dsh-nexus 项目状态与需求基线
 
+## P0 反馈第四轮（2026-09-05）
+
+1. 冷切换状态块**条件渲染**：仅当 operationId 存在或 updateState 非 idle 时出现（含确认计划时内联显示），空闲时整块消失
+2. 标签按钮按本地槽位状态显示「切换到此标签」(已装) / 「拉取此标签」(未装)，判断=releases[].version===selectedTag
+3. 版本槽位行内加「切换到此版本」(promote)——秒切主入口；「释放」仍只对非 current/LKG 显示
+4. 「确认运行时供应计划」从独立面板改为内联在上游标签与冷切换面板内（待确认时显示在进度块之前）
+5. 删除「检查点」导航项（配置档枢纽内已有，CheckpointsView 保留 embedded 用途）
+
 ## P0 反馈第三轮（2026-09-05，accordion）
 
 配置档目录改为**手风琴树**：默认全部折叠；点击 profile 行（整行可点，带 ▸/▾ 指示）展开/收起其子区域（已保存检查点+快照清单+插件清单）；「查看/查看中」按钮与徽标删除，行内仅保留「选择」（切换当前 profile）；RecoveryDiagnostics 移出子区域、每页只渲染一次（它是全局启动恢复状态）；CheckpointsView 的全局块（healthy 捕获错误/待恢复面板）在 embedded 模式下隐藏，避免每个展开的 profile 重复出现。测试改为：折叠断言（▸ 存在、Saved checkpoints/Plugin inventory 不存在）+ 直接渲染 ProfilePlugins 验证清单真实性。
