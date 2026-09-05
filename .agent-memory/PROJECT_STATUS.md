@@ -2,6 +2,15 @@ updated: 2026-09-05 by Codex (P0 快照内容引擎已接入 Agent，恢复事�
 
 # dsh-nexus 项目状态与需求基线
 
+## P0 反馈第五轮（2026-09-05，归位整理）
+
+1. RecoveryDiagnostics（启动恢复状态+日志尾随）**移出配置档**→并入诊断页底部；ProfilesView 不再渲染
+2. 概览 Harness 卡片：state=failed 时出现「查看启动日志尾随」二级展开（RecoveryLogTail）——启动失败日志从概览直达，不再藏在配置档
+3. 设置页「运行时状态」面板（RuntimeStatusPanel+controller）**整体迁至更新页**运行时设置面板内（分隔线下方，手动检查运行时按钮）
+4. 概览删除「Agent 操作」面板：强制重启按钮移入 Agent 生命周期 Metric 卡片
+5. 概览删除「Harness 控制」面板：启动/重启/停止按钮+PID/退出码/最近错误详情移入 Harness Metric 卡片（未运行→启动；运行→重启/停止；failed→重启），卡片内含失败日志二级展开
+6. 新组件 RecoveryLogTail（日志尾随单独抽取）；HarnessControlPanel 组件已删除
+
 ## P0 反馈第四轮（2026-09-05）
 
 1. 冷切换状态块**条件渲染**：仅当 operationId 存在或 updateState 非 idle 时出现（含确认计划时内联显示），空闲时整块消失
