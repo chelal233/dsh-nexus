@@ -1,6 +1,12 @@
 # Nexus architecture baseline
 
-Status: Phase 14 shared Agent runtime and direct Tauri API boundary
+Status: Architecture handoff — current baseline and confirmed target
+
+This document separates the current baseline from the confirmed target. A
+`Current baseline` paragraph describes behavior or metadata already present in
+the current phase. A `Confirmed target` paragraph records an agreed direction
+that is still pending implementation or acceptance. `Open` items remain
+unverified; they must not be read as shipped behavior.
 
 ## Purpose
 
@@ -8,6 +14,11 @@ Nexus is a headless control plane around the standalone DeepSeek Harness. The
 implementation provides a Rust Agent, a versioned local protocol, a CLI, a
 headless Launcher API, and a native Tauri operator shell. It does not modify
 or vendor Harness source code.
+
+The product boundary is explicit: Launcher owns UI navigation, presentation,
+and Agent transport, while Agent owns business state and lifecycle behavior.
+Launcher is a replaceable UI shell and must not become a second owner of Agent
+business rules. Harness upstream source remains unchanged.
 
 ## Non-negotiable boundaries
 
@@ -18,16 +29,20 @@ Harness fork or edit any Harness source, package manifest, lockfile, or build
 configuration. Harness updates are installed as separate, immutable release
 slots and are driven through its documented CLI/runtime entry points.
 
-Nexus may provide external profile configuration, external patches, and
-separately owned plugins. If an external overlay fails, Nexus disables or
-rolls it back; it does not repair the Harness source tree.
+Nexus may carry compatibility profile metadata, external patches, and
+separately owned plugins. The current catalog is only a legacy bridge; the
+confirmed target delegates Profile create/switch to Harness-native behavior.
+If an external overlay fails, Nexus disables or rolls it back; it does not
+repair the Harness source tree.
 
 ### Agent owns lifecycle and recovery
 
-The Nexus Agent is the product's headless control plane. It owns the future
-state machines for Harness process supervision, profile selection, release
+The Nexus Agent is the product's headless control plane. It owns the state
+machines for Harness process supervision, profile selection, release
 promotion/rollback, checkpoints, safe mode, diagnostics, and external plugin
-activation. These responsibilities must remain usable without any GUI.
+activation. These responsibilities must remain usable without any GUI. The
+future profile operation is Harness-native; the current Nexus catalog is only
+a legacy metadata bridge until that native path is implemented.
 
 The Agent state now reports its own lifecycle and the externally supervised
 Harness process. Harness remains an immutable, replaceable upstream binary;
@@ -79,8 +94,9 @@ apps/nexus-launcher  native Tauri 2 shell with direct Agent loopback proxy
 
 These are separate processes with different responsibilities:
 
-- `nexus-agent.exe` is the independent long-lived control-plane process. It
-  listens on port 3090 and owns Nexus state and Harness supervision.
+- `nexus-agent.exe` is the independent long-lived control-plane process. The
+  current baseline listens on loopback port 3090 and owns Nexus state and
+  Harness supervision.
 - `nexus-launcher-app.exe` is the replaceable native Tauri shell. It starts or
   probes `nexus-agent.exe` through the shared core, proxies local `/v1/*`
   requests through Rust, and owns only GUI, tray, notification, theme, and
@@ -92,6 +108,12 @@ These are separate processes with different responsibilities:
   Agent and exits; it is not a daemon and does not host Agent.
 - The configured Harness runtime is another process started and supervised by
   Agent. It remains an immutable upstream runtime.
+
+Confirmed target: Agent asks the OS for a free loopback port (`port 0`) and
+Launcher discovers the resulting endpoint by the Agent's identity/health
+contract. That internal port is an implementation detail and does not enter
+the UI contract. This target is not implemented or runtime-accepted in this
+handoff.
 
 Stopping the native shell or headless Launcher host does not implicitly stop
 Agent. An explicit Launcher/UI stop request is required when the independent
@@ -136,12 +158,20 @@ The Agent exposes:
   unavailable sessions fail closed. A PID-less recovered descendant may publish
   credentials only after Agent rotates a fresh durable log boundary; this
   read-only handoff never enables lifecycle control.
-- `GET|POST /v1/profiles` — list/status the Nexus catalog or select a profile;
-  selecting while Harness is starting/running returns a readable conflict and
-  never performs an implicit restart.
-- `GET|POST /v1/checkpoints` — list, create, or restore Nexus-only manifests.
-  Restore is rejected while Harness is running; after it succeeds, Agent state
-  adopts the saved profile/release metadata but does not start Harness.
+- `GET|POST /v1/profiles` — current baseline lists/statuses the legacy Nexus
+  catalog or selects its metadata; selecting while Harness is starting/running
+  returns a readable conflict and never performs an implicit restart. The
+  confirmed target (pending implementation and acceptance) treats Profile as
+  Harness-native and adds native create/switch operations without a delete
+  operation in this scope. The
+  catalog must not be mistaken for that native implementation.
+- `GET|POST /v1/checkpoints` — current baseline lists, creates, or restores
+  Nexus-only manifest metadata. Restore is rejected while Harness is running;
+  after it succeeds, Agent state adopts the saved profile/release metadata but
+  does not start Harness. The confirmed snapshot target permits only
+  declarative profile/config data, excludes credentials and sessions, and
+  uses healthy-start N/default-3 rotation plus a manual journal; the current
+  implementation remains manifest-only and has not been upgraded.
 - `GET|POST /v1/releases` — list/current, register an immutable slot manifest,
   promote a registered slot, or swap current with last-known-good. Promotion
   and rollback are rejected while Harness is starting/running; registration is
@@ -158,11 +188,13 @@ The Agent exposes:
   orphan the command or authorize a concurrent install/configuration change.
   Spawned commands are also kill-on-runtime-drop; after an Agent restart, a
   durable stale `running` record is failed closed before another install begins.
-- `GET|POST /v1/diagnostics` — list or collect bounded Nexus-only diagnostic
-  bundles. Collection copies runtime metadata and text logs into a new
-  `diagnostics/<id>/` directory, redacting common credential-bearing lines and
-  omitting binary payloads. It never traverses `$HOME/.dsh`, Harness data, or
-  the process environment.
+- `GET|POST /v1/diagnostics` — current baseline lists or collects bounded
+  Nexus-owned diagnostic bundles. Collection copies runtime metadata and text
+  logs into a new `diagnostics/<id>/` directory, redacting common
+  credential-bearing lines and omitting binary payloads. The path boundary is
+  an implementation policy, not a blanket claim about every future runtime
+  integration; any `.dsh`/`DSH_HOME` access would require an explicit,
+  separately scoped contract.
 - `GET|POST /v1/config` — inspect or mutate the Nexus-owned Harness launch and
   external update specifications. Mutations validate all paths, arguments,
   refs, and URLs before an atomic write to `config.json`; changing Harness
@@ -269,17 +301,22 @@ established the fresh log boundary above and the parser observes bytes after
 that watermark. Thus an active Harness can remain usable after a replacement
 while stale credentials remain excluded.
 
-The default listener is `127.0.0.1:3090`, deliberately separate from the
-current Harness Web port. No remote bind option is exposed in this phase. The
-shared client preserves loopback-only transport, bounded JSON bodies, and
-data-root/instance identity checks on requests. A separate local
-authentication token remains a future protocol change; the identity contract
-must remain in place before any remote bind is considered.
+Current baseline: the Agent listener is `127.0.0.1:3090`, deliberately
+separate from the current Harness Web port. No remote bind option is exposed
+in this phase. The shared client preserves loopback-only transport, bounded
+JSON bodies, and data-root/instance identity checks on requests. A separate
+local authentication token remains a future protocol change.
+
+Confirmed target: use OS-assigned loopback `port 0`, discover the bound
+endpoint through Agent identity, and keep the internal port out of UI state
+and presentation. The target is pending implementation and runtime
+acceptance; the current 3090 behavior remains the compatibility baseline.
 
 ## Data and path policy
 
-Nexus-owned files are separate from `$DSH_HOME`. The default Nexus data root
-is resolved with platform APIs/environment conventions:
+Current baseline: Nexus-owned files are stored under a Nexus data root resolved
+with platform APIs/environment conventions. The current layout is separate
+from the external Harness working/data directory:
 
 - Windows: `%LOCALAPPDATA%/Nexus`;
 - macOS: `~/Library/Application Support/Nexus`;
@@ -287,6 +324,9 @@ is resolved with platform APIs/environment conventions:
 
 `NEXUS_DATA_DIR` is an explicit override for development and tests. The
 runtime never hard-codes a drive letter or assumes Windows path separators.
+This document does not make an unconditional no-read claim about `.dsh` or
+`DSH_HOME`; any future runtime integration that needs such a path must name it
+in an explicit, reviewed contract. That integration is outside this phase.
 
 The first path model reserves directories for `logs`, `checkpoints`,
 `releases`, `downloads`, and `run`, and stores the profile catalog in
@@ -297,23 +337,28 @@ and the current/last-known-good pointers are atomically published in
 `logs/`. Nexus does not copy credentials, Harness sessions, or secret
 environment values into Nexus state.
 
-Profiles are Nexus-owned names. The default is `web`; names are limited to
-ASCII letters, digits, `.`, `_`, and `-` with a bounded length. The active name
-is persisted with the known names in `profiles.json`. A profile is rendered
-into Harness launch arguments only when a Nexus-owned `HarnessLaunchSpec.args`
-entry explicitly contains the `{profile}` placeholder. Nexus does not infer a
-Harness CLI flag, edit Harness configuration, inject `DSH_HOME`, or read
-`$HOME/.dsh`.
+Current baseline: the Nexus catalog is a legacy metadata bridge. Its active
+name is persisted with the known names in `profiles.json`; the compatibility
+name is `web`, and names are limited to ASCII letters, digits, `.`, `_`, and
+`-` with a bounded length. A profile is rendered into Harness launch
+arguments only when a Nexus-owned `HarnessLaunchSpec.args` entry explicitly
+contains the `{profile}` placeholder. This catalog behavior does not claim
+Nexus ownership of Harness profiles.
 
-Checkpoints are JSON manifests under the Nexus-owned `checkpoints/` directory.
-They record a safe ID, timestamp, profile, release metadata, optional note,
-and a selection-only state containing the same profile and release. New
-manifests never persist Agent lifecycle, Harness runtime, PID, token, or log
-state. Legacy manifests containing the former runtime summary remain readable;
-those extra fields are ignored and are never applied by restore. Writes use an
-atomic same-directory publication. Restore validates that an optional release still names a
-registered, canonical slot and first writes a two-phase intent under `run/`
-containing the exact prior and target profile/current/LKG selections. A
+Confirmed target: Profile is Harness-native. The native integration will
+support create and switch, with no delete operation in this scope. Until that
+integration is implemented and accepted, catalog selection remains the legacy
+metadata bridge.
+
+Current baseline: Checkpoints are JSON manifests under the Nexus-owned
+`checkpoints/` directory. They record a safe ID, timestamp, profile, release
+metadata, optional note, and a selection-only state containing the same profile
+and release. The current implementation remains manifest-only; legacy
+manifests containing the former runtime summary remain readable, while those
+extra fields are ignored and are not applied by restore. Writes use an atomic
+same-directory publication. Restore validates that an optional release still
+names a registered, canonical slot and first writes a two-phase intent under
+`run/` containing the exact prior and target profile/current/LKG selections. A
 detached owner holds the supervisor lifecycle gate while publishing those
 stores and their derived Agent runtime metadata, then marks the intent
 committed. Cancellation cannot abandon a prepared restore. Startup and every
@@ -328,14 +373,19 @@ target, an observed prepared phase rolls back the exact prior selection, and an
 unreadable or changed journal remains for fail-closed recovery instead of
 guessing and rolling back a possibly committed target.
 State, Harness, profile, and release reads use the same gate and return a
-recovery error instead of publishing a pending mixed view.
-Restore applies only this Nexus Harness-selection
-metadata; it never copies, rewrites, or restores `.dsh` user data, Harness
-sessions, or credentials.
+recovery error instead of publishing a pending mixed view. The current restore
+path applies the manifest's Nexus selection metadata only; upstream data,
+sessions, and credentials are outside its manifest contract.
 
-Phase 2 reads optional Harness launch configuration from the Nexus-owned
-`config.json` under the `harness` key (a direct launch-spec object is also
-accepted):
+Confirmed target: a snapshot may contain only declarative `profile` and
+`config` data, never credentials or sessions. Healthy startup uses N rotations
+(default 3) plus a manual journal. This target snapshot schema and rotation
+policy have not upgraded the current manifest-only implementation.
+
+Current baseline: Phase 2 reads optional Harness launch configuration from the
+Nexus-owned `config.json` under the `harness` key (a direct launch-spec object
+is also accepted). The following direct example is retained as a legacy
+parse-compatibility shape:
 
 ```json
 {
@@ -351,12 +401,13 @@ accepted):
 }
 ```
 
-`mode` is optional for legacy documents and defaults to `direct`. In `node`
-mode, `program` is the Node runtime, `entry` is the JavaScript entry point,
-and `args` contains only arguments after that entry. Nexus normalizes the
-entry into the supervised process argument vector without changing the
-upstream Harness. The Settings view exposes both modes and keeps manual
-configuration as a fallback.
+When `mode` is omitted, the current legacy resolver follows its direct
+behavior for compatibility. The old direct parser remains retained and its
+removal is outside this phase. In `node` mode, `program` is the Node runtime,
+`entry` is the JavaScript entry point, and `args` contains only arguments after
+that entry. Node is the only runtime path tested for this handoff; the direct
+path has not been removed or promoted to a tested path. The Settings view
+exposes both modes and keeps manual configuration as a fallback.
 
 `readiness_url` accepts either an HTTP loopback URL (the supervisor requires a
 2xx response) or an explicit `tcp://127.0.0.1:<port>`/`tcp://[::1]:<port>`
@@ -393,11 +444,14 @@ unchanged.
 The fields can be overridden explicitly for development and tests with
 `NEXUS_HARNESS_PROGRAM`, `NEXUS_HARNESS_ARGS` (JSON array or whitespace
 separated), `NEXUS_HARNESS_WORKING_DIR`, `NEXUS_HARNESS_READINESS_URL`, and
-`NEXUS_HARNESS_READINESS_TIMEOUT_SECS`. `NEXUS_DATA_DIR` selects the Nexus
-root containing `config.json`, `state.json`, `profiles.json`, `checkpoints/`,
-`releases/`, `downloads/`, `update-state.json`, `diagnostics/`, and `logs`; it does not select or
-copy `$HOME/.dsh`, `DSH_HOME`, Harness credentials, or Harness session data.
-Nexus never defaults to `$HOME/.dsh`.
+`NEXUS_HARNESS_READINESS_TIMEOUT_SECS`. Current baseline: `NEXUS_DATA_DIR`
+selects the Nexus root containing `config.json`, `state.json`, `profiles.json`,
+`checkpoints/`, `releases/`, `downloads/`, `update-state.json`,
+`diagnostics/`, and `logs`. The current configuration and manifest contract
+keeps credentials and sessions out of persisted Nexus metadata. It does not
+establish an unconditional no-read rule for every runtime component around
+`.dsh` or `DSH_HOME`; any such path must be named by an explicit, reviewed
+integration contract.
 
 `GET /v1/config` reports the effective launch values after these environment
 overrides and marks `harness_env_override`/`update_env_override` so the GUI can
@@ -417,6 +471,11 @@ the Agent-owned `config.json`:
   "wait_secs": 20
 }
 ```
+
+The `agent_port: 3090` example records the current compatibility baseline.
+Confirmed target: the Agent obtains a free loopback port from the OS and the
+Launcher discovers it by identity; the internal port remains out of the UI.
+This target is pending implementation and runtime acceptance.
 
 The effective precedence is `CLI > launcher.json > environment > built-in
 defaults`. `--data-dir` selects the root before that file is loaded and is
@@ -538,13 +597,15 @@ runtime has stopped/returned idle. Setting sections is currently an API-level
 operation so a future Tauri, Electron, browser, or script frontend can supply
 typed forms without taking ownership of persistence or process coordination.
 
-`nexus-agent` is the independent headless host/runtime boundary around
-Harness. It binds the versioned API at `127.0.0.1:3090` by default, owns the
-Nexus data root, starts and supervises the configured Harness, and keeps its
-state usable without a GUI. `nexus-launcher-core` supplies the bounded Agent
-client and common process resolver/start/probe/stop implementation. The
-native Tauri shell uses those contracts directly, so it never starts a
-headless Launcher helper.
+Current baseline: `nexus-agent` is the independent headless host/runtime
+boundary around Harness. It binds the versioned API at `127.0.0.1:3090` by
+default, owns the Nexus data root, starts and supervises the configured
+Harness, and keeps its state usable without a GUI. `nexus-launcher-core`
+supplies the bounded Agent client and common process resolver/start/probe/stop
+implementation. The native Tauri shell uses those contracts directly, so it
+never starts a headless Launcher helper. The confirmed target replaces the
+fixed listener with OS-assigned loopback `port 0` and identity discovery; the
+internal port remains out of the UI and is pending acceptance.
 
 `nexus-launcher` `api` (also its no-argument mode) remains a legacy script
 compatibility client. It may resolve/spawn Agent through the shared core and
@@ -607,6 +668,59 @@ endpoint snapshot and Harness session/token view, renders only the bridge
 error, disables controls, and sends no Agent API requests. Missing,
 unknown, or transitional Harness state likewise disables lifecycle controls.
 
+## Architecture handoff status
+
+### Current baseline
+
+- Launcher is the UI shell for Agent business operations; Agent remains the
+  owner of business state and lifecycle. Harness upstream source is unchanged.
+- Profile handling currently uses the Nexus catalog as a legacy metadata
+  bridge. The native Profile create/switch contract is still a target.
+- Node is the only runtime path tested for this handoff. The legacy direct
+  parser remains retained, and removing it is outside this phase.
+- The current Agent listener is loopback `127.0.0.1:3090`; the OS-assigned
+  port and identity-discovery design below is not yet accepted.
+- Commit `1e1838b` covers tag enumeration, `ec905f3` covers slot
+  capacity/protection/release, and `df3cff0` covers explicit switch with
+  automatic install/promote. These commits do not constitute cold-install
+  build-to-Node-launch acceptance. Ordinary install remains install-only and
+  does not automatically promote; that behavior must not be conflated with
+  explicit switch.
+- The P0-4 runtime draft is in an independent, uncommitted phase. Runtime
+  discovery, portable download, path pinning, source switching, and install
+  confirmation are all target items pending verification.
+
+### Confirmed target (pending implementation and acceptance)
+
+- Snapshot data is limited to declarative `profile` and `config` values; it
+  contains no credentials or sessions. Healthy startup uses N rotations
+  (default 3) plus a manual journal. The current implementation remains
+  manifest-only until this upgrade lands.
+- Runtime installation prefers a portable layout under the Nexus
+  `data-root/runtimes` directory and passes its location through child-process
+  environment. It does not modify system `PATH`. A system mode is maintained
+  by the system after installation, and real-machine acceptance remains a
+  user-owned check.
+- Node `>=25` no longer bundles Corepack. The official Corepack source is
+  <https://github.com/nodejs/corepack>. Documentation must not claim that all
+  Node installations include Corepack or that pnpm needs no download.
+- The runtime workflow reuses an already available runtime whenever possible
+  and avoids extra downloads. Git only guides installation; local system
+  installation tests are prohibited in this phase.
+- The Agent uses OS-assigned loopback `port 0`; identity discovery finds the
+  bound endpoint, and the internal port remains out of the UI.
+
+### Open and unaccepted
+
+The current switch path has a lifecycle early-release and cancellation-owner
+handoff risk. It needs a separately reviewed fix and runtime evidence; this
+documentation phase does not change that code or mark it accepted.
+
+This handoff records document and Git evidence only. It is not runtime
+acceptance: cold-install build-to-Node-launch, runtime discovery, downloads,
+path pinning, source switching, install confirmation, and the target port
+identity flow remain unverified.
+
 ## Current scope and exclusions
 
 This phase does not add Harness source dependencies, plugin marketplaces,
@@ -628,5 +742,8 @@ change the active pointer or start Harness. Once a slot is explicitly promoted,
 the supervisor resolves `{release_root}` from the catalog and performs launch
 from that canonical directory; it never guesses a release from the process
 working directory. Diagnostics are bounded and redacted as described above;
-they are not a general filesystem archive. Profile selection does not claim to
-understand Harness internals, and checkpoint restore remains metadata-only.
+they are not a general filesystem archive. Current profile selection is still
+the legacy metadata bridge; the confirmed target is Harness-native create and
+switch without delete. Current checkpoint restore remains manifest-only, while
+the declarative snapshot target is pending the upgrade and acceptance recorded
+above.
