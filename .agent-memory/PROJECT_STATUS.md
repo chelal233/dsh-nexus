@@ -2,6 +2,10 @@ updated: 2026-09-05 by Codex (P0 快照内容引擎已接入 Agent，恢复事�
 
 # dsh-nexus 项目状态与需求基线
 
+## P0 反馈第三轮（2026-09-05，accordion）
+
+配置档目录改为**手风琴树**：默认全部折叠；点击 profile 行（整行可点，带 ▸/▾ 指示）展开/收起其子区域（已保存检查点+快照清单+插件清单）；「查看/查看中」按钮与徽标删除，行内仅保留「选择」（切换当前 profile）；RecoveryDiagnostics 移出子区域、每页只渲染一次（它是全局启动恢复状态）；CheckpointsView 的全局块（healthy 捕获错误/待恢复面板）在 embedded 模式下隐藏，避免每个展开的 profile 重复出现。测试改为：折叠断言（▸ 存在、Saved checkpoints/Plugin inventory 不存在）+ 直接渲染 ProfilePlugins 验证清单真实性。
+
 ## P0 反馈第二轮（2026-09-05，提交 nest-profile-children）
 
 1. **配置档树形层级**：配置档目录行加「查看」按钮（与"选择=切换当前 profile"区分，当前 profile 默认为查看对象）；查看中 profile 的子资源（检查点/快照清单/插件/启动恢复状态）以缩进+左边线的 `.profile-children` 容器呈现，标注「属于配置档: X」；CheckpointsView 新增 profileFilter（按 item.profile 与 summary.profile_name 过滤）；ProfilePlugins 接受 profile 参数（卸载命令作用于被查看的 profile）
