@@ -27,13 +27,14 @@ use axum::{
     Json, Router,
 };
 use nexus_core::{
-    data_root_identity, discover_harness_candidates_with_paths, load_harness_launch_spec,
+    AgentDiscoveryRecord, data_root_identity, discover_harness_candidates_with_paths,
+    load_harness_launch_spec,
     load_update_spec, new_instance_id, redact_diagnostics_payload, AgentState,
     CheckpointRestoreIntent, CheckpointRestoreJournal, CheckpointRestoreJournalStore,
     CheckpointRestorePhase, CheckpointStore, ConfigStore, DiagnosticsStore, HarnessLaunchSpec,
     HarnessLogSession, HarnessLogSessionStore, NexusConfig, NexusConfigFile, NexusStateSnapshot,
     ProfileCatalog, ProfileStore, ReleaseCatalog, ReleaseStore, RuntimeConfig, SnapshotsConfig,
-    UpdateSpec, DEFAULT_MAX_RELEASE_SLOTS, DEFAULT_PROFILE, HARNESS_ARGS_ENV, HARNESS_PROGRAM_ENV,
+    unix_time_seconds, UpdateSpec, DEFAULT_MAX_RELEASE_SLOTS, DEFAULT_PROFILE, HARNESS_ARGS_ENV, HARNESS_PROGRAM_ENV,
     HARNESS_READINESS_TIMEOUT_ENV, HARNESS_READINESS_URL_ENV, HARNESS_WORKING_DIR_ENV,
     UPDATE_BUILD_ARGS_ENV, UPDATE_BUILD_PROGRAM_ENV, UPDATE_GIT_PROGRAM_ENV, UPDATE_REF_ENV,
     UPDATE_SOURCE_ENV, UPDATE_TIMEOUT_ENV, UPDATE_VERIFY_ARGS_ENV, UPDATE_VERIFY_PROGRAM_ENV,
@@ -223,6 +224,8 @@ pub async fn run_with_instance_id(
     metadata.write_snapshot(&initial_runtime, initial_harness.clone())?;
     let runtime = Arc::new(RwLock::new(initial_runtime));
     let agent_revision = Arc::new(AtomicU64::new(0));
+    let instance_id_for_discovery = instance_id.clone();
+    let data_root_id_for_discovery = data_root_id.clone();
     let (shutdown, shutdown_receiver) = watch::channel(false);
     let state = AppState {
         paths: paths.clone(),
@@ -251,15 +254,32 @@ pub async fn run_with_instance_id(
     };
 
     let listener = TcpListener::bind(config.bind_addr()).await?;
+    let bound_address = listener.local_addr()?;
     {
         let mut current = runtime.write().await;
         current.mark_running();
         agent_revision.store(1, Ordering::SeqCst);
         metadata.write_snapshot(&current, initial_harness.clone())?;
     }
+    // Publish the bound port for discovery: internal ports are not fixed,
+    // so launchers and CLIs locate the Agent through this record instead.
+    let discovery_record = AgentDiscoveryRecord {
+        port: bound_address.port(),
+        instance_id: instance_id_for_discovery,
+        data_root_id: data_root_id_for_discovery,
+        pid: std::process::id(),
+        updated_at_unix: unix_time_seconds(),
+    };
+    paths
+        .publish_agent_discovery(&discovery_record)
+        .map_err(|error| {
+            io::Error::other(format!(
+                "failed to publish the Agent discovery record: {error}"
+            ))
+        })?;
 
     tracing::info!(
-        address = %config.bind_addr(),
+        address = %bound_address,
         data_root = %paths.root.display(),
         "nexus agent listening"
     );

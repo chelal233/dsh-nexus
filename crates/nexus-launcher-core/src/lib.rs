@@ -637,8 +637,38 @@ impl AgentRuntime {
         }
     }
 
+    /// Probe the configured port; on a transport failure fall back to the
+    /// discovery record (`run/agent.json`) so an Agent that bound an
+    /// OS-assigned port is still found. The identity check below rejects a
+    /// record left over from a different data root.
+    fn client_for_discovery(&self) -> Option<AgentClient> {
+        let record = self
+            .paths
+            .read_agent_discovery()
+            .ok()
+            .flatten()
+            .filter(|record| {
+                record.data_root_id == self.data_root_id && record.port != self.config.port
+            })?;
+        AgentClient::from_reqwest(record.port, reqwest::Client::new()).ok()
+    }
+
     pub async fn probe(&self) -> Result<HealthResponse, AgentRuntimeError> {
-        let health = self.client.get_json::<HealthResponse>("/v1/health").await?;
+        let health = match self.client.get_json::<HealthResponse>("/v1/health").await {
+            Ok(health) => health,
+            Err(AgentClientError::Transport(_)) => match self.client_for_discovery() {
+                Some(discovery_client) => discovery_client
+                    .get_json::<HealthResponse>("/v1/health")
+                    .await
+                    .map_err(AgentRuntimeError::Client)?,
+                None => {
+                    return Err(AgentRuntimeError::Client(AgentClientError::Transport(
+                        "no Agent on the configured port and no discovery record".to_owned(),
+                    )))
+                }
+            },
+            Err(error) => return Err(AgentRuntimeError::Client(error)),
+        };
         if health.api_version != nexus_protocol::API_VERSION
             || health.service != "nexus-agent"
             || health.instance_id.is_empty()
@@ -1172,8 +1202,16 @@ fn spawn_agent(
     command
         .arg("--data-dir")
         .arg(&paths.root)
+        // The default port is only a compatibility pin: an ephemeral
+        // OS-assigned port is the default posture, discovered through
+        // run/agent.json. An explicitly configured non-default port passes
+        // through unchanged.
         .arg("--port")
-        .arg(config.port.to_string())
+        .arg(if config.port == nexus_core::DEFAULT_AGENT_PORT {
+            "0".to_owned()
+        } else {
+            config.port.to_string()
+        })
         .arg("--instance-id")
         .arg(instance_id)
         .stdin(Stdio::null())

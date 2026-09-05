@@ -83,7 +83,8 @@ fn parse_port(value: &str) -> Result<u16, String> {
     value
         .parse::<u16>()
         .ok()
-        .filter(|port| *port != 0)
+        // 0 selects an OS-assigned (ephemeral) port; the Agent publishes the
+        // actual port to run/agent.json for discovery.
         .ok_or_else(|| format!("invalid port: {value}"))
 }
 

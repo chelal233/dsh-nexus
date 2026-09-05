@@ -65,6 +65,39 @@ pub const UPDATE_TIMEOUT_ENV: &str = "NEXUS_UPDATE_TIMEOUT_SECS";
 pub const RUNTIME_SCHEMA_VERSION: u32 = 1;
 pub const HARNESS_LOG_SESSION_SCHEMA_VERSION: u32 = 2;
 
+/// Discovery record published by a running Agent so launchers and CLIs can
+/// find it without assuming a fixed port. The record binds the port to the
+/// data-root identity and instance id, so a stale record for a different
+/// Agent generation is rejected by the normal identity checks.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct AgentDiscoveryRecord {
+    pub port: u16,
+    pub instance_id: String,
+    pub data_root_id: String,
+    pub pid: u32,
+    pub updated_at_unix: u64,
+}
+
+impl NexusPaths {
+    pub fn publish_agent_discovery(&self, record: &AgentDiscoveryRecord) -> io::Result<()> {
+        self.ensure_directories()?;
+        write_json_atomic(
+            &self.run_dir,
+            &self.agent_discovery_file(),
+            record,
+        )
+    }
+
+    pub fn read_agent_discovery(&self) -> io::Result<Option<AgentDiscoveryRecord>> {
+        let path = self.agent_discovery_file();
+        if !path.exists() {
+            return Ok(None);
+        }
+        let bytes = fs::read(&path)?;
+        Ok(Some(decode_json::<AgentDiscoveryRecord>(&bytes)?))
+    }
+}
+
 /// Runtime configuration intentionally binds only to loopback.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct NexusConfig {
@@ -132,6 +165,9 @@ pub struct NexusPaths {
 }
 
 impl NexusPaths {
+    pub fn agent_discovery_file(&self) -> PathBuf {
+        self.run_dir.join("agent.json")
+    }
     pub fn from_root(root: PathBuf) -> Self {
         Self {
             config_file: root.join("config.json"),
