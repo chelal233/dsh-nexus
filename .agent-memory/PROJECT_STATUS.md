@@ -50,6 +50,15 @@ ActionButton 全局补 `type="button"`：此前所有 ActionButton 在 `<form>` 
 
 - **CTRL_BREAK 优雅停止方案已实施又回退**（revert: ctrl break delivery）：实施后测试运行器被控制台事件误杀（0xC000013A，PID 组复用可能命中无辜进程），且 Node 默认不处理 CTRL_BREAK（无真实优雅收益，行为与 TerminateProcess 等价）。最终停止路径 = 5s 宽限窗（对有 handler 的进程有效）+ Job Tree 终止兜底。**结论：Windows 下 node 类负载没有真正的优雅停止，5s 等待是合理成本**，不再尝试信号方案
 
+## P1 进展（2026-09-06，自动化第十三轮）
+
+- **端口去固定化完成**（feat: ephemeral agent port with discovery record and probe fallback）：
+  1. Agent 默认端口 = OS 分配（`--port 0`），实际端口+实例身份+数据根身份+PID 发布到 `run/agent.json` 发现记录（原子写）；显式指定端口（`--port N`/NEXUS_AGENT_PORT）照旧钉死
+  2. launcher-core probe：配置端口传输失败时回退读发现记录（校验 data_root_id 拒绝陈旧/异源记录）→ 发现端口探测
+  3. launcher 启动子 agent 默认传 `--port 0`（配置端口非默认值时透传）
+  4. E2E 实测：`--port 0` → 发现记录 49322 → 该端口 health ok + 实例身份匹配 ✓
+- 兼容性说明：NEXUS_AGENT_PORT/--port 显式钉死的部署照旧；nexusctl 旧用法（显式 --port）不受影响
+
 ## P1 进展（2026-09-06，自动化第十二轮）
 
 - **错误人话化映射落地**（feat: plain-language error mappings）：localizeBackendError 新增 11 类特征签名 → 人话+行动指引（插件树失败→恢复模式、导出不匹配→恢复快照、duplicate entry→移除旧副本、EISDIR/267→重建配置档、槽位满/受保护、快照版本未安装、连接拒绝/超时/拒绝访问）。中英双语，未命中签名回退后端原文
