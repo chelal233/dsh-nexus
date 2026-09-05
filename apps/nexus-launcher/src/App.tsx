@@ -1345,6 +1345,12 @@ export function ProfilesView(props: ViewProps) {
   const gate = recoveryMutationGate(booleanValue(recovery, "harness_stop_required"), harness.state, busyAction !== null);
   return <><PageIntro kicker={t("Control / Profiles")} title={t("Profiles")} detail={t("Profiles own checkpoints and the plugin inventory: select a profile, manage its checkpoints, then adjust its plugins. Profile creation and deletion are unavailable in this release.")} /><Panel title={t("Profile catalog")} icon={<SlidersHorizontal size={18} />}>
     {gate.reason === "stop_required" || gate.reason === "not_stopped" ? <p className="form-error"><WarningCircle size={15} />{t("Stop Harness before switching profiles or removing plugins.")}</p> : null}
+    <div className="button-row">{[
+      ["settings", t("Open settings.yaml")],
+      ["profile_patch", t("Edit profile patch")],
+      ["plugin_manifest", t("Edit plugin manifest")],
+      ["profile_dir", t("Open profile directory")],
+    ].map(([target, label]) => <ActionButton key={target} disabled={busyAction !== null} onClick={() => void runAction(label, "/v1/profiles", { action: "open_path", target })}>{label}</ActionButton>)}</div>
     <DataList items={manifests} emptyTitle={t("No valid native profiles")} emptyDetail={t("Only valid profile manifests are selectable.")} render={(item) => { const name = stringValue(item, "name") || t("Unnamed profile"); const expanded = expandedProfiles.includes(name); return <><div className="profile-row-toggle" onClick={() => toggleProfile(name)}><span className="profile-chevron" aria-hidden="true">{expanded ? "▾" : "▸"}</span><strong>{name}</strong>{name === active && <StatusPill label={t("Active")} tone="good" />}<span>{t("{count} bundles", { count: arrayValue(item, "bundles").length })}</span></div><span className="row-meta">{name !== active && <ActionButton disabled={gate.disabled} onClick={() => void runAction(t("Profile selection"), "/v1/profiles", { action: "select", profile: name })}>{t("Select")}</ActionButton>}</span></>; }} />
   </Panel>
   {manifests.map(asObject).map((item) => { const name = stringValue(item, "name"); if (!name || !expandedProfiles.includes(name)) return null; return <div key={name} className="profile-children"><div className="profile-children-title">{t("Belongs to profile")}: {name}</div>

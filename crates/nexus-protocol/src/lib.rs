@@ -328,6 +328,11 @@ pub enum ProfileAction {
     Select,
     PluginInventory,
     PluginRemove,
+    /// Open a profile-related file or directory with the system handler.
+    /// Bounded targets only: `settings` (home settings.yaml), `profile_dir`,
+    /// `profile_patch` (the profile's cordis.patch.yml), and
+    /// `plugin_manifest` (the profile's package.json).
+    OpenPath,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -337,6 +342,8 @@ pub struct ProfileCommand {
     pub profile: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub package: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub target: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -995,6 +1002,19 @@ pub struct UpdateCommand {
     pub operation_id: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub confirmation: Option<String>,
+}
+
+/// Result of an open-path request: what was opened and where it resolved.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ProfileOpenPathResponse {
+    pub target: String,
+    pub path: String,
+}
+
+impl ProfileOpenPathResponse {
+    pub fn new(target: String, path: String) -> Self {
+        Self { target, path }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]

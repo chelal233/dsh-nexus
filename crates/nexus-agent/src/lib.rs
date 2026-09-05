@@ -49,6 +49,7 @@ use nexus_protocol::{
     ErrorResponse, HarnessAction, HarnessCommand, HarnessDiscoveryResponse, HarnessResponse,
     HarnessRuntimeInfo, HealthResponse, LifecycleAccepted, LifecycleAction, LifecycleCommand,
     PluginRemoveResponse, ProfileAction, ProfileCommand, ProfileListResponse,
+    ProfileOpenPathResponse,
     ProfileSelectResponse, RecoveryLogTail, RecoveryStatusResponse, ReleaseAction, ReleaseCommand,
     ReleaseListResponse, RuntimeInstallMode, RuntimePlanRequest, RuntimeSource,
     CheckpointManifest, SnapshotReference, StateResponse, TagListResponse,
@@ -1263,7 +1264,107 @@ async fn profile_control(
                 .into_response()
         }
         ProfileAction::PluginRemove => profile_plugin_remove(state, command).await,
+        ProfileAction::OpenPath => profile_open_path(state, command).await,
     }
+}
+
+/// Open a bounded profile-related file or directory with the system
+/// handler. Targets derive only from the DSH home and the active profile;
+/// no caller-supplied path is accepted.
+async fn profile_open_path(state: AppState, command: ProfileCommand) -> axum::response::Response {
+    let Some(target) = command.target.as_deref() else {
+        return data_error_response(
+            io::Error::new(io::ErrorKind::InvalidInput, "target is required"),
+            "open_path_target_required",
+        );
+    };
+    let dsh_home = match state.snapshots.configured_dsh_home() {
+        Ok(home) => home.clone(),
+        Err(error) => return data_error_response(error, "dsh_home_unavailable"),
+    };
+    let profiles = match state.profiles.load() {
+        Ok(catalog) => catalog,
+        Err(error) => return data_error_response(error, "profile_catalog_unavailable"),
+    };
+    let profile = command
+        .profile
+        .clone()
+        .unwrap_or_else(|| profiles.active_profile.clone());
+    let profile_dir = dsh_home.join("profiles").join(&profile);
+    if !profile_dir.is_dir() {
+        return data_error_response(
+            io::Error::new(
+                io::ErrorKind::NotFound,
+                format!("profile directory not found: {}", profile_dir.display()),
+            ),
+            "profile_dir_missing",
+        );
+    }
+    let (path, open_dir) = match target {
+        "settings" => (dsh_home.join("settings.yaml"), false),
+        "profile_dir" => (profile_dir.clone(), true),
+        "profile_patch" => (profile_dir.join("cordis.patch.yml"), false),
+        "plugin_manifest" => (profile_dir.join("package.json"), false),
+        other => {
+            return data_error_response(
+                io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    format!("unknown open target: {other}"),
+                ),
+                "open_path_target_invalid",
+            );
+        }
+    };
+    if !open_dir && !path.exists() {
+        return data_error_response(
+            io::Error::new(
+                io::ErrorKind::NotFound,
+                format!("path not found: {}", path.display()),
+            ),
+            "open_path_missing",
+        );
+    }
+    #[cfg(windows)]
+    let opened = {
+        use std::os::windows::process::CommandExt;
+        // `explorer` opens directories in a window; for files it selects them
+        // in the parent. `start` opens files with the default association.
+        let output = if open_dir {
+            std::process::Command::new("explorer")
+                .arg(path.as_os_str())
+                .creation_flags(0x0800_0000) // CREATE_NO_WINDOW
+                .output()
+        } else {
+            std::process::Command::new("cmd")
+                .args(["/C", "start", ""])
+                .arg(path.as_os_str())
+                .creation_flags(0x0800_0000)
+                .output()
+        };
+        output.map(|out| out.status.success()).unwrap_or(false)
+    };
+    #[cfg(not(windows))]
+    let opened = {
+        std::process::Command::new("xdg-open")
+            .arg(path.as_os_str())
+            .output()
+            .map(|out| out.status.success())
+            .unwrap_or(false)
+    };
+    if !opened {
+        return data_error_response(
+            io::Error::other("the system handler did not accept the path"),
+            "open_path_failed",
+        );
+    }
+    (
+        StatusCode::OK,
+        Json(ProfileOpenPathResponse::new(
+            target.to_owned(),
+            path.to_string_lossy().into_owned(),
+        )),
+    )
+        .into_response()
 }
 
 async fn profile_plugin_remove(
