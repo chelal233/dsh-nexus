@@ -5,10 +5,11 @@ use nexus_protocol::{
     CheckpointAction, CheckpointCommand, CheckpointCreateResponse, CheckpointListResponse,
     CheckpointRestoreResponse, ConfigAction, ConfigCommand, ConfigResponse, DiagnosticsAction,
     DiagnosticsCommand, DiagnosticsResponse, ErrorResponse, HarnessAction, HarnessCommand,
-    HarnessResponse, ProfileAction, ProfileCommand, ProfileListResponse, ProfileSelectResponse,
-    ReleaseAction, ReleaseCommand, ReleaseListResponse, RuntimeConfigPayload, RuntimeInstallMode,
-    RuntimeOwnership, RuntimePinPayload, RuntimeSource, SnapshotDetailResponse,
-    SnapshotInspectionPayload, StateResponse, UpdateAction, UpdateCommand, UpdateResponse,
+    HarnessResponse, PluginRemoveResponse, ProfileAction, ProfileCommand, ProfileListResponse,
+    ProfileSelectResponse, RecoveryStatusResponse, ReleaseAction, ReleaseCommand,
+    ReleaseListResponse, RuntimeConfigPayload, RuntimeInstallMode, RuntimeOwnership,
+    RuntimePinPayload, RuntimeSource, SnapshotDetailResponse, SnapshotInspectionPayload,
+    StateResponse, UpdateAction, UpdateCommand, UpdateResponse,
 };
 
 #[derive(Debug)]
@@ -23,6 +24,8 @@ enum Command {
     Status,
     Harness(HarnessAction),
     Profile(ProfileAction, Option<String>),
+    ProfileRemove(String, String),
+    Recovery,
     Checkpoint(CheckpointAction, Option<String>, Option<String>),
     Release(
         ReleaseAction,
@@ -84,27 +87,42 @@ fn parse_args() -> Result<Option<Options>, String> {
                 command = Some(Command::Harness(action));
             }
             "profile" if command.is_none() => {
-                let action = args
-                    .next()
-                    .ok_or_else(|| "profile requires status, list, or select NAME".to_owned())?;
+                let action = args.next().ok_or_else(|| {
+                    "profile requires status, list, select NAME, or remove NAME PACKAGE".to_owned()
+                })?;
                 let action = match action.to_string_lossy().as_ref() {
                     "status" => ProfileAction::Status,
                     "list" => ProfileAction::List,
                     "select" => ProfileAction::Select,
+                    "remove" => ProfileAction::PluginRemove,
                     value => return Err(format!("unknown profile action: {value}")),
                 };
-                let name = if action == ProfileAction::Select {
+                let name = if matches!(action, ProfileAction::Select | ProfileAction::PluginRemove)
+                {
                     Some(
                         args.next()
-                            .ok_or_else(|| "profile select requires NAME".to_owned())?
+                            .ok_or_else(|| "profile action requires NAME".to_owned())?
                             .to_string_lossy()
                             .into_owned(),
                     )
                 } else {
                     None
                 };
-                command = Some(Command::Profile(action, name));
+                if action == ProfileAction::PluginRemove {
+                    let package = args
+                        .next()
+                        .ok_or_else(|| "profile remove requires PACKAGE".to_owned())?
+                        .to_string_lossy()
+                        .into_owned();
+                    command = Some(Command::ProfileRemove(
+                        name.expect("profile name parsed"),
+                        package,
+                    ));
+                } else {
+                    command = Some(Command::Profile(action, name));
+                }
             }
+            "recovery" if command.is_none() => command = Some(Command::Recovery),
             "checkpoint" if command.is_none() => {
                 let action = args
                     .next()
@@ -478,7 +496,26 @@ async fn run(options: Options) -> Result<(), String> {
             .json(&ProfileCommand {
                 action: ProfileAction::Select,
                 profile: profile.clone(),
+                package: None,
             })
+            .send()
+            .await
+            .map_err(|error| format!("agent is unavailable: {error}"))?,
+        Command::Profile(ProfileAction::PluginInventory | ProfileAction::PluginRemove, _) => {
+            return Err("invalid internal profile command".to_owned())
+        }
+        Command::ProfileRemove(profile, package) => client
+            .post(format!("http://{address}/v1/profiles"))
+            .json(&ProfileCommand {
+                action: ProfileAction::PluginRemove,
+                profile: Some(profile.clone()),
+                package: Some(package.clone()),
+            })
+            .send()
+            .await
+            .map_err(|error| format!("agent is unavailable: {error}"))?,
+        Command::Recovery => client
+            .get(format!("http://{address}/v1/recovery"))
             .send()
             .await
             .map_err(|error| format!("agent is unavailable: {error}"))?,
@@ -659,6 +696,43 @@ async fn run(options: Options) -> Result<(), String> {
                         println!("{marker} {name}");
                     }
                 }
+            }
+        }
+        Command::ProfileRemove(_, _) => {
+            let result: PluginRemoveResponse = serde_json::from_str(&body)
+                .map_err(|error| format!("invalid agent response: {error}"))?;
+            if options.json {
+                print_json_value(
+                    &serde_json::to_value(&result).map_err(|error| error.to_string())?,
+                )?;
+            } else {
+                println!(
+                    "plugin {} removed={} exit_code={}",
+                    result.package,
+                    result.removed,
+                    result
+                        .exit_code
+                        .map_or_else(|| "<none>".to_owned(), |code| code.to_string())
+                );
+                if !result.stderr.is_empty() {
+                    eprintln!("{}", result.stderr);
+                }
+            }
+        }
+        Command::Recovery => {
+            let recovery: RecoveryStatusResponse = serde_json::from_str(&body)
+                .map_err(|error| format!("invalid agent response: {error}"))?;
+            if options.json {
+                print_json_value(
+                    &serde_json::to_value(&recovery).map_err(|error| error.to_string())?,
+                )?;
+            } else {
+                println!(
+                    "manual_entry_available: {}",
+                    recovery.manual_entry_available
+                );
+                println!("harness_stop_required: {}", recovery.harness_stop_required);
+                println!("fatal_prefix_observed: {}", recovery.fatal_prefix_observed);
             }
         }
         Command::Checkpoint(action, _, _) => match action {
@@ -975,6 +1049,8 @@ Usage:
   nexusctl harness status|start|stop|restart [--json] [--port PORT]
   nexusctl profile status|list [--json] [--port PORT]
   nexusctl profile select NAME [--json] [--port PORT]
+  nexusctl profile remove NAME PACKAGE [--json] [--port PORT]
+  nexusctl recovery [--json] [--port PORT]
   nexusctl checkpoint list [--json] [--port PORT]
   nexusctl checkpoint create [--note TEXT] [--json] [--port PORT]
   nexusctl checkpoint detail ID [--json] [--port PORT]

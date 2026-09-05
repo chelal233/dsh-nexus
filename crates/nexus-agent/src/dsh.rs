@@ -1,9 +1,15 @@
 //! Native DSH home/profile resolution and owned dependency materialization.
 
 use std::{
-    env, fs, io,
+    collections::{BTreeMap, HashSet},
+    env,
+    ffi::OsString,
+    fs,
+    fs::OpenOptions,
+    io,
     path::{Path, PathBuf},
     process::{Child, Command, ExitStatus, Stdio},
+    sync::atomic::{AtomicU64, Ordering},
     thread,
     time::{Duration, Instant},
 };
@@ -12,9 +18,35 @@ use nexus_core::{
     build_pnpm_args, build_runtime_child_env, resolve_runtime_command, validate_profile_name,
     ConfigStore, NexusPaths,
 };
+use nexus_protocol::{NativeProfilePayload, ProfilePluginPayload};
 
 pub(crate) const DSH_HOME_ENV: &str = "DSH_HOME";
 pub(crate) const DEFAULT_MATERIALIZATION_TIMEOUT: Duration = Duration::from_secs(900);
+const MAX_PROFILE_MANIFEST_BYTES: u64 = 1024 * 1024;
+const MAX_PLUGIN_OUTPUT_BYTES: usize = 64 * 1024;
+static PLUGIN_RUN_SEQUENCE: AtomicU64 = AtomicU64::new(0);
+
+#[derive(Debug, Clone)]
+struct PluginCommandSpec {
+    program: PathBuf,
+    args: Vec<OsString>,
+    current_dir: PathBuf,
+    env: BTreeMap<OsString, OsString>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct PluginCommandOutcome {
+    pub(crate) exit_code: Option<i32>,
+    pub(crate) stdout: String,
+    pub(crate) stderr: String,
+}
+
+trait PluginCommandRunner {
+    fn run(&self, paths: &NexusPaths, spec: &PluginCommandSpec)
+        -> io::Result<PluginCommandOutcome>;
+}
+
+struct SystemPluginCommandRunner;
 
 pub(crate) fn resolve_dsh_home() -> io::Result<PathBuf> {
     if let Some(value) = env::var_os(DSH_HOME_ENV).filter(|value| !value.is_empty()) {
@@ -101,6 +133,39 @@ pub(crate) fn profile_directory(dsh_home: &Path, profile: &str) -> io::Result<Pa
 #[allow(dead_code)] // Shared now so the subsequent plugin-control phase cannot diverge.
 pub(crate) fn locate_built_cli(release_root: &Path) -> io::Result<PathBuf> {
     let release_root = fs::canonicalize(release_root)?;
+    let manifest = release_root.join("apps/cli/package.json");
+    let metadata = fs::symlink_metadata(&manifest)?;
+    if metadata.file_type().is_symlink()
+        || !metadata.is_file()
+        || metadata.len() > MAX_PROFILE_MANIFEST_BYTES
+    {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "built DSH CLI package manifest is not a bounded ordinary file",
+        ));
+    }
+    let manifest = fs::canonicalize(manifest)?;
+    if !manifest.starts_with(&release_root) {
+        return Err(io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            "built DSH CLI package manifest resolves outside its release root",
+        ));
+    }
+    let value: serde_json::Value = serde_json::from_slice(&fs::read(manifest)?)
+        .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
+    let bin_matches = match value.get("bin") {
+        Some(serde_json::Value::String(path)) => path == "lib/bin.js",
+        Some(serde_json::Value::Object(entries)) => entries
+            .values()
+            .any(|value| value.as_str() == Some("lib/bin.js")),
+        _ => false,
+    };
+    if !bin_matches {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "apps/cli package bin does not identify lib/bin.js",
+        ));
+    }
     let candidate = release_root.join("apps/cli/lib/bin.js");
     let metadata = fs::symlink_metadata(&candidate)?;
     if metadata.file_type().is_symlink() || !metadata.is_file() {
@@ -140,6 +205,287 @@ pub(crate) fn profile_is_initialized(dsh_home: &Path, profile: &str) -> io::Resu
         Err(_) => return Ok(false),
     };
     Ok(value.is_object())
+}
+
+pub(crate) fn native_profiles(dsh_home: &Path) -> io::Result<Vec<NativeProfilePayload>> {
+    let home = canonical_dsh_home(dsh_home)?;
+    let profiles_dir = home.join("profiles");
+    let metadata = fs::symlink_metadata(&profiles_dir)?;
+    if metadata.file_type().is_symlink() || !metadata.is_dir() {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "DSH profiles directory must be an ordinary directory",
+        ));
+    }
+    let mut profiles = Vec::new();
+    for entry in fs::read_dir(&profiles_dir)? {
+        let entry = entry?;
+        if profiles.len() >= 256 {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "DSH profile inventory exceeds 256 entries",
+            ));
+        }
+        let name = entry.file_name().to_string_lossy().into_owned();
+        if validate_profile_name(&name).is_err() {
+            continue;
+        }
+        let file_type = entry.file_type()?;
+        if file_type.is_symlink() || !file_type.is_dir() {
+            continue;
+        }
+        if let Ok(profile) = native_profile(&home, &name) {
+            profiles.push(profile);
+        }
+    }
+    profiles.sort_by(|left, right| left.name.cmp(&right.name));
+    Ok(profiles)
+}
+
+pub(crate) fn native_profile(dsh_home: &Path, profile: &str) -> io::Result<NativeProfilePayload> {
+    let profile_dir = profile_directory(dsh_home, profile)?;
+    let package_path = profile_dir.join("package.json");
+    let metadata = fs::symlink_metadata(&package_path)?;
+    if metadata.file_type().is_symlink()
+        || !metadata.is_file()
+        || metadata.len() > MAX_PROFILE_MANIFEST_BYTES
+    {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "profile package.json must be an ordinary file no larger than 1 MiB",
+        ));
+    }
+    let value: serde_json::Value = serde_json::from_slice(&fs::read(package_path)?)
+        .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
+    let bundles_value = value
+        .pointer("/dsh/profile/bundles")
+        .and_then(serde_json::Value::as_array)
+        .ok_or_else(|| {
+            io::Error::new(
+                io::ErrorKind::InvalidData,
+                "profile manifest has no dsh.profile.bundles array",
+            )
+        })?;
+    let mut bundles = Vec::with_capacity(bundles_value.len());
+    let mut seen = HashSet::new();
+    for value in bundles_value {
+        let bundle = value
+            .as_str()
+            .filter(|value| valid_package_name(value))
+            .ok_or_else(|| {
+                io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    "profile bundle is not a valid package name",
+                )
+            })?;
+        if !seen.insert(bundle.to_owned()) {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "profile bundles contain a duplicate",
+            ));
+        }
+        bundles.push(bundle.to_owned());
+    }
+    let dependencies = value
+        .get("dependencies")
+        .and_then(serde_json::Value::as_object)
+        .ok_or_else(|| {
+            io::Error::new(
+                io::ErrorKind::InvalidData,
+                "profile manifest has no dependencies object",
+            )
+        })?;
+    let mut versions = BTreeMap::new();
+    for (package, version) in dependencies {
+        if !valid_package_name(package) {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "profile dependency has an invalid package name",
+            ));
+        }
+        let version = version.as_str().ok_or_else(|| {
+            io::Error::new(
+                io::ErrorKind::InvalidData,
+                "profile dependency version must be text",
+            )
+        })?;
+        versions.insert(package.clone(), version.to_owned());
+    }
+    let mut plugins = Vec::new();
+    for bundle in &bundles {
+        plugins.push(ProfilePluginPayload {
+            package: bundle.clone(),
+            version: versions.remove(bundle),
+            builtin: true,
+            removable: false,
+        });
+    }
+    plugins.extend(
+        versions
+            .into_iter()
+            .map(|(package, version)| ProfilePluginPayload {
+                package,
+                version: Some(version),
+                builtin: false,
+                removable: true,
+            }),
+    );
+    Ok(NativeProfilePayload {
+        name: profile.to_owned(),
+        bundles,
+        plugins,
+    })
+}
+
+fn valid_package_name(value: &str) -> bool {
+    !value.is_empty()
+        && value.len() <= 214
+        && !value.chars().any(char::is_whitespace)
+        && !value.chars().any(char::is_control)
+        && !value.contains(['\\', ':'])
+        && !value.starts_with('.')
+        && !value.ends_with('/')
+        && match value.strip_prefix('@') {
+            Some(scoped) => scoped.split_once('/').is_some_and(|(scope, name)| {
+                !scope.is_empty() && !name.is_empty() && !name.contains('/')
+            }),
+            None => !value.contains('/'),
+        }
+}
+
+pub(crate) fn remove_profile_plugin(
+    paths: &NexusPaths,
+    dsh_home: &Path,
+    release_root: &Path,
+    profile: &str,
+    package: &str,
+) -> io::Result<(PluginCommandOutcome, NativeProfilePayload)> {
+    remove_profile_plugin_with_runner(
+        paths,
+        dsh_home,
+        release_root,
+        profile,
+        package,
+        &SystemPluginCommandRunner,
+    )
+}
+
+fn remove_profile_plugin_with_runner(
+    paths: &NexusPaths,
+    dsh_home: &Path,
+    release_root: &Path,
+    profile: &str,
+    package: &str,
+    runner: &dyn PluginCommandRunner,
+) -> io::Result<(PluginCommandOutcome, NativeProfilePayload)> {
+    let inventory = native_profile(dsh_home, profile)?;
+    if !inventory
+        .plugins
+        .iter()
+        .any(|item| item.package == package && item.removable)
+    {
+        return Err(io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            "package is not a removable dependency of the selected profile",
+        ));
+    }
+    let profile_dir = profile_directory(dsh_home, profile)?;
+    let config = ConfigStore::new(paths.clone()).load()?;
+    let runtime = config
+        .runtime
+        .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "runtime is not configured"))?;
+    let node = resolve_runtime_command(&runtime, "node")?.ok_or_else(|| {
+        io::Error::new(
+            io::ErrorKind::NotFound,
+            "pinned Node runtime is unavailable",
+        )
+    })?;
+    let cli = locate_built_cli(release_root)?;
+    let mut args = node.prefix_args;
+    args.extend([
+        cli.into_os_string(),
+        OsString::from("plugin"),
+        OsString::from("--profile"),
+        OsString::from(profile),
+        OsString::from("remove"),
+        OsString::from(package),
+    ]);
+    let mut child_env: BTreeMap<OsString, OsString> =
+        build_runtime_child_env(&runtime, env::var_os("PATH").as_deref())?
+            .into_iter()
+            .collect();
+    child_env.insert(
+        OsString::from(DSH_HOME_ENV),
+        dsh_home.as_os_str().to_owned(),
+    );
+    let outcome = runner.run(
+        paths,
+        &PluginCommandSpec {
+            program: node.program,
+            args,
+            current_dir: profile_dir,
+            env: child_env,
+        },
+    )?;
+    let refreshed = native_profile(dsh_home, profile)?;
+    Ok((outcome, refreshed))
+}
+
+impl PluginCommandRunner for SystemPluginCommandRunner {
+    fn run(
+        &self,
+        paths: &NexusPaths,
+        spec: &PluginCommandSpec,
+    ) -> io::Result<PluginCommandOutcome> {
+        fs::create_dir_all(&paths.run_dir)?;
+        let sequence = PLUGIN_RUN_SEQUENCE.fetch_add(1, Ordering::Relaxed);
+        let stdout_path = paths.run_dir.join(format!(
+            "plugin-remove-{}-{sequence}.stdout.tmp",
+            std::process::id()
+        ));
+        let stderr_path = paths.run_dir.join(format!(
+            "plugin-remove-{}-{sequence}.stderr.tmp",
+            std::process::id()
+        ));
+        let stdout = OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&stdout_path)?;
+        let stderr = OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&stderr_path)?;
+        let mut command = Command::new(&spec.program);
+        command
+            .args(&spec.args)
+            .current_dir(&spec.current_dir)
+            .envs(spec.env.iter().map(|(key, value)| (key, value)))
+            .stdin(Stdio::null())
+            .stdout(stdout)
+            .stderr(stderr);
+        let result = run_owned_process(&mut command, DEFAULT_MATERIALIZATION_TIMEOUT);
+        let stdout = read_output_bounded(&stdout_path);
+        let stderr = read_output_bounded(&stderr_path);
+        let _ = fs::remove_file(&stdout_path);
+        let _ = fs::remove_file(&stderr_path);
+        let status = result?;
+        Ok(PluginCommandOutcome {
+            exit_code: status.code(),
+            stdout: stdout?,
+            stderr: stderr?,
+        })
+    }
+}
+
+fn read_output_bounded(path: &Path) -> io::Result<String> {
+    let bytes = fs::read(path)?;
+    let truncated = bytes.len() > MAX_PLUGIN_OUTPUT_BYTES;
+    let bytes = &bytes[..bytes.len().min(MAX_PLUGIN_OUTPUT_BYTES)];
+    let mut value = String::from_utf8_lossy(bytes).into_owned();
+    if truncated {
+        value.push_str("\n[output truncated by Nexus]");
+    }
+    Ok(value)
 }
 
 pub(crate) fn materialize_profile(
@@ -560,6 +906,25 @@ mod tests {
 
     static NEXT_TEMP: AtomicU64 = AtomicU64::new(0);
 
+    struct FakePluginRunner {
+        seen: std::sync::Mutex<Vec<PluginCommandSpec>>,
+        outcome: PluginCommandOutcome,
+    }
+
+    impl PluginCommandRunner for FakePluginRunner {
+        fn run(
+            &self,
+            _paths: &NexusPaths,
+            spec: &PluginCommandSpec,
+        ) -> io::Result<PluginCommandOutcome> {
+            self.seen
+                .lock()
+                .expect("fake runner lock")
+                .push(spec.clone());
+            Ok(self.outcome.clone())
+        }
+    }
+
     fn test_dir(label: &str) -> PathBuf {
         let root = std::env::temp_dir().join(format!(
             "nexus-agent-owned-process-{}-{}-{}",
@@ -577,6 +942,112 @@ mod tests {
         env::split_paths(&path)
             .map(|directory| directory.join(name))
             .find(|candidate| candidate.is_file())
+    }
+
+    fn plugin_fixture() -> (PathBuf, NexusPaths, PathBuf, PathBuf) {
+        let root = test_dir("plugin");
+        let paths = NexusPaths::from_root(root.join("nexus-data"));
+        let home = root.join("dsh-home");
+        let profile = home.join("profiles/web");
+        let release = root.join("release");
+        fs::create_dir_all(&profile).expect("profile creates");
+        fs::create_dir_all(release.join("apps/cli/lib")).expect("CLI parent creates");
+        fs::write(release.join("apps/cli/lib/bin.js"), "// fixture").expect("CLI fixture writes");
+        fs::write(
+            release.join("apps/cli/package.json"),
+            r#"{"bin":{"dsh":"lib/bin.js"}}"#,
+        )
+        .expect("CLI package fixture writes");
+        fs::write(
+            profile.join("package.json"),
+            r#"{"dsh":{"profile":{"bundles":["dsh-base","dsh-web-app"]}},"dependencies":{"dsh-extra":"1.2.3","dsh-base":"4.0.0","dsh-web-app":"4.0.0"}}"#,
+        ).expect("manifest writes");
+        let node = root.join(if cfg!(windows) { "node.exe" } else { "node" });
+        fs::write(&node, "fixture").expect("node fixture writes");
+        ConfigStore::new(paths.clone())
+            .write(&NexusConfigFile {
+                runtime: Some(RuntimeConfig {
+                    node: Some(RuntimePin {
+                        path: node,
+                        ownership: RuntimeOwnership::System,
+                    }),
+                    pnpm: None,
+                    git: None,
+                    source: RuntimeSource::Official,
+                    mode: RuntimeInstallMode::Portable,
+                }),
+                ..Default::default()
+            })
+            .expect("runtime config writes");
+        (root, paths, home, release)
+    }
+
+    #[test]
+    fn native_manifest_preserves_bundle_order_and_marks_only_extra_dependencies_removable() {
+        let (root, _paths, home, _release) = plugin_fixture();
+        let profiles = native_profiles(&home).expect("native profiles load");
+        assert_eq!(profiles.len(), 1);
+        assert_eq!(profiles[0].bundles, ["dsh-base", "dsh-web-app"]);
+        assert_eq!(profiles[0].plugins[0].package, "dsh-base");
+        assert!(profiles[0].plugins[0].builtin);
+        assert!(!profiles[0].plugins[0].removable);
+        assert_eq!(profiles[0].plugins[2].package, "dsh-extra");
+        assert!(profiles[0].plugins[2].removable);
+        assert!(native_profile(&home, "../escape").is_err());
+        fs::remove_dir_all(root).expect("fixture removes");
+    }
+
+    #[test]
+    fn plugin_remove_runner_receives_fixed_argv_bound_env_and_preserves_failure() {
+        let (root, paths, home, release) = plugin_fixture();
+        let runner = FakePluginRunner {
+            seen: std::sync::Mutex::new(Vec::new()),
+            outcome: PluginCommandOutcome {
+                exit_code: Some(23),
+                stdout: "partial output".to_owned(),
+                stderr: "pnpm failed".to_owned(),
+            },
+        };
+        let (outcome, _) =
+            remove_profile_plugin_with_runner(&paths, &home, &release, "web", "dsh-extra", &runner)
+                .expect("typed runner returns its failed exit");
+        assert_eq!(outcome.exit_code, Some(23));
+        assert_eq!(outcome.stderr, "pnpm failed");
+        let seen = runner.seen.lock().expect("fake runner lock");
+        let args: Vec<String> = seen[0]
+            .args
+            .iter()
+            .map(|arg| arg.to_string_lossy().into_owned())
+            .collect();
+        assert_eq!(
+            &args[1..],
+            ["plugin", "--profile", "web", "remove", "dsh-extra"]
+        );
+        assert!(args[0].replace('\\', "/").ends_with("apps/cli/lib/bin.js"));
+        assert!(same_native_path(
+            Path::new(
+                seen[0]
+                    .env
+                    .get(&OsString::from(DSH_HOME_ENV))
+                    .expect("DSH_HOME bound")
+            ),
+            &home
+        ));
+        assert!(same_native_path(
+            &seen[0].current_dir,
+            &fs::canonicalize(home.join("profiles/web")).expect("profile canonical")
+        ));
+        drop(seen);
+
+        let error =
+            remove_profile_plugin_with_runner(&paths, &home, &release, "web", "dsh-base", &runner)
+                .expect_err("built-in bundle is rejected before execution");
+        assert_eq!(error.kind(), io::ErrorKind::PermissionDenied);
+        assert_eq!(runner.seen.lock().expect("fake runner lock").len(), 1);
+        fs::write(release.join("apps/cli/package.json"), r#"{"bin":"other.js"}"#)
+            .expect("invalid CLI package fixture writes");
+        assert!(locate_built_cli(&release).is_err());
+        fs::remove_dir_all(root).expect("fixture removes");
     }
 
     #[test]

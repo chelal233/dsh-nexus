@@ -28,12 +28,12 @@ use axum::{
 };
 use nexus_core::{
     data_root_identity, discover_harness_candidates_with_paths, load_harness_launch_spec,
-    load_update_spec, new_instance_id, AgentState, CheckpointRestoreIntent,
-    CheckpointRestoreJournal, CheckpointRestoreJournalStore, CheckpointRestorePhase,
-    CheckpointStore, ConfigStore, DiagnosticsStore, HarnessLaunchSpec, HarnessLogSession,
-    HarnessLogSessionStore, NexusConfig, NexusConfigFile, NexusStateSnapshot, ProfileCatalog,
-    ProfileStore, ReleaseCatalog, ReleaseStore, RuntimeConfig, SnapshotsConfig, UpdateSpec,
-    DEFAULT_MAX_RELEASE_SLOTS, DEFAULT_PROFILE, HARNESS_ARGS_ENV, HARNESS_PROGRAM_ENV,
+    load_update_spec, new_instance_id, redact_diagnostics_payload, AgentState,
+    CheckpointRestoreIntent, CheckpointRestoreJournal, CheckpointRestoreJournalStore,
+    CheckpointRestorePhase, CheckpointStore, ConfigStore, DiagnosticsStore, HarnessLaunchSpec,
+    HarnessLogSession, HarnessLogSessionStore, NexusConfig, NexusConfigFile, NexusStateSnapshot,
+    ProfileCatalog, ProfileStore, ReleaseCatalog, ReleaseStore, RuntimeConfig, SnapshotsConfig,
+    UpdateSpec, DEFAULT_MAX_RELEASE_SLOTS, DEFAULT_PROFILE, HARNESS_ARGS_ENV, HARNESS_PROGRAM_ENV,
     HARNESS_READINESS_TIMEOUT_ENV, HARNESS_READINESS_URL_ENV, HARNESS_WORKING_DIR_ENV,
     UPDATE_BUILD_ARGS_ENV, UPDATE_BUILD_PROGRAM_ENV, UPDATE_GIT_PROGRAM_ENV, UPDATE_REF_ENV,
     UPDATE_SOURCE_ENV, UPDATE_TIMEOUT_ENV, UPDATE_VERIFY_ARGS_ENV, UPDATE_VERIFY_PROGRAM_ENV,
@@ -47,9 +47,10 @@ use nexus_protocol::{
     ConfigCommand, ConfigResponse, DiagnosticsAction, DiagnosticsCommand, DiagnosticsResponse,
     ErrorResponse, HarnessAction, HarnessCommand, HarnessDiscoveryResponse, HarnessResponse,
     HarnessRuntimeInfo, HealthResponse, LifecycleAccepted, LifecycleAction, LifecycleCommand,
-    ProfileAction, ProfileCommand, ProfileListResponse, ProfileSelectResponse, ReleaseAction,
-    ReleaseCommand, ReleaseListResponse, RuntimeInstallMode, RuntimePlanRequest, RuntimeSource,
-    StateResponse, TagListResponse, UpdateAction, UpdateCommand, UpdateResponse, UpdateState,
+    PluginRemoveResponse, ProfileAction, ProfileCommand, ProfileListResponse,
+    ProfileSelectResponse, RecoveryLogTail, RecoveryStatusResponse, ReleaseAction, ReleaseCommand,
+    ReleaseListResponse, RuntimeInstallMode, RuntimePlanRequest, RuntimeSource, StateResponse,
+    TagListResponse, UpdateAction, UpdateCommand, UpdateResponse, UpdateState,
 };
 use tokio::{
     net::TcpListener,
@@ -283,6 +284,7 @@ fn build_router(state: AppState) -> Router {
         .route("/v1/harness/discover", get(harness_discover))
         .route("/v1/harness/ui", get(harness_ui))
         .route("/v1/profiles", get(profile_list).post(profile_control))
+        .route("/v1/recovery", get(recovery_status))
         .route(
             "/v1/checkpoints",
             get(checkpoint_list).post(checkpoint_control),
@@ -661,6 +663,118 @@ async fn harness_status(State(state): State<AppState>) -> axum::response::Respon
     (StatusCode::OK, Json(harness.into_response())).into_response()
 }
 
+const MAX_RECOVERY_LOG_BYTES: u64 = 16 * 1024;
+
+async fn recovery_status(State(state): State<AppState>) -> axum::response::Response {
+    let lifecycle = state.supervisor.acquire_lifecycle().await;
+    let harness = sync_harness_state(&state).await.into_response().harness;
+    let harness_stop_required = !state
+        .supervisor
+        .selection_change_is_quiescent(&lifecycle)
+        .await;
+    let pending_restore = match state.checkpoint_restores.load() {
+        Ok(Some(journal)) => snapshots::restore_status(&journal, None),
+        Ok(None) => None,
+        Err(error) => return data_error_response(error, "checkpoint_restore_journal_failed"),
+    };
+    let mut log_tail = Vec::new();
+    let mut diagnostic_errors = Vec::new();
+    let mut fatal_prefix_observed = false;
+    match HarnessLogSessionStore::new(state.paths.clone()).read() {
+        Ok(Some(session)) => {
+            for (stream, name) in [
+                ("stdout", session.stdout_log_name),
+                ("stderr", session.stderr_log_name),
+            ] {
+                match recovery_log_tail(&state.paths, &name) {
+                    Ok((content, truncated, fatal)) => {
+                        fatal_prefix_observed |= fatal;
+                        if !content.is_empty() {
+                            log_tail.push(RecoveryLogTail {
+                                stream: stream.to_owned(),
+                                content,
+                                truncated,
+                            });
+                        }
+                    }
+                    Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+                    Err(error) => diagnostic_errors.push(bounded_checkpoint_diagnostic(
+                        &io::Error::other(format!("{stream} log: {error}")),
+                    )),
+                }
+            }
+        }
+        Ok(None) => diagnostic_errors.push("Harness log session is not available".to_owned()),
+        Err(error) => diagnostic_errors.push(bounded_checkpoint_diagnostic(&io::Error::other(
+            format!("Harness log session is invalid: {error}"),
+        ))),
+    }
+    let startup_error = harness.error.as_deref().map(|error| {
+        let bytes = error.as_bytes();
+        let bounded = &bytes[..bytes.len().min(4096)];
+        String::from_utf8_lossy(&redact_diagnostics_payload(bounded).0).into_owned()
+    });
+    (
+        StatusCode::OK,
+        Json(RecoveryStatusResponse {
+            api_version: nexus_protocol::API_VERSION.to_owned(),
+            manual_entry_available: true,
+            harness_stop_required,
+            harness,
+            startup_error,
+            fatal_prefix_observed,
+            log_tail,
+            diagnostic_errors,
+            pending_restore,
+        }),
+    )
+        .into_response()
+}
+
+fn recovery_log_tail(
+    paths: &nexus_core::NexusPaths,
+    name: &str,
+) -> io::Result<(String, bool, bool)> {
+    let path = paths.logs_dir.join(name);
+    let metadata = fs::symlink_metadata(&path)?;
+    if metadata.file_type().is_symlink() || !metadata.is_file() {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "Harness log is not an ordinary file",
+        ));
+    }
+    let canonical_logs = fs::canonicalize(&paths.logs_dir)?;
+    let canonical = fs::canonicalize(&path)?;
+    if !canonical.starts_with(&canonical_logs) {
+        return Err(io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            "Harness log resolves outside Nexus logs",
+        ));
+    }
+    let truncated = metadata.len() > MAX_RECOVERY_LOG_BYTES;
+    let start = metadata.len().saturating_sub(MAX_RECOVERY_LOG_BYTES);
+    let mut file = fs::File::open(canonical)?;
+    file.seek(SeekFrom::Start(start))?;
+    let mut bytes = Vec::new();
+    std::io::Read::read_to_end(&mut file, &mut bytes)?;
+    if truncated {
+        if let Some(position) = bytes.iter().position(|byte| *byte == b'\n') {
+            bytes.drain(..=position);
+        }
+    }
+    let raw = String::from_utf8_lossy(&bytes);
+    let fatal = raw.lines().any(|line| {
+        let line = line.trim_start().to_ascii_lowercase();
+        line.starts_with("fatal:") || line.starts_with("[fatal]") || line.starts_with("fatal ")
+    });
+    let redacted = redact_diagnostics_payload(&bytes).0;
+    Ok((
+        String::from_utf8_lossy(&redacted).into_owned(),
+        truncated,
+        fatal,
+    ))
+}
+
 /// Return the current validated Harness URL/token observation for UI clients.
 ///
 /// The parser only reads the Agent-owned bounded log tail. The surrounding
@@ -964,8 +1078,16 @@ where
     )))
 }
 
-fn profile_list_response(catalog: ProfileCatalog) -> ProfileListResponse {
-    ProfileListResponse::new(catalog.active_profile, catalog.profiles)
+fn profile_list_response(
+    state: &AppState,
+    catalog: ProfileCatalog,
+) -> io::Result<ProfileListResponse> {
+    let manifests = dsh::native_profiles(state.snapshots.configured_dsh_home()?)?;
+    let names = manifests
+        .iter()
+        .map(|profile| profile.name.clone())
+        .collect();
+    Ok(ProfileListResponse::new(catalog.active_profile, names).with_manifests(manifests))
 }
 
 async fn profile_list(State(state): State<AppState>) -> axum::response::Response {
@@ -976,8 +1098,12 @@ async fn profile_list(State(state): State<AppState>) -> axum::response::Response
             "checkpoint_recovery_failed",
         );
     }
-    match state.profiles.load() {
-        Ok(catalog) => (StatusCode::OK, Json(profile_list_response(catalog))).into_response(),
+    match state
+        .profiles
+        .load()
+        .and_then(|catalog| profile_list_response(&state, catalog))
+    {
+        Ok(response) => (StatusCode::OK, Json(response)).into_response(),
         Err(error) => data_error_response(error, "profile_catalog_unavailable"),
     }
 }
@@ -987,14 +1113,51 @@ async fn profile_control(
     Json(command): Json<ProfileCommand>,
 ) -> axum::response::Response {
     match command.action {
-        ProfileAction::List | ProfileAction::Status => profile_list(State(state)).await,
+        ProfileAction::List | ProfileAction::Status | ProfileAction::PluginInventory => {
+            if command.profile.is_some() || command.package.is_some() {
+                return data_error_response(
+                    io::Error::new(
+                        io::ErrorKind::InvalidInput,
+                        "profile inventory actions do not accept parameters",
+                    ),
+                    "profile_invalid",
+                );
+            }
+            profile_list(State(state)).await
+        }
         ProfileAction::Select => {
+            if command.package.is_some() {
+                return data_error_response(
+                    io::Error::new(
+                        io::ErrorKind::InvalidInput,
+                        "profile select does not accept a package",
+                    ),
+                    "profile_invalid",
+                );
+            }
             let Some(profile) = command.profile.as_deref() else {
                 return data_error_response(
                     io::Error::new(io::ErrorKind::InvalidInput, "profile is required"),
                     "profile_invalid",
                 );
             };
+            let manifests =
+                match dsh::native_profiles(match state.snapshots.configured_dsh_home() {
+                    Ok(home) => home,
+                    Err(error) => return data_error_response(error, "profile_catalog_unavailable"),
+                }) {
+                    Ok(manifests) => manifests,
+                    Err(error) => return data_error_response(error, "profile_catalog_unavailable"),
+                };
+            if !manifests.iter().any(|item| item.name == profile) {
+                return data_error_response(
+                    io::Error::new(
+                        io::ErrorKind::NotFound,
+                        "profile has no valid native manifest",
+                    ),
+                    "profile_invalid",
+                );
+            }
             let lifecycle = state.supervisor.acquire_lifecycle().await;
             if let Err(response) = ensure_checkpoint_mutation_ready(&state).await {
                 return response;
@@ -1013,7 +1176,14 @@ async fn profile_control(
             {
                 return response;
             }
-            let catalog = match state.profiles.select(profile) {
+            let catalog = match ProfileCatalog::new(
+                profile,
+                manifests.iter().map(|item| item.name.clone()).collect(),
+            )
+            .and_then(|catalog| {
+                state.profiles.write(&catalog)?;
+                Ok(catalog)
+            }) {
                 Ok(catalog) => catalog,
                 Err(error) => return data_error_response(error, "profile_invalid"),
             };
@@ -1042,6 +1212,110 @@ async fn profile_control(
             )
                 .into_response()
         }
+        ProfileAction::PluginRemove => profile_plugin_remove(state, command).await,
+    }
+}
+
+async fn profile_plugin_remove(
+    state: AppState,
+    command: ProfileCommand,
+) -> axum::response::Response {
+    let Some(profile) = command.profile else {
+        return data_error_response(
+            io::Error::new(io::ErrorKind::InvalidInput, "profile is required"),
+            "plugin_remove_invalid",
+        );
+    };
+    let Some(package) = command.package else {
+        return data_error_response(
+            io::Error::new(io::ErrorKind::InvalidInput, "package is required"),
+            "plugin_remove_invalid",
+        );
+    };
+    let catalog = match state.profiles.load() {
+        Ok(catalog) => catalog,
+        Err(error) => return data_error_response(error, "profile_catalog_unavailable"),
+    };
+    if catalog.active_profile != profile {
+        return api_error_response(
+            StatusCode::CONFLICT,
+            "plugin_profile_conflict",
+            "plugins can be removed only from the selected profile",
+        );
+    }
+    let lifecycle = state.supervisor.acquire_lifecycle().await;
+    if let Err(response) = ensure_checkpoint_mutation_ready(&state).await {
+        return response;
+    }
+    let update_gate = match state.updater.try_acquire_gate() {
+        Ok(gate) => gate,
+        Err(error) => return update_error_response(error),
+    };
+    if let Err(response) = ensure_harness_selection_quiescent(
+        &state,
+        &lifecycle,
+        "plugin_remove_conflict",
+        "cannot remove a plugin until Harness is positively stopped and unowned",
+    )
+    .await
+    {
+        return response;
+    }
+    let release_id = match state.releases.load() {
+        Ok(catalog) => match catalog.current_release {
+            Some(id) => id,
+            None => {
+                return data_error_response(
+                    io::Error::new(
+                        io::ErrorKind::NotFound,
+                        "no verified DSH release is selected",
+                    ),
+                    "plugin_cli_unavailable",
+                )
+            }
+        },
+        Err(error) => return data_error_response(error, "release_catalog_unavailable"),
+    };
+    let release_root = match state.releases.release_root(&release_id) {
+        Ok(root) => root,
+        Err(error) => return data_error_response(error, "plugin_cli_unavailable"),
+    };
+    let paths = state.paths.clone();
+    let dsh_home = match state.snapshots.configured_dsh_home() {
+        Ok(home) => home.clone(),
+        Err(error) => return data_error_response(error, "profile_catalog_unavailable"),
+    };
+    let owner = tokio::spawn(async move {
+        let _lifecycle = lifecycle;
+        let _update_gate = update_gate;
+        tokio::task::spawn_blocking(move || {
+            dsh::remove_profile_plugin(&paths, &dsh_home, &release_root, &profile, &package).map(
+                |(outcome, inventory)| {
+                    let removed = outcome.exit_code == Some(0)
+                        && !inventory.plugins.iter().any(|item| item.package == package);
+                    PluginRemoveResponse {
+                        api_version: nexus_protocol::API_VERSION.to_owned(),
+                        profile,
+                        package,
+                        removed,
+                        exit_code: outcome.exit_code,
+                        stdout: outcome.stdout,
+                        stderr: outcome.stderr,
+                        inventory,
+                    }
+                },
+            )
+        })
+        .await
+        .map_err(|error| io::Error::other(format!("plugin removal task failed: {error}")))?
+    });
+    match owner.await {
+        Ok(Ok(response)) => (StatusCode::OK, Json(response)).into_response(),
+        Ok(Err(error)) => data_error_response(error, "plugin_remove_failed"),
+        Err(error) => data_error_response(
+            io::Error::other(format!("plugin removal owner failed: {error}")),
+            "plugin_remove_failed",
+        ),
     }
 }
 
@@ -3001,6 +3275,7 @@ fn data_error_response(error: io::Error, fallback_code: &str) -> axum::response:
         io::ErrorKind::InvalidInput | io::ErrorKind::InvalidData => StatusCode::BAD_REQUEST,
         io::ErrorKind::NotFound => StatusCode::NOT_FOUND,
         io::ErrorKind::AlreadyExists | io::ErrorKind::ResourceBusy => StatusCode::CONFLICT,
+        io::ErrorKind::PermissionDenied => StatusCode::FORBIDDEN,
         _ => StatusCode::INTERNAL_SERVER_ERROR,
     };
     api_error_response(status, fallback_code, error.to_string())
@@ -3128,7 +3403,8 @@ mod cors_tests {
     use super::{
         acquire_runtime_lock, are_allowed_cors_headers, harness_ui_process_is_presentable,
         is_allowed_console_origin_for_port, is_allowed_cors_method, proxy_identity_values_match,
-        redact_config_args, redact_config_url, PROXY_DATA_ROOT_HEADER, PROXY_INSTANCE_HEADER,
+        recovery_log_tail, redact_config_args, redact_config_url, PROXY_DATA_ROOT_HEADER,
+        PROXY_INSTANCE_HEADER,
     };
     use nexus_core::HarnessLogSession;
     use nexus_core::NexusPaths;
@@ -3324,6 +3600,29 @@ mod cors_tests {
             false,
         );
         assert!(harness_ui_process_is_presentable(&attached, &unreserved));
+    }
+
+    #[test]
+    fn recovery_tail_is_bounded_redacted_and_uses_fatal_prefix_as_metadata() {
+        let root = std::env::temp_dir().join(format!("nexus-recovery-tail-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let paths = NexusPaths::from_root(root.clone());
+        paths
+            .ensure_directories()
+            .expect("Nexus directories create");
+        std::fs::write(
+            paths.logs_dir.join("current.stderr.log"),
+            "[fatal] boot failed\nAuthorization: Bearer DUMMY-RECOVERY-SECRET\n",
+        )
+        .expect("synthetic log writes");
+        let (content, truncated, fatal) =
+            recovery_log_tail(&paths, "current.stderr.log").expect("bounded recovery tail reads");
+        assert!(fatal);
+        assert!(!truncated);
+        assert!(!content.contains("DUMMY-RECOVERY-SECRET"));
+        assert!(content.contains("[REDACTED]"));
+        assert!(recovery_log_tail(&paths, "../outside.log").is_err());
+        std::fs::remove_dir_all(root).expect("fixture removes");
     }
 }
 

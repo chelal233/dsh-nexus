@@ -219,6 +219,14 @@ pub struct SnapshotManifest {
     pub files: Vec<SnapshotFileRecord>,
 }
 
+/// A fully validated manifest and its fixed-policy stored blobs. Missing and
+/// intentionally omitted records have no content. Callers cannot select paths.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SnapshotContent {
+    pub manifest: SnapshotManifest,
+    pub files: Vec<Option<Vec<u8>>>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 pub struct SnapshotSummary {
@@ -579,6 +587,30 @@ impl SnapshotStore {
     pub fn detail(&self, snapshot_id: &str) -> Result<SnapshotManifest> {
         let directory = self.find_snapshot_directory(snapshot_id)?;
         validation::load_valid_snapshot(self, &directory)
+    }
+
+    pub fn content(&self, snapshot_id: &str) -> Result<SnapshotContent> {
+        let manifest = self.detail(snapshot_id)?;
+        let mut files = Vec::with_capacity(manifest.files.len());
+        for (index, record) in manifest.files.iter().enumerate() {
+            files.push(match record.state {
+                SnapshotFileState::Present => {
+                    let bytes = validation::read_snapshot_blob(self, snapshot_id, index)?;
+                    let digest = validation::sha256_hex(&bytes);
+                    if bytes.len() as u64 != record.stored_size
+                        || record.sha256.as_deref() != Some(digest.as_str())
+                    {
+                        return Err(SnapshotError::Integrity(format!(
+                            "stored content changed while reading {}",
+                            record.path
+                        )));
+                    }
+                    Some(bytes)
+                }
+                SnapshotFileState::Missing | SnapshotFileState::Omitted => None,
+            });
+        }
+        Ok(SnapshotContent { manifest, files })
     }
 
     pub fn inspect(&self, snapshot_id: &str) -> Result<SnapshotInspection> {

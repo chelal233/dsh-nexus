@@ -319,6 +319,8 @@ pub enum ProfileAction {
     List,
     Status,
     Select,
+    PluginInventory,
+    PluginRemove,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -326,6 +328,24 @@ pub struct ProfileCommand {
     pub action: ProfileAction,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub profile: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub package: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ProfilePluginPayload {
+    pub package: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub version: Option<String>,
+    pub builtin: bool,
+    pub removable: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct NativeProfilePayload {
+    pub name: String,
+    pub bundles: Vec<String>,
+    pub plugins: Vec<ProfilePluginPayload>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -333,6 +353,8 @@ pub struct ProfileListResponse {
     pub api_version: String,
     pub active_profile: String,
     pub profiles: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub manifests: Vec<NativeProfilePayload>,
 }
 
 pub type ProfileStatusResponse = ProfileListResponse;
@@ -343,7 +365,13 @@ impl ProfileListResponse {
             api_version: API_VERSION.to_owned(),
             active_profile: active_profile.into(),
             profiles,
+            manifests: Vec::new(),
         }
+    }
+
+    pub fn with_manifests(mut self, manifests: Vec<NativeProfilePayload>) -> Self {
+        self.manifests = manifests;
+        self
     }
 }
 
@@ -499,6 +527,12 @@ pub struct SnapshotFilePayload {
     pub redacted_paths: Vec<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub omitted_reason: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub content: Option<String>,
+    #[serde(default)]
+    pub content_truncated: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub content_note: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -516,6 +550,32 @@ pub struct SnapshotInspectionPayload {
     pub summary: Option<SnapshotSummaryPayload>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub errors: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub files: Vec<SnapshotFilePayload>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct RecoveryLogTail {
+    pub stream: String,
+    pub content: String,
+    pub truncated: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct RecoveryStatusResponse {
+    pub api_version: String,
+    pub manual_entry_available: bool,
+    pub harness_stop_required: bool,
+    pub harness: HarnessRuntimeInfo,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub startup_error: Option<String>,
+    pub fatal_prefix_observed: bool,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub log_tail: Vec<RecoveryLogTail>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub diagnostic_errors: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pending_restore: Option<CheckpointRestoreStatus>,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
@@ -928,6 +988,21 @@ pub struct UpdateCommand {
     pub operation_id: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub confirmation: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct PluginRemoveResponse {
+    pub api_version: String,
+    pub profile: String,
+    pub package: String,
+    pub removed: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub exit_code: Option<i32>,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub stdout: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub stderr: String,
+    pub inventory: NativeProfilePayload,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]

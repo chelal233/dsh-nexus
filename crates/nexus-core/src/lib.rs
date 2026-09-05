@@ -2485,7 +2485,9 @@ fn validate_diagnostics_bundle(bundle: &DiagnosticsBundle) -> io::Result<()> {
     Ok(())
 }
 
-fn redact_diagnostics_payload(payload: &[u8]) -> (Vec<u8>, bool) {
+/// Redact token- and credential-shaped text using the same policy as exported
+/// diagnostics bundles. Callers must still bound input before invoking this.
+pub fn redact_diagnostics_payload(payload: &[u8]) -> (Vec<u8>, bool) {
     let Ok(text) = std::str::from_utf8(payload) else {
         return (b"[binary diagnostics payload omitted]\n".to_vec(), true);
     };

@@ -13,11 +13,14 @@ use nexus_protocol::{
     SnapshotSummaryPayload, API_VERSION,
 };
 use nexus_snapshots::{
-    CaptureRequest, RecoverDecision, RestoreOutcome, RestoreStatus, SnapshotFileState,
-    SnapshotInspection, SnapshotKind, SnapshotManifest, SnapshotStore, SnapshotStoreConfig,
-    SnapshotSummary,
+    CaptureRequest, RecoverDecision, RestoreOutcome, RestoreStatus, SnapshotContent,
+    SnapshotFileState, SnapshotInspection, SnapshotKind, SnapshotManifest, SnapshotStore,
+    SnapshotStoreConfig, SnapshotSummary,
 };
 use tokio::sync::{OwnedSemaphorePermit, Semaphore};
+
+const MAX_FILE_CONTENT_BYTES: usize = 64 * 1024;
+const MAX_DETAIL_CONTENT_BYTES: usize = 256 * 1024;
 
 #[derive(Clone)]
 pub(crate) struct SnapshotCoordinator {
@@ -112,8 +115,8 @@ impl SnapshotCoordinator {
         snapshot_id: String,
     ) -> io::Result<SnapshotDetailResponse> {
         let lease = self.acquire(profile).await?;
-        let manifest = lease.call(move |store| store.detail(&snapshot_id)).await?;
-        Ok(detail_response(manifest))
+        let content = lease.call(move |store| store.content(&snapshot_id)).await?;
+        Ok(detail_response(content))
     }
 
     pub(crate) async fn inspect(
@@ -122,8 +125,14 @@ impl SnapshotCoordinator {
         snapshot_id: String,
     ) -> io::Result<SnapshotInspectionPayload> {
         let lease = self.acquire(profile).await?;
+        let content_id = snapshot_id.clone();
         let inspection = lease.call(move |store| store.inspect(&snapshot_id)).await?;
-        Ok(inspection_payload(inspection))
+        let mut payload = inspection_payload(inspection);
+        if payload.valid {
+            let content = lease.call(move |store| store.content(&content_id)).await?;
+            payload.files = detail_files(content);
+        }
+        Ok(payload)
     }
 
     pub(crate) fn healthy_error(&self) -> Option<String> {
@@ -330,34 +339,67 @@ fn inspection_payload(inspection: SnapshotInspection) -> SnapshotInspectionPaylo
         valid: inspection.valid,
         summary: inspection.summary.as_ref().map(summary_payload),
         errors: inspection.errors,
+        files: Vec::new(),
     }
 }
 
-fn detail_response(manifest: SnapshotManifest) -> SnapshotDetailResponse {
-    let summary = summary_payload(&SnapshotSummary::from(&manifest));
-    let files = manifest
-        .files
-        .into_iter()
-        .map(|record| SnapshotFilePayload {
-            path: record.path,
-            state: match record.state {
-                SnapshotFileState::Present => SnapshotFileStatePayload::Present,
-                SnapshotFileState::Missing => SnapshotFileStatePayload::Missing,
-                SnapshotFileState::Omitted => SnapshotFileStatePayload::Omitted,
-            },
-            source_size: record.source_size,
-            stored_size: record.stored_size,
-            sha256: record.sha256,
-            mode: record.mode,
-            redacted_paths: record.redacted_paths,
-            omitted_reason: record.omitted_reason,
-        })
-        .collect();
+fn detail_response(content: SnapshotContent) -> SnapshotDetailResponse {
+    let summary = summary_payload(&SnapshotSummary::from(&content.manifest));
+    let files = detail_files(content);
     SnapshotDetailResponse {
         api_version: API_VERSION.to_owned(),
         summary,
         files,
     }
+}
+
+fn detail_files(content: SnapshotContent) -> Vec<SnapshotFilePayload> {
+    let SnapshotContent { manifest, files } = content;
+    let mut remaining = MAX_DETAIL_CONTENT_BYTES;
+    manifest
+        .files
+        .into_iter()
+        .zip(files)
+        .map(|(record, bytes)| {
+            let (content, content_truncated) = match bytes {
+                Some(bytes) => {
+                    let limit = remaining.min(MAX_FILE_CONTENT_BYTES).min(bytes.len());
+                    let mut end = limit;
+                    while end > 0 && std::str::from_utf8(&bytes[..end]).is_err() {
+                        end -= 1;
+                    }
+                    remaining = remaining.saturating_sub(end);
+                    (
+                        Some(String::from_utf8_lossy(&bytes[..end]).into_owned()),
+                        end < bytes.len(),
+                    )
+                }
+                None => (None, false),
+            };
+            SnapshotFilePayload {
+                path: record.path,
+                state: match record.state {
+                    SnapshotFileState::Present => SnapshotFileStatePayload::Present,
+                    SnapshotFileState::Missing => SnapshotFileStatePayload::Missing,
+                    SnapshotFileState::Omitted => SnapshotFileStatePayload::Omitted,
+                },
+                source_size: record.source_size,
+                stored_size: record.stored_size,
+                sha256: record.sha256,
+                mode: record.mode,
+                redacted_paths: record.redacted_paths,
+                omitted_reason: record.omitted_reason,
+                content,
+                content_truncated,
+                content_note: content_truncated.then(|| {
+                    format!(
+                        "content is truncated by the {} byte per-file and {} byte response limits",
+                        MAX_FILE_CONTENT_BYTES, MAX_DETAIL_CONTENT_BYTES
+                    )
+                }),
+            }
+        })
+        .collect()
 }
 
 #[cfg(test)]
@@ -452,6 +494,25 @@ mod tests {
         let encoded = serde_json::to_string(&detail).expect("detail serializes");
         assert!(!encoded.contains("DUMMY-SNAPSHOT-SECRET"));
         assert!(encoded.contains("/provider/apiKey"));
+        assert_eq!(detail.files.len(), 7);
+        assert!(detail
+            .files
+            .iter()
+            .find(|file| file.path == "profile/package.json")
+            .and_then(|file| file.content.as_deref())
+            .is_some_and(|content| content.contains("bundle-a")));
+        assert!(detail
+            .files
+            .iter()
+            .find(|file| file.path == "home/settings.yaml")
+            .and_then(|file| file.content.as_deref())
+            .is_some_and(|content| content.contains("mode: snapshot")));
+        let inspection = coordinator
+            .inspect("demo".to_owned(), manifest.snapshot_id.clone())
+            .await
+            .expect("explicit inspection includes bounded content");
+        assert!(inspection.valid);
+        assert_eq!(inspection.files.len(), 7);
 
         write(
             &fixture.home.join("settings.yaml"),
@@ -473,6 +534,47 @@ mod tests {
         assert!(restored.contains("mode: snapshot"));
         assert!(restored.contains("DUMMY-CURRENT-SECRET"));
         assert!(!restored.contains("DUMMY-SNAPSHOT-SECRET"));
+    }
+
+    #[tokio::test]
+    async fn snapshot_detail_truncates_large_allowed_content() {
+        let fixture = Fixture::new("content-limit");
+        let package = fixture.home.join("profiles/demo/package.json");
+        write(
+            &package,
+            &format!(
+                r#"{{"name":"demo","dsh":{{"profile":{{"bundles":[]}}}},"padding":"{}"}}"#,
+                "x".repeat(MAX_FILE_CONTENT_BYTES + 1024)
+            ),
+        );
+        let coordinator = fixture.coordinator();
+        let lease = coordinator
+            .acquire("demo".to_owned())
+            .await
+            .expect("owner acquires");
+        let manifest = lease
+            .capture_manual("1.0.0".to_owned(), None)
+            .await
+            .expect("snapshot captures");
+        drop(lease);
+        let detail = coordinator
+            .detail("demo".to_owned(), manifest.snapshot_id)
+            .await
+            .expect("detail loads");
+        let package = detail
+            .files
+            .iter()
+            .find(|file| file.path == "profile/package.json")
+            .expect("package record");
+        assert!(package.content_truncated);
+        assert!(package
+            .content_note
+            .as_deref()
+            .is_some_and(|note| note.contains("65536 byte")));
+        assert_eq!(
+            package.content.as_ref().expect("bounded content").len(),
+            MAX_FILE_CONTENT_BYTES
+        );
     }
 
     #[tokio::test]

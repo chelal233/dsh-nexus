@@ -41,6 +41,7 @@ const ALLOWED_ROUTES: &[&str] = &[
     "/v1/harness/ui",
     "/v1/harness/discover",
     "/v1/profiles",
+    "/v1/recovery",
     "/v1/checkpoints",
     "/v1/releases",
     "/v1/releases/tags",
@@ -494,6 +495,7 @@ mod tests {
         assert!(is_allowed_route("/v1/releases/tags"));
         assert!(is_allowed_route("/v1/runtime"));
         assert!(is_allowed_route("/v1/runtime/plan"));
+        assert!(is_allowed_route("/v1/recovery"));
         assert!(is_allowed_route("/v1/agent"));
         assert!(!is_allowed_route("/v1/health?url=https://example.com"));
         assert!(validate_agent_request("/v1/runtime", &Method::GET, None).is_ok());
