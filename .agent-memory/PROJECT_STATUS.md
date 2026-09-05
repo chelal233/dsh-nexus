@@ -2,6 +2,12 @@ updated: 2026-09-05 by Codex (P0 快照内容引擎已接入 Agent，恢复事�
 
 # dsh-nexus 项目状态与需求基线
 
+## P0 缺陷修复第二轮：占位符双路径（2026-09-05）
+
+- 首次 retarget 修复引入回归：替换 `releases\<old>` 时保留了值的前缀（`Nexus\`），渲染后变成 `Nexus\C:\...eleases\...` 双路径 → Harness 启动 os error 267（目录名称无效）
+- **修正**：retarget 改为把值中**从开头到槽位段结束**的整个前缀替换为 `{release_root}`（值以占位符开头）；用户 config.json 的 args[0] 已二次修复为 `{release_root}pps/cli/lib/bin.js`
+- 教训：Windows 文本模式 python 写入会把 LF 转 CRLF，改 Rust 源码后需归一化行尾（本次已 amend）；`{release_root}` 是子串替换语义，占位符应位于值的开头
+
 ## P0 反馈第八轮（2026-09-05，direct 模式退役 + 运行时归位）
 
 1. **运行时设置整块（含运行时状态面板）从更新页迁至设置页**，置于 Harness 配置面板之前；更新页切换标签 payload 改用 config 持久化的 source/mode
