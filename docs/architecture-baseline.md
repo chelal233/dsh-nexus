@@ -862,3 +862,30 @@ Official and npmmirror endpoints are typed and bounded. Node artifacts require a
 Windows probes own their descendant tree through a kill-on-close Job Object and bound output/time. System installation uses private fixed specifications for the verified Node MSI and pinned official pnpm user script. Timeout/cancellation after installer launch is an uncertain external state: the system installer is not blindly killed, the result requires a fresh observation, and no pin is returned until the expected absolute path reports the exact version.
 
 This crate is not yet an Agent route or persisted cold operation. It has not performed a real download, MSI/script installation, Corepack invocation, system PATH/config change, Harness launch, or GUI acceptance. See `artifacts/takeover/p0-runtime-supply-report.md` for verification and trust boundaries.
+
+## P0 persisted cold-install orchestration (2026-09-05)
+
+`POST /v1/updates` now accepts asynchronous `switch`, `confirm`, and `cancel`
+actions while preserving `status` and `install`. `GET /v1/updates` returns the
+single persisted cold operation, including bounded phase/progress, selected tag,
+runtime source/mode, server-owned candidate, deterministic foundation plan, and
+the exact supply confirmation token when acquisition is required. Waiting for
+confirmation owns neither the supervisor lifecycle lock nor the updater gate.
+
+The approved first-run upstream is
+`https://github.com/deepseek-ai/deepseek-harness`; tag enumeration uses it when
+no update config exists and does not write `config.json`. A missing Git runtime
+fails with an actionable message and is never installed automatically. A cold
+candidate is cloned once below Nexus downloads, its fixed manifests are parsed
+through the runtime-requirements planner, and supply delegates to
+`nexus-runtime-supply`. Confirmation re-plans before any supply side effect.
+
+The selected pinned pnpm command runs `install --frozen-lockfile` and `build`
+with the shared child PATH, source registry, and minimum-release-age arguments.
+Publication requires `apps/cli/package.json` to identify `lib/bin.js` and the
+built entry to exist. Only then does Agent acquire lifecycle followed by updater,
+recheck checkpoint/Harness/capacity state, register the immutable slot, persist
+absolute Node/pnpm/Git pins and a Node Harness command with `--profile
+{profile}`, promote, and synchronize Agent state. It never starts Harness.
+Cancellation and failure cannot promote a candidate; a post-promotion Agent
+state failure restores the previous current/LKG pointers.

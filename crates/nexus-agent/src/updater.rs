@@ -145,6 +145,7 @@ impl UpdateExecutor {
     /// slot with that version (fast path) or installs it and promotes the new
     /// slot. The caller must ensure Harness is quiescent; promotion here does
     /// not re-check supervisor state.
+    #[allow(dead_code)]
     pub(crate) async fn switch_tag_owned(
         &self,
         tag: String,
@@ -817,7 +818,7 @@ def	refs/tags/v0.9.0^{}
                     verify_args: Vec::new(),
                     timeout_secs: Some(5),
                 }),
-            
+
                 releases: None,
                 runtime: None,
                 snapshots: None,

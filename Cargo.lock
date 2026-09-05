@@ -1393,6 +1393,7 @@ dependencies = [
  "nexus-core",
  "nexus-launcher-core",
  "nexus-protocol",
+ "nexus-runtime-supply",
  "nexus-snapshots",
  "serde_json",
  "tokio",

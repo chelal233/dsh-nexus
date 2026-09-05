@@ -48,14 +48,15 @@ use nexus_protocol::{
     ErrorResponse, HarnessAction, HarnessCommand, HarnessDiscoveryResponse, HarnessResponse,
     HarnessRuntimeInfo, HealthResponse, LifecycleAccepted, LifecycleAction, LifecycleCommand,
     ProfileAction, ProfileCommand, ProfileListResponse, ProfileSelectResponse, ReleaseAction,
-    ReleaseCommand, ReleaseListResponse, RuntimePlanRequest, StateResponse, TagListResponse,
-    UpdateAction, UpdateCommand, UpdateResponse, UpdateState,
+    ReleaseCommand, ReleaseListResponse, RuntimeInstallMode, RuntimePlanRequest, RuntimeSource,
+    StateResponse, TagListResponse, UpdateAction, UpdateCommand, UpdateResponse, UpdateState,
 };
 use tokio::{
     net::TcpListener,
     sync::{watch, Mutex, RwLock},
 };
 
+mod cold;
 mod dsh;
 mod runtime;
 mod runtime_plan;
@@ -90,6 +91,7 @@ struct AppState {
     diagnostics: DiagnosticsStore,
     config: ConfigStore,
     updater: UpdateExecutor,
+    cold: cold::ColdCoordinator,
     supervisor: HarnessSupervisor,
     snapshots: snapshots::SnapshotCoordinator,
     harness_sync: Arc<Mutex<()>>,
@@ -205,6 +207,8 @@ pub async fn run_with_instance_id(
     let diagnostics = DiagnosticsStore::new(paths.clone());
     let updater = UpdateExecutor::new(paths.clone(), releases.clone());
     let _ = updater.recover_unattached()?;
+    let cold = cold::ColdCoordinator::new(paths.clone());
+    cold.recover()?;
     let supervisor = HarnessSupervisor::new(paths.clone())?;
     let metadata = supervisor.metadata_store();
     // A restart can only recover a persisted Harness state by proving the
@@ -229,6 +233,7 @@ pub async fn run_with_instance_id(
         diagnostics,
         config: config_store,
         updater,
+        cold,
         supervisor: supervisor.clone(),
         snapshots,
         harness_sync: Arc::new(Mutex::new(())),
@@ -2149,15 +2154,16 @@ async fn runtime_status_for_paths(paths: &nexus_core::NexusPaths) -> axum::respo
 async fn release_tags(State(state): State<AppState>) -> axum::response::Response {
     let spec = match load_update_spec(&state.paths) {
         Ok(Some(spec)) => spec,
-        Ok(None) => {
-            return data_error_response(
-                io::Error::new(
-                    io::ErrorKind::InvalidInput,
-                    "update source is not configured; set it in config.json first",
-                ),
-                "update_source_not_configured",
-            );
-        }
+        Ok(None) => UpdateSpec {
+            source: cold::ColdCoordinator::approved_upstream().to_owned(),
+            ref_name: "main".to_owned(),
+            git_program: std::path::PathBuf::from("git"),
+            build_program: None,
+            build_args: Vec::new(),
+            verify_program: None,
+            verify_args: Vec::new(),
+            timeout_secs: Some(120),
+        },
         Err(error) => return data_error_response(error, "update_spec_unavailable"),
     };
     let command_timeout = std::time::Duration::from_secs(spec.timeout_secs.unwrap_or(120));
@@ -2339,7 +2345,15 @@ async fn update_status(State(state): State<AppState>) -> axum::response::Respons
         .release_id
         .as_deref()
         .and_then(|id| state.releases.get(id).ok());
-    (StatusCode::OK, Json(UpdateResponse::new(update, release))).into_response()
+    let operation = match state.cold.load() {
+        Ok(operation) => operation,
+        Err(error) => return data_error_response(error, "cold_operation_unavailable"),
+    };
+    let mut response = UpdateResponse::new(update, release);
+    if let Some(operation) = operation {
+        response = response.with_operation(operation);
+    }
+    (StatusCode::OK, Json(response)).into_response()
 }
 
 async fn update_control(
@@ -2368,41 +2382,115 @@ async fn update_control(
                     "update_tag_required",
                 );
             };
-            let lifecycle = state.supervisor.acquire_lifecycle().await;
             if let Err(response) = ensure_checkpoint_mutation_ready(&state).await {
                 return response;
             }
-            if let Err(response) = ensure_harness_selection_quiescent(
-                &state,
-                &lifecycle,
-                "release_change_conflict",
-                "cannot switch release tag until Harness is positively stopped and unowned",
-            )
-            .await
-            {
-                return response;
+            let source = command.source.unwrap_or(RuntimeSource::Official);
+            let mode = command.mode.unwrap_or(RuntimeInstallMode::Portable);
+            match state.cold.begin(tag, source, mode).await {
+                Ok(operation) => {
+                    let owner_state = state.clone();
+                    let operation_id = operation.operation_id.clone();
+                    tokio::spawn(async move {
+                        cold::prepare(owner_state, operation_id).await;
+                    });
+                    (
+                        StatusCode::ACCEPTED,
+                        Json(
+                            UpdateResponse::new(
+                                state
+                                    .updater
+                                    .status()
+                                    .unwrap_or_else(|_| nexus_protocol::UpdateRuntimeInfo::idle()),
+                                None,
+                            )
+                            .with_operation(operation),
+                        ),
+                    )
+                        .into_response()
+                }
+                Err(error) => data_error_response(error, "cold_operation_rejected"),
             }
-            let update_gate = match state.updater.try_acquire_gate() {
-                Ok(gate) => gate,
-                Err(error) => return update_error_response(error),
+        }
+        UpdateAction::Confirm => {
+            let Some(operation_id) = command.operation_id else {
+                return api_error_response(
+                    StatusCode::BAD_REQUEST,
+                    "cold_operation_id_required",
+                    "operation_id is required",
+                );
             };
-            let (result_tx, result_rx) = tokio::sync::oneshot::channel();
+            let Some(confirmation) = command.confirmation else {
+                return api_error_response(
+                    StatusCode::BAD_REQUEST,
+                    "cold_confirmation_required",
+                    "confirmation is required",
+                );
+            };
+            let operation = match state
+                .cold
+                .claim_confirmation(&operation_id, &confirmation)
+                .await
+            {
+                Ok(operation) => operation,
+                Err(error) if error.kind() == io::ErrorKind::InvalidInput => {
+                    return api_error_response(
+                        StatusCode::CONFLICT,
+                        "cold_confirmation_stale",
+                        "cold-install confirmation is stale or mismatched",
+                    )
+                }
+                Err(error) => return data_error_response(error, "cold_operation_unavailable"),
+            };
             let owner_state = state.clone();
             tokio::spawn(async move {
-                let response = complete_release_switch(owner_state, tag, update_gate).await;
-                drop(lifecycle);
-                let _ = result_tx.send(response);
+                cold::confirm(owner_state, operation_id, confirmation).await;
             });
-            match result_rx.await {
-                Ok(response) => response,
-                Err(_) => update_error_response(UpdateExecutorError::Persistence(
-                    io::Error::other("detached switch owner exited without a terminal result"),
-                )),
+            (
+                StatusCode::ACCEPTED,
+                Json(
+                    UpdateResponse::new(
+                        state
+                            .updater
+                            .status()
+                            .unwrap_or_else(|_| nexus_protocol::UpdateRuntimeInfo::idle()),
+                        None,
+                    )
+                    .with_operation(operation),
+                ),
+            )
+                .into_response()
+        }
+        UpdateAction::Cancel => {
+            let Some(operation_id) = command.operation_id else {
+                return api_error_response(
+                    StatusCode::BAD_REQUEST,
+                    "cold_operation_id_required",
+                    "operation_id is required",
+                );
+            };
+            match state.cold.cancel(&operation_id).await {
+                Ok(operation) => (
+                    StatusCode::OK,
+                    Json(
+                        UpdateResponse::new(
+                            state
+                                .updater
+                                .status()
+                                .unwrap_or_else(|_| nexus_protocol::UpdateRuntimeInfo::idle()),
+                            None,
+                        )
+                        .with_operation(operation),
+                    ),
+                )
+                    .into_response(),
+                Err(error) => data_error_response(error, "cold_cancel_failed"),
             }
         }
     }
 }
 
+#[allow(dead_code)]
 async fn complete_release_switch(
     state: AppState,
     tag: String,
@@ -3344,6 +3432,7 @@ mod checkpoint_tests {
                 diagnostics: DiagnosticsStore::new(paths.clone()),
                 config,
                 updater: UpdateExecutor::new(paths.clone(), releases),
+                cold: crate::cold::ColdCoordinator::new(paths.clone()),
                 supervisor,
                 snapshots: snapshots::SnapshotCoordinator::new(paths.clone(), Ok(dsh_home.clone())),
                 harness_sync: Arc::new(Mutex::new(())),
@@ -3883,6 +3972,7 @@ mod checkpoint_tests {
             diagnostics: DiagnosticsStore::new(paths.clone()),
             config,
             updater: UpdateExecutor::new(paths.clone(), releases.clone()),
+            cold: crate::cold::ColdCoordinator::new(paths.clone()),
             supervisor: supervisor.clone(),
             snapshots: snapshots::SnapshotCoordinator::new(paths.clone(), Ok(dsh_home.clone())),
             harness_sync: Arc::new(Mutex::new(())),
@@ -4174,8 +4264,8 @@ mod switch_ownership_tests {
         ProfileStore, ReleaseStore, UpdateSpec,
     };
     use nexus_protocol::{
-        ConfigAction, ConfigCommand, HarnessAction, RuntimeConfigPayload, UpdateAction,
-        UpdateCommand, UpdateState,
+        ConfigAction, ConfigCommand, RuntimeConfigPayload, RuntimeInstallMode, RuntimeSource,
+        UpdateAction, UpdateCommand,
     };
     use tokio::{
         sync::{oneshot, watch, Mutex, RwLock},
@@ -4183,8 +4273,7 @@ mod switch_ownership_tests {
     };
 
     use super::{
-        config_control, execute_harness_action, snapshots, update_control, AppState,
-        HarnessSupervisor, UpdateExecutor,
+        config_control, snapshots, update_control, AppState, HarnessSupervisor, UpdateExecutor,
     };
 
     fn switch_test_state(label: &str) -> AppState {
@@ -4237,6 +4326,7 @@ mod switch_ownership_tests {
             diagnostics: DiagnosticsStore::new(paths.clone()),
             config,
             updater: UpdateExecutor::new(paths.clone(), releases),
+            cold: crate::cold::ColdCoordinator::new(paths.clone()),
             supervisor,
             snapshots: snapshots::SnapshotCoordinator::new(
                 paths.clone(),
@@ -4256,141 +4346,36 @@ mod switch_ownership_tests {
     }
 
     #[tokio::test]
-    async fn cancelled_switch_keeps_lifecycle_and_update_gate_with_detached_owner() {
+    async fn cold_switch_waiting_and_cancel_do_not_hold_lifecycle_or_update_gate() {
         let state = switch_test_state("cancel-owner");
         let root = state.paths.root.clone();
-        let (command_reached, command_reached_rx) = oneshot::channel();
-        let (command_release, command_release_rx) = oneshot::channel();
-        state
-            .updater
-            .observe_next_command(command_reached, command_release_rx)
-            .await;
-
-        let request_state = state.clone();
-        let request = tokio::spawn(async move {
-            update_control(
-                State(request_state),
-                Json(UpdateCommand {
-                    action: UpdateAction::Switch,
-                    release_id: None,
-                    version: None,
-                    tag: Some("v-test".to_owned()),
-                }),
+        let operation = state
+            .cold
+            .begin(
+                "v-test".to_owned(),
+                RuntimeSource::Official,
+                RuntimeInstallMode::Portable,
             )
             .await
-        });
-        timeout(Duration::from_secs(3), command_reached_rx)
-            .await
-            .expect("switch command starts before deadline")
-            .expect("switch command start signal arrives");
-
-        let (start_attempt, start_attempt_rx) = oneshot::channel();
-        state
-            .supervisor
-            .observe_next_lifecycle_wait(start_attempt)
-            .await;
-        let start_state = state.clone();
-        let start = tokio::spawn(async move {
-            execute_harness_action(&start_state, HarnessAction::Start).await
-        });
-        timeout(Duration::from_secs(3), start_attempt_rx)
-            .await
-            .expect("Harness start attempts lifecycle before deadline")
-            .expect("Harness lifecycle attempt signal arrives");
-        let start_waited = !start.is_finished();
-
-        let second_update = update_control(
-            State(state.clone()),
-            Json(UpdateCommand {
-                action: UpdateAction::Install,
-                release_id: Some("second-update".to_owned()),
-                version: Some("test".to_owned()),
-                tag: None,
-            }),
-        )
-        .await;
-        let update_payload = state
-            .config
-            .load()
-            .expect("config loads")
-            .update
-            .expect("update config exists")
-            .to_payload();
-        let set_update = config_control(
-            State(state.clone()),
-            Json(ConfigCommand {
-                action: ConfigAction::SetUpdate,
-                update: Some(update_payload),
-                ..Default::default()
-            }),
-        )
-        .await;
-        let clear_update = config_control(
-            State(state.clone()),
-            Json(ConfigCommand {
-                action: ConfigAction::ClearUpdate,
-                ..Default::default()
-            }),
-        )
-        .await;
-
-        request.abort();
-        assert!(request
-            .await
-            .expect_err("request cancellation aborts handler")
-            .is_cancelled());
-        let gate_stayed_owned = match state.updater.try_acquire_gate() {
-            Err(super::UpdateExecutorError::AlreadyRunning) => true,
-            Ok(guard) => {
-                drop(guard);
-                false
-            }
-            Err(error) => panic!("unexpected update gate error: {error}"),
-        };
-        let owner_received_release = command_release.send(()).is_ok();
-        let terminal = timeout(Duration::from_secs(3), async {
-            loop {
-                let update = state.updater.status().expect("update state loads");
-                if update.state != UpdateState::Running {
-                    break update;
-                }
-                tokio::task::yield_now().await;
-            }
-        })
-        .await;
-        if start_waited {
-            let _ = timeout(Duration::from_secs(3), start)
+            .expect("operation begins");
+        let lifecycle = state.supervisor.acquire_lifecycle().await;
+        assert!(
+            state
+                .supervisor
+                .selection_change_is_quiescent(&lifecycle)
                 .await
-                .expect("Harness start resumes after switch owner releases lifecycle")
-                .expect("Harness start task joins");
-        }
-        let gate_released_after_terminal = state.updater.try_acquire_gate().is_ok();
+        );
+        drop(lifecycle);
+        assert!(state.updater.try_acquire_gate().is_ok());
+        let cancelled = state
+            .cold
+            .cancel(&operation.operation_id)
+            .await
+            .expect("operation cancels");
         let _ = fs::remove_dir_all(root);
-
-        assert!(
-            start_waited,
-            "Harness start must wait for the switch lifecycle owner"
-        );
-        assert_eq!(second_update.status(), axum::http::StatusCode::CONFLICT);
-        assert_eq!(set_update.status(), axum::http::StatusCode::CONFLICT);
-        assert_eq!(clear_update.status(), axum::http::StatusCode::CONFLICT);
-        assert!(
-            gate_stayed_owned,
-            "request cancellation must not release the update gate"
-        );
-        assert!(
-            owner_received_release,
-            "detached owner must retain the command wait"
-        );
         assert_eq!(
-            terminal
-                .expect("detached owner publishes a terminal state")
-                .state,
-            UpdateState::Failed
-        );
-        assert!(
-            gate_released_after_terminal,
-            "terminal owner must release the update gate"
+            cancelled.phase,
+            nexus_protocol::ColdOperationPhase::Cancelled
         );
     }
 
@@ -4518,7 +4503,7 @@ mod switch_ownership_tests {
     }
 
     #[tokio::test]
-    async fn switch_returns_agent_release_persistence_failure() {
+    async fn asynchronous_fast_switch_persists_terminal_failure() {
         let state = switch_test_state("agent-persistence");
         let root = state.paths.root.clone();
         state
@@ -4536,23 +4521,28 @@ mod switch_ownership_tests {
                 release_id: None,
                 version: None,
                 tag: Some("v-fast".to_owned()),
+                ..UpdateCommand::default()
             }),
         )
         .await;
-        assert_eq!(
-            response.status(),
-            axum::http::StatusCode::INTERNAL_SERVER_ERROR,
-            "Agent current-release persistence failures must reach the caller"
-        );
-        assert_eq!(
-            state.updater.status().expect("switch state loads").state,
-            UpdateState::Failed,
-            "Agent synchronization failure must replace the provisional switch success"
-        );
-        assert!(state
-            .updater
-            .status()
-            .expect("failed switch state reloads")
+        assert_eq!(response.status(), axum::http::StatusCode::ACCEPTED);
+        let terminal = timeout(Duration::from_secs(3), async {
+            loop {
+                let operation = state
+                    .cold
+                    .load()
+                    .expect("operation loads")
+                    .expect("operation exists");
+                if operation.phase.is_terminal() {
+                    break operation;
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("background fast switch terminates");
+        assert_eq!(terminal.phase, nexus_protocol::ColdOperationPhase::Failed);
+        assert!(terminal
             .error
             .as_deref()
             .is_some_and(|message| message.contains("failed to persist Agent current release")));
@@ -4563,7 +4553,8 @@ mod switch_ownership_tests {
                 .expect("release selection loads")
                 .current_release
                 .as_deref(),
-            Some("fast-slot")
+            None,
+            "failed asynchronous promotion restores the previous pointer"
         );
         assert!(state.updater.try_acquire_gate().is_ok());
         let _ = fs::remove_dir_all(root);

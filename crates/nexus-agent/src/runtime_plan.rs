@@ -201,6 +201,53 @@ pub(crate) async fn plan_registered_release(
     )
 }
 
+pub(crate) async fn plan_candidate_release(
+    release_root: &std::path::Path,
+    request: RuntimePlanRequest,
+    config_store: &ConfigStore,
+    runtime_request: &super::runtime::RuntimeRequestContext,
+) -> io::Result<RuntimePlanResponse> {
+    let release_root = std::fs::canonicalize(release_root)?;
+    let downloads_root = std::fs::canonicalize(&config_store.paths().downloads_dir)?;
+    if release_root == downloads_root || !nexus_core::is_within(&downloads_root, &release_root) {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "cold candidate must remain below Nexus downloads",
+        ));
+    }
+    let requirements_root = release_root.clone();
+    let requirements = runtime_request
+        .run_blocking_io(
+            super::runtime::BlockingStage::Requirements,
+            release_root,
+            move || load_runtime_requirements(&requirements_root),
+        )
+        .await?;
+    let config_path = config_store.paths().config_file.clone();
+    let owned_config_store = config_store.clone();
+    let config = runtime_request
+        .run_blocking_io(
+            super::runtime::BlockingStage::ConfigFile,
+            config_path,
+            move || owned_config_store.load(),
+        )
+        .await?;
+    let observed = super::runtime::observe_runtime_selection_until(
+        config_store.paths(),
+        config.runtime.as_ref(),
+        runtime_request,
+    )
+    .await;
+    assemble_runtime_plan(
+        request.release_id,
+        request.source,
+        request.mode,
+        requirements,
+        observed,
+        config.runtime.as_ref(),
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use std::fs;

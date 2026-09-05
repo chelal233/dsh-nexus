@@ -1243,6 +1243,15 @@ impl ReleaseStore {
         self.load_unlocked()
     }
 
+    /// Refuse an expensive acquisition before it starts when no immutable
+    /// release slot can be published. The definitive check is repeated by
+    /// `register_prepared` under the store write gate.
+    pub fn ensure_capacity_for_new(&self) -> io::Result<()> {
+        let _guard = self.lock_gate()?;
+        let catalog = self.load_unlocked()?;
+        self.ensure_slot_capacity(&catalog)
+    }
+
     pub fn get(&self, id: &str) -> io::Result<ReleaseManifest> {
         validate_release_id(id)?;
         self.load()?.find(id).cloned().ok_or_else(|| {
@@ -1645,7 +1654,11 @@ fn validate_release_manifest(manifest: &ReleaseManifest) -> io::Result<()> {
     validate_optional_release_text(manifest.note.as_deref(), "release note")
 }
 
-fn write_json_atomic<T: Serialize>(root: &Path, destination: &Path, value: &T) -> io::Result<()> {
+pub fn write_json_atomic<T: Serialize>(
+    root: &Path,
+    destination: &Path,
+    value: &T,
+) -> io::Result<()> {
     let bytes = encode_json(value).map_err(invalid_data)?;
     fs::create_dir_all(root)?;
     let file_name = destination
@@ -2927,6 +2940,10 @@ mod tests {
         store
             .register("harness-b", "2", None, None)
             .expect("second slot registers");
+        let preflight = store
+            .ensure_capacity_for_new()
+            .expect_err("cold acquisition preflight rejects full capacity");
+        assert_eq!(preflight.kind(), std::io::ErrorKind::ResourceBusy);
         let error = store
             .register("harness-c", "3", None, None)
             .expect_err("third slot must be rejected when full");

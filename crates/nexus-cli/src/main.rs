@@ -31,7 +31,14 @@ enum Command {
         Option<String>,
         Option<String>,
     ),
-    Update(UpdateAction, Option<String>, Option<String>),
+    Update(
+        UpdateAction,
+        Option<String>,
+        Option<String>,
+        Option<String>,
+        Option<RuntimeSource>,
+        Option<RuntimeInstallMode>,
+    ),
     Diagnostics(DiagnosticsAction, Option<String>),
     Config(ConfigAction, Option<RuntimeConfigPayload>),
 }
@@ -174,12 +181,15 @@ fn parse_args() -> Result<Option<Options>, String> {
                 command = Some(Command::Release(action, id, version, None, None));
             }
             "update" if command.is_none() => {
-                let action = args
-                    .next()
-                    .ok_or_else(|| "update requires status or install [ID VERSION]".to_owned())?;
+                let action = args.next().ok_or_else(|| {
+                    "update requires status, install, switch, confirm, or cancel".to_owned()
+                })?;
                 let action = match action.to_string_lossy().as_ref() {
                     "status" => UpdateAction::Status,
                     "install" => UpdateAction::Install,
+                    "switch" => UpdateAction::Switch,
+                    "confirm" => UpdateAction::Confirm,
+                    "cancel" => UpdateAction::Cancel,
                     value => return Err(format!("unknown update action: {value}")),
                 };
                 let (release_id, version) = if action == UpdateAction::Install {
@@ -209,7 +219,65 @@ fn parse_args() -> Result<Option<Options>, String> {
                 } else {
                     (None, None)
                 };
-                command = Some(Command::Update(action, release_id, version));
+                let (third, source, mode) = match action {
+                    UpdateAction::Switch => {
+                        let tag = args
+                            .next()
+                            .ok_or_else(|| "update switch requires TAG".to_owned())?
+                            .to_string_lossy()
+                            .into_owned();
+                        let source = match args.peek().map(|value| value.to_string_lossy()) {
+                            Some(value) if value == "npmmirror" => {
+                                args.next();
+                                RuntimeSource::Npmmirror
+                            }
+                            Some(value) if value == "official" => {
+                                args.next();
+                                RuntimeSource::Official
+                            }
+                            _ => RuntimeSource::Official,
+                        };
+                        let mode = match args.peek().map(|value| value.to_string_lossy()) {
+                            Some(value) if value == "system" => {
+                                args.next();
+                                RuntimeInstallMode::System
+                            }
+                            Some(value) if value == "portable" => {
+                                args.next();
+                                RuntimeInstallMode::Portable
+                            }
+                            _ => RuntimeInstallMode::Portable,
+                        };
+                        (Some(tag), Some(source), Some(mode))
+                    }
+                    UpdateAction::Confirm => {
+                        let operation = args
+                            .next()
+                            .ok_or_else(|| "update confirm requires OPERATION_ID TOKEN".to_owned())?
+                            .to_string_lossy()
+                            .into_owned();
+                        let token = args
+                            .next()
+                            .ok_or_else(|| "update confirm requires OPERATION_ID TOKEN".to_owned())?
+                            .to_string_lossy()
+                            .into_owned();
+                        (Some(format!("{operation}\n{token}")), None, None)
+                    }
+                    UpdateAction::Cancel => (
+                        Some(
+                            args.next()
+                                .ok_or_else(|| "update cancel requires OPERATION_ID".to_owned())?
+                                .to_string_lossy()
+                                .into_owned(),
+                        ),
+                        None,
+                        None,
+                    ),
+                    _ => (None, None, None),
+                };
+                command = Some(Command::Update(
+                    action, release_id, version, third, source, mode,
+                ));
             }
             "diagnostics" if command.is_none() => {
                 let action = args
@@ -446,19 +514,41 @@ async fn run(options: Options) -> Result<(), String> {
             .send()
             .await
             .map_err(|error| format!("agent is unavailable: {error}"))?,
-        Command::Update(UpdateAction::Status, _, _) => client
+        Command::Update(UpdateAction::Status, _, _, _, _, _) => client
             .get(format!("http://{address}/v1/updates"))
             .send()
             .await
             .map_err(|error| format!("agent is unavailable: {error}"))?,
-        Command::Update(action, release_id, version) => client
+        Command::Update(action, release_id, version, third, source, mode) => client
             .post(format!("http://{address}/v1/updates"))
             .json(&UpdateCommand {
                 action: *action,
                 release_id: release_id.clone(),
                 version: version.clone(),
 
-                tag: None,
+                tag: if *action == UpdateAction::Switch {
+                    third.clone()
+                } else {
+                    None
+                },
+                source: *source,
+                mode: *mode,
+                operation_id: match action {
+                    UpdateAction::Confirm => third
+                        .as_deref()
+                        .and_then(|value| value.split_once('\n'))
+                        .map(|(id, _)| id.to_owned()),
+                    UpdateAction::Cancel => third.clone(),
+                    _ => None,
+                },
+                confirmation: if *action == UpdateAction::Confirm {
+                    third
+                        .as_deref()
+                        .and_then(|value| value.split_once('\n'))
+                        .map(|(_, token)| token.to_owned())
+                } else {
+                    None
+                },
             })
             .send()
             .await
@@ -711,7 +801,7 @@ async fn run(options: Options) -> Result<(), String> {
                 }
             }
         }
-        Command::Update(_, _, _) => {
+        Command::Update(_, _, _, _, _, _) => {
             let update: UpdateResponse = serde_json::from_str(&body)
                 .map_err(|error| format!("invalid agent response: {error}"))?;
             if options.json {
@@ -729,6 +819,18 @@ async fn run(options: Options) -> Result<(), String> {
                 }
                 if let Some(error) = update.update.error {
                     println!("error: {error}");
+                }
+                if let Some(operation) = update.operation {
+                    println!("operation_id: {}", operation.operation_id);
+                    println!("operation_phase: {:?}", operation.phase);
+                    println!("tag: {}", operation.tag);
+                    println!("progress_percent: {}", operation.progress_percent);
+                    if let Some(confirmation) = operation.confirmation {
+                        println!("confirmation: {confirmation}");
+                    }
+                    if let Some(error) = operation.error {
+                        println!("operation_error: {error}");
+                    }
                 }
             }
         }
@@ -886,6 +988,9 @@ Usage:
   nexusctl release rollback [--json] [--port PORT]
   nexusctl update status [--json] [--port PORT]
   nexusctl update install [ID VERSION] [--json] [--port PORT]
+  nexusctl update switch TAG [official|npmmirror] [portable|system] [--json] [--port PORT]
+  nexusctl update confirm OPERATION_ID TOKEN [--json] [--port PORT]
+  nexusctl update cancel OPERATION_ID [--json] [--port PORT]
   nexusctl diagnostics status [--json] [--port PORT]
   nexusctl diagnostics collect [--note TEXT] [--json] [--port PORT]
   nexusctl config status [--json] [--port PORT]

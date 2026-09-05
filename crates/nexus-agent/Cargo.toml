@@ -18,6 +18,7 @@ axum.workspace = true
 nexus-core = { path = "../nexus-core" }
 nexus-launcher-core = { path = "../nexus-launcher-core" }
 nexus-protocol = { path = "../nexus-protocol" }
+nexus-runtime-supply = { path = "../nexus-runtime-supply" }
 nexus-snapshots = { path = "../nexus-snapshots" }
 serde_json.workspace = true
 tokio.workspace = true

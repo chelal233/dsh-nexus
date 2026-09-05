@@ -901,6 +901,8 @@ pub enum UpdateAction {
     Status,
     Install,
     Switch,
+    Confirm,
+    Cancel,
 }
 
 impl Default for UpdateAction {
@@ -918,6 +920,63 @@ pub struct UpdateCommand {
     pub version: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tag: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source: Option<RuntimeSource>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mode: Option<RuntimeInstallMode>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub operation_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub confirmation: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ColdOperationPhase {
+    Queued,
+    Cloning,
+    Planning,
+    AwaitingConfirmation,
+    Supplying,
+    Installing,
+    Building,
+    Verifying,
+    Registering,
+    Promoting,
+    Succeeded,
+    Cancelled,
+    Failed,
+}
+
+impl ColdOperationPhase {
+    pub fn is_terminal(self) -> bool {
+        matches!(self, Self::Succeeded | Self::Cancelled | Self::Failed)
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ColdOperation {
+    pub operation_id: String,
+    pub phase: ColdOperationPhase,
+    pub tag: String,
+    pub source: RuntimeSource,
+    pub mode: RuntimeInstallMode,
+    pub release_id: String,
+    pub candidate: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub candidate_revision: Option<String>,
+    pub progress_percent: u8,
+    pub started_at_unix: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub updated_at_unix: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub foundation_plan_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub supply_plan: Option<serde_json::Value>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub confirmation: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
@@ -980,6 +1039,8 @@ pub struct UpdateResponse {
     pub update: UpdateRuntimeInfo,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub release: Option<ReleaseManifest>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub operation: Option<ColdOperation>,
 }
 
 impl UpdateResponse {
@@ -988,7 +1049,13 @@ impl UpdateResponse {
             api_version: API_VERSION.to_owned(),
             update,
             release,
+            operation: None,
         }
+    }
+
+    pub fn with_operation(mut self, operation: ColdOperation) -> Self {
+        self.operation = Some(operation);
+        self
     }
 }
 
@@ -1553,10 +1620,21 @@ mod tests {
             tag: None,
             release_id: Some("harness-rc1".to_owned()),
             version: Some("rc.1".to_owned()),
+            ..UpdateCommand::default()
         };
         let json = serde_json::to_value(command).expect("update command serializes");
         assert_eq!(json["action"], "install");
         assert_eq!(json["release_id"], "harness-rc1");
+
+        let confirm = UpdateCommand {
+            action: UpdateAction::Confirm,
+            operation_id: Some("cold-1".to_owned()),
+            confirmation: Some("sha256:abc".to_owned()),
+            ..UpdateCommand::default()
+        };
+        let json = serde_json::to_value(confirm).expect("confirmation serializes");
+        assert_eq!(json["action"], "confirm");
+        assert_eq!(json["operation_id"], "cold-1");
 
         let response = UpdateResponse::new(
             UpdateRuntimeInfo::running("harness-rc1".to_owned(), 100),
