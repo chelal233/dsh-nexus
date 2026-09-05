@@ -236,3 +236,5 @@ dd { overflow: hidden; margin: 5px 0 0; color: var(--text); font-size: 12px; fon
   .data-row { align-items: flex-start; flex-direction: column; gap: 5px; }
   .row-meta { align-self: flex-end; }
 }
+
+.panel-divider{border:0;border-top:1px solid rgba(128,128,128,.25);margin:14px 0;width:100%;}

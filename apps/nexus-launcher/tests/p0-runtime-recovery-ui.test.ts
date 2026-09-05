@@ -24,11 +24,11 @@ const props = {
 async function loadViews() {
   const vite = await createServer({ root: process.cwd(), appType: "custom", logLevel: "silent", server: { middlewareMode: true } });
   const app = await vite.ssrLoadModule("/src/App.tsx");
-  return { vite, RecoveryView: app.RecoveryView, UpdatesView: app.UpdatesView, CheckpointsView: app.CheckpointsView };
+  return { vite, ProfilesView: app.ProfilesView, UpdatesView: app.UpdatesView, CheckpointsView: app.CheckpointsView };
 }
 
-test("manual recovery exposes four tabs and truthful plugin inventory while Harness is failed", async () => {
-  const { vite, RecoveryView } = await loadViews();
+test("profile hub embeds checkpoints and a truthful plugin inventory", async () => {
+  const { vite, ProfilesView } = await loadViews();
   try {
     const snapshot = {
       ...baseSnapshot,
@@ -38,9 +38,11 @@ test("manual recovery exposes four tabs and truthful plugin inventory while Harn
         { package: "extra-plugin", version: "2.0.0", builtin: false, removable: true },
       ] }] },
     };
-    const markup = renderToStaticMarkup(createElement(RecoveryView, { ...props, snapshot }));
-    assert.match(markup, /Manual recovery remains available/);
-    for (const label of ["Plugins", "Rollback", "Native profiles", "Diagnostics"]) assert.match(markup, new RegExp(label));
+    const markup = renderToStaticMarkup(createElement(ProfilesView, { ...props, snapshot }));
+    assert.match(markup, /Profile catalog/);
+    assert.match(markup, /Saved checkpoints/);
+    assert.match(markup, /Plugin inventory/);
+    assert.doesNotMatch(markup, /Manual recovery remains available/);
     assert.match(markup, /dsh-base/);
     assert.match(markup, /Built-in/);
     assert.match(markup, /extra-plugin/);

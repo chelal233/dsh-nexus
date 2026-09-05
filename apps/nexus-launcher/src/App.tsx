@@ -75,7 +75,6 @@ type ModuleId =
   | "profiles"
   | "checkpoints"
   | "updates"
-  | "recovery"
   | "diagnostics"
   | "settings";
 
@@ -93,7 +92,6 @@ const modules: ModuleDefinition[] = [
   { id: "profiles", label: "Profiles", icon: SlidersHorizontal },
   { id: "checkpoints", label: "Checkpoints", icon: ListChecks },
   { id: "updates", label: "Updates", icon: CloudArrowUp },
-  { id: "recovery", label: "Recovery", icon: ShieldCheck },
   { id: "diagnostics", label: "Diagnostics", icon: TerminalWindow },
   { id: "settings", label: "Settings", icon: Gear },
 ];
@@ -1096,7 +1094,6 @@ function App() {
       case "profiles": return <ProfilesView {...common} />;
       case "checkpoints": return <CheckpointsView {...common} />;
       case "updates": return <UpdatesView {...common} />;
-      case "recovery": return <RecoveryView {...common} />;
       case "diagnostics": return <DiagnosticsView {...common} />;
       case "settings": return <SettingsView {...common} />;
       default: return <OverviewView {...common} />;
@@ -1297,20 +1294,25 @@ export function HarnessWebPanel({ snapshot, credentialInvalidationPending, busyA
   </Panel>;
 }
 
-function ProfilesView({ snapshot, busyAction, runAction }: ViewProps) {
+export function ProfilesView(props: ViewProps) {
   const { t } = useI18n();
+  const { snapshot, busyAction, runAction } = props;
   const active = stringValue(snapshot.profiles, "active_profile");
   const manifests = arrayValue(snapshot.profiles, "manifests");
   const recovery = asObject(snapshot.recovery);
   const harness = asObject(recovery.harness);
   const gate = recoveryMutationGate(booleanValue(recovery, "harness_stop_required"), harness.state, busyAction !== null);
-  return <><PageIntro kicker={t("Control / Profiles")} title={t("Profiles")} detail={t("Select an existing manifest-backed profile. Profile creation and deletion are unavailable in this release.")} /><Panel title={t("Profile catalog")} icon={<SlidersHorizontal size={18} />}>
+  return <><PageIntro kicker={t("Control / Profiles")} title={t("Profiles")} detail={t("Profiles own checkpoints and the plugin inventory: select a profile, manage its checkpoints, then adjust its plugins. Profile creation and deletion are unavailable in this release.")} /><Panel title={t("Profile catalog")} icon={<SlidersHorizontal size={18} />}>
     {gate.reason === "stop_required" || gate.reason === "not_stopped" ? <p className="form-error"><WarningCircle size={15} />{t("Stop Harness before switching profiles or removing plugins.")}</p> : null}
     <DataList items={manifests} emptyTitle={t("No valid native profiles")} emptyDetail={t("Only valid profile manifests are selectable.")} render={(item) => { const name = stringValue(item, "name") || t("Unnamed profile"); return <><div><strong>{name}</strong>{name === active && <StatusPill label={t("Active")} tone="good" />}<span>{t("{count} bundles", { count: arrayValue(item, "bundles").length })}</span></div><span className="row-meta">{name === active ? t("Selected by Agent") : <ActionButton disabled={gate.disabled} onClick={() => void runAction(t("Profile selection"), "/v1/profiles", { action: "select", profile: name })}>{t("Select")}</ActionButton>}</span></>; }} />
-  </Panel></>;
+  </Panel>
+  <CheckpointsView {...props} embedded />
+  <ProfilePlugins {...props} />
+  <RecoveryDiagnostics snapshot={props.snapshot} busyAction={props.busyAction} runAction={props.runAction} refresh={props.refresh} />
+  </>;
 }
 
-export function CheckpointsView({ snapshot, busyAction, runAction }: ViewProps) {
+export function CheckpointsView({ snapshot, busyAction, runAction, embedded }: ViewProps & { embedded?: boolean }) {
   const { locale, t } = useI18n();
   const items = arrayValue(snapshot.checkpoints, "checkpoints");
   const snapshots = arrayValue(snapshot.checkpoints, "snapshots");
@@ -1330,7 +1332,7 @@ export function CheckpointsView({ snapshot, busyAction, runAction }: ViewProps) 
     catch (cause) { if (latest.current.isCurrent(token)) { setDetail(null); setDetailError(errorMessage(cause)); } }
     finally { if (latest.current.isCurrent(token)) setDetailLoading(false); }
   };
-  return <><PageIntro kicker={t("State / Checkpoints")} title={t("Checkpoints")} detail={`${t("Checkpoint manifests contain only Harness profile/release selection. Agent lifecycle and Harness runtime are never saved or restored.")} ${t("Manual checkpoints contain a bounded redacted snapshot. Legacy entries restore selection metadata only.")}`} />
+  return <>{!embedded && <PageIntro kicker={t("State / Checkpoints")} title={t("Checkpoints")} detail={`${t("Checkpoint manifests contain only Harness profile/release selection. Agent lifecycle and Harness runtime are never saved or restored.")} ${t("Manual checkpoints contain a bounded redacted snapshot. Legacy entries restore selection metadata only.")}`} />}
     {healthyError && <div className="notice action-error"><WarningCircle size={17} /><span>{t("Healthy snapshot capture failed")}: {healthyError}</span></div>}
     {Object.keys(pending).length > 0 && <Panel title={t("Pending restore")} icon={<WarningCircle size={18} />}><dl className="detail-list compact-details"><div><dt>{t("Checkpoint")}</dt><dd>{stringValue(pending, "checkpoint_id")}</dd></div><div><dt>{t("State")}</dt><dd>{localizedRuntimeState(stringValue(pending, "state"), t)}</dd></div><div><dt>{t("Last error")}</dt><dd>{stringValue(pending, "error") || t("None reported")}</dd></div></dl><div className="button-row">{booleanValue(pending, "retryable") && <ActionButton disabled={gate.disabled} onClick={() => void runAction(t("Retry restore"), "/v1/checkpoints", { action: "retry", id: stringValue(pending, "checkpoint_id") })}>{t("Retry")}</ActionButton>}{booleanValue(pending, "abortable") && <ActionButton tone="danger" disabled={gate.disabled} onClick={() => void runAction(t("Abort restore"), "/v1/checkpoints", { action: "abort", id: stringValue(pending, "checkpoint_id") })}>{t("Abort")}</ActionButton>}</div></Panel>}
     <Panel title={t("Saved checkpoints")} icon={<ListChecks size={18} />}><div className="panel-toolbar"><span className="toolbar-count">{t("{count} saved", { count: items.length })}</span><ActionButton tone="primary" disabled={gate.disabled || snapshot.startup?.available !== true} onClick={() => void runAction(t("Checkpoint creation"), "/v1/checkpoints", { action: "create", note: t("Native launcher checkpoint") })}><CheckCircle size={16} />{t("Create checkpoint")}</ActionButton></div><DataList items={items} emptyTitle={t("No checkpoints yet")} emptyDetail={t("Create a checkpoint after the Agent has a stable profile and release state.")} render={(item) => { const id = stringValue(item, "id") || ""; const reference = asObject(asObject(item).snapshot); const summary = asObject(reference.summary); const legacy = !Object.keys(reference).length; return <><div><strong>{id || t("Checkpoint")}</strong><StatusPill label={legacy ? t("Legacy metadata only") : localizedRuntimeState(stringValue(summary, "kind"), t)} tone={legacy ? "warn" : "good"}/><span>{stringValue(item, "profile") || t("No profile")} · {stringValue(summary, "dsh_version") || stringValue(item, "release") || t("Unknown version")}</span></div><span className="row-meta">{formatTimestamp(numberValue(item, "created_at_unix"), t("Not available"), locale)} <ActionButton disabled={detailLoading || legacy} onClick={() => void loadDetail(id, "detail")}>{t("Detail")}</ActionButton><ActionButton disabled={detailLoading || legacy} onClick={() => void loadDetail(id, "inspect")}>{t("Inspect")}</ActionButton><ActionButton disabled={gate.disabled} onClick={() => void runAction(t("Restore checkpoint"), "/v1/checkpoints", { action: "restore", id })}>{t("Restore")}</ActionButton></span></>; }} /></Panel>
@@ -1369,15 +1371,38 @@ export function UpdatesView({ snapshot, busyAction, runAction, refresh }: ViewPr
   const [tagsError, setTagsError] = useState<string | null>(null);
   const latestTags = useRef(createLatestRequest());
   const runtimeConfigKey = useRef("");
+  const [runtimeSetupOpen, setRuntimeSetupOpen] = useState(false);
+  const [pins, setPins] = useState<{ node: string; pnpm: string; git: string }>({ node: "", pnpm: "", git: "" });
+  const [runtimeTools, setRuntimeTools] = useState<JsonObject[] | null>(null);
   useEffect(() => () => latestTags.current.cancel(), []);
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const value = await proxyRequest<JsonObject>("/v1/runtime");
+        if (!cancelled) setRuntimeTools(arrayValue(value, "tools").map((tool) => asObject(tool)));
+      } catch {
+        if (!cancelled) setRuntimeTools([]);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, []);
+  useEffect(() => {
+    if (runtimeTools && runtimeTools.some((tool) => !booleanValue(tool, "available"))) setRuntimeSetupOpen(true);
+  }, [runtimeTools]);
   useEffect(() => {
     const key = `${persistedSource}\u0000${persistedMode}`;
     if (runtimeConfigKey.current !== key) {
       runtimeConfigKey.current = key;
       setSource(persistedSource);
       setMode(persistedMode);
+      setPins({
+        node: stringValue(nestedValue(runtime, "node"), "path") || "",
+        pnpm: stringValue(nestedValue(runtime, "pnpm"), "path") || "",
+        git: stringValue(nestedValue(runtime, "git"), "path") || "",
+      });
     }
-  }, [persistedMode, persistedSource]);
+  }, [persistedMode, persistedSource, runtime]);
   const tags: string[] = tagList ? arrayValue(tagList, "tags").map((tag) => String(tag)) : [];
   const loadTags = useCallback(async () => {
     const token = latestTags.current.begin();
@@ -1398,24 +1423,21 @@ export function UpdatesView({ snapshot, busyAction, runAction, refresh }: ViewPr
   const supply = nestedValue(operation, "supply_plan");
   const confirmation = stringValue(operation, "confirmation") || stringValue(supply, "supply_plan_id");
   const operationMode = stringValue(operation, "mode") || stringValue(supply, "mode") || mode;
-  const runtimePayload = { node: runtime.node ?? null, pnpm: runtime.pnpm ?? null, git: runtime.git ?? null, source, mode };
+  const pinOrEmpty = (name: "node" | "pnpm" | "git") => pins[name].trim() ? { path: pins[name].trim(), ownership: "system" } : null;
+  const runtimePayload = { node: pinOrEmpty("node"), pnpm: pinOrEmpty("pnpm"), git: pinOrEmpty("git"), source, mode };
   const harness = harnessRuntimeValue(snapshot.harnessRuntime);
   const cleanupPending = booleanValue(operation, "cleanup_pending");
   const runtimeGate = runtimeSettingsGate(stringValue(harness, "state"), numberValue(harness, "pid"), updateState, operationPhase, cleanupPending, busyAction !== null);
   const runtimeGateReason = runtimeGate.reason === "harness_not_stopped" ? t("Harness must be positively stopped before saving runtime settings.") : runtimeGate.reason === "update_active" ? t("Wait for the update to become idle before saving runtime settings.") : runtimeGate.reason === "cold_active" ? t("Wait for the cold switch to finish before saving runtime settings.") : runtimeGate.reason === "cleanup_pending" ? t("Retry cold cleanup before saving runtime settings.") : null;
   return <><PageIntro kicker={t("Releases / Updates")} title={t("Updates")} detail={t("Cold switches are asynchronous and never start Harness automatically.")} />
-    <div className="grid-two"><Panel title={t("Runtime settings")} icon={<Cpu size={18} />}><div className="form-grid"><label className="form-field"><span className="field-label">{t("Source")}</span><select className="form-input" value={source} onChange={(e) => setSource(e.target.value)}><option value="official">{t("Official")}</option><option value="npmmirror">npmmirror</option></select></label><label className="form-field"><span className="field-label">{t("Install mode")}</span><select className="form-input" value={mode} onChange={(e) => setMode(e.target.value)}><option value="portable">{t("Portable")}</option><option value="system">{t("System install")}</option></select></label></div><RuntimePins runtime={runtime} /><ActionButton disabled={runtimeGate.disabled} onClick={() => void runAction(t("Save runtime settings"), "/v1/config", { action: "set_runtime", runtime: runtimePayload })}>{t("Save runtime settings")}</ActionButton>{runtimeGateReason && <p className="field-help" role="status">{runtimeGateReason}</p>}</Panel>
-    <Panel title={t("Cold switch status")} icon={<CloudArrowUp size={18} />}><div className="status-block"><StatusPill label={localizedRuntimeState(operationPhase || updateState, t)} tone={operationPhase === "failed" || updateState === "failed" ? "bad" : pendingConfirmation ? "warn" : operationPhase === "succeeded" ? "good" : "neutral"}/><strong>{operationId || stringValue(update, "release_id") || t("No active update")}</strong>{operationId && <progress max="100" value={numberValue(operation, "progress_percent") || 0}>{numberValue(operation, "progress_percent") || 0}%</progress>}<span>{stringValue(operation, "error") || stringValue(update, "error") || t("No update error reported")}</span>{stringValue(operation, "cleanup_error") && <p className="form-error" role="alert"><WarningCircle size={15}/>{t("Cleanup error")}: {stringValue(operation, "cleanup_error")}</p>}{operationId && <span>{t("Owner quiescent")}: {booleanValue(operation, "owner_quiescent") ? t("Yes") : t("No")}{cleanupPending ? ` · ${t("Cleanup pending")}` : ""}</span>}<div className="button-row"><ActionButton disabled={busyAction !== null} onClick={() => void refresh()}>{t("Refresh")}</ActionButton>{operationId && (!coldOperationIsTerminal(operationPhase) || cleanupPending) && <ActionButton tone="danger" disabled={busyAction !== null || operationPhase === "cancelling"} onClick={() => void runAction(t("Cancel cold switch"), "/v1/updates", { action: "cancel", operation_id: operationId })}>{cleanupPending ? t("Retry cleanup") : t("Cancel")}</ActionButton>}</div></div></Panel></div>
+    <Panel title={t("Runtime & cold switch")} icon={<Cpu size={18} />}><div className="status-block"><div className="button-row"><ActionButton onClick={() => setRuntimeSetupOpen((open) => !open)}>{runtimeSetupOpen ? t("Hide source and install mode") : t("Change runtime source or install mode")}</ActionButton></div>{runtimeSetupOpen && <div className="form-grid"><label className="form-field"><span className="field-label">{t("Source")}</span><select className="form-input" value={source} onChange={(e) => setSource(e.target.value)}><option value="official">{t("Official")}</option><option value="npmmirror">npmmirror</option></select></label><label className="form-field"><span className="field-label">{t("Install mode")}</span><select className="form-input" value={mode} onChange={(e) => setMode(e.target.value)}><option value="portable">{t("Portable")}</option><option value="system">{t("System install")}</option></select></label></div>}{runtimeSetupOpen && <p className="field-help">{t("These settings only matter when runtimes must be installed or replaced.")}</p>}<div className="form-grid">{(["node", "pnpm", "git"] as const).map((name) => <label key={name} className="form-field"><span className="field-label">{name} {t("pin")}</span><input className="form-input" value={pins[name]} placeholder={stringValue(nestedValue(runtime, name), "path") || t("Leave blank for automatic discovery")} onChange={(event) => setPins((current) => ({ ...current, [name]: event.target.value }))} /></label>)}</div><p className="field-help">{t("Manual paths are saved as system pins. Leave blank to let Nexus resolve automatically.")}</p><ActionButton disabled={runtimeGate.disabled} onClick={() => void runAction(t("Save runtime settings"), "/v1/config", { action: "set_runtime", runtime: runtimePayload })}>{t("Save runtime settings")}</ActionButton>{runtimeGateReason && <p className="field-help" role="status">{runtimeGateReason}</p>}</div><hr className="panel-divider" /><div className="status-block"><StatusPill label={localizedRuntimeState(operationPhase || updateState, t)} tone={operationPhase === "failed" || updateState === "failed" ? "bad" : pendingConfirmation ? "warn" : operationPhase === "succeeded" ? "good" : "neutral"}/><strong>{operationId || stringValue(update, "release_id") || t("No active update")}</strong>{operationId && <progress max="100" value={numberValue(operation, "progress_percent") || 0}>{numberValue(operation, "progress_percent") || 0}%</progress>}<span>{stringValue(operation, "error") || stringValue(update, "error") || t("No update error reported")}</span>{stringValue(operation, "cleanup_error") && <p className="form-error" role="alert"><WarningCircle size={15}/>{t("Cleanup error")}: {stringValue(operation, "cleanup_error")}</p>}{operationId && <span>{t("Owner quiescent")}: {booleanValue(operation, "owner_quiescent") ? t("Yes") : t("No")}{cleanupPending ? ` · ${t("Cleanup pending")}` : ""}</span>}<div className="button-row"><ActionButton disabled={busyAction !== null} onClick={() => void refresh()}>{t("Refresh")}</ActionButton>{operationId && (!coldOperationIsTerminal(operationPhase) || cleanupPending) && <ActionButton tone="danger" disabled={busyAction !== null || operationPhase === "cancelling"} onClick={() => void runAction(t("Cancel cold switch"), "/v1/updates", { action: "cancel", operation_id: operationId })}>{cleanupPending ? t("Retry cleanup") : t("Cancel")}</ActionButton>}</div></div></Panel>
     {pendingConfirmation && <Panel title={t("Confirm runtime supply plan")} icon={<WarningCircle size={18} />}><SupplyPlanDetails operation={operation} supply={supply} /><p className="form-error"><WarningCircle size={15}/>{operationMode === "system" ? t("System mode may show an installer or elevation prompt and can require restart verification.") : t("Portable mode writes only to the Nexus-owned runtime destination.")}</p><div className="button-row"><ActionButton tone="primary" disabled={!operationId || !confirmation || busyAction !== null} onClick={() => void runAction(t("Confirm cold switch"), "/v1/updates", { action: "confirm", operation_id: operationId, confirmation })}>{t("Confirm exact plan")}</ActionButton><ActionButton tone="danger" disabled={!operationId || busyAction !== null} onClick={() => void runAction(t("Cancel cold switch"), "/v1/updates", { action: "cancel", operation_id: operationId })}>{t("Cancel")}</ActionButton></div></Panel>}
     <Panel title={t("Upstream tags")} icon={<CloudArrowUp size={18} />}><div className="status-block"><ActionButton disabled={tagsLoading} onClick={() => void loadTags()}>{tagsLoading ? t("Listing tags") : t("List upstream tags")}</ActionButton>{tagsError ? <span>{tagsError} · <button className="button subtle" onClick={() => void loadTags()}>{t("Refresh")}</button></span> : <span>{tagList ? `${t("Source")}: ${stringValue(tagList, "source")}` : t("No tags loaded")}</span>}{tags.length > 0 && <select value={selectedTag} onChange={(event) => setSelectedTag(event.target.value)} aria-label={t("Upstream tags")}><option value="">{t("Select a tag")}</option>{tags.map((tag) => <option key={tag} value={tag}>{tag}</option>)}</select>}{selectedTag && <ActionButton tone="primary" disabled={busyAction !== null || tagsLoading || (!!operationId && !coldOperationIsTerminal(operationPhase))} onClick={() => void runAction(t("Switch to tag"), "/v1/updates", { action: "switch", tag: selectedTag, source, mode })}>{t("Switch to tag")}</ActionButton>}{selectedTag && <span>{`${t("Selected tag")}: ${selectedTag}`}</span>}</div></Panel>
     <Panel title={t("Release slots")} icon={<Package size={18} />}><DataList items={releases} emptyTitle={t("No release slots")} emptyDetail={t("A successful cold switch registers and promotes its immutable slot without starting Harness.")} render={(item) => { const slotId = stringValue(item, "id") || ""; const current = stringValue(snapshot.releases, "current_release"); const lkg = stringValue(snapshot.releases, "last_known_good"); const protectedSlot = slotId === current || slotId === lkg; return <><div><strong>{slotId || t("Release")}</strong><span>{stringValue(item, "version") || t("Unknown version")}{slotId === current ? ` · ${t("Current")}` : slotId === lkg ? ` · ${t("Last known good")}` : ""}</span></div><span className="row-meta">{!protectedSlot && <ActionButton disabled={busyAction !== null} onClick={() => void runAction(t("Release slot"), "/v1/releases", { action: "remove", id: slotId })}>{t("Release slot")}</ActionButton>}</span></>; }} /></Panel>
   </>;
 }
 
-function RuntimePins({ runtime }: { runtime: JsonObject }) {
-  const { t } = useI18n();
-  return <dl className="detail-list compact-details">{["node", "pnpm", "git"].map((name) => { const pin = asObject(runtime[name]); return <div key={name}><dt>{name} {t("pin")}</dt><dd>{stringValue(pin, "path") || t("Not pinned")} {stringValue(pin, "ownership") ? `(${stringValue(pin, "ownership")})` : ""}</dd></div>; })}</dl>;
-}
+
 
 function SupplyPlanDetails({ operation, supply }: { operation: JsonObject; supply: JsonObject }) {
   const { t } = useI18n();
@@ -1423,12 +1445,8 @@ function SupplyPlanDetails({ operation, supply }: { operation: JsonObject; suppl
   return <><dl className="detail-list"><div><dt>{t("Source")}</dt><dd>{stringValue(supply, "source") || stringValue(operation, "source")}</dd></div><div><dt>{t("Install mode")}</dt><dd>{stringValue(supply, "mode") || stringValue(operation, "mode")}</dd></div><div><dt>{t("Version")}</dt><dd>{stringValue(asObject(supply.node), "version") || stringValue(operation, "tag")}</dd></div><div><dt>{t("Destination")}</dt><dd>{stringValue(supply, "destination_root")}</dd></div><div><dt>{t("System effects")}</dt><dd>{effects}</dd></div><div><dt>Node</dt><dd>{stringValue(asObject(supply.node), "disposition")} · {stringValue(asObject(supply.node), "path")}</dd></div><div><dt>pnpm</dt><dd>{stringValue(asObject(supply.pnpm), "version")} · {stringValue(asObject(supply.pnpm), "disposition")} · {stringValue(asObject(supply.pnpm), "path")}</dd></div><div><dt>{t("Plan ID")}</dt><dd>{stringValue(supply, "supply_plan_id") || stringValue(operation, "confirmation")}</dd></div></dl></>;
 }
 
-type RecoveryTab = "plugins" | "rollback" | "native_profiles" | "diagnostics";
-
-export function RecoveryView(props: ViewProps) {
-  const { snapshot, busyAction, runAction, refresh } = props;
+export function ProfilePlugins({ snapshot, busyAction, runAction, refresh }: ViewProps) {
   const { t } = useI18n();
-  const [tab, setTab] = useState<RecoveryTab>("plugins");
   const [pluginBusy, setPluginBusy] = useState(false);
   const [pluginResult, setPluginResult] = useState<JsonObject | null>(null);
   const [pluginError, setPluginError] = useState<string | null>(null);
@@ -1454,16 +1472,13 @@ export function RecoveryView(props: ViewProps) {
       await refresh();
     }
   };
-  const tabs: Array<[RecoveryTab, string]> = [["plugins", t("Plugins")], ["rollback", t("Rollback")], ["native_profiles", t("Native profiles")], ["diagnostics", t("Diagnostics")]];
-  return <><PageIntro kicker={t("Manual / Recovery")} title={t("Recovery")} detail={t("Manual recovery remains available when Harness is unhealthy or cannot start.")} />
-    {!booleanValue(recovery, "manual_entry_available") && <div className="notice action-error"><WarningCircle size={17}/><span>{snapshot.startup?.available === true ? t("Recovery status is unavailable. Refresh to retry.") : t("Reconnect the Agent to use recovery actions.")}</span></div>}
+  return <Panel title={t("Plugin inventory")} icon={<Package size={18} />}>
     {(booleanValue(recovery, "harness_stop_required") || gate.reason === "not_stopped") && <div className="notice degraded"><WarningCircle size={17}/><span>{t("Harness must be stopped before profile, plugin, or rollback changes. Diagnostics remain available.")}</span><ActionButton disabled={busyAction !== null} onClick={() => void runAction(t("Harness stop"), "/v1/harness", { action: "stop" })}>{t("Stop Harness")}</ActionButton></div>}
-    <div className="recovery-tabs" role="tablist">{tabs.map(([id, label]) => <button key={id} role="tab" aria-selected={tab === id} className={`button ${tab === id ? "primary" : ""}`} onClick={() => setTab(id)}>{label}</button>)}</div>
-    {tab === "plugins" && <Panel title={t("Plugin inventory")} icon={<Package size={18} />}><p className="panel-description">{t("Built-in plugins belong to profile bundles. Only packages marked removable can be removed.")}</p><DataList items={plugins} emptyTitle={t("No plugins reported")} emptyDetail={t("Select a valid native profile to inspect its inventory.")} render={(item) => { const packageName = stringValue(item, "package") || ""; const builtin = booleanValue(item, "builtin"); const removable = booleanValue(item, "removable"); return <><div><strong>{packageName}</strong><StatusPill label={builtin ? t("Built-in") : removable ? t("Removable") : t("Protected")} tone={removable ? "warn" : "neutral"}/><span>{stringValue(item, "version") || t("Unknown version")}</span></div><span className="row-meta">{removable && <ActionButton tone="danger" disabled={gate.disabled} onClick={() => void removePlugin(packageName)}>{pluginBusy ? t("Removing") : t("Remove")}</ActionButton>}</span></>; }} />{pluginError && <p className="form-error"><WarningCircle size={15}/>{pluginError} <button className="button subtle" onClick={() => setPluginError(null)}>{t("Dismiss")}</button></p>}{pluginResult && <pre className="output-block">{[stringValue(pluginResult, "stdout"), stringValue(pluginResult, "stderr")].filter(Boolean).join("\n") || t("Plugin removed. Inventory refreshed.")}</pre>}</Panel>}
-    {tab === "rollback" && <CheckpointsView {...props} />}
-    {tab === "native_profiles" && <ProfilesView {...props} />}
-    {tab === "diagnostics" && <RecoveryDiagnostics snapshot={snapshot} busyAction={busyAction} runAction={runAction} refresh={refresh} />}
-  </>;
+    <p className="panel-description">{t("Built-in plugins belong to profile bundles. Only packages marked removable can be removed.")}</p>
+    <DataList items={plugins} emptyTitle={t("No plugins reported")} emptyDetail={t("Select a valid native profile to inspect its inventory.")} render={(item) => { const packageName = stringValue(item, "package") || ""; const builtin = booleanValue(item, "builtin"); const removable = booleanValue(item, "removable"); return <><div><strong>{packageName}</strong><StatusPill label={builtin ? t("Built-in") : removable ? t("Removable") : t("Protected")} tone={removable ? "warn" : "neutral"}/><span>{stringValue(item, "version") || t("Unknown version")}</span></div><span className="row-meta">{removable && <ActionButton tone="danger" disabled={gate.disabled} onClick={() => void removePlugin(packageName)}>{pluginBusy ? t("Removing") : t("Remove")}</ActionButton>}</span></>; }} />
+    {pluginError && <p className="form-error"><WarningCircle size={15}/>{pluginError} <button className="button subtle" onClick={() => setPluginError(null)}>{t("Dismiss")}</button></p>}
+    {pluginResult && <pre className="output-block">{[stringValue(pluginResult, "stdout"), stringValue(pluginResult, "stderr")].filter(Boolean).join("\n") || t("Plugin removed. Inventory refreshed.")}</pre>}
+  </Panel>;
 }
 
 function RecoveryDiagnostics({ snapshot, busyAction, runAction, refresh }: Pick<ViewProps, "snapshot" | "busyAction" | "runAction" | "refresh">) {
