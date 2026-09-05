@@ -13,6 +13,13 @@ eleases\...` 双路径 → Harness 启动 os error 267（目录名称无效）
 
 ActionButton 全局补 `type="button"`：此前所有 ActionButton 在 `<form>` 内默认为 submit，「添加参数/移除参数」点击会触发表单提交（表现为变成保存/取消）。submit 专用按钮本就是原生 `<button type="submit">`，不受影响。
 
+## P0 状态机核查结论（2026-09-06）
+
+- 实测显式 stop：终态 = stopped（"graceful stop 超时后强杀"，Windows 下 Harness 不响应优雅停止，exit 1 如实记录）——**此前怀疑的 stop→failed bug 不存在**，当时是 Harness 已自行崩溃（插件树损坏），stop 返回既有 failed 状态。撤回该 bug 报告
+- /v1/harness（8s 轮询快照）与 /v1/harness/ui（fail-closed 实时双同步）的不一致 = 崩溃窗口内的轮询时差（≤8s），非状态源缺陷；认证面板的 Failed 是真相
+- 启动中/停止中的 i18n 与状态机均正确；用户观察到的错误状态源自插件树崩溃窗口
+- 当前唯一阻断不变：desktop 配置档插件树损坏 → 用户走快照恢复（rc.1 时期健康快照）即愈
+
 ## P0 验证进展与遗留（2026-09-05 晚）
 
 - **EISDIR 已修复验证**：verbatim 路径修复后，rc.1 loader 正常引导（run 25/26 的 node 启动阶段已过）
