@@ -244,3 +244,6 @@ dd { overflow: hidden; margin: 5px 0 0; color: var(--text); font-size: 12px; fon
 
 .profile-row-toggle{display:flex;align-items:center;gap:8px;cursor:pointer;}
 .profile-chevron{width:16px;display:inline-block;opacity:.7;}
+
+.metric-actions{margin-top:10px;}
+.metric-actions .button-row{margin:0;}
