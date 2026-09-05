@@ -46,6 +46,16 @@ ActionButton 全局补 `type="button"`：此前所有 ActionButton 在 `<form>` 
 - **当前机器状态**：release=alpha.5 槽位→已切 rc.1（指针 rc.1，dsh-file-upload 已从清单移除，manifest 干净）；启动仍失败（导出缺失，因农场=alpha.1 包）；`.nexus-backup-20260906/` 与 `node_modules.stale-alpha1` 保留；plugin-desktop\node_modules 的 0.1.2-alpha.1 三件套验证过满足全部导出（应急可 junction，但 loader 不走 profiles/node_modules 解析 @deepseek-ai/*——loader 内部映射优先，junction 方案无效已证实）
 - **已知可行组合**：desktop 自带 0.1.2-alpha.1 harness + 其捆绑官方包曾正常运行数周（用户原生态）；本地三个 GitHub tag 槽位均与 rc.2 时代插件存在导出面不匹配
 
+## P0 node_modules 清空实验（2026-09-06，自动化第八轮）与晨报
+
+- 实验：备份后清空 desktop/node_modules → 启动 → harness 报 "cannot resolve profile bundle dsh-auto-review ... run dsh plugin install"——**harness 启动不会自动重装插件**，需要显式 dsh plugin install（21 个插件的全量网络安装）。已回滚：node_modules 从备份完整恢复（dsh-settings-file ✓）
+- **晨报总结（用户醒来先读这段）**：
+  1. 机器当前状态：release 指针 = rc.1；配置档 node_modules = Sep 2 desktop 时代（与 rc.1/alpha.1/alpha.5 槽位均存在导出面不匹配）；桌面 fallback 链接与备份完整
+  2. 今日已修复的 Nexus 真 bug：配置钉死占位符化（4 条路径全覆盖）、verbatim 路径、cold 发布占位符、retarget 加固+事务化、kv 编辑器 4 项、ActionButton submit、健康快照直接恢复（restore 接受快照 id，已实战验证合成 checkpoint + 两阶段恢复 + 指针回滚）、EISDIR verbatim
+  3. **剩余阻断的本质**：21 插件配置档（market 多代混装）与任何 GitHub tag 槽位都存在导出面错配；桌面捆绑 0.1.2-alpha.1 官方包是唯一全满足的副本（fallback 链接已恢复指向它）
+  4. **恢复可用的两条路（用户拍板）**：A. 重装插件集——`dsh plugin install` 全量重装（网络下载 21 包，装完与 rc.1/alpha.1 自洽）；B. 继续用桌面应用跑（现状可用），Nexus 等待插件生态版本对齐后再接管
+  5. 代码侧无剩余已知 bug；自动化已删除条件未到（P0 尾巴只剩 A/B 决策后的收尾）
+
 ## P0 INSTALL_ANCHOR 定位（2026-09-06，自动化第七轮）
 
 - **heal 锚点确认**：`profile-boot` 中 `INSTALL_ANCHOR = fileURLToPath(new URL("../package.json", import.meta.url))`——锚点=运行中 harness 自己的 apps/cli/package.json，heal 理论上永远治愈到当前运行槽位
