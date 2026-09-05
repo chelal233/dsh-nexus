@@ -1446,6 +1446,126 @@ impl ReleaseStore {
         Ok(catalog)
     }
 
+/// Keep the profile module link farm (`~/.dsh/profiles/node_modules`)
+/// pointing at the running slot's own workspace packages. The Harness boot
+/// maintains the same farm itself, but a crashed boot can leave links from a
+/// previous slot behind; repointing before spawn makes plugin resolution
+/// deterministic for the selected release. Best-effort: failures are logged
+/// through the returned count of repaired links and never block a launch.
+pub fn heal_module_farm(dsh_home: &Path, slot_root: &Path) -> io::Result<usize> {
+    let farm = dsh_home.join("profiles").join("node_modules");
+    fs::create_dir_all(&farm)?;
+    let mut repaired = 0;
+    let mut roots: Vec<PathBuf> = Vec::new();
+    for first in ["vendor", "packages"] {
+        let dir = slot_root.join(first);
+        let Ok(entries) = fs::read_dir(&dir) else {
+            continue;
+        };
+        for entry in entries {
+            let path = entry?.path();
+            if path.is_dir() {
+                roots.push(path);
+            }
+        }
+    }
+    // packages/*/* adds a second level; vendor/* is flat.
+    if let Ok(entries) = fs::read_dir(slot_root.join("packages")) {
+        for entry in entries {
+            let Ok(entry) = entry else { continue };
+            let scope = entry.path();
+            if !scope.is_dir() {
+                continue;
+            }
+            if let Ok(children) = fs::read_dir(&scope) {
+                for child in children {
+                    let Ok(child) = child else { continue };
+                    if child.path().is_dir() {
+                        roots.push(child.path());
+                    }
+                }
+            }
+        }
+    }
+    for package_dir in &roots {
+        let manifest = package_dir.join("package.json");
+        let Ok(bytes) = fs::read(&manifest) else {
+            continue;
+        };
+        let Ok(value) = serde_json::from_slice::<serde_json::Value>(&bytes) else {
+            continue;
+        };
+        let Some(name) = value.get("name").and_then(|item| item.as_str()) else {
+            continue;
+        };
+        if name.is_empty() {
+            continue;
+        }
+        let link = farm.join(name.replace('/', std::path::MAIN_SEPARATOR_STR));
+        if let Some(parent) = link.parent() {
+            fs::create_dir_all(parent)?;
+        }
+        if Self::same_directory(&link, package_dir) {
+            continue;
+        }
+        if link.exists() || fs::symlink_metadata(&link).is_ok() {
+            // A junction or real directory from a previous installation:
+            // move it aside instead of deleting user data blindly.
+            let aside = farm.join(format!(
+                "{name}.stale-{}",
+                unix_time_seconds()
+            ));
+            fs::rename(&link, aside)?;
+        }
+        match Self::create_dir_junction(&link, package_dir) {
+            Ok(()) => repaired += 1,
+            Err(error) => {
+                return Err(io::Error::other(format!(
+                    "failed to link module {} to {}: {error}",
+                    name,
+                    package_dir.display()
+                )));
+            }
+        }
+    }
+    Ok(repaired)
+}
+
+fn same_directory(link: &Path, target: &Path) -> bool {
+    fs::read_link(link)
+        .map(|target| target == *target)
+        .unwrap_or_else(|_| {
+            fs::canonicalize(link).map(|resolved| resolved == *target).unwrap_or(false)
+        })
+}
+
+#[cfg(windows)]
+fn create_dir_junction(link: &Path, target: &Path) -> io::Result<()> {
+    let output = std::process::Command::new("cmd")
+        .args([
+            "/C",
+            "mklink",
+            "/J",
+            &link.to_string_lossy(),
+            &target.to_string_lossy(),
+        ])
+        .stdin(std::process::Stdio::null())
+        .output()?;
+    if output.status.success() {
+        Ok(())
+    } else {
+        Err(io::Error::other(format!(
+            "mklink failed: {}",
+            String::from_utf8_lossy(&output.stderr).trim()
+        )))
+    }
+}
+
+#[cfg(not(windows))]
+fn create_dir_junction(link: &Path, target: &Path) -> io::Result<()> {
+    std::os::unix::fs::symlink(target, link)
+}
+
     /// Rewrite persisted Harness launch paths that still reference the
     /// previously promoted slot into `{release_root}` placeholders, so the
     /// next launch follows the current pointer instead of a stale slot

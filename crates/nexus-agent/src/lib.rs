@@ -49,8 +49,9 @@ use nexus_protocol::{
     HarnessRuntimeInfo, HealthResponse, LifecycleAccepted, LifecycleAction, LifecycleCommand,
     PluginRemoveResponse, ProfileAction, ProfileCommand, ProfileListResponse,
     ProfileSelectResponse, RecoveryLogTail, RecoveryStatusResponse, ReleaseAction, ReleaseCommand,
-    ReleaseListResponse, RuntimeInstallMode, RuntimePlanRequest, RuntimeSource, StateResponse,
-    TagListResponse, UpdateAction, UpdateCommand, UpdateResponse, UpdateState,
+    ReleaseListResponse, RuntimeInstallMode, RuntimePlanRequest, RuntimeSource,
+    CheckpointManifest, SnapshotDetailResponse, SnapshotReference, StateResponse, TagListResponse,
+    UpdateAction, UpdateCommand, UpdateResponse, UpdateState,
 };
 use tokio::{
     net::TcpListener,
@@ -936,6 +937,10 @@ async fn execute_harness_action(
         .unwrap_or_else(|| DEFAULT_PROFILE.to_owned());
     match action {
         HarnessAction::Start => {
+            // Repoint the profile module link farm at the running slot before
+            // spawn: a crashed boot from a different slot can leave stale
+            // official-package links that break plugin resolution.
+            heal_module_farm_best_effort(&state, &profile);
             state
                 .supervisor
                 .start_with_profile_locked(&profile, &lifecycle)
@@ -1564,6 +1569,96 @@ async fn checkpoint_snapshot_read(
     }
 }
 
+/// Resolve a restore request whose id names a healthy-start snapshot rather
+/// than a checkpoint: synthesize a checkpoint that references the snapshot so
+/// the standard two-phase restore and materialization apply unchanged. The
+/// snapshot's harness version must still be an installed release slot.
+/// Best-effort module farm heal before Harness start. Never blocks a launch.
+fn heal_module_farm_best_effort(state: &AppState, profile: &str) {
+    let result = (|| -> io::Result<()> {
+        let catalog = state.releases.load()?;
+        let Some(current) = catalog.current_release.clone() else {
+            return Ok(());
+        };
+        let slot_root = state.releases.release_root(&current)?;
+        let dsh_home = state.snapshots.configured_dsh_home()?;
+        let repaired = ReleaseStore::heal_module_farm(&dsh_home, &slot_root)?;
+        if repaired > 0 {
+            tracing::info!("module farm: repointed {repaired} package links to the current slot");
+        }
+        Ok(())
+    })();
+    if let Err(error) = result {
+        tracing::warn!("module farm heal skipped: {error}");
+    }
+}
+
+async fn checkpoint_from_snapshot(
+    state: &AppState,
+    snapshot_id: &str,
+) -> Result<CheckpointManifest, axum::response::Response> {
+    let profiles = state
+        .profiles
+        .load()
+        .map_err(|error| data_error_response(error, "checkpoint_profile_invalid"))?;
+    let profile = profiles.active_profile.clone();
+    let detail = state
+        .snapshots
+        .detail(profile.clone(), snapshot_id.to_owned())
+        .await
+        .map_err(|error| data_error_response(error, "snapshot_not_found"))?;
+    let summary = &detail.summary;
+    let snapshot_profile = summary.profile_name.clone();
+    if snapshot_profile != profile {
+        return Err(data_error_response(
+            io::Error::new(
+                io::ErrorKind::InvalidInput,
+                format!("snapshot belongs to profile {snapshot_profile}"),
+            ),
+            "snapshot_profile_mismatch",
+        ));
+    }
+    let dsh_version = summary.dsh_version.clone();
+    let releases = state
+        .releases
+        .load()
+        .map_err(|error| data_error_response(error, "checkpoint_release_unavailable"))?;
+    let release = releases
+        .releases
+        .iter()
+        .find(|item| item.version == dsh_version)
+        .map(|item| item.id.clone())
+        .ok_or_else(|| {
+            data_error_response(
+                io::Error::new(
+                    io::ErrorKind::NotFound,
+                    format!(
+                        "the snapshot's harness version {dsh_version} is not installed; cold-switch to it first"
+                    ),
+                ),
+                "snapshot_release_not_installed",
+            )
+        })?;
+    let state_snapshot = NexusStateSnapshot {
+        profile: profile.clone(),
+        release: Some(release.clone()),
+    };
+    let reference = SnapshotReference {
+        snapshot_id: snapshot_id.to_owned(),
+        summary: detail.summary.clone(),
+    };
+    state
+        .checkpoints
+        .create_with_snapshot(
+            &profile,
+            Some(release),
+            Some(format!("restored from snapshot {snapshot_id}")),
+            state_snapshot,
+            Some(reference),
+        )
+        .map_err(|error| data_error_response(error, "snapshot_checkpoint_failed"))
+}
+
 async fn checkpoint_restore(state: AppState, id: String) -> axum::response::Response {
     let lifecycle = state.supervisor.acquire_lifecycle().await;
     if let Err(response) = ensure_checkpoint_mutation_ready(&state).await {
@@ -1585,6 +1680,15 @@ async fn checkpoint_restore(state: AppState, id: String) -> axum::response::Resp
     }
     let checkpoint = match state.checkpoints.restore(&id) {
         Ok(checkpoint) => checkpoint,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => {
+            // The id may name a healthy-start snapshot: synthesize a
+            // checkpoint referencing it so the standard two-phase restore
+            // and materialization apply unchanged.
+            match checkpoint_from_snapshot(&state, &id).await {
+                Ok(checkpoint) => checkpoint,
+                Err(response) => return response,
+            }
+        }
         Err(error) => {
             let code = if error.kind() == io::ErrorKind::NotFound {
                 "checkpoint_not_found"
