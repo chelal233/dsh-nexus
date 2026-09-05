@@ -13,6 +13,14 @@ eleases\...` 双路径 → Harness 启动 os error 267（目录名称无效）
 
 ActionButton 全局补 `type="button"`：此前所有 ActionButton 在 `<form>` 内默认为 submit，「添加参数/移除参数」点击会触发表单提交（表现为变成保存/取消）。submit 专用按钮本就是原生 `<button type="submit">`，不受影响。
 
+## P0 验证进展与遗留（2026-09-05 晚）
+
+- **EISDIR 已修复验证**：verbatim 路径修复后，rc.1 loader 正常引导（run 25/26 的 node 启动阶段已过）
+- **当前阻断（非 Nexus bug）**：desktop 配置档插件树被 alpha.5 失败启动半迁移——`@deepseek-ai/dsh-settings` 从配置档消失、三个包的软链接（dsh-client-store/ui-primitives/ui-slots）被改写指向 `.dsh-module-fallback` 的跨版本副本 → rc.1 loader 报缺 `settingsNamespace` 导出
+- **恢复路径（已告知用户走 UI 验收）**：配置档 → 检查点/快照清单 → 恢复 rc.1 时期健康快照（snapshot-1788614094193 等）→ pnpm 物化重建 node_modules → 启动
+- **已知状态机 bug（测试中发现，待修）**：显式 stop 后状态发布为 failed（应为 stopped）——stop 终止子进程的退出码 1 被监控任务抢先发布；以及 /v1/harness/ui 的状态源与 /v1/harness 不一致导致认证面板显示陈旧 Failed
+- 根治项仍待拍板：切换版本成功后自动物化配置档依赖（可预防此类半迁移）
+
 ## P0 缺陷修复第三轮：release_root verbatim 路径（2026-09-05）
 
 - 用户切回 rc.1 后启动仍报 EISDIR lstat 'C:'（node 主模块解析失败）。手动复现 rc.1 bin.js 引导正常，排除入口文件问题
