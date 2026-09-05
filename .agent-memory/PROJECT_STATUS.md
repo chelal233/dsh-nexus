@@ -2,6 +2,10 @@ updated: 2026-09-05 by Codex (P0 快照内容引擎已接入 Agent，恢复事�
 
 # dsh-nexus 项目状态与需求基线
 
+## P0 反馈第六轮（2026-09-05）
+
+冷切换状态块渲染条件收紧：仅当操作进行中（operationId 存在且 phase 非终态：running/cancelling/awaiting_confirmation）或 update job running 时显示；**终态（succeeded/failed/cancelled）即消失，不再常驻**。失败信息由操作横幅与按钮恢复可用承担。
+
 ## P0 反馈第五轮（2026-09-05，归位整理）
 
 1. RecoveryDiagnostics（启动恢复状态+日志尾随）**移出配置档**→并入诊断页底部；ProfilesView 不再渲染
