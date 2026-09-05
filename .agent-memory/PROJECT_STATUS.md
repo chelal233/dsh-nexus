@@ -2,6 +2,15 @@ updated: 2026-09-05 by Codex (P0 快照内容引擎已接入 Agent，恢复事�
 
 # dsh-nexus 项目状态与需求基线
 
+## P0 用户反馈修复（2026-09-05，提交 3b3b161）
+
+用户以 GUI 截图反馈 4 项，已全部落地（纯前端，无后端改动）：
+1. **来源/安装模式下拉按需展开**：默认收起为「更换运行时来源或安装模式」按钮；UpdatesView 挂载时按需 GET /v1/runtime（不进 8s 轮询），检测到工具缺失自动展开
+2. **手动指定运行时路径**：node/pnpm/git 三行从只读改为输入框，保存走既有 POST /v1/config set_runtime 的 pin 字段（ownership=system；留空=清除 pin 交回自动发现，placeholder 显示当前解析路径）
+3. **运行时设置+冷切换状态合并**：两 Panel 合一（中间 panel-divider 分隔）
+4. **导航层级重构（已对照 desktop 证实层级）**：配置档(原生 pnpm package，dsh.profile.bundles=插件清单)→检查点(每 profile 独立槽位，快照=插件清单+配置文件)→插件列表。删除独立「恢复」导航项；ProfilesView 成为枢纽=配置档目录+嵌入 CheckpointsView(embedded 跳过 PageIntro)+ProfilePlugins(从 RecoveryView 提取)+RecoveryDiagnostics(启动恢复状态/日志尾随保留)。RecoveryView 四标签页组件已删除；p0-runtime-recovery-ui.test.ts 已改写为 profile hub 断言
+- 教训：往 App.tsx 加新顶层视图组件必须 export，否则测试 ssrLoadModule 拿到 undefined 报 "Element type is invalid"
+
 ## ZCode 独立确认（2026-09-05，P0 合入主线）
 
 - **main 已在 8feeb0b**（codex/nexus-p0/integration 快进合入），P0 全部落地：tag 枚举/槽位容量/一键切换（1e1838b/ec905f3/df3cff0）+ 运行时供给/冷安装/快照恢复/插件卸载（takeover 系列）
