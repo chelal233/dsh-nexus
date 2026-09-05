@@ -856,7 +856,7 @@ function ActionButton({
   tone?: "default" | "primary" | "danger";
   title?: string;
 }) {
-  return <button className={`button ${tone}`} onClick={onClick} disabled={disabled} title={title}>{children}</button>;
+  return <button type="button" className={`button ${tone}`} onClick={onClick} disabled={disabled} title={title}>{children}</button>;
 }
 
 function DataList({
