@@ -38,6 +38,15 @@ ActionButton 全局补 `type="button"`：此前所有 ActionButton 在 `<form>` 
 - 启动中/停止中的 i18n 与状态机均正确；用户观察到的错误状态源自插件树崩溃窗口
 - 当前唯一阻断不变：desktop 配置档插件树损坏 → 用户走快照恢复（rc.1 时期健康快照）即愈
 
+## P0 插件树兼容性终局分析（2026-09-06，自动化第二轮）
+
+- 实测矩阵：desktop 捆绑 0.1.2-alpha.1 官方包**满足全部所需导出**（settingsNamespace/deepEqualJson/DEFAULT_PREPARED/assertNever/CallId 全 ✓）；rc.1 内部缺 settingsNamespace 等；alpha.1 内部几乎全缺；alpha.5 部分 ✓ 部分 ✗。**配置档里 9 月 2 日物化的插件副本（desktop 时代）与任何本地槽位都不匹配**
+- **物化器粘性**：harness 启动物化器遵循 "existing pnpm entries win"——desktop 时代的旧副本永远不会被自愈覆盖，删掉杂散树后重物化仍装出错版本
+- **确认设计缺口**：`checkpoint_restore` 只接受 checkpoint id；**3 个健康快照无法直接恢复**（UI 只有详情/检查），而 desktop 模型中健康槽位本身就是恢复点 → 需要实现"快照直接恢复"（复用两阶段 journal + 物化）
+- **fallback 清理教训**：`.dsh-module-fallback` 与投影链接是上游 loader 的正当机制（原 fallback 指向桌面应用自带包，是插件能跑的功臣），不可当作污染清理（已从备份恢复原状）
+- 用户恢复的完整临时路径：恢复快照功能实现后一键修复；临时手工方案=用桌面捆绑的 0.1.2-alpha.1 官方包副本 junction 替换配置档 node_modules 对应条目（junction 已建，实测 loader 不走 profiles/node_modules 解析 @deepseek-ai/*，而是 loader 内部映射到运行 harness 的内部模块 → junction 无效，故临时方案也不可行）
+- **结论：必须实现快照直接恢复**，这是用户当前唯一出路（快照内容=desktop 时代自洽组合的备份）
+
 ## P0 解析链完整定位（2026-09-06 凌晨，自动化）
 
 - **解析链实锤**：配置档插件（desktop/node_modules/...）import `@deepseek-ai/dsh-settings` → 命中 **`C:\Users\PC\.dsh\profiles\node_modules\@deepseek-ai\dsh-settings`**（profiles 级 pnpm 工作区共享 node_modules）——该共享树在 alpha.1 启动时被重新物化为 alpha.1 版本（0.1.3-alpha.1，无 settingsNamespace/deepEqualJson 导出）
