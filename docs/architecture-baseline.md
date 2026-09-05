@@ -2,6 +2,18 @@
 
 Status: Architecture handoff — current baseline and confirmed target
 
+## Latest P0 disposition (2026-09-05)
+
+P0 is complete in `codex/nexus-p0/integration` at implementation head `73dec37`.
+The earlier phase-specific pending statements below are historical. Runtime
+supply is wired into persisted cold installation; native Profile/plugin adapters,
+snapshot recovery and their UI are integrated and verified. Real isolated Windows
+cold installation, start, restore and plugin removal passed. Authenticated Web
+uses the system-browser fallback, with final browser acceptance confirmed by the
+user. Main integration and deployment have not occurred. See
+[final acceptance](../artifacts/takeover/p0-final-acceptance.md) for verification
+tiers and explicit system-installation/download/platform limitations.
+
 This document separates the current baseline from the confirmed target. A
 `Current baseline` paragraph describes behavior or metadata already present in
 the current phase. A `Confirmed target` paragraph records an agreed direction
