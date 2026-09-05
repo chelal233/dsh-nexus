@@ -59,6 +59,10 @@ ActionButton 全局补 `type="button"`：此前所有 ActionButton 在 `<form>` 
   4. E2E 实测：`--port 0` → 发现记录 49322 → 该端口 health ok + 实例身份匹配 ✓
 - 兼容性说明：NEXUS_AGENT_PORT/--port 显式钉死的部署照旧；nexusctl 旧用法（显式 --port）不受影响
 
+## P1 进展（2026-09-06，自动化第十八轮）
+
+- **桌面通知完成**（feat: desktop notifications for harness failures with settings toggle）：插件权限（capabilities notification:default）、src/notifications.ts（权限申请+偏好 localStorage+best-effort 发送）、Harness 崩溃 transition 通知（per-run 去重）、设置页启用开关（默认开）。设置页静态"Available through Tauri"行替换为真实开关
+
 ## P1 进展（2026-09-06，自动化第十七轮）
 
 - 崩溃自动留证的测试干扰已修（4cd0249）：cfg(not(test)) 跳过自动捕获；清理 unused 警告。130 测试全绿。工作协议补充：新增 AppState 字段必须同步全部测试构造器（本次 5 处）；带副作用的异步行为（诊断/快照写盘）在测试构建统一关闭
