@@ -46,6 +46,12 @@ ActionButton 全局补 `type="button"`：此前所有 ActionButton 在 `<form>` 
 - **当前机器状态**：release=alpha.5 槽位→已切 rc.1（指针 rc.1，dsh-file-upload 已从清单移除，manifest 干净）；启动仍失败（导出缺失，因农场=alpha.1 包）；`.nexus-backup-20260906/` 与 `node_modules.stale-alpha1` 保留；plugin-desktop\node_modules 的 0.1.2-alpha.1 三件套验证过满足全部导出（应急可 junction，但 loader 不走 profiles/node_modules 解析 @deepseek-ai/*——loader 内部映射优先，junction 方案无效已证实）
 - **已知可行组合**：desktop 自带 0.1.2-alpha.1 harness + 其捆绑官方包曾正常运行数周（用户原生态）；本地三个 GitHub tag 槽位均与 rc.2 时代插件存在导出面不匹配
 
+## P1 进展（2026-09-06，自动化第九轮）
+
+- **agent 二进制新鲜度握手已实现**：HealthResponse 新增 `binary_path`（agent 报告 current_exe）；launcher-core 的 `AgentRuntime::start` 在采用既有 agent 前比对 binary_path 与自身解析的 agent 路径（规范化+canonicalize 双重比较），不一致 → 优雅 stop 旧实例 → 正常 spawn 新二进制；无 binary_path 的旧版 agent 向后兼容直接采用。实测踩坑的"launcher 更新后旧 agent 被复用"从此根治
+- **failed 快循环**：Harness 崩溃后 UI 轮询从 8s 收紧到 400ms，失败状态 ≤1s 内可见
+- P1 队列剩余：Job Object（进程树清理）、优雅停止信号+stop 持锁重构、Profile 新建 UI、配置文件快速查看、DSH 终端、通知、首次运行向导、崩溃自动留证、错误映射、端口去固定化
+
 ## P0 node_modules 清空实验（2026-09-06，自动化第八轮）与晨报
 
 - 实验：备份后清空 desktop/node_modules → 启动 → harness 报 "cannot resolve profile bundle dsh-auto-review ... run dsh plugin install"——**harness 启动不会自动重装插件**，需要显式 dsh plugin install（21 个插件的全量网络安装）。已回滚：node_modules 从备份完整恢复（dsh-settings-file ✓）
