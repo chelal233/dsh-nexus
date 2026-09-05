@@ -46,6 +46,14 @@ ActionButton 全局补 `type="button"`：此前所有 ActionButton 在 `<form>` 
 - **当前机器状态**：release=alpha.5 槽位→已切 rc.1（指针 rc.1，dsh-file-upload 已从清单移除，manifest 干净）；启动仍失败（导出缺失，因农场=alpha.1 包）；`.nexus-backup-20260906/` 与 `node_modules.stale-alpha1` 保留；plugin-desktop\node_modules 的 0.1.2-alpha.1 三件套验证过满足全部导出（应急可 junction，但 loader 不走 profiles/node_modules 解析 @deepseek-ai/*——loader 内部映射优先，junction 方案无效已证实）
 - **已知可行组合**：desktop 自带 0.1.2-alpha.1 harness + 其捆绑官方包曾正常运行数周（用户原生态）；本地三个 GitHub tag 槽位均与 rc.2 时代插件存在导出面不匹配
 
+## P0 INSTALL_ANCHOR 定位（2026-09-06，自动化第七轮）
+
+- **heal 锚点确认**：`profile-boot` 中 `INSTALL_ANCHOR = fileURLToPath(new URL("../package.json", import.meta.url))`——锚点=运行中 harness 自己的 apps/cli/package.json，heal 理论上永远治愈到当前运行槽位
+- **矛盾未解**：实测 rc.1 启动后共享 fallback 仍指向 alpha.1 槽位（0.1.3-alpha.1 版本）——heal 应在 composeProfile 时运行，但农场内容未跟随。需下一轮：插桩观察 rc.1 启动时 composeProfile/heal 是否执行（或读启动日志/调试输出）
+- **绕开时序的 Nexus 侧方案（下一轮实施）**：heal 语义已知=对当前槽位 workspace（vendor/*、packages/*/*，见槽位 package.json workspaces 字段）的每个包，在 `~/.dsh/profiles/node_modules/<pkg>` 建/校 symlink（Windows junction）→ Nexus 在启动 Harness 前自行执行同样的 heal（不依赖上游时序），并在 switch/restore 时清理旧农场。这正是此前设计的"Nexus 侧 heal"
+- 实测参考：rc.1 槽位 workspace 结构已确认（vendor/*、packages/*/*、native/landlock-run）；desktop 捆绑 0.1.2-alpha.1 副本满足全部插件导出（已验证）；alpha.5 内部模块满足除 settingsNamespace 外全部导出
+- 插件兼容矩阵速查：settings-file 需 deepEqualJson（rc.1+ ✓）；session-persistence-jsonl 需 DEFAULT_PREPARED（alpha.5+ ✓）；sandbox/llm-deepseek 需 assertNever/CallId（alpha.5+ ✓）；reasoning-effort/better-sidebar 需 settingsNamespace（仅 desktop 捆绑 0.1.2-alpha.1 与 rc.2+ 有）→ **当前 21 插件清单与任何本地槽位都无法全量兼容，需要逐插件取舍**（卸载旧 API 插件或换槽位），这是用户级决策不是代码 bug
+
 ## P0 heal 函数定位（2026-09-06，自动化第六轮）
 
 - **机制完全定位**：两条线的 app-boot 均含 `healProfilesModuleFallback`（profile.ts，两份源码长度一致 37889 字节）：每次启动创建 `~/.dsh/profiles/node_modules` 共享 fallback 并把链接**重新治愈到当前安装（installAnchor）**的包；`moduleFallbackCurrent` 校验不匹配才重建；`ensureProfileSymlink` 对已存在的链接直接跳过（粘性）；"cleanup removes only dsh-owned links"
