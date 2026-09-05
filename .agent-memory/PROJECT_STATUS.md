@@ -9,6 +9,10 @@ eleases\...` 双路径 → Harness 启动 os error 267（目录名称无效）
 - **修正**：retarget 改为把值中**从开头到槽位段结束**的整个前缀替换为 `{release_root}`（值以占位符开头）；用户 config.json 的 args[0] 已二次修复为 `{release_root}pps/cli/lib/bin.js`
 - 教训：Windows 文本模式 python 写入会把 LF 转 CRLF，改 Rust 源码后需归一化行尾（本次已 amend）；`{release_root}` 是子串替换语义，占位符应位于值的开头
 
+## P0 反馈第十轮（2026-09-05）
+
+ActionButton 全局补 `type="button"`：此前所有 ActionButton 在 `<form>` 内默认为 submit，「添加参数/移除参数」点击会触发表单提交（表现为变成保存/取消）。submit 专用按钮本就是原生 `<button type="submit">`，不受影响。
+
 ## P0 缺陷修复第三轮：release_root verbatim 路径（2026-09-05）
 
 - 用户切回 rc.1 后启动仍报 EISDIR lstat 'C:'（node 主模块解析失败）。手动复现 rc.1 bin.js 引导正常，排除入口文件问题
