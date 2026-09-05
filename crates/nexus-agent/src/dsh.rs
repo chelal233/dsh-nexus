@@ -208,9 +208,17 @@ pub(crate) fn profile_is_initialized(dsh_home: &Path, profile: &str) -> io::Resu
 }
 
 pub(crate) fn native_profiles(dsh_home: &Path) -> io::Result<Vec<NativeProfilePayload>> {
-    let home = canonical_dsh_home(dsh_home)?;
+    let home = match canonical_dsh_home(dsh_home) {
+        Ok(home) => home,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(error) => return Err(error),
+    };
     let profiles_dir = home.join("profiles");
-    let metadata = fs::symlink_metadata(&profiles_dir)?;
+    let metadata = match fs::symlink_metadata(&profiles_dir) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(error) => return Err(error),
+    };
     if metadata.file_type().is_symlink() || !metadata.is_dir() {
         return Err(io::Error::new(
             io::ErrorKind::InvalidData,
@@ -1054,6 +1062,19 @@ mod tests {
         assert!(
             output.len() <= MAX_PLUGIN_OUTPUT_BYTES + "\n[output truncated by Nexus]".len()
         );
+        fs::remove_dir_all(root).expect("fixture removes");
+    }
+
+    #[test]
+    fn first_run_profile_inventory_is_empty_without_creating_home() {
+        let root = test_dir("empty-native-profiles");
+        let home = root.join("new-home");
+        assert!(native_profiles(&home).expect("missing home is empty").is_empty());
+        assert!(!home.exists());
+        fs::create_dir(&home).expect("home fixture creates");
+        assert!(native_profiles(&home).expect("missing profiles is empty").is_empty());
+        fs::write(home.join("profiles"), "invalid directory").expect("invalid fixture writes");
+        assert!(native_profiles(&home).is_err());
         fs::remove_dir_all(root).expect("fixture removes");
     }
 

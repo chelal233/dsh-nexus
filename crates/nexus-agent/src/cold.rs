@@ -486,6 +486,7 @@ impl ColdCoordinator {
             ));
         }
         operation.phase = ColdOperationPhase::Supplying;
+        operation.owner_quiescent = false;
         operation.progress_percent = 40;
         operation.updated_at_unix = Some(unix_time_seconds());
         self.write(&operation)?;
@@ -694,10 +695,13 @@ async fn confirm_inner(state: &AppState, operation_id: &str, confirmation: &str)
         corepack_root(),
     )
     .map_err(supply_error)?;
-    let outcome = supplier
+    let mut outcome = supplier
         .execute_confirmed(&fresh, &supply, confirmation, &cancellation)
         .await
         .map_err(supply_error)?;
+    // Supply owns Node/pnpm only; retain the Git pin verified above for the
+    // post-build revision check and the persisted runtime configuration.
+    outcome.runtime.git = runtime.git;
     build_and_publish(state, operation_id, outcome.runtime).await
 }
 
