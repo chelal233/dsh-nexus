@@ -1,18 +1,18 @@
-# Runtime status UI report
+# Runtime status UI fix report
 
-Task: `nexus-takeover`
-Phase: `runtime-status-ui`
+Task: `nexus-takeover-fix1`
+Phase: `runtime-ui-fix1`
 Owner: `verify_checkout`
-Base ref: `df3cff00cb5e740f223897756f2c7f5bf9c44207`
-Branch: `codex/nexus-takeover/runtime-status-ui`
-Worktree: `E:\git\dsh-nexus-phases\runtime-status-ui`
+Base ref: `809dda1f6b327449e09b4cee5bbbf7dcba5e58a6`
+Branch: `codex/nexus-takeover/runtime-ui-fix1`
+Worktree: `E:\git\dsh-nexus-phases\runtime-ui-fix1`
 
 ## Worktree handshake
 
-`worktree_verified`: root `E:/git/dsh-nexus-phases/runtime-status-ui`, branch
-`codex/nexus-takeover/runtime-status-ui`, and `HEAD` equal to the declared
-base `df3cff00cb5e740f223897756f2c7f5bf9c44207`. The worktree was clean
-before implementation.
+`worktree_verified`: root `E:/git/dsh-nexus-phases/runtime-ui-fix1`, branch
+`codex/nexus-takeover/runtime-ui-fix1`, and `HEAD` equal to the declared base
+`809dda1f6b327449e09b4cee5bbbf7dcba5e58a6`. The worktree was clean before
+the fix.
 
 ## Scope and implementation
 
@@ -23,39 +23,47 @@ The exact write scope is:
 - `apps/nexus-launcher/tests/runtime-status.test.ts`
 - `artifacts/takeover/runtime-status-ui-report.md`
 
-Settings now contains an independently exported `RuntimeStatusPanel` and local
-runtime status state. Only its explicit Check/Refresh action requests
-`GET /v1/runtime` through the existing `proxyRequest`; it adds no poller,
-download/install action, or new unavailable-tool button. Agent-unavailable,
-idle, loading, success, and retryable error states are rendered with existing
-Panel, ActionButton, StatusPill, and state-card styles. Failed requests clear
-the prior success payload. The display preserves each tool's own version and
-does not infer a pnpm version from Corepack. `not_found` and
-`corepack_shim_unverified` have stable explanations; other reasons use the
-generic unable-to-verify message. Both English and Simplified Chinese copy is
-present.
+`runtimeStatusFromResponse` now rejects malformed envelopes, non-object,
+duplicate, missing, and unknown tool entries. It returns the required
+`git`/`node`/`pnpm` order and only accepts an available tool when its version
+is non-empty, source is `system` or `nexus`, and path is absolute. Windows
+drive-absolute, UNC, and POSIX paths are accepted; relative and drive-relative
+paths fail closed.
+
+`createRuntimeStatusController` is a small injectable async controller used by
+Settings. It starts in idle, emits loading before the injected transport, calls
+only `GET /v1/runtime` after an explicit Check/Refresh action, skips transport
+when the Agent is unavailable, and emits success or error with `status: null`.
+The controller tests observe the real loading-to-success/error transitions and
+verify that a failed refresh clears the previous success payload. SSR tests
+remain display-only and verify that rendering does not trigger a request.
+
+Runtime source labels use bilingual i18n: `system` renders as `System` or
+`系统`, while `nexus` preserves the `Nexus` brand. The optional provider
+initial locale is used only to render the Chinese SSR assertion.
 
 The API endpoint is implemented by a separate Rust phase. This phase does not
-claim Rust integration or end-to-end runtime acceptance.
+claim Rust integration, live Agent requests, or end-to-end runtime acceptance.
 
 ## Test-first and verification evidence
 
-- Initial focused test: `pnpm.cmd test -- --test-name-pattern "RuntimeStatusPanel"`
-  failed as expected because `RuntimeStatusPanel` was not exported (8 prior
-  tests passed; 3 new tests failed).
+- Pre-implementation focused run exited non-zero because the newly referenced
+  parser/controller exports were not yet present; the source-label expectation
+  was also intentionally ahead of its implementation. This was expected test
+  scaffolding, not a behavior RED classification or a pre-existing regression.
 - `COREPACK_ENABLE_NETWORK=0 pnpm.cmd install --offline --frozen-lockfile --ignore-scripts` — exit `0`; cache reuse only.
 - `COREPACK_ENABLE_NETWORK=0 pnpm.cmd typecheck` — exit `0`.
-- `COREPACK_ENABLE_NETWORK=0 pnpm.cmd test` — exit `0`; 11 passed, 0 failed.
+- `COREPACK_ENABLE_NETWORK=0 pnpm.cmd test` — exit `0`; 14 passed, 0 failed.
 - `git diff --check` — passed before commit.
 
-The SSR tests use Vite `ssrLoadModule` and `renderToStaticMarkup` to verify
-available tool metadata, stable unavailable reasons, HTML escaping of a path
-with special characters, loading state, Agent-unavailable disabling, retryable
-errors, stale-success removal, and no request triggered during render.
+The tests use Vite `ssrLoadModule` and `renderToStaticMarkup` for display and
+an injected transport/controller for request, protocol parsing, and state
+transition evidence. They cover normal and malformed protocol input, path
+forms, HTML escaping, bilingual source rendering, manual-only requests,
+Agent-unavailable no-call behavior, loading/success/error, and stale payload
+clearing after failed refresh.
 
 ## Not done
 
 No Rust changes, endpoint implementation, live Agent request, real Harness
-launch, system runtime installation, or build was performed. The target
-`/v1/runtime` response still requires the separate Rust phase and integration
-acceptance.
+launch, system runtime installation, package download, or build was performed.

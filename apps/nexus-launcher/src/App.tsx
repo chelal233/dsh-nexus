@@ -574,31 +574,70 @@ export type RuntimeStatusPanelProps = {
   onCheck: () => void;
 };
 
+export type RuntimeStatusTransport = (path: string, method: "GET") => Promise<unknown>;
+
+export type RuntimeStatusController = {
+  getState: () => RuntimeStatusViewState;
+  check: (agentAvailable: boolean) => Promise<RuntimeStatusViewState>;
+};
+
 function isRuntimeToolName(value: string | undefined): value is RuntimeToolName {
   return value !== undefined && runtimeToolNames.includes(value as RuntimeToolName);
 }
 
-function runtimeStatusFromResponse(value: unknown): RuntimeStatusPayload {
+function isAbsoluteRuntimePath(value: string): boolean {
+  return value.startsWith("/") || /^\\\\[^\\/]+[\\/][^\\/]+/.test(value) || /^[A-Za-z]:[\\/]/.test(value);
+}
+
+function optionalRuntimeString(item: JsonObject, key: string): string | undefined {
+  const value = item[key];
+  if (value === undefined) return undefined;
+  if (typeof value !== "string" || !value.trim()) {
+    throw new Error("Runtime status response is invalid.");
+  }
+  return value;
+}
+
+export function runtimeStatusFromResponse(value: unknown): RuntimeStatusPayload {
   const response = asObject(value);
   const apiVersion = response.api_version;
-  if (typeof apiVersion !== "string" && typeof apiVersion !== "number") {
+  if (
+    (typeof apiVersion !== "string" || !apiVersion.trim()) &&
+    (typeof apiVersion !== "number" || !Number.isFinite(apiVersion))
+  ) {
     throw new Error("Runtime status response is invalid.");
   }
 
+  const rawTools = arrayValue(response, "tools");
+  if (rawTools.length !== runtimeToolNames.length) {
+    throw new Error("Runtime status response is invalid.");
+  }
   const tools = new Map<RuntimeToolName, RuntimeToolStatus>();
-  for (const item of arrayValue(response, "tools")) {
-    if (!isObject(item)) continue;
-    const name = stringValue(item, "name");
-    if (!isRuntimeToolName(name) || tools.has(name) || typeof item.available !== "boolean") continue;
-    const source = stringValue(item, "source");
-    tools.set(name, {
-      name,
-      available: item.available,
-      version: stringValue(item, "version"),
-      source: source === "system" || source === "nexus" ? source : undefined,
-      path: stringValue(item, "path"),
-      reason: stringValue(item, "reason"),
-    });
+  for (const item of rawTools) {
+    if (!isObject(item)) throw new Error("Runtime status response is invalid.");
+    const name = item.name;
+    if (typeof name !== "string" || !isRuntimeToolName(name) || tools.has(name) || typeof item.available !== "boolean") {
+      throw new Error("Runtime status response is invalid.");
+    }
+    const version = optionalRuntimeString(item, "version");
+    const sourceValue = optionalRuntimeString(item, "source");
+    const path = optionalRuntimeString(item, "path");
+    const reason = optionalRuntimeString(item, "reason");
+    const source = sourceValue === "system" || sourceValue === "nexus" ? sourceValue : undefined;
+    if (sourceValue !== undefined && source === undefined) {
+      throw new Error("Runtime status response is invalid.");
+    }
+    if (path !== undefined && !isAbsoluteRuntimePath(path)) {
+      throw new Error("Runtime status response is invalid.");
+    }
+    if (item.available && (
+      version === undefined ||
+      source === undefined ||
+      path === undefined
+    )) {
+      throw new Error("Runtime status response is invalid.");
+    }
+    tools.set(name, { name, available: item.available, version, source, path, reason });
   }
   if (tools.size !== runtimeToolNames.length) {
     throw new Error("Runtime status response is invalid.");
@@ -609,8 +648,37 @@ function runtimeStatusFromResponse(value: unknown): RuntimeStatusPayload {
   };
 }
 
+export function createRuntimeStatusController(
+  transport: RuntimeStatusTransport,
+  publish: (state: RuntimeStatusViewState) => void = () => undefined,
+): RuntimeStatusController {
+  let state: RuntimeStatusViewState = { phase: "idle", status: null, error: null };
+  const update = (next: RuntimeStatusViewState): RuntimeStatusViewState => {
+    state = next;
+    publish(state);
+    return state;
+  };
+  return {
+    getState: () => state,
+    check: async (agentAvailable) => {
+      if (!agentAvailable) return state;
+      update({ phase: "loading", status: null, error: null });
+      try {
+        const response = await transport("/v1/runtime", "GET");
+        return update({ phase: "success", status: runtimeStatusFromResponse(response), error: null });
+      } catch (cause) {
+        return update({ phase: "error", status: null, error: errorMessage(cause) });
+      }
+    },
+  };
+}
+
 function runtimeToolLabel(name: RuntimeToolName, t: Translator): string {
   return t(name === "git" ? "Git" : name === "node" ? "Node" : "pnpm");
+}
+
+function runtimeToolSourceLabel(source: RuntimeToolSource, t: Translator): string {
+  return source === "system" ? t("System source") : t("Nexus source");
 }
 
 function runtimeToolReason(reason: string | undefined, t: Translator): string {
@@ -634,7 +702,7 @@ function RuntimeToolRow({ tool }: { tool: RuntimeToolStatus }) {
       </div>
       <div>
         {tool.version && <span>{t("Version")}: <code>{tool.version}</code></span>}
-        {tool.source && <span>{t("Source")}: <code>{tool.source}</code></span>}
+        {tool.source && <span>{t("Source")}: <code>{runtimeToolSourceLabel(tool.source, t)}</code></span>}
         {tool.path && <span>{t("Path")}: <code>{tool.path}</code></span>}
         {!tool.available && <span>{runtimeToolReason(tool.reason, t)}</span>}
       </div>
@@ -1388,6 +1456,13 @@ function SettingsView({ snapshot, themeMode, setThemeMode, busyAction, runAction
     status: null,
     error: null,
   });
+  const runtimeController = useMemo(
+    () => createRuntimeStatusController(
+      (path, method) => proxyRequest<unknown>(path, method),
+      setRuntimeStatus,
+    ),
+    [],
+  );
   const draftDirtyRef = useRef(false);
 
   useEffect(() => {
@@ -1502,15 +1577,8 @@ function SettingsView({ snapshot, themeMode, setThemeMode, busyAction, runAction
   }, [detectHarness, discovery, discoveryLoading, editingHarness, snapshot.startup?.available]);
 
   const checkRuntime = useCallback(async () => {
-    if (snapshot.startup?.available !== true) return;
-    setRuntimeStatus({ phase: "loading", status: null, error: null });
-    try {
-      const response = await proxyRequest<unknown>("/v1/runtime");
-      setRuntimeStatus({ phase: "success", status: runtimeStatusFromResponse(response), error: null });
-    } catch (cause) {
-      setRuntimeStatus({ phase: "error", status: null, error: errorMessage(cause) });
-    }
-  }, [snapshot.startup?.available]);
+    await runtimeController.check(snapshot.startup?.available === true);
+  }, [runtimeController, snapshot.startup?.available]);
 
   const openEditor = () => {
     setDraft(harnessDraftFromConfig(config));

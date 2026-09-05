@@ -327,6 +327,8 @@ const english: Record<string, string> = {
   "Git": "Git",
   "Node": "Node",
   "pnpm": "pnpm",
+  "System source": "System",
+  "Nexus source": "Nexus",
   "No credentials leave this device": "No credentials leave this device",
   "The Agent API is not responding on its loopback port.": "The Agent API is not responding on its loopback port.",
   "Set NEXUS_AGENT_BIN or build the Rust Agent.": "Set NEXUS_AGENT_BIN or build the Rust Agent.",
@@ -647,6 +649,8 @@ const chinese: Record<string, string> = {
   "Git": "Git",
   "Node": "Node",
   "pnpm": "pnpm",
+  "System source": "系统",
+  "Nexus source": "Nexus",
   "No credentials leave this device": "凭据不会离开本机",
   "The Agent API is not responding on its loopback port.": "Agent API 未在本机回环端口响应。",
   "Set NEXUS_AGENT_BIN or build the Rust Agent.": "请设置 NEXUS_AGENT_BIN，或构建 Rust Agent。",
@@ -689,8 +693,8 @@ const I18nContext = createContext<I18nContextValue>({
   t: (key, params) => translate("en", key, params),
 });
 
-export function I18nProvider({ children }: { children: ReactNode }) {
-  const [locale, setLocale] = useState<Locale>(detectLocale);
+export function I18nProvider({ children, initialLocale }: { children: ReactNode; initialLocale?: Locale }) {
+  const [locale, setLocale] = useState<Locale>(() => initialLocale ?? detectLocale());
   useEffect(() => {
     document.documentElement.lang = locale === "zh" ? "zh-CN" : "en";
     document.title = translate(locale, "Nexus Launcher");
