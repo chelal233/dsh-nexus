@@ -830,6 +830,15 @@ function AgentUnavailableNotice({ message, onRetry }: { message: string; onRetry
   return <div className="notice action-error" role="status" aria-live="polite"><WarningCircle size={17} /><span><strong>{t("Agent unavailable")}</strong> {localizeBackendError(message, t)}</span><button className="button subtle" onClick={onRetry}>{t("Retry")}</button></div>;
 }
 
+function Modal({ title, onClose, children }: { title: string; onClose: () => void; children: React.ReactNode }) {
+  return <div className="modal-overlay" role="dialog" aria-modal="true" onClick={onClose}>
+    <div className="modal-card" onClick={(event) => event.stopPropagation()}>
+      <div className="modal-header"><strong>{title}</strong><ActionButton onClick={onClose}><X size={16} /></ActionButton></div>
+      <div className="modal-body">{children}</div>
+    </div>
+  </div>;
+}
+
 function Metric({ label, value, detail, actions, children }: { label: string; value: string; detail?: string; actions?: React.ReactNode; children?: React.ReactNode }) {
   return <div className="metric"><span>{label}</span><strong>{value}</strong>{detail && <small>{detail}</small>}{actions && <div className="metric-actions">{actions}</div>}{children}</div>;
 }
@@ -1194,7 +1203,7 @@ export function OverviewView({ snapshot, busyAction, credentialInvalidationPendi
         const harnessAction = (action: string) => void runAction(t(`Harness ${action}`), "/v1/harness", { action });
         return <div className="metric-grid">
         <Metric label={t("Agent lifecycle")} value={localizedRuntimeState(stringValue(state, "lifecycle"), t)} detail={localizedRuntimeState(stringValue(health, "status"), t)} actions={<ActionButton tone="primary" disabled={agentRestartDisabled} onClick={() => void runAction(t("Force restart Agent"), "/v1/agent", { action: "restart" })}><ArrowsClockwise size={16} />{t("Force restart Agent")}</ActionButton>} />
-        <Metric label={t("Harness")} value={localizedRuntimeState(harnessState, t)} detail={stringValue(harness, "pid") ? t("PID {pid}", { pid: stringValue(harness, "pid") || "" }) : t("No child process")} actions={<>{harnessState !== "running" && <ActionButton tone="primary" disabled={startDisabled} onClick={() => harnessAction("start")}><CheckCircle size={16} />{t("Start")}</ActionButton>}{(harnessState === "running" || harnessState === "failed") && <ActionButton disabled={restartDisabled} onClick={() => harnessAction("restart")}><ArrowsClockwise size={16} />{t("Restart")}</ActionButton>}{(harnessState === "running" || harnessState === "starting") && <ActionButton tone="danger" disabled={stopDisabled} onClick={() => harnessAction("stop")}><StopCircle size={16} />{t("Stop")}</ActionButton>}</>}>{harnessState === "failed" && <><div className="button-row"><ActionButton onClick={() => setFailLogOpen(!failLogOpen)}>{failLogOpen ? t("Hide startup log tail") : t("Show startup log tail")}</ActionButton></div>{failLogOpen && <RecoveryLogTail snapshot={snapshot} />}</>}</Metric>
+        <Metric label={t("Harness")} value={localizedRuntimeState(harnessState, t)} detail={stringValue(harness, "pid") ? t("PID {pid}", { pid: stringValue(harness, "pid") || "" }) : t("No child process")} actions={<>{harnessState !== "running" && <ActionButton tone="primary" disabled={startDisabled} onClick={() => harnessAction("start")}><CheckCircle size={16} />{t("Start")}</ActionButton>}{(harnessState === "running" || harnessState === "failed") && <ActionButton disabled={restartDisabled} onClick={() => harnessAction("restart")}><ArrowsClockwise size={16} />{t("Restart")}</ActionButton>}{(harnessState === "running" || harnessState === "starting") && <ActionButton tone="danger" disabled={stopDisabled} onClick={() => harnessAction("stop")}><StopCircle size={16} />{t("Stop")}</ActionButton>}</>}>{harnessState === "failed" && <div className="button-row"><ActionButton onClick={() => setFailLogOpen(true)}>{t("Show startup log")}</ActionButton></div>}{harnessState === "failed" && failLogOpen && <Modal title={t("Startup log tail")} onClose={() => setFailLogOpen(false)}><RecoveryLogTail snapshot={snapshot} /></Modal>}</Metric>
         <Metric label={t("Active profile")} value={stringValue(state, "profile") || t("None selected")} detail={t("{count} profiles available", { count: profiles.length })} />
         <Metric label={t("Checkpoints")} value={String(checkpoints.length)} detail={updateStateLabel(update, t)} />
         </div>;
