@@ -2,6 +2,10 @@ updated: 2026-09-05 by Codex (P0 快照内容引擎已接入 Agent，恢复事�
 
 # dsh-nexus 项目状态与需求基线
 
+## P0 反馈第七轮（2026-09-05）
+
+概览 Harness 卡片的启动日志尾随改为**二级弹窗**（新增通用 Modal 组件：遮罩+居中卡片+右上关闭，点击遮罩可关闭），不再内联拉伸页面。按钮文案「查看启动日志」。**待用户拍板**：冷切换成功且版本变化后自动对当前配置档执行 pnpm 物化（修复 alpha.5 类“配置档依赖与 harness 版本不匹配”启动失败；写入 .dsh profile 行为与已验收的恢复物化一致）——用户确认后实现，然后 P0 收束进 P1。
+
 ## P0 反馈第六轮（2026-09-05）
 
 冷切换状态块渲染条件收紧：仅当操作进行中（operationId 存在且 phase 非终态：running/cancelling/awaiting_confirmation）或 update job running 时显示；**终态（succeeded/failed/cancelled）即消失，不再常驻**。失败信息由操作横幅与按钮恢复可用承担。
