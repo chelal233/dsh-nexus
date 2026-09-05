@@ -1181,24 +1181,24 @@ export function OverviewView({ snapshot, busyAction, credentialInvalidationPendi
   const agentStopping = agentLifecycle === "stopping";
   const agentControlsUnavailable = busyAction !== null || snapshot.startup === null;
   const agentRestartDisabled = agentControlsUnavailable || agentStarting || agentStopping;
+  const [failLogOpen, setFailLogOpen] = useState(false);
   return (
     <>
       <div className="page-heading"><div><span className="kicker">{t("Runtime / Overview")}</span><h1>{t("Local control plane")}</h1><p>{t("Observe and operate the independent Agent and its immutable Harness runtime.")}</p></div><StatusPill label={agentRunning ? t("Running") : t("Standby")} tone={agentRunning ? "good" : "warn"} /></div>
-      <div className="metric-grid">
-        <Metric label={t("Agent lifecycle")} value={localizedRuntimeState(stringValue(state, "lifecycle"), t)} detail={localizedRuntimeState(stringValue(health, "status"), t)} />
-        <Metric label={t("Harness")} value={localizedRuntimeState(stringValue(harness, "state"), t)} detail={stringValue(harness, "pid") ? t("PID {pid}", { pid: stringValue(harness, "pid") || "" }) : t("No child process")} />
+      {(() => {
+        const harnessState = stringValue(harness, "state");
+        const controlGate = harnessControlGate(harnessState, numberValue(harness, "pid"), busyAction !== null, snapshot.startup?.available === true);
+        const startDisabled = controlGate.controlsDisabled || harnessState === "running" || harnessState === "starting" || harnessState === "stopping";
+        const restartDisabled = controlGate.controlsDisabled || harnessState === "starting" || harnessState === "stopping" || harnessState === "detached";
+        const stopDisabled = controlGate.controlsDisabled || !["running", "starting", "failed"].includes(harnessState || "");
+        const harnessAction = (action: string) => void runAction(t(`Harness ${action}`), "/v1/harness", { action });
+        return <div className="metric-grid">
+        <div className="metric-with-actions"><Metric label={t("Agent lifecycle")} value={localizedRuntimeState(stringValue(state, "lifecycle"), t)} detail={localizedRuntimeState(stringValue(health, "status"), t)} /><div className="button-row"><ActionButton tone="primary" disabled={agentRestartDisabled} onClick={() => void runAction(t("Force restart Agent"), "/v1/agent", { action: "restart" })}><ArrowsClockwise size={16} />{t("Force restart Agent")}</ActionButton></div></div>
+        <div className="metric-with-actions"><Metric label={t("Harness")} value={localizedRuntimeState(harnessState, t)} detail={stringValue(harness, "pid") ? t("PID {pid}", { pid: stringValue(harness, "pid") || "" }) : t("No child process")} /><div className="button-row">{harnessState !== "running" && <ActionButton tone="primary" disabled={startDisabled} onClick={() => harnessAction("start")}><CheckCircle size={16} />{t("Start")}</ActionButton>}{(harnessState === "running" || harnessState === "failed") && <ActionButton disabled={restartDisabled} onClick={() => harnessAction("restart")}><ArrowsClockwise size={16} />{t("Restart")}</ActionButton>}{(harnessState === "running" || harnessState === "starting") && <ActionButton tone="danger" disabled={stopDisabled} onClick={() => harnessAction("stop")}><StopCircle size={16} />{t("Stop")}</ActionButton>}</div><dl className="detail-list compact-details"><div><dt>{t("Process ID")}</dt><dd>{stringValue(harness, "pid") || t("Not attached")}</dd></div><div><dt>{t("Exit code")}</dt><dd>{stringValue(harness, "exit_code") || t("Not exited")}</dd></div><div><dt>{t("Last error")}</dt><dd>{harness.error ? localizeBackendError(stringValue(harness, "error") || "", t) : t("None reported")}</dd></div></dl>{harnessState === "failed" && <div className="button-row"><ActionButton onClick={() => setFailLogOpen(!failLogOpen)}>{failLogOpen ? t("Hide startup log tail") : t("Show startup log tail")}</ActionButton></div>}{harnessState === "failed" && failLogOpen && <RecoveryLogTail snapshot={snapshot} />}</div>
         <Metric label={t("Active profile")} value={stringValue(state, "profile") || t("None selected")} detail={t("{count} profiles available", { count: profiles.length })} />
         <Metric label={t("Checkpoints")} value={String(checkpoints.length)} detail={updateStateLabel(update, t)} />
-      </div>
-      <div className="grid-two">
-        <Panel title={t("Agent operations")} icon={<Pulse size={18} />}>
-          <p className="panel-description">{t("The Agent starts and stops with the Launcher. Only force-restart remains for recovery.")}</p>
-          <div className="button-row">
-            <ActionButton tone="primary" disabled={agentRestartDisabled} onClick={() => void runAction(t("Force restart Agent"), "/v1/agent", { action: "restart" })}><ArrowsClockwise size={16} />{t("Force restart Agent")}</ActionButton>
-          </div>
-        </Panel>
-        <HarnessControlPanel snapshot={snapshot} busyAction={busyAction} runAction={runAction} openSettings={openSettings} />
-      </div>
+        </div>;
+      })()}
       <HarnessAuthPanel snapshot={snapshot} busyAction={busyAction} credentialInvalidationPending={credentialInvalidationPending} runAction={runAction} />
       <HarnessWebPanel snapshot={snapshot} credentialInvalidationPending={credentialInvalidationPending} busyAction={busyAction} runAction={runAction} />
     </>
@@ -1305,7 +1305,6 @@ export function ProfilesView(props: ViewProps) {
   <CheckpointsView {...props} embedded profileFilter={name} />
   <ProfilePlugins {...props} profile={name} />
   </div>; })}
-  <RecoveryDiagnostics snapshot={props.snapshot} busyAction={props.busyAction} runAction={props.runAction} refresh={props.refresh} />
   </>;
 }
 
@@ -1387,6 +1386,21 @@ export function UpdatesView({ snapshot, busyAction, runAction, refresh }: ViewPr
   useEffect(() => {
     if (runtimeTools && runtimeTools.some((tool) => !booleanValue(tool, "available"))) setRuntimeSetupOpen(true);
   }, [runtimeTools]);
+  const [runtimeStatus, setRuntimeStatus] = useState<RuntimeStatusViewState>({
+    phase: "idle",
+    status: null,
+    error: null,
+  });
+  const runtimeController = useMemo(
+    () => createRuntimeStatusController(
+      (path, method) => proxyRequest<unknown>(path, method),
+      setRuntimeStatus,
+    ),
+    [],
+  );
+  const checkRuntime = useCallback(async () => {
+    await runtimeController.check(snapshot.startup?.available === true);
+  }, [runtimeController, snapshot.startup?.available]);
   useEffect(() => {
     const key = `${persistedSource}\u0000${persistedMode}`;
     if (runtimeConfigKey.current !== key) {
@@ -1427,7 +1441,7 @@ export function UpdatesView({ snapshot, busyAction, runAction, refresh }: ViewPr
   const runtimeGate = runtimeSettingsGate(stringValue(harness, "state"), numberValue(harness, "pid"), updateState, operationPhase, cleanupPending, busyAction !== null);
   const runtimeGateReason = runtimeGate.reason === "harness_not_stopped" ? t("Harness must be positively stopped before saving runtime settings.") : runtimeGate.reason === "update_active" ? t("Wait for the update to become idle before saving runtime settings.") : runtimeGate.reason === "cold_active" ? t("Wait for the cold switch to finish before saving runtime settings.") : runtimeGate.reason === "cleanup_pending" ? t("Retry cold cleanup before saving runtime settings.") : null;
   return <><PageIntro kicker={t("Releases / Updates")} title={t("Updates")} detail={t("Cold switches are asynchronous and never start Harness automatically.")} />
-    <Panel title={t("Runtime settings")} icon={<Cpu size={18} />}><div className="status-block"><div className="button-row"><ActionButton onClick={() => setRuntimeSetupOpen((open) => !open)}>{runtimeSetupOpen ? t("Hide source and install mode") : t("Change runtime source or install mode")}</ActionButton></div>{runtimeSetupOpen && <div className="form-grid"><label className="form-field"><span className="field-label">{t("Source")}</span><select className="form-input" value={source} onChange={(e) => setSource(e.target.value)}><option value="official">{t("Official")}</option><option value="npmmirror">npmmirror</option></select></label><label className="form-field"><span className="field-label">{t("Install mode")}</span><select className="form-input" value={mode} onChange={(e) => setMode(e.target.value)}><option value="portable">{t("Portable")}</option><option value="system">{t("System install")}</option></select></label></div>}{runtimeSetupOpen && <p className="field-help">{t("These settings only matter when runtimes must be installed or replaced.")}</p>}<div className="form-grid">{(["node", "pnpm", "git"] as const).map((name) => <label key={name} className="form-field"><span className="field-label">{name} {t("pin")}</span><input className="form-input" value={pins[name]} placeholder={stringValue(nestedValue(runtime, name), "path") || t("Leave blank for automatic discovery")} onChange={(event) => setPins((current) => ({ ...current, [name]: event.target.value }))} /></label>)}</div><p className="field-help">{t("Manual paths are saved as system pins. Leave blank to let Nexus resolve automatically.")}</p><ActionButton disabled={runtimeGate.disabled} onClick={() => void runAction(t("Save runtime settings"), "/v1/config", { action: "set_runtime", runtime: runtimePayload })}>{t("Save runtime settings")}</ActionButton>{runtimeGateReason && <p className="field-help" role="status">{runtimeGateReason}</p>}</div></Panel>
+    <Panel title={t("Runtime settings")} icon={<Cpu size={18} />}><div className="status-block"><div className="button-row"><ActionButton onClick={() => setRuntimeSetupOpen((open) => !open)}>{runtimeSetupOpen ? t("Hide source and install mode") : t("Change runtime source or install mode")}</ActionButton></div>{runtimeSetupOpen && <div className="form-grid"><label className="form-field"><span className="field-label">{t("Source")}</span><select className="form-input" value={source} onChange={(e) => setSource(e.target.value)}><option value="official">{t("Official")}</option><option value="npmmirror">npmmirror</option></select></label><label className="form-field"><span className="field-label">{t("Install mode")}</span><select className="form-input" value={mode} onChange={(e) => setMode(e.target.value)}><option value="portable">{t("Portable")}</option><option value="system">{t("System install")}</option></select></label></div>}{runtimeSetupOpen && <p className="field-help">{t("These settings only matter when runtimes must be installed or replaced.")}</p>}<div className="form-grid">{(["node", "pnpm", "git"] as const).map((name) => <label key={name} className="form-field"><span className="field-label">{name} {t("pin")}</span><input className="form-input" value={pins[name]} placeholder={stringValue(nestedValue(runtime, name), "path") || t("Leave blank for automatic discovery")} onChange={(event) => setPins((current) => ({ ...current, [name]: event.target.value }))} /></label>)}</div><p className="field-help">{t("Manual paths are saved as system pins. Leave blank to let Nexus resolve automatically.")}</p><ActionButton disabled={runtimeGate.disabled} onClick={() => void runAction(t("Save runtime settings"), "/v1/config", { action: "set_runtime", runtime: runtimePayload })}>{t("Save runtime settings")}</ActionButton>{runtimeGateReason && <p className="field-help" role="status">{runtimeGateReason}</p>}<hr className="panel-divider" /><RuntimeStatusPanel agentAvailable={snapshot.startup?.available === true} state={runtimeStatus} onCheck={() => void checkRuntime()} /></div></Panel>
     
     <Panel title={t("Upstream tags & cold switch")} icon={<CloudArrowUp size={18} />}><div className="status-block"><ActionButton disabled={tagsLoading} onClick={() => void loadTags()}>{tagsLoading ? t("Listing tags") : t("List upstream tags")}</ActionButton>{tagsError ? <span>{tagsError} · <button className="button subtle" onClick={() => void loadTags()}>{t("Refresh")}</button></span> : <span>{tagList ? `${t("Source")}: ${stringValue(tagList, "source")}` : t("No tags loaded")}</span>}{tags.length > 0 && <select value={selectedTag} onChange={(event) => setSelectedTag(event.target.value)} aria-label={t("Upstream tags")}><option value="">{t("Select a tag")}</option>{tags.map((tag) => <option key={tag} value={tag}>{tag}</option>)}</select>}{selectedTag && <ActionButton tone="primary" disabled={busyAction !== null || tagsLoading || (!!operationId && !coldOperationIsTerminal(operationPhase))} onClick={() => void runAction(t("Switch to tag"), "/v1/updates", { action: "switch", tag: selectedTag, source, mode })}>{releases.some((item) => stringValue(item, "version") === selectedTag) ? t("Switch to tag") : t("Fetch this tag")}</ActionButton>}{selectedTag && <span>{`${t("Selected tag")}: ${selectedTag}`}</span>}</div>{pendingConfirmation && <div className="status-block"><strong>{t("Confirm runtime supply plan")}</strong><SupplyPlanDetails operation={operation} supply={supply} /><p className="form-error"><WarningCircle size={15}/>{operationMode === "system" ? t("System mode may show an installer or elevation prompt and can require restart verification.") : t("Portable mode writes only to the Nexus-owned runtime destination.")}</p><div className="button-row"><ActionButton tone="primary" disabled={!operationId || !confirmation || busyAction !== null} onClick={() => void runAction(t("Confirm cold switch"), "/v1/updates", { action: "confirm", operation_id: operationId, confirmation })}>{t("Confirm exact plan")}</ActionButton><ActionButton tone="danger" disabled={!operationId || busyAction !== null} onClick={() => void runAction(t("Cancel cold switch"), "/v1/updates", { action: "cancel", operation_id: operationId })}>{t("Cancel")}</ActionButton></div></div>}
     {(!!operationId || (updateState && updateState !== "idle")) && <><hr className="panel-divider" /><div className="status-block"><StatusPill label={localizedRuntimeState(operationPhase || updateState, t)} tone={operationPhase === "failed" || updateState === "failed" ? "bad" : pendingConfirmation ? "warn" : operationPhase === "succeeded" ? "good" : "neutral"}/><strong>{operationId || stringValue(update, "release_id") || t("No active update")}</strong>{operationId && <progress max="100" value={numberValue(operation, "progress_percent") || 0}>{numberValue(operation, "progress_percent") || 0}%</progress>}<span>{stringValue(operation, "error") || stringValue(update, "error") || t("No update error reported")}</span>{stringValue(operation, "cleanup_error") && <p className="form-error" role="alert"><WarningCircle size={15}/>{t("Cleanup error")}: {stringValue(operation, "cleanup_error")}</p>}{operationId && <span>{t("Owner quiescent")}: {booleanValue(operation, "owner_quiescent") ? t("Yes") : t("No")}{cleanupPending ? ` · ${t("Cleanup pending")}` : ""}</span>}<div className="button-row"><ActionButton disabled={busyAction !== null} onClick={() => void refresh()}>{t("Refresh")}</ActionButton>{operationId && (!coldOperationIsTerminal(operationPhase) || cleanupPending) && <ActionButton tone="danger" disabled={busyAction !== null || operationPhase === "cancelling"} onClick={() => void runAction(t("Cancel cold switch"), "/v1/updates", { action: "cancel", operation_id: operationId })}>{cleanupPending ? t("Retry cleanup") : t("Cancel")}</ActionButton>}</div></div></>}</Panel>
@@ -1479,19 +1493,25 @@ export function ProfilePlugins({ snapshot, busyAction, runAction, refresh, profi
   </Panel>;
 }
 
-function RecoveryDiagnostics({ snapshot, busyAction, runAction, refresh }: Pick<ViewProps, "snapshot" | "busyAction" | "runAction" | "refresh">) {
+function RecoveryLogTail({ snapshot }: Pick<ViewProps, "snapshot">) {
   const { t } = useI18n();
   const recovery = asObject(snapshot.recovery);
   const tails = arrayValue(recovery, "log_tail");
-  const errors = arrayValue(recovery, "diagnostic_errors").map(String);
-  return <><Panel title={t("Startup recovery status")} icon={<Pulse size={18} />}><dl className="detail-list"><div><dt>{t("Harness state")}</dt><dd>{localizedRuntimeState(stringValue(asObject(recovery.harness), "state"), t)}</dd></div><div><dt>{t("Startup error")}</dt><dd>{stringValue(recovery, "startup_error") || t("None reported")}</dd></div><div><dt>{t("Fatal prefix observed")}</dt><dd>{booleanValue(recovery, "fatal_prefix_observed") ? t("Yes, advisory only") : t("No")}</dd></div></dl>{errors.map((item) => <p className="form-error" key={item}>{item}</p>)}<div className="button-row"><ActionButton disabled={busyAction !== null} onClick={() => void refresh()}>{t("Refresh")}</ActionButton><ActionButton disabled={busyAction !== null || snapshot.startup?.available !== true} onClick={() => void runAction(t("Diagnostic collection"), "/v1/diagnostics", { action: "collect", note: t("Manual recovery collection") })}>{t("Collect diagnostics")}</ActionButton></div></Panel><Panel title={t("Bounded redacted log tail")} icon={<TerminalWindow size={18} />}><DataList items={tails} emptyTitle={t("No recovery log tail")} emptyDetail={t("No current Nexus-owned Harness log session is available.")} render={(item) => <div className="snapshot-file"><strong>{stringValue(item, "stream")}</strong><pre>{stringValue(item, "content")}</pre>{booleanValue(item, "truncated") && <small className="truncation-note">{t("Log truncated by the Agent response limit.")}</small>}</div>} /></Panel></>;
+  return <Panel title={t("Bounded redacted log tail")} icon={<TerminalWindow size={18} />}><DataList items={tails} emptyTitle={t("No recovery log tail")} emptyDetail={t("No current Nexus-owned Harness log session is available.")} render={(item) => <div className="snapshot-file"><strong>{stringValue(item, "stream")}</strong><pre>{stringValue(item, "content")}</pre>{booleanValue(item, "truncated") && <small className="truncation-note">{t("Log truncated by the Agent response limit.")}</small>}</div>} /></Panel>;
 }
 
-function DiagnosticsView({ snapshot, busyAction, runAction }: ViewProps) {
+function RecoveryDiagnostics({ snapshot, busyAction, runAction, refresh }: Pick<ViewProps, "snapshot" | "busyAction" | "runAction" | "refresh">) {
+  const { t } = useI18n();
+  const recovery = asObject(snapshot.recovery);
+  const errors = arrayValue(recovery, "diagnostic_errors").map(String);
+  return <><Panel title={t("Startup recovery status")} icon={<Pulse size={18} />}><dl className="detail-list"><div><dt>{t("Harness state")}</dt><dd>{localizedRuntimeState(stringValue(asObject(recovery.harness), "state"), t)}</dd></div><div><dt>{t("Startup error")}</dt><dd>{stringValue(recovery, "startup_error") || t("None reported")}</dd></div><div><dt>{t("Fatal prefix observed")}</dt><dd>{booleanValue(recovery, "fatal_prefix_observed") ? t("Yes, advisory only") : t("No")}</dd></div></dl>{errors.map((item) => <p className="form-error" key={item}>{item}</p>)}<div className="button-row"><ActionButton disabled={busyAction !== null} onClick={() => void refresh()}>{t("Refresh")}</ActionButton><ActionButton disabled={busyAction !== null || snapshot.startup?.available !== true} onClick={() => void runAction(t("Diagnostic collection"), "/v1/diagnostics", { action: "collect", note: t("Manual recovery collection") })}>{t("Collect diagnostics")}</ActionButton></div></Panel><RecoveryLogTail snapshot={snapshot} /></>;
+}
+
+function DiagnosticsView({ snapshot, busyAction, runAction, refresh }: ViewProps) {
   const { locale, t } = useI18n();
   const items = arrayValue(snapshot.diagnostics, "bundles");
   const controlsDisabled = busyAction !== null || snapshot.startup?.available !== true;
-  return <><PageIntro kicker={t("Observability / Diagnostics")} title={t("Diagnostics")} detail={t("Bundles are bounded, redacted, and limited to Nexus-owned metadata and text logs.")} /><Panel title={t("Diagnostic bundles")} icon={<TerminalWindow size={18} />}><div className="panel-toolbar"><span className="toolbar-count">{t("{count} bundles", { count: items.length })}</span><ActionButton tone="primary" disabled={controlsDisabled} onClick={() => void runAction(t("Diagnostic collection"), "/v1/diagnostics", { action: "collect", note: t("Native launcher collection") })}><TerminalWindow size={16} />{t("Collect diagnostics")}</ActionButton></div><DataList items={items} emptyTitle={t("No diagnostic bundles")} emptyDetail={t("Collect a bounded bundle when a runtime issue needs review.")} render={(item) => <><div><strong>{stringValue(item, "id") || t("Bundle")}</strong><span>{t("{count} files", { count: arrayValue(item, "files").length })}</span></div><span className="row-meta">{formatTimestamp(numberValue(item, "created_at_unix"), t("Not available"), locale)}</span></>} /></Panel></>;
+  return <><PageIntro kicker={t("Observability / Diagnostics")} title={t("Diagnostics")} detail={t("Bundles are bounded, redacted, and limited to Nexus-owned metadata and text logs.")} /><Panel title={t("Diagnostic bundles")} icon={<TerminalWindow size={18} />}><div className="panel-toolbar"><span className="toolbar-count">{t("{count} bundles", { count: items.length })}</span><ActionButton tone="primary" disabled={controlsDisabled} onClick={() => void runAction(t("Diagnostic collection"), "/v1/diagnostics", { action: "collect", note: t("Native launcher collection") })}><TerminalWindow size={16} />{t("Collect diagnostics")}</ActionButton></div><DataList items={items} emptyTitle={t("No diagnostic bundles")} emptyDetail={t("Collect a bounded bundle when a runtime issue needs review.")} render={(item) => <><div><strong>{stringValue(item, "id") || t("Bundle")}</strong><span>{t("{count} files", { count: arrayValue(item, "files").length })}</span></div><span className="row-meta">{formatTimestamp(numberValue(item, "created_at_unix"), t("Not available"), locale)}</span></>} /></Panel><RecoveryDiagnostics snapshot={snapshot} busyAction={busyAction} runAction={runAction} refresh={refresh} /></>;
 }
 
 function HarnessDiscoveryPanel({
@@ -1633,18 +1653,7 @@ function SettingsView({ snapshot, themeMode, setThemeMode, busyAction, runAction
   const [discoveryLoading, setDiscoveryLoading] = useState(false);
   const [discoveryError, setDiscoveryError] = useState<string | null>(null);
   const [selectedCandidateId, setSelectedCandidateId] = useState<string | undefined>(undefined);
-  const [runtimeStatus, setRuntimeStatus] = useState<RuntimeStatusViewState>({
-    phase: "idle",
-    status: null,
-    error: null,
-  });
-  const runtimeController = useMemo(
-    () => createRuntimeStatusController(
-      (path, method) => proxyRequest<unknown>(path, method),
-      setRuntimeStatus,
-    ),
-    [],
-  );
+
   const draftDirtyRef = useRef(false);
 
   useEffect(() => {
@@ -1757,10 +1766,6 @@ function SettingsView({ snapshot, themeMode, setThemeMode, busyAction, runAction
     if (!editingHarness || snapshot.startup?.available !== true || discovery !== null || discoveryLoading) return;
     void detectHarness();
   }, [detectHarness, discovery, discoveryLoading, editingHarness, snapshot.startup?.available]);
-
-  const checkRuntime = useCallback(async () => {
-    await runtimeController.check(snapshot.startup?.available === true);
-  }, [runtimeController, snapshot.startup?.available]);
 
   const openEditor = () => {
     setDraft(harnessDraftFromConfig(config));
@@ -1897,7 +1902,6 @@ function SettingsView({ snapshot, themeMode, setThemeMode, busyAction, runAction
         {Object.keys(update).length ? <dl className="detail-list"><div><dt>{t("Source")}</dt><dd>{stringValue(update, "source") || t("Not shown")}</dd></div><div><dt>{t("Ref")}</dt><dd>{stringValue(update, "ref_name") || t("Default")}</dd></div><div><dt>{t("Git program")}</dt><dd>{stringValue(update, "git_program") || t("Default")}</dd></div></dl> : <EmptyState title={t("Updates are not configured")} detail={t("Release metadata and current runtime remain available without an update source.")} />}
        </Panel>
      </div>
-     <RuntimeStatusPanel agentAvailable={snapshot.startup?.available === true} state={runtimeStatus} onCheck={() => void checkRuntime()} />
      <Panel title={t("Native integration")} icon={<Bell size={18} />}><div className="integration-list"><div><CheckCircle size={18} /><span>{t("Single instance guard")}</span><strong>{t("Enabled")}</strong></div><div><Bell size={18} /><span>{t("Desktop notifications")}</span><strong>{t("Available through Tauri")}</strong></div><div><Key size={18} /><span>{t("API transport")}</span><strong>{t("Rust loopback proxy")}</strong></div></div></Panel>
   </>;
 }
