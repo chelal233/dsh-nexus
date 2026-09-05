@@ -301,17 +301,44 @@ async fn run_owned_process(
     timeout: Duration,
     cancellation: &CancellationToken,
 ) -> Result<ProcessOutcome> {
+    run_owned_process_with_pre_attach(&mut command, timeout, cancellation, |_| Ok(())).await
+}
+
+async fn run_owned_process_with_pre_attach<F>(
+    command: &mut Command,
+    timeout: Duration,
+    cancellation: &CancellationToken,
+    pre_attach: F,
+) -> Result<ProcessOutcome>
+where
+    F: FnOnce(u32) -> Result<()>,
+{
     command
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .kill_on_drop(true);
-    configure_owned_process(&mut command);
+    configure_owned_process(command);
     let mut child = match command.spawn() {
         Ok(child) => child,
         Err(error) => return Ok(spawn_error(error)),
     };
-    let tree_guard = match OwnedProcessTree::attach(child.id()) {
+    let process_id = match child.id() {
+        Some(process_id) => process_id,
+        None => {
+            let _ = child.kill().await;
+            let _ = child.wait().await;
+            return Err(SupplyError::Process(
+                "spawned runtime process has no PID".to_owned(),
+            ));
+        }
+    };
+    if let Err(error) = pre_attach(process_id) {
+        let _ = child.kill().await;
+        let _ = child.wait().await;
+        return Err(error);
+    }
+    let tree_guard = match OwnedProcessTree::attach_and_resume(process_id) {
         Ok(guard) => guard,
         Err(error) => {
             let _ = child.kill().await;
@@ -465,12 +492,12 @@ pub(crate) fn default_system_pnpm_path() -> Result<PathBuf> {
 #[cfg(windows)]
 fn configure_owned_process(command: &mut Command) {
     use std::os::windows::process::CommandExt;
-    const CREATE_BREAKAWAY_FROM_JOB: u32 = 0x01000000;
     const CREATE_NEW_PROCESS_GROUP: u32 = 0x00000200;
     const CREATE_NO_WINDOW: u32 = 0x08000000;
+    const CREATE_SUSPENDED: u32 = 0x00000004;
     command
         .as_std_mut()
-        .creation_flags(CREATE_BREAKAWAY_FROM_JOB | CREATE_NEW_PROCESS_GROUP | CREATE_NO_WINDOW);
+        .creation_flags(CREATE_NEW_PROCESS_GROUP | CREATE_NO_WINDOW | CREATE_SUSPENDED);
 }
 
 #[cfg(not(windows))]
@@ -486,26 +513,27 @@ struct OwnedProcessTree {
 unsafe impl Send for OwnedProcessTree {}
 
 impl OwnedProcessTree {
-    fn attach(process_id: Option<u32>) -> Result<Self> {
+    fn attach_and_resume(process_id: u32) -> Result<Self> {
         #[cfg(windows)]
         unsafe {
             use windows_sys::Win32::{
-                Foundation::CloseHandle,
+                Foundation::{CloseHandle, INVALID_HANDLE_VALUE},
                 System::{
+                    Diagnostics::ToolHelp::{
+                        CreateToolhelp32Snapshot, Thread32First, Thread32Next, TH32CS_SNAPTHREAD,
+                        THREADENTRY32,
+                    },
                     JobObjects::{
                         AssignProcessToJobObject, CreateJobObjectW,
                         JobObjectExtendedLimitInformation, SetInformationJobObject,
                         JOBOBJECT_EXTENDED_LIMIT_INFORMATION, JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
                     },
                     Threading::{
-                        OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION, PROCESS_SET_QUOTA,
-                        PROCESS_TERMINATE,
+                        OpenProcess, OpenThread, ResumeThread, PROCESS_QUERY_LIMITED_INFORMATION,
+                        PROCESS_SET_QUOTA, PROCESS_TERMINATE, THREAD_SUSPEND_RESUME,
                     },
                 },
             };
-            let process_id = process_id.ok_or_else(|| {
-                SupplyError::Process("spawned runtime process has no PID".to_owned())
-            })?;
             let job = CreateJobObjectW(std::ptr::null(), std::ptr::null());
             if job.is_null() {
                 return Err(SupplyError::Process(format!(
@@ -534,16 +562,70 @@ impl OwnedProcessTree {
                 process_id,
             );
             if process.is_null() || AssignProcessToJobObject(job, process) == 0 {
+                let error = std::io::Error::last_os_error();
                 if !process.is_null() {
                     CloseHandle(process);
                 }
                 CloseHandle(job);
                 return Err(SupplyError::Process(format!(
                     "cannot attach runtime process tree: {}",
-                    std::io::Error::last_os_error()
+                    error
                 )));
             }
             CloseHandle(process);
+
+            let snapshot = CreateToolhelp32Snapshot(TH32CS_SNAPTHREAD, 0);
+            if snapshot == INVALID_HANDLE_VALUE {
+                let error = std::io::Error::last_os_error();
+                CloseHandle(job);
+                return Err(SupplyError::Process(format!(
+                    "cannot enumerate suspended runtime thread: {error}"
+                )));
+            }
+            let mut entry = THREADENTRY32 {
+                dwSize: std::mem::size_of::<THREADENTRY32>() as u32,
+                ..Default::default()
+            };
+            let mut thread_id = None;
+            if Thread32First(snapshot, &mut entry) != 0 {
+                loop {
+                    if entry.th32OwnerProcessID == process_id
+                        && thread_id.replace(entry.th32ThreadID).is_some()
+                    {
+                        CloseHandle(snapshot);
+                        CloseHandle(job);
+                        return Err(SupplyError::Process(
+                            "suspended runtime process has multiple threads before resume"
+                                .to_owned(),
+                        ));
+                    }
+                    if Thread32Next(snapshot, &mut entry) == 0 {
+                        break;
+                    }
+                }
+            }
+            CloseHandle(snapshot);
+            let thread_id = thread_id.ok_or_else(|| {
+                CloseHandle(job);
+                SupplyError::Process("cannot find suspended runtime primary thread".to_owned())
+            })?;
+            let thread = OpenThread(THREAD_SUSPEND_RESUME, 0, thread_id);
+            if thread.is_null() {
+                let error = std::io::Error::last_os_error();
+                CloseHandle(job);
+                return Err(SupplyError::Process(format!(
+                    "cannot open suspended runtime primary thread: {error}"
+                )));
+            }
+            let previous_count = ResumeThread(thread);
+            let resume_error = (previous_count == u32::MAX).then(std::io::Error::last_os_error);
+            CloseHandle(thread);
+            if let Some(error) = resume_error {
+                CloseHandle(job);
+                return Err(SupplyError::Process(format!(
+                    "cannot resume owned runtime process: {error}"
+                )));
+            }
             Ok(Self { job })
         }
         #[cfg(not(windows))]
@@ -559,6 +641,94 @@ impl Drop for OwnedProcessTree {
         #[cfg(windows)]
         unsafe {
             windows_sys::Win32::Foundation::CloseHandle(self.job);
+        }
+    }
+}
+
+#[cfg(all(test, windows))]
+mod windows_tests {
+    use super::*;
+    use std::fs;
+    use tempfile::TempDir;
+
+    #[tokio::test]
+    async fn owned_process_is_suspended_until_attached_and_descendant_is_cleaned_up() {
+        let temp = TempDir::new().unwrap();
+        let started = temp.path().join("started.txt");
+        let descendant_pid = temp.path().join("descendant-pid.txt");
+        let script = temp.path().join("spawn-descendant.ps1");
+        fs::write(
+            &script,
+            r#"[IO.File]::WriteAllText($env:NEXUS_FIXTURE_STARTED, 'started')
+$child = Start-Process -FilePath "$PSHOME\powershell.exe" -ArgumentList @('-NoProfile','-NonInteractive','-Command','Start-Sleep -Seconds 30') -NoNewWindow -PassThru
+[IO.File]::WriteAllText($env:NEXUS_FIXTURE_DESCENDANT_PID, [string]$child.Id)
+"#,
+        )
+        .unwrap();
+
+        let mut command = Command::new(system32_powershell());
+        command
+            .arg("-NoLogo")
+            .arg("-NoProfile")
+            .arg("-NonInteractive")
+            .arg("-ExecutionPolicy")
+            .arg("Bypass")
+            .arg("-File")
+            .arg(&script)
+            .env("NEXUS_FIXTURE_STARTED", &started)
+            .env("NEXUS_FIXTURE_DESCENDANT_PID", &descendant_pid);
+        let observed_started = started.clone();
+        let outcome = run_owned_process_with_pre_attach(
+            &mut command,
+            Duration::from_secs(10),
+            &CancellationToken::default(),
+            move |_| {
+                std::thread::sleep(Duration::from_secs(2));
+                if observed_started.exists() {
+                    return Err(SupplyError::Process(
+                        "owned fixture executed before Job attachment".to_owned(),
+                    ));
+                }
+                Ok(())
+            },
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(outcome.exit_code, Some(0), "{outcome:?}");
+        assert!(started.exists());
+        let pid: u32 = fs::read_to_string(&descendant_pid)
+            .unwrap()
+            .trim()
+            .parse()
+            .unwrap();
+        let deadline = std::time::Instant::now() + Duration::from_secs(2);
+        while process_is_active(pid) && std::time::Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        assert!(
+            !process_is_active(pid),
+            "owned descendant {pid} survived Job close"
+        );
+    }
+
+    fn process_is_active(process_id: u32) -> bool {
+        unsafe {
+            use windows_sys::Win32::{
+                Foundation::{CloseHandle, STILL_ACTIVE},
+                System::Threading::{
+                    GetExitCodeProcess, OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION,
+                },
+            };
+            let process = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, process_id);
+            if process.is_null() {
+                return false;
+            }
+            let mut exit_code = 0;
+            let active = GetExitCodeProcess(process, &mut exit_code) != 0
+                && exit_code == STILL_ACTIVE as u32;
+            CloseHandle(process);
+            active
         }
     }
 }

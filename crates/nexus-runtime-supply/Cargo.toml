@@ -22,7 +22,7 @@ tar = "0.4"
 tokio = { workspace = true, features = ["fs"] }
 url = "2"
 zip = { version = "6", default-features = false, features = ["deflate-flate2"] }
-windows-sys.workspace = true
+windows-sys = { workspace = true, features = ["Win32_System_Diagnostics_ToolHelp"] }
 
 [dev-dependencies]
 tempfile = "3"

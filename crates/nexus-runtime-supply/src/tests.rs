@@ -20,6 +20,7 @@ use zip::{write::SimpleFileOptions, ZipWriter};
 use crate::{
     archive::ArchiveLimits,
     extract_node_zip, extract_pnpm_tarball,
+    portable::{create_staging, publish_directory, write_cache_manifest},
     source::{fetch_bytes, sha256_hex, verify_pnpm_metadata, DownloadKind, DownloadReceipt},
     system::{classify_system_install, ProcessOutcome, SystemInstallResult},
     ArtifactIdentity, ArtifactKind, CancellationToken, DownloadClient, HostArch, HostOs,
@@ -629,6 +630,48 @@ async fn stale_marker_from_a_crashed_supplier_does_not_block_windows_lock_recove
         .await
         .unwrap();
     assert!(!cache.join(".runtime-supply.lock").exists());
+}
+
+#[cfg(windows)]
+#[test]
+fn fresh_portable_tree_writes_manifest_and_publishes_with_parent_creation() {
+    let temp = TempDir::new().unwrap();
+    let cache = temp.path().join("runtimes");
+    fs::create_dir(&cache).unwrap();
+    let staging = create_staging(&cache).unwrap();
+    let extracted = staging.join("unpacked/package");
+    fs::create_dir_all(extracted.join("bin")).unwrap();
+    let entry = b"console.log('fresh portable fixture')";
+    fs::write(extracted.join("bin/pnpm.mjs"), entry).unwrap();
+    let artifact = ArtifactIdentity {
+        kind: ArtifactKind::PnpmTarball,
+        locator: "fixture/pnpm-11.7.0.tgz".to_owned(),
+        filename: "pnpm-11.7.0.tgz".to_owned(),
+        digest_algorithm: "sha512-sri".to_owned(),
+        digest: "sha512:fixture".to_owned(),
+        signing_key_id: Some("fixture-key".to_owned()),
+    };
+
+    write_cache_manifest(
+        &extracted,
+        "pnpm",
+        "11.7.0",
+        "bin/pnpm.mjs",
+        std::slice::from_ref(&artifact),
+    )
+    .unwrap();
+    let target = cache.join("pnpm/11.7.0");
+    assert!(!target.parent().unwrap().exists());
+    publish_directory(&extracted, &target).unwrap();
+
+    assert_eq!(fs::read(target.join("bin/pnpm.mjs")).unwrap(), entry);
+    let manifest: serde_json::Value =
+        serde_json::from_slice(&fs::read(target.join(".nexus-runtime.json")).unwrap()).unwrap();
+    assert_eq!(manifest["tool"], "pnpm");
+    assert_eq!(manifest["version"], "11.7.0");
+    assert_eq!(manifest["artifacts"][0]["locator"], artifact.locator);
+    assert!(!extracted.exists());
+    fs::remove_dir_all(staging).unwrap();
 }
 
 #[tokio::test]

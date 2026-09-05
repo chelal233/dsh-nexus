@@ -1065,7 +1065,7 @@ fn validate_owned_tool(cache_root: &Path, tool: &PlannedTool) -> Result<()> {
     Ok(())
 }
 
-fn write_cache_manifest(
+pub(crate) fn write_cache_manifest(
     root: &Path,
     tool: &str,
     version: &str,
@@ -1090,11 +1090,12 @@ fn write_cache_manifest(
         .open(&path)?;
     file.write_all(&bytes)?;
     file.sync_all()?;
+    #[cfg(not(windows))]
     sync_directory(root)?;
     Ok(())
 }
 
-fn publish_directory(staging_root: &Path, target: &Path) -> Result<()> {
+pub(crate) fn publish_directory(staging_root: &Path, target: &Path) -> Result<()> {
     if target.exists() {
         return Err(SupplyError::Busy(format!(
             "runtime target already exists: {}",
@@ -1106,13 +1107,49 @@ fn publish_directory(staging_root: &Path, target: &Path) -> Result<()> {
         .ok_or_else(|| SupplyError::InvalidPlan("runtime target has no parent".to_owned()))?;
     fs::create_dir_all(parent)?;
     reject_reparse(parent)?;
-    sync_directory(staging_root)?;
-    fs::rename(staging_root, target)?;
-    sync_directory(parent)?;
+    #[cfg(windows)]
+    publish_directory_windows(staging_root, target)?;
+    #[cfg(not(windows))]
+    {
+        sync_directory(staging_root)?;
+        fs::rename(staging_root, target)?;
+        sync_directory(parent)?;
+    }
     Ok(())
 }
 
-fn create_staging(cache_root: &Path) -> Result<PathBuf> {
+#[cfg(windows)]
+fn publish_directory_windows(staging_root: &Path, target: &Path) -> Result<()> {
+    use std::os::windows::ffi::OsStrExt;
+    use windows_sys::Win32::Storage::FileSystem::{MoveFileExW, MOVEFILE_WRITE_THROUGH};
+
+    let source = staging_root
+        .as_os_str()
+        .encode_wide()
+        .chain(std::iter::once(0))
+        .collect::<Vec<_>>();
+    let destination = target
+        .as_os_str()
+        .encode_wide()
+        .chain(std::iter::once(0))
+        .collect::<Vec<_>>();
+    // Windows does not support flushing directory handles with FlushFileBuffers.
+    // Every extracted file and the manifest are flushed before this point; the
+    // supported write-through move supplies the durable namespace publication.
+    if unsafe {
+        MoveFileExW(
+            source.as_ptr(),
+            destination.as_ptr(),
+            MOVEFILE_WRITE_THROUGH,
+        )
+    } == 0
+    {
+        return Err(SupplyError::Io(std::io::Error::last_os_error()));
+    }
+    Ok(())
+}
+
+pub(crate) fn create_staging(cache_root: &Path) -> Result<PathBuf> {
     let id = STAGING_COUNTER.fetch_add(1, Ordering::Relaxed);
     let path = cache_root.join(format!(".staging-{}-{id}", std::process::id()));
     fs::create_dir(&path)?;
@@ -1268,18 +1305,8 @@ fn reject_reparse(path: &Path) -> Result<()> {
     Ok(())
 }
 
+#[cfg(not(windows))]
 fn sync_directory(path: &Path) -> Result<()> {
-    #[cfg(windows)]
-    {
-        use std::os::windows::fs::OpenOptionsExt;
-        const FILE_FLAG_BACKUP_SEMANTICS: u32 = 0x02000000;
-        fs::OpenOptions::new()
-            .read(true)
-            .custom_flags(FILE_FLAG_BACKUP_SEMANTICS)
-            .open(path)?
-            .sync_all()?;
-    }
-    #[cfg(not(windows))]
     File::open(path)?.sync_all()?;
     Ok(())
 }
