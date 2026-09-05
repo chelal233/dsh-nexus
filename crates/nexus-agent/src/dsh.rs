@@ -6,7 +6,7 @@ use std::{
     ffi::OsString,
     fs,
     fs::OpenOptions,
-    io,
+    io::{self, Read},
     path::{Path, PathBuf},
     process::{Child, Command, ExitStatus, Stdio},
     sync::atomic::{AtomicU64, Ordering},
@@ -478,7 +478,10 @@ impl PluginCommandRunner for SystemPluginCommandRunner {
 }
 
 fn read_output_bounded(path: &Path) -> io::Result<String> {
-    let bytes = fs::read(path)?;
+    let file = fs::File::open(path)?;
+    let mut bytes = Vec::new();
+    file.take(MAX_PLUGIN_OUTPUT_BYTES.saturating_add(1) as u64)
+        .read_to_end(&mut bytes)?;
     let truncated = bytes.len() > MAX_PLUGIN_OUTPUT_BYTES;
     let bytes = &bytes[..bytes.len().min(MAX_PLUGIN_OUTPUT_BYTES)];
     let mut value = String::from_utf8_lossy(bytes).into_owned();
@@ -1013,6 +1016,20 @@ mod tests {
             })
             .expect("runtime config writes");
         (root, paths, home, release)
+    }
+
+    #[test]
+    fn plugin_output_reader_consumes_only_cap_plus_sentinel() {
+        let root = test_dir("plugin-output-bound");
+        let path = root.join("oversized-output.log");
+        let oversized = vec![b'x'; MAX_PLUGIN_OUTPUT_BYTES + 1024 * 1024];
+        fs::write(&path, oversized).expect("oversized output fixture writes");
+        let output = read_output_bounded(&path).expect("bounded output reads");
+        assert!(output.ends_with("\n[output truncated by Nexus]"));
+        assert!(
+            output.len() <= MAX_PLUGIN_OUTPUT_BYTES + "\n[output truncated by Nexus]".len()
+        );
+        fs::remove_dir_all(root).expect("fixture removes");
     }
 
     #[test]

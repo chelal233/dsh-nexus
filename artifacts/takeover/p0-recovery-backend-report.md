@@ -79,3 +79,15 @@ seven-file content, secret omission, response truncation, route method gates,
 and bounded/redacted fatal diagnostics. Existing checkpoint cancellation,
 Prepared/Committed startup recovery, transient materialization retry, abort,
 healthy rotation, and manual retention tests also remained green.
+
+## Follow-up blocker fixes
+
+- Recovery now applies the same bounded diagnostics redaction to both
+  `startup_error` and embedded `harness.error`, and the complete response
+  serialization regression confirms the synthetic bearer secret is absent.
+- Recovery log reading caps the opened reader at 16 KiB plus one sentinel byte;
+  oversized metadata and bytes observed after the metadata check both report
+  truncation without unbounded `read_to_end`.
+- Plugin stdout/stderr reading caps the opened reader at 64 KiB plus one
+  sentinel byte before applying the existing truncation annotation.
+- `cargo test -p nexus-agent`: 122 passed; `git diff --check`: passed.

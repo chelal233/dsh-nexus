@@ -2,7 +2,7 @@
 
 use std::{
     env, fs, io,
-    io::{Seek, SeekFrom, Write},
+    io::{Read, Seek, SeekFrom, Write},
     ops::Deref,
     sync::{
         atomic::{AtomicU64, Ordering},
@@ -665,9 +665,17 @@ async fn harness_status(State(state): State<AppState>) -> axum::response::Respon
 
 const MAX_RECOVERY_LOG_BYTES: u64 = 16 * 1024;
 
+fn redact_recovery_error(error: Option<&str>) -> Option<String> {
+    error.map(|error| {
+        let bytes = error.as_bytes();
+        let bounded = &bytes[..bytes.len().min(4096)];
+        String::from_utf8_lossy(&redact_diagnostics_payload(bounded).0).into_owned()
+    })
+}
+
 async fn recovery_status(State(state): State<AppState>) -> axum::response::Response {
     let lifecycle = state.supervisor.acquire_lifecycle().await;
-    let harness = sync_harness_state(&state).await.into_response().harness;
+    let mut harness = sync_harness_state(&state).await.into_response().harness;
     let harness_stop_required = !state
         .supervisor
         .selection_change_is_quiescent(&lifecycle)
@@ -709,11 +717,8 @@ async fn recovery_status(State(state): State<AppState>) -> axum::response::Respo
             format!("Harness log session is invalid: {error}"),
         ))),
     }
-    let startup_error = harness.error.as_deref().map(|error| {
-        let bytes = error.as_bytes();
-        let bounded = &bytes[..bytes.len().min(4096)];
-        String::from_utf8_lossy(&redact_diagnostics_payload(bounded).0).into_owned()
-    });
+    let startup_error = redact_recovery_error(harness.error.as_deref());
+    harness.error = startup_error.clone();
     (
         StatusCode::OK,
         Json(RecoveryStatusResponse {
@@ -751,12 +756,15 @@ fn recovery_log_tail(
             "Harness log resolves outside Nexus logs",
         ));
     }
-    let truncated = metadata.len() > MAX_RECOVERY_LOG_BYTES;
+    let limit = usize::try_from(MAX_RECOVERY_LOG_BYTES).unwrap_or(usize::MAX);
+    let metadata_truncated = metadata.len() > MAX_RECOVERY_LOG_BYTES;
     let start = metadata.len().saturating_sub(MAX_RECOVERY_LOG_BYTES);
     let mut file = fs::File::open(canonical)?;
     file.seek(SeekFrom::Start(start))?;
     let mut bytes = Vec::new();
-    std::io::Read::read_to_end(&mut file, &mut bytes)?;
+    file.take(MAX_RECOVERY_LOG_BYTES.saturating_add(1))
+        .read_to_end(&mut bytes)?;
+    let truncated = metadata_truncated || bytes.len() > limit;
     if truncated {
         if let Some(position) = bytes.iter().position(|byte| *byte == b'\n') {
             bytes.drain(..=position);
@@ -3410,8 +3418,9 @@ mod cors_tests {
     use super::{
         acquire_runtime_lock, are_allowed_cors_headers, harness_ui_process_is_presentable,
         is_allowed_console_origin_for_port, is_allowed_cors_method, proxy_identity_values_match,
-        recovery_log_tail, redact_config_args, redact_config_url, PROXY_DATA_ROOT_HEADER,
-        PROXY_INSTANCE_HEADER,
+        recovery_log_tail, redact_config_args, redact_config_url, redact_recovery_error,
+        MAX_RECOVERY_LOG_BYTES, PROXY_DATA_ROOT_HEADER, PROXY_INSTANCE_HEADER,
+        RecoveryStatusResponse,
     };
     use nexus_core::HarnessLogSession;
     use nexus_core::NexusPaths;
@@ -3628,8 +3637,45 @@ mod cors_tests {
         assert!(!truncated);
         assert!(!content.contains("DUMMY-RECOVERY-SECRET"));
         assert!(content.contains("[REDACTED]"));
+        std::fs::write(
+            paths.logs_dir.join("current.stderr.log"),
+            vec![b'x'; MAX_RECOVERY_LOG_BYTES as usize + 1024],
+        )
+        .expect("oversized log fixture writes");
+        let (content, truncated, _) =
+            recovery_log_tail(&paths, "current.stderr.log").expect("oversized tail reads");
+        assert!(truncated);
+        assert!(content.len() <= MAX_RECOVERY_LOG_BYTES as usize);
         assert!(recovery_log_tail(&paths, "../outside.log").is_err());
         std::fs::remove_dir_all(root).expect("fixture removes");
+    }
+
+    #[test]
+    fn recovery_response_redacts_harness_error_and_startup_error_consistently() {
+        let secret = "Authorization: Bearer DUMMY-RECOVERY-SECRET";
+        let startup_error = redact_recovery_error(Some(secret));
+        let response = RecoveryStatusResponse {
+            api_version: nexus_protocol::API_VERSION.to_owned(),
+            manual_entry_available: true,
+            harness_stop_required: false,
+            harness: HarnessRuntimeInfo {
+                state: HarnessState::Stopped,
+                pid: None,
+                exit_code: None,
+                error: startup_error.clone(),
+                started_at_unix: None,
+                updated_at_unix: None,
+            },
+            startup_error,
+            fatal_prefix_observed: false,
+            log_tail: Vec::new(),
+            diagnostic_errors: Vec::new(),
+            pending_restore: None,
+        };
+        let encoded = serde_json::to_string(&response).expect("recovery response serializes");
+        assert!(!encoded.contains(secret));
+        assert!(!encoded.contains("DUMMY-RECOVERY-SECRET"));
+        assert_eq!(response.harness.error, response.startup_error);
     }
 }
 
