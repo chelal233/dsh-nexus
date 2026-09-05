@@ -1459,6 +1459,35 @@ async fn update_control(
             Ok(response) => (StatusCode::CREATED, Json(response)).into_response(),
             Err(error) => update_error_response(error),
         },
+        UpdateAction::Switch => {
+            let Some(tag) = command.tag.clone() else {
+                return data_error_response(
+                    io::Error::new(io::ErrorKind::InvalidInput, "tag is required"),
+                    "update_tag_required",
+                );
+            };
+            let lifecycle = state.supervisor.acquire_lifecycle().await;
+            if let Err(response) = ensure_harness_selection_quiescent(
+                &state,
+                &lifecycle,
+                "release_change_conflict",
+                "cannot switch release tag until Harness is positively stopped and unowned",
+            )
+            .await
+            {
+                return response;
+            }
+            drop(lifecycle);
+            match state.updater.switch_tag(tag).await {
+                Ok(response) => {
+                    if let Ok(catalog) = state.releases.load() {
+                        apply_release_catalog(&state, catalog).await;
+                    }
+                    (StatusCode::CREATED, Json(response)).into_response()
+                }
+                Err(error) => update_error_response(error),
+            }
+        }
     }
 }
 
@@ -1991,7 +2020,7 @@ async fn wait_for_shutdown(mut receiver: watch::Receiver<bool>) {
 
 #[cfg(test)]
 mod cors_tests {
-    use super::{DEFAULT_MAX_RELEASE_SLOTS, 
+    use super::{
         acquire_runtime_lock, are_allowed_cors_headers, harness_ui_process_is_presentable,
         is_allowed_console_origin_for_port, is_allowed_cors_method, proxy_identity_values_match,
         redact_config_args, redact_config_url, PROXY_DATA_ROOT_HEADER, PROXY_INSTANCE_HEADER,

@@ -594,6 +594,7 @@ pub struct ReleaseCommand {
 pub enum UpdateAction {
     Status,
     Install,
+    Switch,
 }
 
 impl Default for UpdateAction {
@@ -609,6 +610,8 @@ pub struct UpdateCommand {
     pub release_id: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub version: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tag: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
@@ -1120,6 +1123,7 @@ mod tests {
     fn update_protocol_uses_stable_install_json() {
         let command = UpdateCommand {
             action: UpdateAction::Install,
+            tag: None,
             release_id: Some("harness-rc1".to_owned()),
             version: Some("rc.1".to_owned()),
         };

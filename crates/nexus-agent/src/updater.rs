@@ -4,8 +4,8 @@ use std::{fmt, fs, io, path::Path, process::Stdio, sync::Arc, time::Duration};
 
 use nexus_core::{
     load_update_spec, unix_time_nanos_for_update, unix_time_seconds, validate_release_id,
-    validate_release_version, validate_update_ref, validate_update_source, NexusPaths,
-    ReleaseStore, UpdateSpec, UpdateStateStore,
+    validate_release_version, validate_update_ref, validate_update_source, ConfigStore,
+    NexusPaths, ReleaseStore, UpdateSpec, UpdateStateStore,
 };
 use nexus_protocol::{ReleaseManifest, UpdateResponse, UpdateRuntimeInfo, UpdateState};
 use tokio::{
@@ -115,6 +115,75 @@ impl UpdateExecutor {
         release: tokio::sync::oneshot::Receiver<()>,
     ) {
         *self.command_gate.lock().await = Some(UpdateCommandGate { reached, release });
+    }
+
+    /// One-click tag switch. The tag becomes the update ref (persisted while
+    /// holding the executor gate), then either promotes an already-installed
+    /// slot with that version (fast path) or installs it and promotes the new
+    /// slot. The caller must ensure Harness is quiescent; promotion here does
+    /// not re-check supervisor state.
+    pub async fn switch_tag(&self, tag: String) -> Result<UpdateResponse, UpdateExecutorError> {
+        validate_update_ref(&tag).map_err(UpdateExecutorError::Configuration)?;
+        let guard = self.try_acquire_gate()?;
+        let config_store = ConfigStore::new(self.paths.clone());
+        let mut document = config_store
+            .load()
+            .map_err(UpdateExecutorError::Configuration)?;
+        if document.update.is_none() {
+            return Err(UpdateExecutorError::NotConfigured);
+        }
+        if document.update.as_ref().map(|spec| spec.ref_name.as_str()) != Some(tag.as_str()) {
+            if let Some(spec) = document.update.as_mut() {
+                spec.ref_name = tag.clone();
+            }
+            config_store
+                .write(&document)
+                .map_err(UpdateExecutorError::Configuration)?;
+        }
+        if let Some(manifest) = self.latest_slot_for_tag(&tag)? {
+            let catalog = self
+                .releases
+                .promote(&manifest.id)
+                .map_err(UpdateExecutorError::Persistence)?;
+            let finished = UpdateRuntimeInfo {
+                state: UpdateState::Succeeded,
+                release_id: Some(manifest.id.clone()),
+                started_at_unix: Some(unix_time_seconds()),
+                finished_at_unix: Some(unix_time_seconds()),
+                exit_code: Some(0),
+                error: None,
+            };
+            self.state
+                .write(&finished)
+                .map_err(UpdateExecutorError::Persistence)?;
+            return Ok(UpdateResponse::new(
+                finished,
+                catalog.find(&manifest.id).cloned(),
+            ));
+        }
+        let response = self.install_owned(None, None, guard).await?;
+        let manifest = self
+            .latest_slot_for_tag(&tag)?
+            .ok_or_else(|| {
+                UpdateExecutorError::Persistence(io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    format!("installed release for tag {tag} was not found in the catalog"),
+                ))
+            })?;
+        self.releases
+            .promote(&manifest.id)
+            .map_err(UpdateExecutorError::Persistence)?;
+        Ok(response)
+    }
+
+    fn latest_slot_for_tag(&self, tag: &str) -> Result<Option<ReleaseManifest>, UpdateExecutorError> {
+        let catalog = self.releases.load().map_err(UpdateExecutorError::Persistence)?;
+        Ok(catalog
+            .releases
+            .iter()
+            .filter(|item| item.version == tag)
+            .max_by_key(|item| item.installed_at_unix)
+            .cloned())
     }
 
     pub async fn install(

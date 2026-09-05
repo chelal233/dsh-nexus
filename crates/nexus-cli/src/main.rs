@@ -362,7 +362,8 @@ async fn run(options: Options) -> Result<(), String> {
                 action: *action,
                 release_id: release_id.clone(),
                 version: version.clone(),
-            })
+            
+                tag: None,})
             .send()
             .await
             .map_err(|error| format!("agent is unavailable: {error}"))?,
