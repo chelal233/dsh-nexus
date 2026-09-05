@@ -36,6 +36,14 @@ ActionButton 全局补 `type="button"`：此前所有 ActionButton 在 `<form>` 
 - 启动中/停止中的 i18n 与状态机均正确；用户观察到的错误状态源自插件树崩溃窗口
 - 当前唯一阻断不变：desktop 配置档插件树损坏 → 用户走快照恢复（rc.1 时期健康快照）即愈
 
+## P0 启动失败最终定性（2026-09-06，版本偏斜）
+
+- 实锤：槽位内无 dsh-settings/dsh-llm 独立副本（loader 将 @deepseek-ai/* 映射到 harness 内部模块）；配置档插件是 rc.2 时代（dsh-settings-file@0.1.1-rc.2），要求 settingsNamespace/deepEqualJson 等新导出；rc.1/alpha.5 两槽位都太旧 → **切哪个槽位都会插件树失败，这是版本偏斜不是污染**
+- fallback 链接指向原 dsh-desktop 安装目录（D:\dsh-local\dsh-desktop\...）——配置档插件运行一直隐性依赖桌面应用自带的官方包，这就是"脱离 desktop"必须解决的架构依赖
+- 我的 fallback 清理是误判（已从备份完整恢复，链接由 loader 自动重建）
+- **下一步行动（自动化执行）**：冷切换到最新 tag（tag 枚举显示 dsh-v0.1.3-alpha.1 最新，晚于插件的 rc.2 时代）→ 验证插件树加载 → 成功则 P0 闭环
+- 深层架构项（P1 首项）：插件官方依赖解析需要"跟随 harness 版本的官方包供给"——候选方案=把 @deepseek-ai 家族的 fallback 投影纳入 Nexus 管理（按版本分目录物化），而不是依赖桌面应用目录；需先研究上游 loader 的映射协议
+
 ## P0 验证进展与遗留（2026-09-05 晚）
 
 - **EISDIR 已修复验证**：verbatim 路径修复后，rc.1 loader 正常引导（run 25/26 的 node 启动阶段已过）
