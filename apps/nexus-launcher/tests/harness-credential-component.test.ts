@@ -58,7 +58,8 @@ test("Overview removes stale Harness credentials while a restart POST is deferre
 
     const before = render(false);
     assert.match(before, /old-token/);
-    assert.match(before, /<iframe/);
+    assert.doesNotMatch(before, /<iframe/);
+    assert.match(before, /Harness authentication requires a system browser/);
 
     let releasePost!: () => void;
     const deferredPost = new Promise<void>((resolve) => {
@@ -172,6 +173,59 @@ test("Overview removes stale Harness credentials while a restart POST is deferre
 
     releasePost();
     await request;
+  } finally {
+    await vite.close();
+  }
+});
+
+test("Harness web panel uses the system browser for token sessions and preserves safe iframe fallback", async () => {
+  const vite = await createServer({
+    root: process.cwd(),
+    appType: "custom",
+    logLevel: "silent",
+    server: { middlewareMode: true },
+  });
+  try {
+    const { HarnessWebPanel } = await vite.ssrLoadModule("/src/App.tsx");
+    const baseSnapshot = {
+      startup: { available: true },
+      endpointErrors: {},
+      status: {},
+      health: {},
+      state: {},
+      harnessRuntime: { harness: { state: "running", pid: 42 }, generation: 7, log_session_run_id: "run-a" },
+      harnessUi: { available: true, generation: 7, run_id: "run-a", url: "http://127.0.0.1:3080/", token: "session-token" },
+      profiles: null,
+      checkpoints: null,
+      releases: null,
+      updates: null,
+      diagnostics: null,
+      recovery: null,
+      config: null,
+    };
+    const render = (snapshot: typeof baseSnapshot, credentialInvalidationPending = false) =>
+      renderToStaticMarkup(createElement(HarnessWebPanel, {
+        snapshot,
+        credentialInvalidationPending,
+        busyAction: null,
+        runAction: async () => {},
+      }));
+
+    const tokenMarkup = render(baseSnapshot);
+    assert.doesNotMatch(tokenMarkup, /<iframe/, "token sessions must not load the authenticated page in the iframe");
+    assert.match(tokenMarkup, /Harness authentication requires a system browser/);
+    assert.match(tokenMarkup, /Open in system browser/);
+    assert.doesNotMatch(tokenMarkup, /session-token/);
+
+    const iframeMarkup = render({ ...baseSnapshot, harnessUi: { ...baseSnapshot.harnessUi, token: undefined } });
+    assert.match(iframeMarkup, /<iframe/);
+    assert.match(iframeMarkup, /http:\/\/127\.0\.0\.1:3080\//);
+
+    const invalidatedMarkup = render(baseSnapshot, true);
+    assert.doesNotMatch(invalidatedMarkup, /<iframe/);
+    assert.match(invalidatedMarkup, /Harness authentication requires a system browser/);
+    assert.match(invalidatedMarkup, /Open in system browser/);
+    assert.match(invalidatedMarkup, /disabled/);
   } finally {
     await vite.close();
   }

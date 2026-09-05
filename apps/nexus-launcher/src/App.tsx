@@ -1169,7 +1169,7 @@ type ViewProps = {
 
 type HarnessPanelProps = Pick<ViewProps, "snapshot" | "busyAction" | "runAction">;
 type HarnessAuthPanelProps = HarnessPanelProps & Pick<ViewProps, "credentialInvalidationPending">;
-type HarnessWebPanelProps = Pick<ViewProps, "snapshot" | "credentialInvalidationPending">;
+type HarnessWebPanelProps = Pick<ViewProps, "snapshot" | "credentialInvalidationPending" | "busyAction" | "runAction">;
 
 export function OverviewView({ snapshot, busyAction, credentialInvalidationPending, runAction, openSettings }: ViewProps) {
   const { t } = useI18n();
@@ -1210,7 +1210,7 @@ export function OverviewView({ snapshot, busyAction, credentialInvalidationPendi
         <HarnessControlPanel snapshot={snapshot} busyAction={busyAction} runAction={runAction} openSettings={openSettings} />
       </div>
       <HarnessAuthPanel snapshot={snapshot} busyAction={busyAction} credentialInvalidationPending={credentialInvalidationPending} runAction={runAction} />
-      <HarnessWebPanel snapshot={snapshot} credentialInvalidationPending={credentialInvalidationPending} />
+      <HarnessWebPanel snapshot={snapshot} credentialInvalidationPending={credentialInvalidationPending} busyAction={busyAction} runAction={runAction} />
     </>
   );
 }
@@ -1281,15 +1281,19 @@ function HarnessAuthPanel({ snapshot, busyAction, credentialInvalidationPending,
   );
 }
 
-function HarnessWebPanel({ snapshot, credentialInvalidationPending }: HarnessWebPanelProps) {
+export function HarnessWebPanel({ snapshot, credentialInvalidationPending, busyAction, runAction }: HarnessWebPanelProps) {
   const { t } = useI18n();
   const info = asObject(snapshot.harnessUi);
-  const uiUrl = harnessUiMatchesRuntime(snapshot.harnessRuntime, snapshot.harnessUi, credentialInvalidationPending)
+  const currentUiAvailable = harnessUiMatchesRuntime(snapshot.harnessRuntime, snapshot.harnessUi, credentialInvalidationPending);
+  const uiUrl = currentUiAvailable
     ? stringValue(info, "url")
     : undefined;
+  const tokenMode = stringValue(info, "token") !== undefined;
   const safeUrl = isLoopbackUrl(uiUrl) ? uiUrl : undefined;
+  const browserActionDisabled = busyAction !== null || snapshot.startup?.available !== true || !currentUiAvailable;
+  const openSystemBrowser = () => void runAction(t("Open Harness"), "/v1/harness/ui", { action: "open" });
   return <Panel title={t("Embedded Harness Web")} icon={<MonitorPlay size={18} />}>
-    {safeUrl ? <iframe className="harness-frame" title={t("Harness Web interface")} src={safeUrl} referrerPolicy="no-referrer" sandbox="allow-forms allow-scripts allow-same-origin allow-downloads allow-popups allow-popups-to-escape-sandbox" /> : <EmptyState title={t("Harness view is not ready")} detail={t("A validated loopback HTTP URL will appear here when Harness reports its web interface.")} />}
+    {tokenMode ? <div className="status-block"><strong>{t("Harness authentication requires a system browser")}</strong><span>{t("This session needs top-level browser authentication. Open the validated Harness page in your system browser to sign in.")}</span><div className="button-row"><ActionButton tone="primary" disabled={browserActionDisabled} onClick={openSystemBrowser}><RocketLaunch size={16} />{t("Open in system browser")}</ActionButton></div></div> : safeUrl ? <iframe className="harness-frame" title={t("Harness Web interface")} src={safeUrl} referrerPolicy="no-referrer" sandbox="allow-forms allow-scripts allow-same-origin allow-downloads allow-popups allow-popups-to-escape-sandbox" /> : <EmptyState title={t("Harness view is not ready")} detail={t("A validated loopback HTTP URL will appear here when Harness reports its web interface.")} />}
   </Panel>;
 }
 
