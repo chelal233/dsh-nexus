@@ -46,6 +46,14 @@ ActionButton 全局补 `type="button"`：此前所有 ActionButton 在 `<form>` 
 - **当前机器状态**：release=alpha.5 槽位→已切 rc.1（指针 rc.1，dsh-file-upload 已从清单移除，manifest 干净）；启动仍失败（导出缺失，因农场=alpha.1 包）；`.nexus-backup-20260906/` 与 `node_modules.stale-alpha1` 保留；plugin-desktop\node_modules 的 0.1.2-alpha.1 三件套验证过满足全部导出（应急可 junction，但 loader 不走 profiles/node_modules 解析 @deepseek-ai/*——loader 内部映射优先，junction 方案无效已证实）
 - **已知可行组合**：desktop 自带 0.1.2-alpha.1 harness + 其捆绑官方包曾正常运行数周（用户原生态）；本地三个 GitHub tag 槽位均与 rc.2 时代插件存在导出面不匹配
 
+## P0 双布局发现（2026-09-06，自动化第五轮）
+
+- **上游两条发布线使用不同的模块布局**：alpha 线（0.1.3-alpha.1）的 app-boot 维护 **profiles 级共享链接农场**（`~/.dsh/profiles/node_modules` → 当前槽位的 vendor/packages）；rc 线（0.1.2-rc.1）的 app-boot 维护 **profile 内 fallback**（`.dsh-module-fallback` + 投影链接）。两套布局互不认识
+- **当前病灶**：alpha.1 启动时在 profiles 级留下的共享农场（全部链接指向 alpha.1 槽位）残留；rc.1 启动只维护自己的 fallback，不清理/更新父级农场 → 插件解析时命中父级农场里的 alpha.1 版本包（缺 settingsNamespace/deepEqualJson）→ 崩溃。删掉农场后 rc.1 启动会**重建农场但内容仍是 alpha.1 版本**（重建来源待查——疑为 alpha.1 boot 写入的持久化引用或 pnpm 缓存）
+- dsh-file-upload 重复已随快照恢复回来并再次从清单移除（当前 manifest 干净）
+- export 错误清单（rc.1 boot + alpha.1 农场）：settings-file 需 deepEqualJson、session-persistence-jsonl 需 DEFAULT_PREPARED、sandbox 需 assertNever、llm-deepseek 需 CallId、reasoning-effort/better-sidebar 需 settingsNamespace
+- **下一轮任务**：1) diff rc.1 与 alpha.1 的 app-boot 源码（packages/boot/app-boot/src/profile.ts），确定 profiles 级农场的创建者与重建数据源；2) 找到重建来源后修复（Nexus switch/restore 时清理或改写）；3) 若无法从源头修，rc.1 启动前阻止农场重建的实验性方案待评估
+
 ## P0 链接农场机制实锤（2026-09-06，自动化第三轮）
 
 - **机制实锤**：`~/.dsh/profiles/node_modules/` 是 harness 启动时自动创建的**链接农场**（junction/link，非真实目录）——全部指向"当前运行槽位"的 vendor/packages（插件借此解析官方依赖）。这就是上游"Profile module fallback"的落地形态
