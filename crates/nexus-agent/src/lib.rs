@@ -99,6 +99,7 @@ struct AppState {
     supervisor: HarnessSupervisor,
     snapshots: snapshots::SnapshotCoordinator,
     harness_sync: Arc<Mutex<()>>,
+    crash_capture_run: Arc<Mutex<Option<String>>>,
     #[cfg(test)]
     checkpoint_transition_gate: Arc<Mutex<Option<CheckpointTransitionGate>>>,
     #[cfg(test)]
@@ -243,6 +244,7 @@ pub async fn run_with_instance_id(
         supervisor: supervisor.clone(),
         snapshots,
         harness_sync: Arc::new(Mutex::new(())),
+        crash_capture_run: Arc::new(Mutex::new(None)),
         #[cfg(test)]
         checkpoint_transition_gate: Arc::new(Mutex::new(None)),
         #[cfg(test)]
@@ -997,7 +999,37 @@ async fn sync_harness_state(state: &AppState) -> HarnessSnapshot {
         }
     };
     schedule_healthy_snapshot(state, &snapshot);
+    schedule_crash_capture(state, &snapshot).await;
     snapshot
+}
+
+/// Auto-capture a bounded diagnostic bundle the first time a run's Harness
+/// dies unexpectedly, so crash evidence survives without a manual request.
+/// Deduplicated per run id; collection happens off the request path.
+async fn schedule_crash_capture(state: &AppState, observation: &HarnessSnapshot) {
+    if observation.runtime.state != nexus_protocol::HarnessState::Failed
+        || observation.log_session.run_id.is_empty()
+    {
+        return;
+    }
+    let run_id = observation.log_session.run_id.clone();
+    {
+        let mut captured = state.crash_capture_run.lock().await;
+        if captured.as_deref() == Some(run_id.as_str()) {
+            return;
+        }
+        *captured = Some(run_id.clone());
+    }
+    let state = state.clone();
+    tokio::spawn(async move {
+        let note = format!("auto: crash evidence for run {run_id}");
+        if let Ok(bundle) = state.diagnostics.collect(Some(note)) {
+            tracing::info!(
+                bundle = %bundle.id,
+                "captured automatic crash evidence"
+            );
+        }
+    });
 }
 
 fn schedule_healthy_snapshot(state: &AppState, observation: &HarnessSnapshot) {
