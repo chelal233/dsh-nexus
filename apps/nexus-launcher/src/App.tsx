@@ -286,6 +286,9 @@ function localizeBackendError(message: string, t: Translator): string {
   if (normalized.includes("native bridge returned an unknown error")) {
     return t("The native bridge returned an unknown error");
   }
+  if (normalized.includes("runtime status response is invalid")) {
+    return t("Runtime status response is invalid.");
+  }
   return t("Backend error: {message}", { message });
 }
 
@@ -539,6 +542,153 @@ async function proxyRequest<T = JsonObject>(
     path,
     body: body ?? null,
   });
+}
+
+const runtimeToolNames = ["git", "node", "pnpm"] as const;
+type RuntimeToolName = typeof runtimeToolNames[number];
+type RuntimeToolSource = "system" | "nexus";
+
+export type RuntimeToolStatus = {
+  name: RuntimeToolName;
+  available: boolean;
+  version?: string;
+  source?: RuntimeToolSource;
+  path?: string;
+  reason?: string;
+};
+
+export type RuntimeStatusPayload = {
+  api_version: string | number;
+  tools: RuntimeToolStatus[];
+};
+
+export type RuntimeStatusViewState = {
+  phase: "idle" | "loading" | "success" | "error";
+  status: RuntimeStatusPayload | null;
+  error: string | null;
+};
+
+export type RuntimeStatusPanelProps = {
+  agentAvailable: boolean;
+  state: RuntimeStatusViewState;
+  onCheck: () => void;
+};
+
+function isRuntimeToolName(value: string | undefined): value is RuntimeToolName {
+  return value !== undefined && runtimeToolNames.includes(value as RuntimeToolName);
+}
+
+function runtimeStatusFromResponse(value: unknown): RuntimeStatusPayload {
+  const response = asObject(value);
+  const apiVersion = response.api_version;
+  if (typeof apiVersion !== "string" && typeof apiVersion !== "number") {
+    throw new Error("Runtime status response is invalid.");
+  }
+
+  const tools = new Map<RuntimeToolName, RuntimeToolStatus>();
+  for (const item of arrayValue(response, "tools")) {
+    if (!isObject(item)) continue;
+    const name = stringValue(item, "name");
+    if (!isRuntimeToolName(name) || tools.has(name) || typeof item.available !== "boolean") continue;
+    const source = stringValue(item, "source");
+    tools.set(name, {
+      name,
+      available: item.available,
+      version: stringValue(item, "version"),
+      source: source === "system" || source === "nexus" ? source : undefined,
+      path: stringValue(item, "path"),
+      reason: stringValue(item, "reason"),
+    });
+  }
+  if (tools.size !== runtimeToolNames.length) {
+    throw new Error("Runtime status response is invalid.");
+  }
+  return {
+    api_version: apiVersion,
+    tools: runtimeToolNames.map((name) => tools.get(name) as RuntimeToolStatus),
+  };
+}
+
+function runtimeToolLabel(name: RuntimeToolName, t: Translator): string {
+  return t(name === "git" ? "Git" : name === "node" ? "Node" : "pnpm");
+}
+
+function runtimeToolReason(reason: string | undefined, t: Translator): string {
+  switch (reason) {
+    case "not_found":
+      return t("Runtime tool was not found. Install it or configure its path, then retry.");
+    case "corepack_shim_unverified":
+      return t("Corepack shim could not be verified; pnpm status cannot be confirmed.");
+    default:
+      return t("This runtime could not be verified.");
+  }
+}
+
+function RuntimeToolRow({ tool }: { tool: RuntimeToolStatus }) {
+  const { t } = useI18n();
+  return (
+    <div className="data-row">
+      <div>
+        <strong>{runtimeToolLabel(tool.name, t)}</strong>
+        <StatusPill label={tool.available ? t("Available") : t("Unavailable")} tone={tool.available ? "good" : "warn"} />
+      </div>
+      <div>
+        {tool.version && <span>{t("Version")}: <code>{tool.version}</code></span>}
+        {tool.source && <span>{t("Source")}: <code>{tool.source}</code></span>}
+        {tool.path && <span>{t("Path")}: <code>{tool.path}</code></span>}
+        {!tool.available && <span>{runtimeToolReason(tool.reason, t)}</span>}
+      </div>
+    </div>
+  );
+}
+
+export function RuntimeStatusPanel({ agentAvailable, state, onCheck }: RuntimeStatusPanelProps) {
+  const { t } = useI18n();
+  const checkDisabled = !agentAvailable || state.phase === "loading";
+  let content: React.ReactNode;
+  if (!agentAvailable) {
+    content = <EmptyState title={t("Agent unavailable")} detail={t("The Agent is unavailable. Reconnect the Agent before checking runtime status.")} />;
+  } else if (state.phase === "idle") {
+    content = <EmptyState title={t("Runtime status not checked")} detail={t("Click Check runtime to inspect Git, Node, and pnpm.")} />;
+  } else if (state.phase === "loading") {
+    content = (
+      <div className="state-card loading-state" role="status" aria-live="polite">
+        <Pulse size={22} className="spin" aria-hidden="true" />
+        <div><strong>{t("Checking runtime...")}</strong><span>{t("Reading the Agent runtime status.")}</span></div>
+      </div>
+    );
+  } else if (state.phase === "error") {
+    const message = state.error ? localizeBackendError(state.error, t) : t("Unknown");
+    content = (
+      <div className="state-card error-state" role="alert">
+        <WarningCircle size={25} aria-hidden="true" />
+        <div className="state-copy"><strong>{t("Runtime status unavailable")}</strong><span>{t("Runtime status request failed: {message}", { message: compactError(message) })}</span></div>
+        <ActionButton onClick={onCheck}><ArrowClockwise size={16} />{t("Retry")}</ActionButton>
+      </div>
+    );
+  } else if (state.status) {
+    content = state.status.tools.length ? (
+      <div className="data-list" aria-label={t("Runtime tools")}>
+        {state.status.tools.map((tool) => <RuntimeToolRow key={tool.name} tool={tool} />)}
+      </div>
+    ) : <EmptyState title={t("No runtime tools reported")} detail={t("The Agent returned no tool entries to display.")} />;
+  } else {
+    content = <EmptyState title={t("Runtime status unavailable")} detail={t("This runtime could not be verified.")} />;
+  }
+
+  return (
+    <Panel title={t("Runtime status")} icon={<Cpu size={18} />}>
+      <p className="panel-description">{t("Runtime status is checked manually. It never downloads or installs tools.")}</p>
+      <div className="panel-toolbar">
+        <span className="toolbar-count">{state.phase === "success" && state.status ? t("API {version}", { version: String(state.status.api_version) }) : t("Manual check")}</span>
+        <ActionButton disabled={checkDisabled} onClick={onCheck}>
+          {state.phase === "loading" ? <Pulse size={16} className="spin" /> : <ArrowClockwise size={16} />}
+          {state.phase === "loading" ? t("Checking runtime...") : state.phase === "success" ? t("Refresh runtime status") : t("Check runtime")}
+        </ActionButton>
+      </div>
+      {content}
+    </Panel>
+  );
 }
 
 function StatusPill({ label, tone = "neutral" }: { label: string; tone?: "good" | "warn" | "bad" | "neutral" }) {
@@ -1233,6 +1383,11 @@ function SettingsView({ snapshot, themeMode, setThemeMode, busyAction, runAction
   const [discoveryLoading, setDiscoveryLoading] = useState(false);
   const [discoveryError, setDiscoveryError] = useState<string | null>(null);
   const [selectedCandidateId, setSelectedCandidateId] = useState<string | undefined>(undefined);
+  const [runtimeStatus, setRuntimeStatus] = useState<RuntimeStatusViewState>({
+    phase: "idle",
+    status: null,
+    error: null,
+  });
   const draftDirtyRef = useRef(false);
 
   useEffect(() => {
@@ -1345,6 +1500,17 @@ function SettingsView({ snapshot, themeMode, setThemeMode, busyAction, runAction
     if (!editingHarness || snapshot.startup?.available !== true || discovery !== null || discoveryLoading) return;
     void detectHarness();
   }, [detectHarness, discovery, discoveryLoading, editingHarness, snapshot.startup?.available]);
+
+  const checkRuntime = useCallback(async () => {
+    if (snapshot.startup?.available !== true) return;
+    setRuntimeStatus({ phase: "loading", status: null, error: null });
+    try {
+      const response = await proxyRequest<unknown>("/v1/runtime");
+      setRuntimeStatus({ phase: "success", status: runtimeStatusFromResponse(response), error: null });
+    } catch (cause) {
+      setRuntimeStatus({ phase: "error", status: null, error: errorMessage(cause) });
+    }
+  }, [snapshot.startup?.available]);
 
   const openEditor = () => {
     setDraft(harnessDraftFromConfig(config));
@@ -1479,9 +1645,10 @@ function SettingsView({ snapshot, themeMode, setThemeMode, busyAction, runAction
       <Panel title={t("Update configuration")} icon={<CloudArrowUp size={18} />}>
         {updateEnvOverride && <p className="field-help" role="status">{t("Environment variables override part of this update configuration.")}</p>}
         {Object.keys(update).length ? <dl className="detail-list"><div><dt>{t("Source")}</dt><dd>{stringValue(update, "source") || t("Not shown")}</dd></div><div><dt>{t("Ref")}</dt><dd>{stringValue(update, "ref_name") || t("Default")}</dd></div><div><dt>{t("Git program")}</dt><dd>{stringValue(update, "git_program") || t("Default")}</dd></div></dl> : <EmptyState title={t("Updates are not configured")} detail={t("Release metadata and current runtime remain available without an update source.")} />}
-      </Panel>
-    </div>
-    <Panel title={t("Native integration")} icon={<Bell size={18} />}><div className="integration-list"><div><CheckCircle size={18} /><span>{t("Single instance guard")}</span><strong>{t("Enabled")}</strong></div><div><Bell size={18} /><span>{t("Desktop notifications")}</span><strong>{t("Available through Tauri")}</strong></div><div><Key size={18} /><span>{t("API transport")}</span><strong>{t("Rust loopback proxy")}</strong></div></div></Panel>
+       </Panel>
+     </div>
+     <RuntimeStatusPanel agentAvailable={snapshot.startup?.available === true} state={runtimeStatus} onCheck={() => void checkRuntime()} />
+     <Panel title={t("Native integration")} icon={<Bell size={18} />}><div className="integration-list"><div><CheckCircle size={18} /><span>{t("Single instance guard")}</span><strong>{t("Enabled")}</strong></div><div><Bell size={18} /><span>{t("Desktop notifications")}</span><strong>{t("Available through Tauri")}</strong></div><div><Key size={18} /><span>{t("API transport")}</span><strong>{t("Rust loopback proxy")}</strong></div></div></Panel>
   </>;
 }
 
