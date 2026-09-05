@@ -46,6 +46,12 @@ ActionButton 全局补 `type="button"`：此前所有 ActionButton 在 `<form>` 
 - **当前机器状态**：release=alpha.5 槽位→已切 rc.1（指针 rc.1，dsh-file-upload 已从清单移除，manifest 干净）；启动仍失败（导出缺失，因农场=alpha.1 包）；`.nexus-backup-20260906/` 与 `node_modules.stale-alpha1` 保留；plugin-desktop\node_modules 的 0.1.2-alpha.1 三件套验证过满足全部导出（应急可 junction，但 loader 不走 profiles/node_modules 解析 @deepseek-ai/*——loader 内部映射优先，junction 方案无效已证实）
 - **已知可行组合**：desktop 自带 0.1.2-alpha.1 harness + 其捆绑官方包曾正常运行数周（用户原生态）；本地三个 GitHub tag 槽位均与 rc.2 时代插件存在导出面不匹配
 
+## P0 heal 函数定位（2026-09-06，自动化第六轮）
+
+- **机制完全定位**：两条线的 app-boot 均含 `healProfilesModuleFallback`（profile.ts，两份源码长度一致 37889 字节）：每次启动创建 `~/.dsh/profiles/node_modules` 共享 fallback 并把链接**重新治愈到当前安装（installAnchor）**的包；`moduleFallbackCurrent` 校验不匹配才重建；`ensureProfileSymlink` 对已存在的链接直接跳过（粘性）；"cleanup removes only dsh-owned links"
+- **待解的最后问题**：rc.1 启动后共享 fallback 链接仍指向 alpha.1 槽位——要么 heal 未运行（启动崩溃时序在 heal 之前？），要么 installAnchor 解析到了 alpha.1（持久化锚点？）。下一轮：grep app-boot 源码中 healProfilesModuleFallback 的调用点与 installAnchor 的来源（从运行进程路径还是从持久化状态），即可锁定修复点
+- Nexus 侧修复预案（锁定后实施）：switch/restore/启动 Harness 前调用同一 heal 语义（或直接删除共享 fallback 让 harness 自己 heal 到当前槽位——需确认 heal 在崩溃前运行的时序）
+
 ## P0 双布局发现（2026-09-06，自动化第五轮）
 
 - **上游两条发布线使用不同的模块布局**：alpha 线（0.1.3-alpha.1）的 app-boot 维护 **profiles 级共享链接农场**（`~/.dsh/profiles/node_modules` → 当前槽位的 vendor/packages）；rc 线（0.1.2-rc.1）的 app-boot 维护 **profile 内 fallback**（`.dsh-module-fallback` + 投影链接）。两套布局互不认识
