@@ -178,9 +178,10 @@ The Agent exposes:
   and rollback are rejected while Harness is starting/running; registration is
   metadata-only and does not install, start, or restart Harness.
 - `GET /v1/runtime` — observe `git`, `node`, and `pnpm` with one bounded
-  six-second round. Configured absolute pins are probed first and never
-  silently replaced by a PATH candidate; missing, incompatible, or unsafe
-  pins retain a machine-readable reason.
+  six-second request deadline established before config I/O. Configured
+  absolute pins are probed first and never silently replaced by a PATH
+  candidate; missing, incompatible, or unsafe pins retain a machine-readable
+  reason.
 - `POST /v1/runtime/plan` — build a read-only plan for one registered
   `release_id`. The Agent reads only that slot's `package.json` and
   `apps/cli/package.json`, parses `engines.node` and the exact
@@ -188,7 +189,10 @@ The Agent exposes:
   reuse/missing/incompatible classifications plus suggested actions. Unknown
   request fields, including caller-provided manifest paths, are rejected. The
   `plan_id` is the complete deterministic serialized plan facts, not a
-  cryptographic hash; a later installer must recompute and compare them.
+  cryptographic hash; a later installer must recompute and compare them. Config,
+  registered-release lookup, both fixed manifest reads, observation, child
+  probes, and cleanup consume the same absolute deadline and shared filesystem
+  permit owner.
 - `GET|POST /v1/updates` — inspect durable update status or run one serialized
   external update job. An update clones the configured Git ref into a temporary
   Nexus `downloads/` candidate, optionally runs explicitly configured build and
@@ -733,13 +737,18 @@ unknown, or transitional Harness state likewise disables lifecycle controls.
   build-to-Node-launch acceptance. Ordinary install remains install-only and
   does not automatically promote; that behavior must not be conflated with
   explicit switch.
-- Read-only `GET /v1/runtime` is integrated with one six-second absolute request
-  budget, a global three-permit blocking owner, and bounded detached child
-  cleanup. The shared Agent route gate permits this endpoint and release tags
-  only as bodyless GET requests. The native Settings panel requests status only
-  on explicit user action, strictly parses the fixed tool set, and renders
-  bilingual source labels. Portable download, runtime injection, source
-  switching, and install confirmation remain target items.
+- Read-only `GET /v1/runtime` and `POST /v1/runtime/plan` each establish one
+  six-second absolute request deadline before filesystem preparation. Config,
+  registered-release lookup, manifest loading, observation, child probes, and
+  cleanup share that unchanged deadline. All synchronous filesystem work uses
+  one process-wide three-permit owner; a timed-out operation retains its permit
+  until its real blocking call exits, while later requests still return at their
+  own deadline. The shared Agent route gate permits runtime status and release
+  tags only as bodyless GET requests and runtime planning only as POST. The
+  native Settings panel requests status only on explicit user action, strictly
+  parses the fixed tool set, and renders bilingual source labels. Portable
+  download, runtime injection, source switching, and install confirmation
+  remain target items.
 
 ### Confirmed target (pending implementation and acceptance)
 

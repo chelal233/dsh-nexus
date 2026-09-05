@@ -8,7 +8,7 @@ use std::{
     env,
     ffi::{OsStr, OsString},
     fs,
-    io::Read,
+    io::{self, Read},
     path::{Path, PathBuf},
     process::Stdio,
     sync::{Arc, OnceLock},
@@ -88,7 +88,10 @@ struct ProbeConfig {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum BlockingStage {
+pub(crate) enum BlockingStage {
+    ConfigFile,
+    ReleaseRoot,
+    Requirements,
     Configure,
     SystemDirectory,
     PortableRoot,
@@ -104,6 +107,69 @@ struct BlockingHooks {
 #[derive(Clone)]
 struct BlockingFs {
     permits: Arc<Semaphore>,
+}
+
+#[derive(Clone)]
+pub(crate) struct RuntimeRequestContext {
+    deadline: Instant,
+    budget: ProbeBudget,
+    blocking_fs: BlockingFs,
+    blocking_hooks: BlockingHooks,
+}
+
+impl RuntimeRequestContext {
+    pub(crate) fn production() -> Self {
+        Self::with_budget(
+            PRODUCTION_PROBE_BUDGET,
+            production_blocking_fs(),
+            BlockingHooks::default(),
+        )
+    }
+
+    fn with_budget(
+        budget: ProbeBudget,
+        blocking_fs: BlockingFs,
+        blocking_hooks: BlockingHooks,
+    ) -> Self {
+        Self {
+            deadline: Instant::now() + budget.round,
+            budget,
+            blocking_fs,
+            blocking_hooks,
+        }
+    }
+
+    pub(crate) async fn run_blocking_io<T, F>(
+        &self,
+        stage: BlockingStage,
+        path: PathBuf,
+        operation: F,
+    ) -> io::Result<T>
+    where
+        T: Send + 'static,
+        F: FnOnce() -> io::Result<T> + Send + 'static,
+    {
+        let hooks = self.blocking_hooks.clone();
+        self.blocking_fs
+            .run(self.deadline, move || {
+                hooks.notify(stage, &path);
+                operation()
+            })
+            .await
+            .ok_or_else(runtime_request_timeout)?
+    }
+
+    #[cfg(test)]
+    fn available_blocking_permits(&self) -> usize {
+        self.blocking_fs.permits.available_permits()
+    }
+}
+
+fn runtime_request_timeout() -> io::Error {
+    io::Error::new(
+        io::ErrorKind::TimedOut,
+        "runtime request exceeded its absolute deadline",
+    )
 }
 
 impl BlockingFs {
@@ -244,31 +310,20 @@ fn probe_cwd_candidates(paths: &NexusPaths) -> Vec<PathBuf> {
     candidates
 }
 
-/// Observe every known runtime tool. Results are ordered as `RUNTIME_TOOLS`.
-#[cfg(test)]
-pub async fn observe_runtimes(paths: &NexusPaths) -> RuntimeListResponse {
-    observe_runtimes_with_selection_budget(
-        paths,
-        None,
-        PRODUCTION_PROBE_BUDGET,
-        production_blocking_fs(),
-        BlockingHooks::default(),
-    )
-    .await
-}
-
 /// Observe the exact configured pins first. Missing or unsafe pins remain
 /// explicit failures and never fall back silently to a different PATH tool.
-pub(crate) async fn observe_runtime_selection(
+pub(crate) async fn observe_runtime_selection_until(
     paths: &NexusPaths,
     runtime: Option<&RuntimeConfig>,
+    request: &RuntimeRequestContext,
 ) -> RuntimeListResponse {
     observe_runtimes_with_selection_budget(
         paths,
         runtime.cloned(),
-        PRODUCTION_PROBE_BUDGET,
-        production_blocking_fs(),
-        BlockingHooks::default(),
+        request.deadline,
+        request.budget,
+        request.blocking_fs.clone(),
+        request.blocking_hooks.clone(),
     )
     .await
 }
@@ -280,17 +335,18 @@ async fn observe_runtimes_with_budget(
     blocking_fs: BlockingFs,
     blocking_hooks: BlockingHooks,
 ) -> RuntimeListResponse {
-    observe_runtimes_with_selection_budget(paths, None, budget, blocking_fs, blocking_hooks).await
+    let request = RuntimeRequestContext::with_budget(budget, blocking_fs, blocking_hooks);
+    observe_runtime_selection_until(paths, None, &request).await
 }
 
 async fn observe_runtimes_with_selection_budget(
     paths: &NexusPaths,
     runtime: Option<RuntimeConfig>,
+    deadline: Instant,
     budget: ProbeBudget,
     blocking_fs: BlockingFs,
     blocking_hooks: BlockingHooks,
 ) -> RuntimeListResponse {
-    let deadline = Instant::now() + budget.round;
     let owned_paths = paths.clone();
     let config_blocking_fs = blocking_fs.clone();
     let config = blocking_fs
@@ -1714,6 +1770,259 @@ mod tests {
             .tools
             .iter()
             .all(|tool| { tool.reason.as_deref() == Some(REASON_PROBE_BUDGET_EXCEEDED) }));
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn slow_runtime_config_load_is_inside_the_get_request_budget() {
+        let root = fixture_root("slow-route-config");
+        let paths = NexusPaths::from_root(root.join("data"));
+        let (hooks, entered_rx, gate) = blocking_stage_hook(BlockingStage::ConfigFile, 0);
+        let request = RuntimeRequestContext::with_budget(
+            ProbeBudget {
+                round: Duration::from_millis(75),
+                child: Duration::from_millis(25),
+                cleanup: Duration::from_millis(10),
+            },
+            BlockingFs::new(1),
+            hooks,
+        );
+        let inspector = request.clone();
+        let config_store = nexus_core::ConfigStore::new(paths.clone());
+
+        let response = tokio::spawn(crate::runtime_status_for_parts(
+            paths,
+            config_store,
+            request,
+        ));
+        tokio::time::timeout(Duration::from_millis(200), entered_rx)
+            .await
+            .expect("config load enters the bounded blocking pool")
+            .expect("config hook remains connected");
+        let bounded = tokio::time::timeout(Duration::from_millis(200), response)
+            .await
+            .expect("GET runtime obeys its absolute deadline")
+            .expect("GET runtime task completes");
+        gate.release();
+        assert_eq!(
+            bounded.status(),
+            axum::http::StatusCode::INTERNAL_SERVER_ERROR
+        );
+        tokio::time::timeout(Duration::from_secs(1), async {
+            while inspector.available_blocking_permits() != 1 {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("config worker releases its permit after the real read exits");
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn slow_release_requirements_are_inside_the_plan_request_budget() {
+        let root = fixture_root("slow-plan-requirements");
+        let paths = NexusPaths::from_root(root.join("data"));
+        let releases = nexus_core::ReleaseStore::new(paths.clone());
+        releases
+            .register("release-a", "tag-a", None, None)
+            .expect("release registers");
+        let release_root = releases
+            .release_root("release-a")
+            .expect("release resolves");
+        fs::create_dir_all(release_root.join("apps/cli")).expect("CLI directory creates");
+        fs::write(
+            release_root.join("package.json"),
+            br#"{"engines":{"node":"^22.19.0 || >=24.0.0"},"packageManager":"pnpm@11.7.0"}"#,
+        )
+        .expect("root package writes");
+        fs::write(
+            release_root.join("apps/cli/package.json"),
+            br#"{"engines":{"node":">=22.19.0"}}"#,
+        )
+        .expect("CLI package writes");
+        let config_store = nexus_core::ConfigStore::new(paths);
+        let (hooks, entered_rx, gate) = blocking_stage_hook(BlockingStage::Requirements, 0);
+        let runtime_request = RuntimeRequestContext::with_budget(
+            ProbeBudget {
+                round: Duration::from_millis(150),
+                child: Duration::from_millis(50),
+                cleanup: Duration::from_millis(25),
+            },
+            BlockingFs::new(MAX_BLOCKING_FS_OPERATIONS),
+            hooks,
+        );
+        let inspector = runtime_request.clone();
+
+        let plan = tokio::spawn(async move {
+            crate::runtime_plan::plan_registered_release(
+                &releases,
+                &config_store,
+                nexus_protocol::RuntimePlanRequest {
+                    release_id: "release-a".to_owned(),
+                    source: nexus_protocol::RuntimeSource::Official,
+                    mode: nexus_protocol::RuntimeInstallMode::Portable,
+                },
+                &runtime_request,
+            )
+            .await
+        });
+        tokio::time::timeout(Duration::from_millis(300), entered_rx)
+            .await
+            .expect("requirements load enters the bounded blocking pool")
+            .expect("requirements hook remains connected");
+        let error = tokio::time::timeout(Duration::from_millis(300), plan)
+            .await
+            .expect("POST runtime plan obeys its absolute deadline")
+            .expect("POST runtime plan task completes")
+            .expect_err("blocked requirements cannot produce a plan");
+        gate.release();
+        assert_eq!(error.kind(), io::ErrorKind::TimedOut);
+        tokio::time::timeout(Duration::from_secs(1), async {
+            while inspector.available_blocking_permits() != MAX_BLOCKING_FS_OPERATIONS {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("requirements worker releases its permit after the real read exits");
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn timed_out_preparation_workers_keep_all_three_shared_permits_until_exit() {
+        let root = fixture_root("request-permit-limit");
+        let blocking_fs = BlockingFs::new(MAX_BLOCKING_FS_OPERATIONS);
+        let gate = BlockingGate::new();
+        let active = Arc::new(AtomicUsize::new(0));
+        let maximum = Arc::new(AtomicUsize::new(0));
+        let (entered_tx, mut entered_rx) = tokio::sync::mpsc::unbounded_channel();
+        let (finished_tx, mut finished_rx) = tokio::sync::mpsc::unbounded_channel();
+        let hooks = BlockingHooks {
+            callback: Some(Arc::new({
+                let gate = gate.clone();
+                let active = Arc::clone(&active);
+                let maximum = Arc::clone(&maximum);
+                move |stage, _| {
+                    if stage != BlockingStage::ConfigFile {
+                        return;
+                    }
+                    let count = active.fetch_add(1, Ordering::SeqCst) + 1;
+                    maximum.fetch_max(count, Ordering::SeqCst);
+                    let _ = entered_tx.send(());
+                    gate.wait();
+                    active.fetch_sub(1, Ordering::SeqCst);
+                    let _ = finished_tx.send(());
+                }
+            })),
+        };
+        let budget = ProbeBudget {
+            round: Duration::from_millis(150),
+            child: Duration::from_millis(50),
+            cleanup: Duration::from_millis(25),
+        };
+        let inspector =
+            RuntimeRequestContext::with_budget(budget, blocking_fs.clone(), hooks.clone());
+        let holders = (0..MAX_BLOCKING_FS_OPERATIONS)
+            .map(|index| {
+                let request =
+                    RuntimeRequestContext::with_budget(budget, blocking_fs.clone(), hooks.clone());
+                let path = root.join(format!("config-{index}.json"));
+                tokio::spawn(async move {
+                    request
+                        .run_blocking_io(BlockingStage::ConfigFile, path, || Ok(()))
+                        .await
+                })
+            })
+            .collect::<Vec<_>>();
+        for _ in 0..MAX_BLOCKING_FS_OPERATIONS {
+            tokio::time::timeout(Duration::from_secs(1), entered_rx.recv())
+                .await
+                .expect("bounded preparation worker enters")
+                .expect("entry channel remains open");
+        }
+        for holder in holders {
+            let error = tokio::time::timeout(Duration::from_millis(300), holder)
+                .await
+                .expect("timed-out holder returns under its request deadline")
+                .expect("holder task completes")
+                .expect_err("blocked preparation must time out");
+            assert_eq!(error.kind(), io::ErrorKind::TimedOut);
+        }
+        assert_eq!(inspector.available_blocking_permits(), 0);
+
+        let later_request = RuntimeRequestContext::with_budget(budget, blocking_fs, hooks);
+        let later_started = Instant::now();
+        let error = later_request
+            .run_blocking_io(
+                BlockingStage::ConfigFile,
+                root.join("later.json"),
+                || Ok(()),
+            )
+            .await
+            .expect_err("later request cannot bypass saturated preparation workers");
+        assert_eq!(error.kind(), io::ErrorKind::TimedOut);
+        assert!(later_started.elapsed() < Duration::from_millis(300));
+        assert_eq!(maximum.load(Ordering::SeqCst), MAX_BLOCKING_FS_OPERATIONS);
+        assert!(entered_rx.try_recv().is_err());
+
+        gate.release();
+        for _ in 0..MAX_BLOCKING_FS_OPERATIONS {
+            tokio::time::timeout(Duration::from_secs(1), finished_rx.recv())
+                .await
+                .expect("blocked preparation worker exits after release")
+                .expect("finish channel remains open");
+        }
+        assert_eq!(active.load(Ordering::SeqCst), 0);
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn preparation_time_is_not_reset_before_child_probe_and_cleanup() {
+        let root = fixture_root("request-child-deadline");
+        let paths = NexusPaths::from_root(root.join("data"));
+        let system_dir = root.join("system");
+        let node = write_hanging_fixture(&system_dir, "node");
+        let pnpm = write_hanging_fixture(&system_dir, "pnpm");
+        let git = write_hanging_fixture(&system_dir, "git");
+        let runtime = RuntimeConfig {
+            node: Some(nexus_core::RuntimePin {
+                path: node,
+                ownership: RuntimeOwnership::System,
+            }),
+            pnpm: Some(nexus_core::RuntimePin {
+                path: pnpm,
+                ownership: RuntimeOwnership::System,
+            }),
+            git: Some(nexus_core::RuntimePin {
+                path: git,
+                ownership: RuntimeOwnership::System,
+            }),
+            ..RuntimeConfig::default()
+        };
+        let request = RuntimeRequestContext::with_budget(
+            ProbeBudget {
+                round: Duration::from_millis(800),
+                child: Duration::from_millis(600),
+                cleanup: Duration::from_millis(100),
+            },
+            BlockingFs::new(MAX_BLOCKING_FS_OPERATIONS),
+            BlockingHooks::default(),
+        );
+        let started = Instant::now();
+        request
+            .run_blocking_io(BlockingStage::ConfigFile, paths.config_file.clone(), || {
+                std::thread::sleep(Duration::from_millis(500));
+                Ok(())
+            })
+            .await
+            .expect("preparation completes inside request deadline");
+        let observed = tokio::time::timeout(
+            Duration::from_millis(450),
+            observe_runtime_selection_until(&paths, Some(&runtime), &request),
+        )
+        .await
+        .expect("child probes consume only the original request remainder");
+        assert!(started.elapsed() < Duration::from_millis(950));
+        assert!(observed.tools.iter().all(|tool| !tool.available));
         let _ = fs::remove_dir_all(root);
     }
 

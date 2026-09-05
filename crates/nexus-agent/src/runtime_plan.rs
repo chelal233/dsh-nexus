@@ -156,13 +156,41 @@ pub(crate) async fn plan_registered_release(
     releases: &ReleaseStore,
     config_store: &ConfigStore,
     request: RuntimePlanRequest,
+    runtime_request: &super::runtime::RuntimeRequestContext,
 ) -> io::Result<RuntimePlanResponse> {
-    let release_root = releases.release_root(&request.release_id)?;
-    let requirements = load_runtime_requirements(&release_root)?;
-    let config = config_store.load()?;
-    let observed =
-        super::runtime::observe_runtime_selection(config_store.paths(), config.runtime.as_ref())
-            .await;
+    let release_path = releases.paths().release_pointers_file.clone();
+    let owned_releases = releases.clone();
+    let release_id = request.release_id.clone();
+    let release_root = runtime_request
+        .run_blocking_io(
+            super::runtime::BlockingStage::ReleaseRoot,
+            release_path,
+            move || owned_releases.release_root(&release_id),
+        )
+        .await?;
+    let requirements_path = release_root.clone();
+    let requirements = runtime_request
+        .run_blocking_io(
+            super::runtime::BlockingStage::Requirements,
+            requirements_path,
+            move || load_runtime_requirements(&release_root),
+        )
+        .await?;
+    let config_path = config_store.paths().config_file.clone();
+    let owned_config_store = config_store.clone();
+    let config = runtime_request
+        .run_blocking_io(
+            super::runtime::BlockingStage::ConfigFile,
+            config_path,
+            move || owned_config_store.load(),
+        )
+        .await?;
+    let observed = super::runtime::observe_runtime_selection_until(
+        config_store.paths(),
+        config.runtime.as_ref(),
+        runtime_request,
+    )
+    .await;
     assemble_runtime_plan(
         request.release_id,
         request.source,
@@ -325,6 +353,7 @@ mod tests {
                 source: RuntimeSource::Official,
                 mode: RuntimeInstallMode::Portable,
             },
+            &super::super::runtime::RuntimeRequestContext::production(),
         )
         .await
         .expect("registered release plans");
@@ -341,6 +370,7 @@ mod tests {
                 source: RuntimeSource::Official,
                 mode: RuntimeInstallMode::Portable,
             },
+            &super::super::runtime::RuntimeRequestContext::production(),
         )
         .await
         .expect_err("unregistered release cannot select a manifest");

@@ -2,10 +2,12 @@
 
 - Task: `nexus-p0`
 - Phase: `runtime-foundation-expanded`
-- Status: implementation and worker verification complete; isolated commit pending independent review
+- Status: foundation implementation complete; the independent-review deadline finding is resolved on the `runtime-fix1` isolation branch
 - Base: `f91f28d81a9ae72f88772f67e3ed23679462971b`
 - Branch: `codex/nexus-p0/runtime-foundation`
 - Worktree: `E:\git\dsh-nexus-phases\p0-runtime-foundation`
+- Review fix branch/base: `codex/nexus-p0/runtime-fix1` at
+  `8261a6e35c485a85c7b4e203c682bb956d52e62a`
 
 ## Outcome
 
@@ -44,6 +46,13 @@ complete.
   version-probed through the existing bounded observation path. A missing,
   unsafe, or invalid pin reports an explicit reason and never falls back to a
   different PATH candidate.
+- Both runtime handlers create one six-second absolute deadline before config or
+  registered-release filesystem work. Config loading, release-root lookup,
+  bounded manifest reads, observation, child probes, and cleanup consume that
+  unchanged deadline. Every synchronous filesystem operation shares the same
+  process-wide three-permit owner. A timed-out blocking operation keeps its
+  permit until its real call returns, so detached work is capped and later
+  requests still return under their own deadline.
 - `SetRuntime` and `ClearRuntime` share the Agent config route and retain the
   existing lifecycle-lock-then-try-update-gate order, including lifecycle wait
   and update-conflict behavior. Protocol and CLI literals, launcher-core
@@ -90,6 +99,13 @@ The three new behavior groups were exercised red before implementation:
 - The plan fixture compiled and failed on an empty `plan_id` before deterministic
   serialization and classification were implemented.
 
+The independent review fix added a fourth behavior group. The GET regression
+compiled and failed because the `ConfigFile` blocking hook was never entered
+within 200 ms, proving that `ConfigStore::load` was outside the shared owner.
+After moving the deadline to the outer handlers, the regression passed together
+with blocked requirements, three saturated preparation permits plus a later
+request, and preparation-time-not-reset-before-child/cleanup cases.
+
 During final verification, changing the command fixture to the real cached
 shape `pnpm/bin/pnpm.mjs` exposed one stale test expectation for its parent PATH
 directory. The targeted test was rerun after correcting that assertion and
@@ -106,6 +122,9 @@ passed; no production behavior changed for this diagnosis.
     nexus-launcher-core 11; all associated doc-tests passed
 - `cargo check --offline -p nexus-cli`
   - Exit code: 0
+- `cargo test --offline -p nexus-agent`
+  - Exit code: 0
+  - Fix1 result: 101 passed; all associated doc-tests passed
 - `git diff --check`
   - Exit code: 0
 

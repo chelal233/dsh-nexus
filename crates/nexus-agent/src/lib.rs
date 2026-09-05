@@ -1272,11 +1272,28 @@ async fn release_list(State(state): State<AppState>) -> axum::response::Response
 }
 
 async fn runtime_status(State(state): State<AppState>) -> axum::response::Response {
-    let config = match state.config.load() {
+    let runtime_request = runtime::RuntimeRequestContext::production();
+    runtime_status_for_parts(state.paths.clone(), state.config.clone(), runtime_request).await
+}
+
+async fn runtime_status_for_parts(
+    paths: nexus_core::NexusPaths,
+    config_store: ConfigStore,
+    request: runtime::RuntimeRequestContext,
+) -> axum::response::Response {
+    let config_path = config_store.paths().config_file.clone();
+    let owned_config_store = config_store.clone();
+    let config = match request
+        .run_blocking_io(runtime::BlockingStage::ConfigFile, config_path, move || {
+            owned_config_store.load()
+        })
+        .await
+    {
         Ok(config) => config,
         Err(error) => return data_error_response(error, "config_unavailable"),
     };
-    let response = runtime::observe_runtime_selection(&state.paths, config.runtime.as_ref()).await;
+    let response =
+        runtime::observe_runtime_selection_until(&paths, config.runtime.as_ref(), &request).await;
     (StatusCode::OK, Json(response)).into_response()
 }
 
@@ -1284,7 +1301,15 @@ async fn runtime_plan(
     State(state): State<AppState>,
     Json(request): Json<RuntimePlanRequest>,
 ) -> axum::response::Response {
-    match runtime_plan::plan_registered_release(&state.releases, &state.config, request).await {
+    let runtime_request = runtime::RuntimeRequestContext::production();
+    match runtime_plan::plan_registered_release(
+        &state.releases,
+        &state.config,
+        request,
+        &runtime_request,
+    )
+    .await
+    {
         Ok(response) => (StatusCode::OK, Json(response)).into_response(),
         Err(error) => data_error_response(error, "runtime_plan_failed"),
     }
@@ -1321,8 +1346,12 @@ mod runtime_route_tests {
 
 #[cfg(test)]
 async fn runtime_status_for_paths(paths: &nexus_core::NexusPaths) -> axum::response::Response {
-    let response = runtime::observe_runtimes(paths).await;
-    (StatusCode::OK, Json(response)).into_response()
+    runtime_status_for_parts(
+        paths.clone(),
+        ConfigStore::new(paths.clone()),
+        runtime::RuntimeRequestContext::production(),
+    )
+    .await
 }
 
 async fn release_tags(State(state): State<AppState>) -> axum::response::Response {

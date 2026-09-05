@@ -1,4 +1,4 @@
-updated: 2026-09-05 12:24 by Codex (P0 runtime foundation 隔离段完成实现与组合验证)
+updated: 2026-09-05 13:20 by Codex (P0 runtime foundation 独立审查阻断已在 fix1 隔离段修复并通过回归)
 
 # dsh-nexus 项目状态与需求基线
 
@@ -89,13 +89,13 @@ updated: 2026-09-05 12:24 by Codex (P0 runtime foundation 隔离段完成实现�
 - **配置并发已封口**：`ConfigStore::transaction` 用进程级共享粗粒度 Mutex 包住 load→mutate→validate→atomic replace；Agent 的 Set/Clear Harness、Set/Clear Update、Set/Clear Runtime 与 Switch ref 写入均已迁移，不同 `ConfigStore::new` 实例并发写不同字段不会再丢更新；readiness URL 保留语义仍在同一事务内
 - **release runtime requirements 与只读计划已实现**：纯解析器只读已注册 release 的 `package.json` 与 `apps/cli/package.json`（单文件 MAX+1 有界读取），支持当前所需 npm `^`、`>=`、`||`、exact 与显式 prerelease 规则，未知语法 fail closed；`POST /v1/runtime/plan` 只接收 `release_id`+source/mode，拒绝未知字段/任意 manifest path，返回 requirements、reuse/missing/incompatible/unverifiable、建议动作和完整 deterministic JSON `plan_id`（明确不是安全 hash，安装前必须重算比对）
 - **统一 pins/env/command 下游接口已建立**：配置 pin 优先走现有 6 秒 bounded observation，对真实 canonical path 执行版本探测；失败保留明确 reason，绝不只改 source 假复用。`resolve_runtime_command` 同时覆盖直接 executable 与 pinned Node + pnpm `.js|.cjs|.mjs` entry；`build_runtime_child_env` 只构造 child PATH；`build_pnpm_args` 统一进程局部 minimumReleaseAge=0 与 registry，不改系统/用户环境
-- **失败根因已修复**：原先配置、PATH/portable 枚举与 shim/cwd 文件检查在 async deadline 外同步执行，UNC/映射盘/异常文件系统可突破 6 秒声明；晚候选的 child deadline 后还会另加 cleanup。现在整个 runtime 请求从配置起共用 6 秒 absolute deadline，同步文件系统工作经全局 3 许可 bounded blocking owner，先取许可再 spawn，后续请求不会无限堆积挂起 blocking task
+- **runtime foundation 独立审查阻断已在 fix1 隔离段修复**：`GET /v1/runtime` 与 `POST /v1/runtime/plan` 都在 handler 最外层创建同一 6 秒 absolute deadline；config、registered release root、两个固定 manifest、PATH/portable 枚举及 shim/cwd 检查全部共享进程级 3 许可 bounded blocking owner，先取许可再 `spawn_blocking`，进入观察和 child/cleanup 时不重置 deadline
 - **真实保证边界**：标准 Rust 不能强杀已阻塞的同步文件系统线程；超时任务会继续占用许可直到返回，但永久占位最多 3 个，所有后续请求仍按 deadline 返回。Windows UNC 和映射网络盘候选预拒绝；child 只运行到 `round_deadline - cleanup`，kill/wait 使用同一轮次剩余预算，取消调用方不会取消 detached child owner
 - **P0-4a 安全边界已补齐**：PATH/PATHEXT 受限且候选有上限；Corepack canonical/shebang/script 检测 fail-closed，Corepack 不执行并关闭 network/download prompt/default latest/auto pin/project spec；探测 cwd 拒绝祖先 manifest；cmd/bat 采用绝对系统 command processor、拒绝 shell 元字符并隐藏控制台；输出/轮次/子进程/kill+wait 清理有界；数据根与 runtimes 根 reparse point 拒绝，portable canonical 候选必须留在 runtimes 根内
 - **P0-1 共享接线缺口已修复**：`nexus-launcher-core` Agent allowlist 补 `/v1/runtime` 与既有 `/v1/releases/tags`，两者只允许无 body GET；POST 和非空 GET body 拒绝；Tauri runtime 移除重复 validator，复用共享 gate
 - **手动 runtime 状态面板已集成**：Settings 只在显式 Check/Refresh 时请求 `GET /v1/runtime`；严格解析固定 `git`/`node`/`pnpm` 集合、顺序、可用元数据和绝对路径，失败清除旧成功结果；`system`/`nexus` 来源支持中英文显示
 - **Switch 生命周期所有权修复已集成**：显式 Switch 以 supervisor lifecycle → updater gate 固定顺序取得双锁并转交 detached owner；取消请求不会提前释放。冷 Switch 仅在 promotion 后发布 `Succeeded`，命令、promotion、catalog load 或 Agent current-release 最终同步失败均发布 `Failed`；promotion 后的同步失败不回滚 release pointer
-- **runtime foundation 组合验证已完成**：`cargo test --offline -p nexus-core -p nexus-agent -p nexus-protocol -p nexus-launcher-core` 通过（core 30、agent 97、protocol 13、launcher-core 11，另 doc-tests 全过）；`cargo check --offline -p nexus-cli` 通过。Tauri 只同步共享 route/validator 字面量，本隔离段未重复生成 resource binary 或做 GUI 总验收
+- **runtime foundation 组合验证已完成**：原 foundation 的 `cargo test --offline -p nexus-core -p nexus-agent -p nexus-protocol -p nexus-launcher-core` 通过（core 30、agent 97、protocol 13、launcher-core 11，另 doc-tests 全过）且 `cargo check --offline -p nexus-cli` 通过；fix1 新增前置慢 I/O、3 许可饱和后续请求、child/cleanup 不重置 deadline 回归后，`cargo test --offline -p nexus-agent` 101/101 通过。Tauri 未重复生成 resource binary 或做 GUI 总验收
 - **仍未验**：未启动真实 Harness，未做真实 cold-install build-to-Node-launch、下载/安装、系统 runtime、GUI 截图/交互、Unix 分支、Windows junction/真实映射盘或部署；未改系统 PATH 或用户配置
 - **P0-4 后续仍待做**：当前段没有下载、安装、执行 Corepack、启动 Harness、系统级变更或 GUI 总验收；下游需实现用户确认后的 portable/system 供给与冷安装，并让 install/build/start/terminal/plugin/profile materialization 全部消费上述同一 pins/env/command 接口。规划器暂不扫描未配置的 Corepack cache；本机已知 11.7.0 `bin/pnpm.mjs` 可由下游显式解析后 pin 并安全复用
 - **Corepack 官方事实**：官方 `https://github.com/nodejs/corepack` 说明仅 Node `>=14.19` 且 `<25` 随 Node 附带 Corepack；不能假设所有 Node 版本自带 Corepack 或 pnpm 调用不会下载
