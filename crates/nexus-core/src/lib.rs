@@ -1245,7 +1245,18 @@ impl ReleaseStore {
                 "registered release resolves outside the Nexus release root",
             ));
         }
-        Ok(slot)
+        // canonicalize returns the `\\?\C:\...` verbatim form on Windows;
+        // strip it because Node and other launch consumers mis-resolve
+        // verbatim paths mixed with forward-slash placeholders.
+        let text = slot.as_os_str().to_string_lossy();
+        let stripped = if let Some(rest) = text.strip_prefix(r"\\?\UNC\") {
+            format!(r"\\{}", rest)
+        } else if let Some(rest) = text.strip_prefix(r"\\?\") {
+            rest.to_owned()
+        } else {
+            text.into_owned()
+        };
+        Ok(PathBuf::from(stripped))
     }
 
     pub fn load(&self) -> io::Result<ReleaseCatalog> {
