@@ -32,34 +32,34 @@ use nexus_core::{
     CheckpointRestoreJournal, CheckpointRestoreJournalStore, CheckpointRestorePhase,
     CheckpointStore, ConfigStore, DiagnosticsStore, HarnessLaunchSpec, HarnessLogSession,
     HarnessLogSessionStore, NexusConfig, NexusConfigFile, NexusStateSnapshot, ProfileCatalog,
-    ProfileStore, ReleaseCatalog, ReleaseStore, RuntimeConfig, UpdateSpec,
-    DEFAULT_MAX_RELEASE_SLOTS,
-    DEFAULT_PROFILE, HARNESS_ARGS_ENV,
-    HARNESS_PROGRAM_ENV, HARNESS_READINESS_TIMEOUT_ENV, HARNESS_READINESS_URL_ENV,
-    HARNESS_WORKING_DIR_ENV, UPDATE_BUILD_ARGS_ENV, UPDATE_BUILD_PROGRAM_ENV,
-    UPDATE_GIT_PROGRAM_ENV, UPDATE_REF_ENV, UPDATE_SOURCE_ENV, UPDATE_TIMEOUT_ENV,
-    UPDATE_VERIFY_ARGS_ENV, UPDATE_VERIFY_PROGRAM_ENV,
+    ProfileStore, ReleaseCatalog, ReleaseStore, RuntimeConfig, SnapshotsConfig, UpdateSpec,
+    DEFAULT_MAX_RELEASE_SLOTS, DEFAULT_PROFILE, HARNESS_ARGS_ENV, HARNESS_PROGRAM_ENV,
+    HARNESS_READINESS_TIMEOUT_ENV, HARNESS_READINESS_URL_ENV, HARNESS_WORKING_DIR_ENV,
+    UPDATE_BUILD_ARGS_ENV, UPDATE_BUILD_PROGRAM_ENV, UPDATE_GIT_PROGRAM_ENV, UPDATE_REF_ENV,
+    UPDATE_SOURCE_ENV, UPDATE_TIMEOUT_ENV, UPDATE_VERIFY_ARGS_ENV, UPDATE_VERIFY_PROGRAM_ENV,
 };
 use nexus_launcher_core::{
     harness_observation_matches_session, read_harness_ui_info, unavailable_harness_ui_info,
 };
 use nexus_protocol::{
-    AgentLifecycleState, CheckpointAction, CheckpointCommand, CheckpointCreateResponse,
-    CheckpointListResponse, CheckpointRestoreResponse, ConfigAction, ConfigCommand, ConfigResponse,
-    DiagnosticsAction, DiagnosticsCommand, DiagnosticsResponse, ErrorResponse, HarnessAction,
-    HarnessCommand, HarnessDiscoveryResponse, HarnessResponse, HarnessRuntimeInfo, HealthResponse,
-    LifecycleAccepted, LifecycleAction, LifecycleCommand, ProfileAction, ProfileCommand,
-    ProfileListResponse, ProfileSelectResponse, ReleaseAction, ReleaseCommand, ReleaseListResponse,
-    RuntimePlanRequest, StateResponse, TagListResponse, UpdateAction, UpdateCommand,
-    UpdateResponse, UpdateState,
+    AgentLifecycleState, CheckpointAction, CheckpointCommand, CheckpointContentState,
+    CheckpointCreateResponse, CheckpointListResponse, CheckpointRestoreResponse, ConfigAction,
+    ConfigCommand, ConfigResponse, DiagnosticsAction, DiagnosticsCommand, DiagnosticsResponse,
+    ErrorResponse, HarnessAction, HarnessCommand, HarnessDiscoveryResponse, HarnessResponse,
+    HarnessRuntimeInfo, HealthResponse, LifecycleAccepted, LifecycleAction, LifecycleCommand,
+    ProfileAction, ProfileCommand, ProfileListResponse, ProfileSelectResponse, ReleaseAction,
+    ReleaseCommand, ReleaseListResponse, RuntimePlanRequest, StateResponse, TagListResponse,
+    UpdateAction, UpdateCommand, UpdateResponse, UpdateState,
 };
 use tokio::{
     net::TcpListener,
     sync::{watch, Mutex, RwLock},
 };
 
+mod dsh;
 mod runtime;
 mod runtime_plan;
+mod snapshots;
 mod supervisor;
 mod updater;
 
@@ -91,6 +91,7 @@ struct AppState {
     config: ConfigStore,
     updater: UpdateExecutor,
     supervisor: HarnessSupervisor,
+    snapshots: snapshots::SnapshotCoordinator,
     harness_sync: Arc<Mutex<()>>,
     #[cfg(test)]
     checkpoint_transition_gate: Arc<Mutex<Option<CheckpointTransitionGate>>>,
@@ -185,8 +186,9 @@ pub async fn run_with_instance_id(
 
     let profiles = ProfileStore::new(paths.clone());
     let checkpoints = CheckpointStore::new(paths.clone());
+    let config_store = ConfigStore::new(paths.clone());
+    let snapshots = snapshots::SnapshotCoordinator::new(paths.clone(), dsh::resolve_dsh_home());
     let releases = {
-        let config_store = ConfigStore::new(paths.clone());
         let max_slots = config_store
             .load()
             .ok()
@@ -196,11 +198,11 @@ pub async fn run_with_instance_id(
         ReleaseStore::new(paths.clone()).with_max_slots(max_slots)
     };
     let checkpoint_restores = CheckpointRestoreJournalStore::new(paths.clone());
-    recover_checkpoint_restore_startup(&checkpoint_restores, &profiles, &releases)?;
+    recover_checkpoint_restore_startup(&checkpoint_restores, &profiles, &releases, &snapshots)
+        .await?;
     let profile_catalog = profiles.load()?;
     let release_catalog = releases.load()?;
     let diagnostics = DiagnosticsStore::new(paths.clone());
-    let config_store = ConfigStore::new(paths.clone());
     let updater = UpdateExecutor::new(paths.clone(), releases.clone());
     let _ = updater.recover_unattached()?;
     let supervisor = HarnessSupervisor::new(paths.clone())?;
@@ -228,6 +230,7 @@ pub async fn run_with_instance_id(
         config: config_store,
         updater,
         supervisor: supervisor.clone(),
+        snapshots,
         harness_sync: Arc::new(Mutex::new(())),
         #[cfg(test)]
         checkpoint_transition_gate: Arc::new(Mutex::new(None)),
@@ -299,14 +302,44 @@ fn build_router(state: AppState) -> Router {
         .with_state(state)
 }
 
-fn recover_checkpoint_restore_startup(
+async fn recover_checkpoint_restore_startup(
     journal_store: &CheckpointRestoreJournalStore,
     profiles: &ProfileStore,
     releases: &ReleaseStore,
+    snapshots: &snapshots::SnapshotCoordinator,
 ) -> io::Result<()> {
     let Some(journal) = journal_store.load()? else {
         return Ok(());
     };
+    if let Some(binding) = journal.intent.snapshot.as_ref() {
+        let recovery = async {
+            let lease = snapshots.acquire_bound(binding).await?;
+            match journal.phase {
+                CheckpointRestorePhase::Prepared => {
+                    lease.rollback(binding.ticket.clone()).await?;
+                    releases.restore_release_pointers(
+                        journal.intent.previous_current_release.as_deref(),
+                        journal.intent.previous_last_known_good.as_deref(),
+                    )?;
+                    profiles.write(&journal.intent.previous_profiles)?;
+                    journal_store.clear(CheckpointRestorePhase::Prepared, &journal.intent)
+                }
+                CheckpointRestorePhase::Committed => {
+                    validate_committed_checkpoint_restore(&journal, profiles, releases)?;
+                    lease.commit(binding.ticket.clone()).await?;
+                    journal_store.clear(CheckpointRestorePhase::Committed, &journal.intent)
+                }
+            }
+        }
+        .await;
+        if let Err(error) = recovery {
+            let diagnostic =
+                format!("startup checkpoint restore recovery remains pending: {error}");
+            let _ = journal_store.record_error(journal.phase, &journal.intent, diagnostic.clone());
+            tracing::warn!(error = %diagnostic, "checkpoint restore startup recovery remains available for explicit retry or abort");
+        }
+        return Ok(());
+    }
     match journal.phase {
         CheckpointRestorePhase::Prepared => {
             releases.restore_release_pointers(
@@ -350,6 +383,11 @@ async fn settle_checkpoint_restore(state: &AppState) -> Result<(), HarnessSuperv
     else {
         return Ok(());
     };
+    // Content restores wait for explicit Retry or Abort. Read-only routes stay
+    // available and ordinary mutation guards reject the pending transaction.
+    if journal.intent.snapshot.is_some() {
+        return Ok(());
+    }
     let (profiles, current_release, last_known_good) = match journal.phase {
         CheckpointRestorePhase::Prepared => (
             journal.intent.previous_profiles.clone(),
@@ -711,6 +749,11 @@ async fn harness_control(
     State(state): State<AppState>,
     Json(command): Json<HarnessCommand>,
 ) -> impl IntoResponse {
+    if command.action != HarnessAction::Status {
+        if let Err(response) = ensure_checkpoint_mutation_ready(&state).await {
+            return response;
+        }
+    }
     let result = execute_harness_action(&state, command.action).await;
 
     match result {
@@ -735,10 +778,16 @@ async fn execute_harness_action(
     action: HarnessAction,
 ) -> Result<HarnessRuntimeInfo, HarnessSupervisorError> {
     let lifecycle = state.supervisor.acquire_lifecycle().await;
-    settle_checkpoint_restore(state).await?;
     if action == HarnessAction::Status {
+        settle_checkpoint_restore(state).await?;
         return Ok(state.supervisor.status().await);
     }
+    ensure_checkpoint_mutation_ready(state).await.map_err(|_| {
+        HarnessSupervisorError::Persistence(io::Error::new(
+            io::ErrorKind::AlreadyExists,
+            "a content restore is pending; use checkpoint retry or checkpoint abort",
+        ))
+    })?;
     let profile = state
         .runtime
         .read()
@@ -765,7 +814,7 @@ async fn execute_harness_action(
 }
 
 async fn sync_harness_state(state: &AppState) -> HarnessSnapshot {
-    match update_agent_state(state, |_| {}).await {
+    let snapshot = match update_agent_state(state, |_| {}).await {
         Ok((_, harness)) => harness,
         Err(error) => {
             tracing::warn!(error = %error, "failed to persist refreshed Harness state");
@@ -776,7 +825,61 @@ async fn sync_harness_state(state: &AppState) -> HarnessSnapshot {
                 log_session,
             }
         }
+    };
+    schedule_healthy_snapshot(state, &snapshot);
+    snapshot
+}
+
+fn schedule_healthy_snapshot(state: &AppState, observation: &HarnessSnapshot) {
+    if observation.runtime.state != nexus_protocol::HarnessState::Running
+        || observation.log_session.run_id.is_empty()
+        || observation.log_session.healthy_snapshot_attempted
+    {
+        return;
     }
+    let state = state.clone();
+    let run_id = observation.log_session.run_id.clone();
+    let generation = observation.log_session.generation;
+    tokio::spawn(async move {
+        let profile = match state.runtime.read().await.profile.clone() {
+            Some(profile) => profile,
+            None => return,
+        };
+        let dsh_home = match state.snapshots.configured_dsh_home() {
+            Ok(home) => home.clone(),
+            Err(_) => return,
+        };
+        let profile_for_check = profile.clone();
+        let initialized = tokio::task::spawn_blocking(move || {
+            dsh::profile_is_initialized(&dsh_home, &profile_for_check)
+        })
+        .await;
+        if !matches!(initialized, Ok(Ok(true))) {
+            return;
+        }
+        match state
+            .supervisor
+            .claim_healthy_snapshot_attempt(&run_id, generation)
+            .await
+        {
+            Ok(true) => {}
+            Ok(false) => return,
+            Err(error) => {
+                let result = Err(io::Error::other(format!(
+                    "failed to claim healthy snapshot for the current Harness run: {error}"
+                )));
+                state.snapshots.record_healthy_result(&result);
+                return;
+            }
+        }
+        let release = state.runtime.read().await.release.clone();
+        let version = selected_dsh_version(&state.releases, release.as_deref());
+        let result = state.snapshots.capture_healthy(profile, version).await;
+        if let Err(error) = &result {
+            tracing::warn!(error = %error, "healthy Harness snapshot attempt failed");
+        }
+        state.snapshots.record_healthy_result(&result);
+    });
 }
 
 async fn update_agent_state<F>(
@@ -888,12 +991,13 @@ async fn profile_control(
                 );
             };
             let lifecycle = state.supervisor.acquire_lifecycle().await;
-            if let Err(error) = settle_checkpoint_restore(&state).await {
-                return data_error_response(
-                    io::Error::other(error.to_string()),
-                    "checkpoint_recovery_failed",
-                );
+            if let Err(response) = ensure_checkpoint_mutation_ready(&state).await {
+                return response;
             }
+            let _update_gate = match state.updater.try_acquire_gate() {
+                Ok(gate) => gate,
+                Err(error) => return update_error_response(error),
+            };
             if let Err(response) = ensure_harness_selection_quiescent(
                 &state,
                 &lifecycle,
@@ -937,14 +1041,69 @@ async fn profile_control(
 }
 
 async fn checkpoint_list(State(state): State<AppState>) -> axum::response::Response {
-    match state.checkpoints.list() {
-        Ok(checkpoints) => (
-            StatusCode::OK,
-            Json(CheckpointListResponse::new(checkpoints)),
-        )
-            .into_response(),
-        Err(error) => data_error_response(error, "checkpoint_list_failed"),
+    let checkpoints = match state.checkpoints.list() {
+        Ok(checkpoints) => checkpoints,
+        Err(error) => return data_error_response(error, "checkpoint_list_failed"),
+    };
+    let profile = match state.profiles.load() {
+        Ok(catalog) => catalog.active_profile,
+        Err(error) => return data_error_response(error, "checkpoint_profile_invalid"),
+    };
+    let mut diagnostic = state.snapshots.healthy_error();
+    let snapshots = match state.snapshots.list_inspections(profile).await {
+        Ok(snapshots) => snapshots,
+        Err(error) => {
+            if diagnostic.is_none() {
+                diagnostic = Some(error.to_string());
+            }
+            Vec::new()
+        }
+    };
+    let pending_restore = match state.checkpoint_restores.load() {
+        Ok(Some(journal)) => snapshots::restore_status(&journal, None),
+        Ok(None) => None,
+        Err(error) => return data_error_response(error, "checkpoint_restore_journal_failed"),
+    };
+    (
+        StatusCode::OK,
+        Json(
+            CheckpointListResponse::new(checkpoints).with_snapshot_state(
+                snapshots,
+                pending_restore,
+                diagnostic,
+            ),
+        ),
+    )
+        .into_response()
+}
+
+async fn ensure_checkpoint_mutation_ready(
+    state: &AppState,
+) -> Result<(), axum::response::Response> {
+    if let Err(error) = settle_checkpoint_restore(state).await {
+        return Err(data_error_response(
+            io::Error::other(error.to_string()),
+            "checkpoint_recovery_failed",
+        ));
     }
+    let store = state.checkpoint_restores.clone();
+    let pending = tokio::task::spawn_blocking(move || store.load())
+        .await
+        .map_err(|error| {
+            data_error_response(
+                io::Error::other(format!("checkpoint journal task failed: {error}")),
+                "checkpoint_restore_journal_failed",
+            )
+        })?
+        .map_err(|error| data_error_response(error, "checkpoint_restore_journal_failed"))?;
+    if pending.is_some_and(|journal| journal.intent.snapshot.is_some()) {
+        return Err(api_error_response(
+            StatusCode::CONFLICT,
+            "checkpoint_restore_pending",
+            "a content restore is pending; use checkpoint retry or checkpoint abort",
+        ));
+    }
+    Ok(())
 }
 
 async fn checkpoint_control(
@@ -954,6 +1113,18 @@ async fn checkpoint_control(
     match command.action {
         CheckpointAction::List => checkpoint_list(State(state)).await,
         CheckpointAction::Create => checkpoint_create(state, command.note).await,
+        CheckpointAction::Detail | CheckpointAction::Inspect => {
+            let Some(id) = command.id else {
+                return data_error_response(
+                    io::Error::new(
+                        io::ErrorKind::InvalidInput,
+                        "snapshot or checkpoint id is required",
+                    ),
+                    "checkpoint_invalid",
+                );
+            };
+            checkpoint_snapshot_read(state, id, command.action).await
+        }
         CheckpointAction::Restore => {
             let Some(id) = command.id else {
                 return data_error_response(
@@ -963,17 +1134,20 @@ async fn checkpoint_control(
             };
             checkpoint_restore(state, id).await
         }
+        CheckpointAction::Retry => checkpoint_restore_retry(state, command.id).await,
+        CheckpointAction::Abort => checkpoint_restore_abort(state, command.id).await,
     }
 }
 
 async fn checkpoint_create(state: AppState, note: Option<String>) -> axum::response::Response {
     let lifecycle = state.supervisor.acquire_lifecycle().await;
-    if let Err(error) = settle_checkpoint_restore(&state).await {
-        return data_error_response(
-            io::Error::other(error.to_string()),
-            "checkpoint_recovery_failed",
-        );
+    if let Err(response) = ensure_checkpoint_mutation_ready(&state).await {
+        return response;
     }
+    let update_gate = match state.updater.try_acquire_gate() {
+        Ok(gate) => gate,
+        Err(error) => return update_error_response(error),
+    };
     if let Err(response) = ensure_harness_selection_quiescent(
         &state,
         &lifecycle,
@@ -989,31 +1163,99 @@ async fn checkpoint_create(state: AppState, note: Option<String>) -> axum::respo
         .profile
         .clone()
         .unwrap_or_else(|| DEFAULT_PROFILE.to_owned());
-    let snapshot = NexusStateSnapshot {
+    let state_snapshot = NexusStateSnapshot {
         profile: profile.clone(),
         release: current.release.clone(),
     };
-    match state
-        .checkpoints
-        .create(&profile, current.release, note, snapshot)
-    {
-        Ok(checkpoint) => (
+    let version = selected_dsh_version(&state.releases, current.release.as_deref());
+    let owner_state = state.clone();
+    let (result_tx, result_rx) = tokio::sync::oneshot::channel();
+    tokio::spawn(async move {
+        let result = async {
+            let lease = owner_state.snapshots.acquire(profile.clone()).await?;
+            let manifest = lease.capture_manual(version, note.clone()).await?;
+            owner_state.checkpoints.create_with_snapshot(
+                &profile,
+                current.release,
+                note,
+                state_snapshot,
+                Some(snapshots::snapshot_reference(&manifest)),
+            )
+        }
+        .await;
+        drop(update_gate);
+        drop(lifecycle);
+        let _ = result_tx.send(result);
+    });
+    match result_rx.await {
+        Ok(Ok(checkpoint)) => (
             StatusCode::CREATED,
             Json(CheckpointCreateResponse::from_manifest(checkpoint)),
         )
             .into_response(),
-        Err(error) => data_error_response(error, "checkpoint_create_failed"),
+        Ok(Err(error)) => data_error_response(error, "checkpoint_create_failed"),
+        Err(_) => data_error_response(
+            io::Error::other("checkpoint capture owner exited without a result"),
+            "checkpoint_create_failed",
+        ),
+    }
+}
+
+fn selected_dsh_version(releases: &ReleaseStore, release: Option<&str>) -> String {
+    release
+        .and_then(|id| releases.get(id).ok())
+        .map(|manifest| manifest.version)
+        .or_else(|| release.map(ToOwned::to_owned))
+        .unwrap_or_else(|| "unmanaged".to_owned())
+}
+
+async fn checkpoint_snapshot_read(
+    state: AppState,
+    id: String,
+    action: CheckpointAction,
+) -> axum::response::Response {
+    let (profile, snapshot_id) = match state.checkpoints.read(&id) {
+        Ok(Some(checkpoint)) => match checkpoint.snapshot {
+            Some(reference) => (checkpoint.profile, reference.snapshot_id),
+            None => {
+                return api_error_response(
+                    StatusCode::CONFLICT,
+                    "checkpoint_legacy_metadata_only",
+                    "this legacy checkpoint has no content snapshot",
+                )
+            }
+        },
+        Ok(None) => match state.profiles.load() {
+            Ok(catalog) => (catalog.active_profile, id),
+            Err(error) => return data_error_response(error, "checkpoint_profile_invalid"),
+        },
+        Err(error) => return data_error_response(error, "checkpoint_invalid"),
+    };
+    match action {
+        CheckpointAction::Detail => match state.snapshots.detail(profile, snapshot_id).await {
+            Ok(detail) => (StatusCode::OK, Json(detail)).into_response(),
+            Err(error) => data_error_response(error, "snapshot_detail_failed"),
+        },
+        CheckpointAction::Inspect => match state.snapshots.inspect(profile, snapshot_id).await {
+            Ok(inspection) => (StatusCode::OK, Json(inspection)).into_response(),
+            Err(error) => data_error_response(error, "snapshot_inspect_failed"),
+        },
+        _ => data_error_response(
+            io::Error::new(io::ErrorKind::InvalidInput, "invalid snapshot read action"),
+            "checkpoint_invalid",
+        ),
     }
 }
 
 async fn checkpoint_restore(state: AppState, id: String) -> axum::response::Response {
     let lifecycle = state.supervisor.acquire_lifecycle().await;
-    if let Err(error) = settle_checkpoint_restore(&state).await {
-        return data_error_response(
-            io::Error::other(error.to_string()),
-            "checkpoint_recovery_failed",
-        );
+    if let Err(response) = ensure_checkpoint_mutation_ready(&state).await {
+        return response;
     }
+    let update_gate = match state.updater.try_acquire_gate() {
+        Ok(gate) => gate,
+        Err(error) => return update_error_response(error),
+    };
     if let Err(response) = ensure_harness_selection_quiescent(
         &state,
         &lifecycle,
@@ -1064,7 +1306,7 @@ async fn checkpoint_restore(state: AppState, id: String) -> axum::response::Resp
             return data_error_response(error, code);
         }
     };
-    let intent = CheckpointRestoreIntent {
+    let mut intent = CheckpointRestoreIntent {
         checkpoint_id: checkpoint.id.clone(),
         previous_profiles,
         previous_current_release: previous_releases.current_release,
@@ -1072,7 +1314,53 @@ async fn checkpoint_restore(state: AppState, id: String) -> axum::response::Resp
         target_profiles,
         target_current_release: target_releases.current_release,
         target_last_known_good: target_releases.last_known_good,
+        snapshot: None,
     };
+    if let Some(reference) = checkpoint.snapshot.as_ref() {
+        let (result_tx, result_rx) = tokio::sync::oneshot::channel();
+        let owner_state = state.clone();
+        let checkpoint_for_owner = checkpoint.clone();
+        let snapshot_id = reference.snapshot_id.clone();
+        tokio::spawn(async move {
+            let result = complete_content_checkpoint_restore(
+                owner_state,
+                &mut intent,
+                checkpoint_for_owner,
+                snapshot_id,
+            )
+            .await;
+            drop(update_gate);
+            drop(lifecycle);
+            let _ = result_tx.send(result);
+        });
+        return match result_rx.await {
+            Ok(Ok((checkpoint, None))) => (
+                StatusCode::OK,
+                Json(CheckpointRestoreResponse::content(
+                    checkpoint,
+                    true,
+                    CheckpointContentState::Committed,
+                    None,
+                )),
+            )
+                .into_response(),
+            Ok(Ok((checkpoint, Some(status)))) => (
+                StatusCode::ACCEPTED,
+                Json(CheckpointRestoreResponse::content(
+                    checkpoint,
+                    false,
+                    status.state.clone(),
+                    Some(status),
+                )),
+            )
+                .into_response(),
+            Ok(Err(error)) => data_error_response(error, "checkpoint_restore_failed"),
+            Err(_) => data_error_response(
+                io::Error::other("checkpoint restore owner exited without a result"),
+                "checkpoint_restore_failed",
+            ),
+        };
+    }
     if let Err(error) = state.checkpoint_restores.begin(intent.clone()) {
         return data_error_response(error, "checkpoint_restore_journal_failed");
     }
@@ -1084,6 +1372,7 @@ async fn checkpoint_restore(state: AppState, id: String) -> axum::response::Resp
     let owner_state = state.clone();
     tokio::spawn(async move {
         let result = complete_checkpoint_restore(owner_state, intent).await;
+        drop(update_gate);
         drop(lifecycle);
         let _ = result_tx.send(result);
     });
@@ -1098,6 +1387,503 @@ async fn checkpoint_restore(state: AppState, id: String) -> axum::response::Resp
             io::Error::other("checkpoint restore owner exited without a result"),
             "checkpoint_state_persistence_failed",
         ),
+    }
+}
+
+async fn complete_content_checkpoint_restore(
+    state: AppState,
+    intent: &mut CheckpointRestoreIntent,
+    checkpoint: nexus_protocol::CheckpointManifest,
+    snapshot_id: String,
+) -> io::Result<(
+    nexus_protocol::CheckpointManifest,
+    Option<nexus_protocol::CheckpointRestoreStatus>,
+)> {
+    let lease = state
+        .snapshots
+        .acquire(intent.target_profiles.active_profile.clone())
+        .await?;
+    let ticket = lease.prepare(snapshot_id).await?;
+    intent.snapshot = Some(snapshots::binding_for(&lease, ticket.clone()));
+    if let Err(error) = state.checkpoint_restores.begin(intent.clone()) {
+        let rollback = lease.rollback(ticket).await;
+        return Err(checkpoint_transaction_error(error, rollback.map(|_| ())));
+    }
+
+    let outcome = match lease.apply(ticket.clone()).await {
+        Ok(outcome) => outcome,
+        Err(error) => {
+            return pending_content_restore(&state, intent, checkpoint, error, None);
+        }
+    };
+    let outcome = if outcome.materialization_pending {
+        match run_profile_materialization(&state, &lease, &ticket).await {
+            Ok(()) => match lease.mark_materialized(ticket.clone()).await {
+                Ok(outcome) => outcome,
+                Err(error) => {
+                    return pending_content_restore(
+                        &state,
+                        intent,
+                        checkpoint,
+                        error,
+                        Some(&outcome),
+                    );
+                }
+            },
+            Err(error) => {
+                return pending_content_restore(&state, intent, checkpoint, error, Some(&outcome));
+            }
+        }
+    } else {
+        outcome
+    };
+
+    if let Err(primary) = apply_checkpoint_target_selection(&state, intent).await {
+        let content_rollback = lease.rollback(ticket.clone()).await.map(|_| ());
+        let selection_rollback = rollback_checkpoint_selection(&state, intent).await;
+        let rollback = combine_results(content_rollback, selection_rollback).and_then(|()| {
+            state
+                .checkpoint_restores
+                .clear(CheckpointRestorePhase::Prepared, intent)
+        });
+        return Err(checkpoint_transaction_error(primary, rollback));
+    }
+
+    if let Err(primary) = mark_checkpoint_committed(&state, intent) {
+        match state.checkpoint_restores.load() {
+            Ok(Some(journal))
+                if journal.intent == *intent
+                    && journal.phase == CheckpointRestorePhase::Committed => {}
+            Ok(Some(journal))
+                if journal.intent == *intent
+                    && journal.phase == CheckpointRestorePhase::Prepared =>
+            {
+                let content_rollback = lease.rollback(ticket.clone()).await.map(|_| ());
+                let selection_rollback = rollback_checkpoint_selection(&state, intent).await;
+                let rollback =
+                    combine_results(content_rollback, selection_rollback).and_then(|()| {
+                        state
+                            .checkpoint_restores
+                            .clear(CheckpointRestorePhase::Prepared, intent)
+                    });
+                return Err(checkpoint_transaction_error(primary, rollback));
+            }
+            Ok(_) => return Err(primary),
+            Err(inspection) => {
+                return Err(io::Error::new(
+                    primary.kind(),
+                    format!("{primary}; cannot inspect checkpoint commit outcome: {inspection}"),
+                ));
+            }
+        }
+    }
+
+    match lease.commit(ticket).await {
+        Ok(_) => {
+            state
+                .checkpoint_restores
+                .clear(CheckpointRestorePhase::Committed, intent)?;
+            Ok((checkpoint, None))
+        }
+        Err(error) => pending_content_restore(&state, intent, checkpoint, error, Some(&outcome)),
+    }
+}
+
+fn pending_content_restore(
+    state: &AppState,
+    intent: &CheckpointRestoreIntent,
+    checkpoint: nexus_protocol::CheckpointManifest,
+    error: io::Error,
+    outcome: Option<&nexus_snapshots::RestoreOutcome>,
+) -> io::Result<(
+    nexus_protocol::CheckpointManifest,
+    Option<nexus_protocol::CheckpointRestoreStatus>,
+)> {
+    let journal = state.checkpoint_restores.load()?.ok_or_else(|| {
+        io::Error::new(
+            io::ErrorKind::NotFound,
+            "content restore failed after its outer journal disappeared",
+        )
+    })?;
+    let diagnostic = bounded_checkpoint_diagnostic(&error);
+    state
+        .checkpoint_restores
+        .record_error(journal.phase, intent, diagnostic)?;
+    let journal = state
+        .checkpoint_restores
+        .load()?
+        .ok_or_else(|| io::Error::other("content restore journal disappeared"))?;
+    Ok((checkpoint, snapshots::restore_status(&journal, outcome)))
+}
+
+async fn run_profile_materialization(
+    state: &AppState,
+    lease: &snapshots::SnapshotLease,
+    ticket: &nexus_snapshots::RestoreTicket,
+) -> io::Result<()> {
+    let paths = state.paths.clone();
+    let dsh_home = lease.store().dsh_home().to_path_buf();
+    let profile = ticket.profile_name.clone();
+    tokio::task::spawn_blocking(move || dsh::materialize_profile(&paths, &dsh_home, &profile))
+        .await
+        .map_err(|error| io::Error::other(format!("materialization owner failed: {error}")))?
+}
+
+async fn apply_checkpoint_target_selection(
+    state: &AppState,
+    intent: &CheckpointRestoreIntent,
+) -> io::Result<()> {
+    state.releases.restore_release_pointers(
+        intent.target_current_release.as_deref(),
+        intent.target_last_known_good.as_deref(),
+    )?;
+    state.profiles.write(&intent.target_profiles)?;
+    let profile = intent.target_profiles.active_profile.clone();
+    let release = intent.target_current_release.clone();
+    update_agent_state_inner(
+        state,
+        move |current| {
+            current.set_profile(profile);
+            current.set_release(release);
+        },
+        true,
+    )
+    .await
+    .map(|_| ())
+    .map_err(|error| io::Error::other(error.to_string()))
+}
+
+fn mark_checkpoint_committed(state: &AppState, intent: &CheckpointRestoreIntent) -> io::Result<()> {
+    let result = state.checkpoint_restores.mark_committed(intent);
+    #[cfg(test)]
+    let result = match result {
+        Ok(())
+            if state
+                .checkpoint_commit_result_failure
+                .swap(false, std::sync::atomic::Ordering::SeqCst) =>
+        {
+            Err(io::Error::other(
+                "injected error after durable Committed journal publication",
+            ))
+        }
+        result => result,
+    };
+    result
+}
+
+async fn checkpoint_restore_retry(
+    state: AppState,
+    requested_id: Option<String>,
+) -> axum::response::Response {
+    let lifecycle = state.supervisor.acquire_lifecycle().await;
+    let update_gate = match state.updater.try_acquire_gate() {
+        Ok(gate) => gate,
+        Err(error) => return update_error_response(error),
+    };
+    if let Err(response) = ensure_harness_selection_quiescent(
+        &state,
+        &lifecycle,
+        "checkpoint_restore_conflict",
+        "cannot retry a restore until Harness is positively stopped and unowned",
+    )
+    .await
+    {
+        return response;
+    }
+    let journal = match load_requested_content_restore(&state, requested_id.as_deref()) {
+        Ok(journal) => journal,
+        Err(error) => return data_error_response(error, "checkpoint_restore_not_pending"),
+    };
+    let checkpoint = match state.checkpoints.get(&journal.intent.checkpoint_id) {
+        Ok(checkpoint) => checkpoint,
+        Err(error) => return data_error_response(error, "checkpoint_not_found"),
+    };
+    let (result_tx, result_rx) = tokio::sync::oneshot::channel();
+    let owner_state = state.clone();
+    tokio::spawn(async move {
+        let result = resume_content_checkpoint_restore(owner_state, journal, checkpoint).await;
+        drop(update_gate);
+        drop(lifecycle);
+        let _ = result_tx.send(result);
+    });
+    content_restore_http_result(result_rx.await)
+}
+
+async fn resume_content_checkpoint_restore(
+    state: AppState,
+    journal: CheckpointRestoreJournal,
+    checkpoint: nexus_protocol::CheckpointManifest,
+) -> io::Result<(
+    nexus_protocol::CheckpointManifest,
+    Option<nexus_protocol::CheckpointRestoreStatus>,
+)> {
+    let binding = journal.intent.snapshot.as_ref().ok_or_else(|| {
+        io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "legacy restore has no content ticket",
+        )
+    })?;
+    let lease = state.snapshots.acquire_bound(binding).await?;
+    if journal.phase == CheckpointRestorePhase::Committed {
+        validate_committed_checkpoint_restore(&journal, &state.profiles, &state.releases)?;
+        return match lease.commit(binding.ticket.clone()).await {
+            Ok(_) => {
+                state
+                    .checkpoint_restores
+                    .clear(CheckpointRestorePhase::Committed, &journal.intent)?;
+                Ok((checkpoint, None))
+            }
+            Err(error) => pending_content_restore(&state, &journal.intent, checkpoint, error, None),
+        };
+    }
+
+    let mut outcome = match lease.resume_apply(binding.ticket.clone()).await {
+        Ok(outcome) => outcome,
+        Err(error) => {
+            return pending_content_restore(&state, &journal.intent, checkpoint, error, None);
+        }
+    };
+    if outcome.materialization_pending {
+        if let Err(error) = run_profile_materialization(&state, &lease, &binding.ticket).await {
+            return pending_content_restore(
+                &state,
+                &journal.intent,
+                checkpoint,
+                error,
+                Some(&outcome),
+            );
+        }
+        outcome = match lease.mark_materialized(binding.ticket.clone()).await {
+            Ok(outcome) => outcome,
+            Err(error) => {
+                return pending_content_restore(
+                    &state,
+                    &journal.intent,
+                    checkpoint,
+                    error,
+                    Some(&outcome),
+                );
+            }
+        };
+    }
+    if let Err(primary) = apply_checkpoint_target_selection(&state, &journal.intent).await {
+        let content_rollback = lease.rollback(binding.ticket.clone()).await.map(|_| ());
+        let selection_rollback = rollback_checkpoint_selection(&state, &journal.intent).await;
+        let rollback = combine_results(content_rollback, selection_rollback).and_then(|()| {
+            state
+                .checkpoint_restores
+                .clear(CheckpointRestorePhase::Prepared, &journal.intent)
+        });
+        return Err(checkpoint_transaction_error(primary, rollback));
+    }
+    if let Err(primary) = mark_checkpoint_committed(&state, &journal.intent) {
+        match state.checkpoint_restores.load() {
+            Ok(Some(current))
+                if current.intent == journal.intent
+                    && current.phase == CheckpointRestorePhase::Committed => {}
+            Ok(Some(current))
+                if current.intent == journal.intent
+                    && current.phase == CheckpointRestorePhase::Prepared =>
+            {
+                let content_rollback = lease.rollback(binding.ticket.clone()).await.map(|_| ());
+                let selection_rollback =
+                    rollback_checkpoint_selection(&state, &journal.intent).await;
+                let rollback =
+                    combine_results(content_rollback, selection_rollback).and_then(|()| {
+                        state
+                            .checkpoint_restores
+                            .clear(CheckpointRestorePhase::Prepared, &journal.intent)
+                    });
+                return Err(checkpoint_transaction_error(primary, rollback));
+            }
+            Ok(_) => return Err(primary),
+            Err(inspection) => {
+                return Err(io::Error::new(
+                    primary.kind(),
+                    format!("{primary}; cannot inspect checkpoint commit outcome: {inspection}"),
+                ));
+            }
+        }
+    }
+    match lease.commit(binding.ticket.clone()).await {
+        Ok(_) => {
+            state
+                .checkpoint_restores
+                .clear(CheckpointRestorePhase::Committed, &journal.intent)?;
+            Ok((checkpoint, None))
+        }
+        Err(error) => {
+            pending_content_restore(&state, &journal.intent, checkpoint, error, Some(&outcome))
+        }
+    }
+}
+
+async fn checkpoint_restore_abort(
+    state: AppState,
+    requested_id: Option<String>,
+) -> axum::response::Response {
+    let lifecycle = state.supervisor.acquire_lifecycle().await;
+    let update_gate = match state.updater.try_acquire_gate() {
+        Ok(gate) => gate,
+        Err(error) => return update_error_response(error),
+    };
+    if let Err(response) = ensure_harness_selection_quiescent(
+        &state,
+        &lifecycle,
+        "checkpoint_restore_conflict",
+        "cannot abort a restore until Harness is positively stopped and unowned",
+    )
+    .await
+    {
+        return response;
+    }
+    let journal = match load_requested_content_restore(&state, requested_id.as_deref()) {
+        Ok(journal) if journal.phase == CheckpointRestorePhase::Prepared => journal,
+        Ok(_) => {
+            return api_error_response(
+                StatusCode::CONFLICT,
+                "checkpoint_restore_committed",
+                "a committed content restore can only be finished with retry",
+            )
+        }
+        Err(error) => return data_error_response(error, "checkpoint_restore_not_pending"),
+    };
+    let checkpoint = match state.checkpoints.get(&journal.intent.checkpoint_id) {
+        Ok(checkpoint) => checkpoint,
+        Err(error) => return data_error_response(error, "checkpoint_not_found"),
+    };
+    let (result_tx, result_rx) = tokio::sync::oneshot::channel();
+    let owner_state = state.clone();
+    tokio::spawn(async move {
+        let result = async {
+            let binding = journal.intent.snapshot.as_ref().ok_or_else(|| {
+                io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    "legacy restore has no content ticket",
+                )
+            })?;
+            let lease = owner_state.snapshots.acquire_bound(binding).await?;
+            lease.rollback(binding.ticket.clone()).await?;
+            rollback_checkpoint_selection(&owner_state, &journal.intent).await?;
+            owner_state
+                .checkpoint_restores
+                .clear(CheckpointRestorePhase::Prepared, &journal.intent)?;
+            Ok::<_, io::Error>(checkpoint)
+        }
+        .await;
+        drop(update_gate);
+        drop(lifecycle);
+        let _ = result_tx.send(result);
+    });
+    match result_rx.await {
+        Ok(Ok(checkpoint)) => (
+            StatusCode::OK,
+            Json(CheckpointRestoreResponse::content(
+                checkpoint,
+                false,
+                CheckpointContentState::RolledBack,
+                None,
+            )),
+        )
+            .into_response(),
+        Ok(Err(error)) => data_error_response(error, "checkpoint_restore_abort_failed"),
+        Err(_) => data_error_response(
+            io::Error::other("checkpoint abort owner exited without a result"),
+            "checkpoint_restore_abort_failed",
+        ),
+    }
+}
+
+fn content_restore_http_result(
+    result: Result<
+        io::Result<(
+            nexus_protocol::CheckpointManifest,
+            Option<nexus_protocol::CheckpointRestoreStatus>,
+        )>,
+        tokio::sync::oneshot::error::RecvError,
+    >,
+) -> axum::response::Response {
+    match result {
+        Ok(Ok((checkpoint, None))) => (
+            StatusCode::OK,
+            Json(CheckpointRestoreResponse::content(
+                checkpoint,
+                true,
+                CheckpointContentState::Committed,
+                None,
+            )),
+        )
+            .into_response(),
+        Ok(Ok((checkpoint, Some(status)))) => (
+            StatusCode::ACCEPTED,
+            Json(CheckpointRestoreResponse::content(
+                checkpoint,
+                false,
+                status.state.clone(),
+                Some(status),
+            )),
+        )
+            .into_response(),
+        Ok(Err(error)) => data_error_response(error, "checkpoint_restore_retry_failed"),
+        Err(_) => data_error_response(
+            io::Error::other("checkpoint retry owner exited without a result"),
+            "checkpoint_restore_retry_failed",
+        ),
+    }
+}
+
+fn load_requested_content_restore(
+    state: &AppState,
+    requested_id: Option<&str>,
+) -> io::Result<CheckpointRestoreJournal> {
+    let journal = state.checkpoint_restores.load()?.ok_or_else(|| {
+        io::Error::new(io::ErrorKind::NotFound, "no checkpoint restore is pending")
+    })?;
+    let binding = journal.intent.snapshot.as_ref().ok_or_else(|| {
+        io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "the pending legacy restore has no content retry or abort action",
+        )
+    })?;
+    if requested_id
+        .is_some_and(|id| id != journal.intent.checkpoint_id && id != binding.ticket.ticket_id)
+    {
+        return Err(io::Error::new(
+            io::ErrorKind::NotFound,
+            "requested restore does not match the pending transaction",
+        ));
+    }
+    Ok(journal)
+}
+
+fn bounded_checkpoint_diagnostic(error: &io::Error) -> String {
+    let mut text: String = error
+        .to_string()
+        .chars()
+        .map(|character| {
+            if character.is_control() {
+                ' '
+            } else {
+                character
+            }
+        })
+        .take(4096)
+        .collect();
+    if text.is_empty() {
+        text = "checkpoint restore failed".to_owned();
+    }
+    text
+}
+
+fn combine_results(first: io::Result<()>, second: io::Result<()>) -> io::Result<()> {
+    match (first, second) {
+        (Ok(()), Ok(())) => Ok(()),
+        (Err(first), Ok(())) => Err(first),
+        (Ok(()), Err(second)) => Err(second),
+        (Err(first), Err(second)) => Err(io::Error::new(
+            first.kind(),
+            format!("{first}; selection rollback also failed: {second}"),
+        )),
     }
 }
 
@@ -1208,6 +1994,16 @@ async fn rollback_prepared_checkpoint(
     state: &AppState,
     intent: &CheckpointRestoreIntent,
 ) -> io::Result<()> {
+    rollback_checkpoint_selection(state, intent).await?;
+    state
+        .checkpoint_restores
+        .clear(CheckpointRestorePhase::Prepared, intent)
+}
+
+async fn rollback_checkpoint_selection(
+    state: &AppState,
+    intent: &CheckpointRestoreIntent,
+) -> io::Result<()> {
     let mut failures = Vec::new();
     if let Err(error) = state.releases.restore_release_pointers(
         intent.previous_current_release.as_deref(),
@@ -1234,9 +2030,7 @@ async fn rollback_prepared_checkpoint(
     if !failures.is_empty() {
         return Err(io::Error::other(failures.join("; ")));
     }
-    state
-        .checkpoint_restores
-        .clear(CheckpointRestorePhase::Prepared, intent)
+    Ok(())
 }
 
 fn checkpoint_transaction_error(primary: io::Error, rollback: io::Result<()>) -> io::Error {
@@ -1323,10 +2117,8 @@ mod runtime_route_tests {
 
     #[tokio::test]
     async fn runtime_route_returns_versioned_tool_list() {
-        let root = std::env::temp_dir().join(format!(
-            "nexus-agent-runtime-route-{}",
-            std::process::id()
-        ));
+        let root =
+            std::env::temp_dir().join(format!("nexus-agent-runtime-route-{}", std::process::id()));
         let paths = NexusPaths::from_root(root.clone());
         std::fs::create_dir_all(paths.root.join("runtimes")).expect("runtime root creates");
 
@@ -1386,6 +2178,9 @@ async fn release_control(
     match command.action {
         ReleaseAction::List | ReleaseAction::Current => release_list(State(state)).await,
         ReleaseAction::Register => {
+            if let Err(response) = ensure_checkpoint_mutation_ready(&state).await {
+                return response;
+            }
             let Some(id) = command.id.as_deref() else {
                 return data_error_response(
                     io::Error::new(io::ErrorKind::InvalidInput, "release id is required"),
@@ -1419,12 +2214,13 @@ async fn release_control(
                 );
             };
             let lifecycle = state.supervisor.acquire_lifecycle().await;
-            if let Err(error) = settle_checkpoint_restore(&state).await {
-                return data_error_response(
-                    io::Error::other(error.to_string()),
-                    "checkpoint_recovery_failed",
-                );
+            if let Err(response) = ensure_checkpoint_mutation_ready(&state).await {
+                return response;
             }
+            let _update_gate = match state.updater.try_acquire_gate() {
+                Ok(gate) => gate,
+                Err(error) => return update_error_response(error),
+            };
             if let Err(response) = ensure_harness_selection_quiescent(
                 &state,
                 &lifecycle,
@@ -1449,12 +2245,13 @@ async fn release_control(
                 );
             };
             let lifecycle = state.supervisor.acquire_lifecycle().await;
-            if let Err(error) = settle_checkpoint_restore(&state).await {
-                return data_error_response(
-                    io::Error::other(error.to_string()),
-                    "checkpoint_recovery_failed",
-                );
+            if let Err(response) = ensure_checkpoint_mutation_ready(&state).await {
+                return response;
             }
+            let _update_gate = match state.updater.try_acquire_gate() {
+                Ok(gate) => gate,
+                Err(error) => return update_error_response(error),
+            };
             if let Err(response) = ensure_harness_selection_quiescent(
                 &state,
                 &lifecycle,
@@ -1479,12 +2276,13 @@ async fn release_control(
         }
         ReleaseAction::Rollback => {
             let lifecycle = state.supervisor.acquire_lifecycle().await;
-            if let Err(error) = settle_checkpoint_restore(&state).await {
-                return data_error_response(
-                    io::Error::other(error.to_string()),
-                    "checkpoint_recovery_failed",
-                );
+            if let Err(response) = ensure_checkpoint_mutation_ready(&state).await {
+                return response;
             }
+            let _update_gate = match state.updater.try_acquire_gate() {
+                Ok(gate) => gate,
+                Err(error) => return update_error_response(error),
+            };
             if let Err(response) = ensure_harness_selection_quiescent(
                 &state,
                 &lifecycle,
@@ -1550,14 +2348,19 @@ async fn update_control(
 ) -> axum::response::Response {
     match command.action {
         UpdateAction::Status => update_status(State(state)).await,
-        UpdateAction::Install => match state
-            .updater
-            .install(command.release_id, command.version)
-            .await
-        {
-            Ok(response) => (StatusCode::CREATED, Json(response)).into_response(),
-            Err(error) => update_error_response(error),
-        },
+        UpdateAction::Install => {
+            if let Err(response) = ensure_checkpoint_mutation_ready(&state).await {
+                return response;
+            }
+            match state
+                .updater
+                .install(command.release_id, command.version)
+                .await
+            {
+                Ok(response) => (StatusCode::CREATED, Json(response)).into_response(),
+                Err(error) => update_error_response(error),
+            }
+        }
         UpdateAction::Switch => {
             let Some(tag) = command.tag.clone() else {
                 return data_error_response(
@@ -1566,6 +2369,9 @@ async fn update_control(
                 );
             };
             let lifecycle = state.supervisor.acquire_lifecycle().await;
+            if let Err(response) = ensure_checkpoint_mutation_ready(&state).await {
+                return response;
+            }
             if let Err(response) = ensure_harness_selection_quiescent(
                 &state,
                 &lifecycle,
@@ -1650,14 +2456,20 @@ async fn diagnostics_control(
 ) -> axum::response::Response {
     match command.action {
         DiagnosticsAction::Status => diagnostics_status(State(state)).await,
-        DiagnosticsAction::Collect => match state.diagnostics.collect(command.note) {
-            Ok(bundle) => (
-                StatusCode::CREATED,
-                Json(DiagnosticsResponse::new(vec![bundle])),
-            )
-                .into_response(),
-            Err(error) => data_error_response(error, "diagnostics_collect_failed"),
-        },
+        DiagnosticsAction::Collect => {
+            let _lifecycle = state.supervisor.acquire_lifecycle().await;
+            if let Err(response) = ensure_checkpoint_mutation_ready(&state).await {
+                return response;
+            }
+            match state.diagnostics.collect(command.note) {
+                Ok(bundle) => (
+                    StatusCode::CREATED,
+                    Json(DiagnosticsResponse::new(vec![bundle])),
+                )
+                    .into_response(),
+                Err(error) => data_error_response(error, "diagnostics_collect_failed"),
+            }
+        }
     }
 }
 
@@ -1688,11 +2500,8 @@ async fn config_control(
                 );
             };
             let lifecycle = state.supervisor.acquire_lifecycle().await;
-            if let Err(error) = settle_checkpoint_restore(&state).await {
-                return data_error_response(
-                    io::Error::other(error.to_string()),
-                    "checkpoint_recovery_failed",
-                );
+            if let Err(response) = ensure_checkpoint_mutation_ready(&state).await {
+                return response;
             }
             if let Err(response) = ensure_harness_stopped(&state, &lifecycle).await {
                 return response;
@@ -1724,11 +2533,8 @@ async fn config_control(
         }
         ConfigAction::ClearHarness => {
             let lifecycle = state.supervisor.acquire_lifecycle().await;
-            if let Err(error) = settle_checkpoint_restore(&state).await {
-                return data_error_response(
-                    io::Error::other(error.to_string()),
-                    "checkpoint_recovery_failed",
-                );
+            if let Err(response) = ensure_checkpoint_mutation_ready(&state).await {
+                return response;
             }
             if let Err(response) = ensure_harness_stopped(&state, &lifecycle).await {
                 return response;
@@ -1752,6 +2558,9 @@ async fn config_control(
                 Ok(update) => update,
                 Err(error) => return data_error_response(error, "config_invalid"),
             };
+            if let Err(response) = ensure_checkpoint_mutation_ready(&state).await {
+                return response;
+            }
             let _update_gate = match state.updater.try_acquire_gate() {
                 Ok(gate) => gate,
                 Err(error) => return update_error_response(error),
@@ -1765,6 +2574,9 @@ async fn config_control(
             })
         }
         ConfigAction::ClearUpdate => {
+            if let Err(response) = ensure_checkpoint_mutation_ready(&state).await {
+                return response;
+            }
             let _update_gate = match state.updater.try_acquire_gate() {
                 Ok(gate) => gate,
                 Err(error) => return update_error_response(error),
@@ -1796,11 +2608,8 @@ async fn config_control(
                 None
             };
             let lifecycle = state.supervisor.acquire_lifecycle().await;
-            if let Err(error) = settle_checkpoint_restore(&state).await {
-                return data_error_response(
-                    io::Error::other(error.to_string()),
-                    "checkpoint_recovery_failed",
-                );
+            if let Err(response) = ensure_checkpoint_mutation_ready(&state).await {
+                return response;
             }
             if let Err(response) = ensure_harness_stopped(&state, &lifecycle).await {
                 return response;
@@ -1817,6 +2626,37 @@ async fn config_control(
                 Ok(())
             })
         }
+        ConfigAction::SetSnapshots | ConfigAction::ClearSnapshots => {
+            let snapshots = if command.action == ConfigAction::SetSnapshots {
+                let Some(payload) = command.snapshots else {
+                    return data_error_response(
+                        io::Error::new(
+                            io::ErrorKind::InvalidInput,
+                            "snapshot configuration is required",
+                        ),
+                        "config_invalid",
+                    );
+                };
+                Some(SnapshotsConfig::from_payload(payload))
+            } else {
+                None
+            };
+            let lifecycle = state.supervisor.acquire_lifecycle().await;
+            if let Err(response) = ensure_checkpoint_mutation_ready(&state).await {
+                return response;
+            }
+            if let Err(response) = ensure_harness_stopped(&state, &lifecycle).await {
+                return response;
+            }
+            let _update_gate = match state.updater.try_acquire_gate() {
+                Ok(gate) => gate,
+                Err(error) => return update_error_response(error),
+            };
+            transact_config_response(&state, move |document| {
+                document.snapshots = snapshots;
+                Ok(())
+            })
+        }
     }
 }
 
@@ -1826,6 +2666,7 @@ fn config_response(document: NexusConfigFile) -> ConfigResponse {
         .as_ref()
         .and_then(|harness| harness.readiness_url.as_ref())
         .is_some_and(|url| redact_config_url(Some(url.clone())).as_deref() != Some(url.as_str()));
+    let snapshots = document.snapshots.map(|snapshots| snapshots.to_payload());
     ConfigResponse::new(
         document.harness.map(|harness| {
             let mut payload = harness.to_payload();
@@ -1841,6 +2682,7 @@ fn config_response(document: NexusConfigFile) -> ConfigResponse {
         }),
     )
     .with_runtime(document.runtime.map(|runtime| runtime.to_payload()))
+    .with_snapshots(snapshots)
     .with_harness_readiness_url_redacted(harness_readiness_url_redacted)
 }
 
@@ -1879,6 +2721,7 @@ fn config_response_for_paths(
         update: load_update_spec(paths)?.or(document.update),
         releases: None,
         runtime: document.runtime,
+        snapshots: document.snapshots,
     };
     Ok(config_response(effective)
         .with_environment_overrides(harness_env_override, update_env_override))
@@ -2399,7 +3242,7 @@ mod cors_tests {
 #[cfg(test)]
 mod checkpoint_tests {
     use std::{
-        fs,
+        fs, io,
         path::{Path, PathBuf},
         sync::{atomic::AtomicU64, Arc},
         time::Duration,
@@ -2408,19 +3251,372 @@ mod checkpoint_tests {
     use nexus_core::{
         data_root_identity, AgentState, CheckpointRestoreIntent, CheckpointRestoreJournalStore,
         CheckpointStore, ConfigStore, DiagnosticsStore, HarnessLaunchSpec, NexusConfigFile,
-        NexusPaths, NexusStateSnapshot, ProfileCatalog, ProfileStore, ReleaseStore,
+        NexusPaths, NexusStateSnapshot, ProfileCatalog, ProfileStore, ReleaseStore, RuntimeConfig,
+        RuntimePin,
     };
-    use nexus_protocol::{AgentLifecycleState, HarnessState};
+    use nexus_protocol::{
+        AgentLifecycleState, CheckpointCreateResponse, CheckpointRestoreResponse, HarnessState,
+        RuntimeInstallMode, RuntimeOwnership, RuntimeSource,
+    };
     use tokio::{
         sync::{oneshot, watch, Mutex, RwLock},
         time::{sleep, timeout},
     };
 
     use super::{
-        checkpoint_create, checkpoint_restore, execute_harness_action, DEFAULT_MAX_RELEASE_SLOTS,
-        recover_checkpoint_restore_startup, sync_harness_state, update_agent_state, AppState,
-        CheckpointTransitionGate, HarnessSupervisor, UpdateExecutor,
+        checkpoint_create, checkpoint_restore, checkpoint_restore_abort, checkpoint_restore_retry,
+        execute_harness_action, recover_checkpoint_restore_startup, snapshots, sync_harness_state,
+        update_agent_state, AppState, CheckpointTransitionGate, HarnessSupervisor, UpdateExecutor,
+        DEFAULT_MAX_RELEASE_SLOTS,
     };
+
+    fn write_profile_file(path: &Path, content: &str) {
+        if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent).expect("synthetic profile parent creates");
+        }
+        fs::write(path, content).expect("synthetic profile file writes");
+    }
+
+    fn executable_on_path(name: &str) -> Option<PathBuf> {
+        std::env::var_os("PATH").and_then(|path| {
+            std::env::split_paths(&path)
+                .map(|directory| directory.join(name))
+                .find(|candidate| candidate.is_file())
+        })
+    }
+
+    fn content_test_state(label: &str) -> (AppState, PathBuf) {
+        let root = std::env::temp_dir().join(format!(
+            "nexus-agent-content-{label}-{}-{}",
+            std::process::id(),
+            nexus_core::unix_time_nanos_for_update()
+        ));
+        let paths = NexusPaths::from_root(root.join("nexus-data"));
+        paths
+            .ensure_directories()
+            .expect("Nexus directories create");
+        let dsh_home = root.join("dsh-home");
+        let profile = dsh_home.join("profiles/demo");
+        write_profile_file(
+            &profile.join("package.json"),
+            r#"{"name":"demo","version":"1.0.0","dependencies":{}}"#,
+        );
+        write_profile_file(&profile.join("pnpm-lock.yaml"), "lockfileVersion: '9.0'\n");
+        write_profile_file(&profile.join("pnpm-workspace.yaml"), "packages: []\n");
+        write_profile_file(&profile.join("cordis.patch.yml"), "[]\n");
+        write_profile_file(
+            &profile.join(".dsh-market/state.json"),
+            r#"{"installed":[]}"#,
+        );
+        write_profile_file(
+            &dsh_home.join("settings.yaml"),
+            "provider:\n  apiKey: DUMMY-OLD-SECRET\n  mode: old\n",
+        );
+        write_profile_file(&dsh_home.join("cordis.patch.yml"), "[]\n");
+        let profiles = ProfileStore::new(paths.clone());
+        profiles
+            .write(
+                &ProfileCatalog::new("demo", vec!["demo".to_owned()]).expect("profile validates"),
+            )
+            .expect("profile catalog writes");
+        let config = ConfigStore::new(paths.clone());
+        config
+            .write(&NexusConfigFile::default())
+            .expect("empty config writes");
+        let releases = ReleaseStore::new(paths.clone()).with_max_slots(DEFAULT_MAX_RELEASE_SLOTS);
+        let supervisor =
+            HarnessSupervisor::with_graceful_wait(paths.clone(), Duration::from_millis(100))
+                .expect("supervisor creates");
+        let mut runtime = AgentState::starting();
+        runtime.mark_running();
+        runtime.set_profile("demo".to_owned());
+        runtime.set_harness(HarnessState::Stopped);
+        let (shutdown, _) = watch::channel(false);
+        (
+            AppState {
+                paths: paths.clone(),
+                runtime: Arc::new(RwLock::new(runtime)),
+                agent_revision: Arc::new(AtomicU64::new(0)),
+                profiles,
+                checkpoints: CheckpointStore::new(paths.clone()),
+                checkpoint_restores: CheckpointRestoreJournalStore::new(paths.clone()),
+                releases: releases.clone(),
+                diagnostics: DiagnosticsStore::new(paths.clone()),
+                config,
+                updater: UpdateExecutor::new(paths.clone(), releases),
+                supervisor,
+                snapshots: snapshots::SnapshotCoordinator::new(paths.clone(), Ok(dsh_home.clone())),
+                harness_sync: Arc::new(Mutex::new(())),
+                checkpoint_transition_gate: Arc::new(Mutex::new(None)),
+                agent_persist_failure: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+                checkpoint_commit_result_failure: Arc::new(std::sync::atomic::AtomicBool::new(
+                    false,
+                )),
+                shutdown,
+                data_root_id: data_root_identity(&paths).expect("data root identity reads"),
+                instance_id: format!("content-{label}"),
+            },
+            root,
+        )
+    }
+
+    #[tokio::test]
+    async fn materialization_failure_stays_prepared_blocks_mutations_and_abort_rolls_back() {
+        let (state, root) = content_test_state("pending-abort");
+        let response = checkpoint_create(state.clone(), Some("before change".to_owned())).await;
+        assert_eq!(response.status(), axum::http::StatusCode::CREATED);
+        let body = axum::body::to_bytes(response.into_body(), 64 * 1024)
+            .await
+            .expect("checkpoint response reads");
+        assert!(!body
+            .windows(b"DUMMY-OLD-SECRET".len())
+            .any(|window| window == b"DUMMY-OLD-SECRET"));
+        let created: CheckpointCreateResponse =
+            serde_json::from_slice(&body).expect("checkpoint response parses");
+        assert!(created.checkpoint.snapshot.is_some());
+
+        let dsh_home = root.join("dsh-home");
+        let profile = dsh_home.join("profiles/demo");
+        write_profile_file(
+            &profile.join("package.json"),
+            r#"{"name":"demo","version":"2.0.0","dependencies":{"changed":"1"}}"#,
+        );
+        write_profile_file(
+            &dsh_home.join("settings.yaml"),
+            "provider:\n  apiKey: DUMMY-CURRENT-SECRET\n  mode: current\n",
+        );
+
+        let response = checkpoint_restore(state.clone(), created.checkpoint.id.clone()).await;
+        assert_eq!(response.status(), axum::http::StatusCode::ACCEPTED);
+        let body = axum::body::to_bytes(response.into_body(), 64 * 1024)
+            .await
+            .expect("pending response reads");
+        let pending: CheckpointRestoreResponse =
+            serde_json::from_slice(&body).expect("pending response parses");
+        let pending_status = pending.pending_restore.expect("pending status is explicit");
+        assert!(pending_status.materialization_pending);
+        assert!(pending_status.retryable);
+        assert!(pending_status.abortable);
+        assert_eq!(
+            state
+                .checkpoint_restores
+                .load()
+                .expect("pending journal reads")
+                .expect("Prepared remains")
+                .phase,
+            nexus_core::CheckpointRestorePhase::Prepared
+        );
+        assert!(fs::read_to_string(profile.join("package.json"))
+            .expect("applied package reads")
+            .contains("1.0.0"));
+        let applied_settings =
+            fs::read_to_string(dsh_home.join("settings.yaml")).expect("applied settings read");
+        assert!(applied_settings.contains("mode: old"));
+        assert!(applied_settings.contains("DUMMY-CURRENT-SECRET"));
+        assert!(!applied_settings.contains("DUMMY-OLD-SECRET"));
+
+        let blocked = checkpoint_create(state.clone(), Some("blocked".to_owned())).await;
+        assert_eq!(blocked.status(), axum::http::StatusCode::CONFLICT);
+        let response = checkpoint_restore_abort(state.clone(), Some(created.checkpoint.id)).await;
+        assert_eq!(response.status(), axum::http::StatusCode::OK);
+        assert!(state
+            .checkpoint_restores
+            .load()
+            .expect("journal reloads")
+            .is_none());
+        assert!(fs::read_to_string(profile.join("package.json"))
+            .expect("rolled-back package reads")
+            .contains("2.0.0"));
+        let rolled_back_settings =
+            fs::read_to_string(dsh_home.join("settings.yaml")).expect("rolled-back settings read");
+        assert!(rolled_back_settings.contains("mode: current"));
+        assert!(rolled_back_settings.contains("DUMMY-CURRENT-SECRET"));
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[tokio::test]
+    async fn retry_reuses_prepared_ticket_and_finishes_after_transient_pnpm_failure() {
+        let (state, root) = content_test_state("retry");
+        let fake_pnpm = root.join("fake-pnpm.js");
+        write_profile_file(
+            &fake_pnpm,
+            "require('fs').writeFileSync(require('path').join(process.cwd(), 'attempt.txt'), 'failed'); process.exit(19);\n",
+        );
+        let node = executable_on_path(if cfg!(windows) { "node.exe" } else { "node" })
+            .expect("test host provides Node required by the DSH runtime contract");
+        let mut config = state.config.load().expect("config loads");
+        config.runtime = Some(RuntimeConfig {
+            node: Some(RuntimePin {
+                path: node,
+                ownership: RuntimeOwnership::System,
+            }),
+            pnpm: Some(RuntimePin {
+                path: fake_pnpm.clone(),
+                ownership: RuntimeOwnership::System,
+            }),
+            git: None,
+            source: RuntimeSource::Official,
+            mode: RuntimeInstallMode::Portable,
+        });
+        state.config.write(&config).expect("runtime config writes");
+
+        let response = checkpoint_create(state.clone(), Some("retry source".to_owned())).await;
+        assert_eq!(response.status(), axum::http::StatusCode::CREATED);
+        let body = axum::body::to_bytes(response.into_body(), 64 * 1024)
+            .await
+            .expect("checkpoint response reads");
+        let created: CheckpointCreateResponse =
+            serde_json::from_slice(&body).expect("checkpoint response parses");
+        let profile = root.join("dsh-home/profiles/demo");
+        write_profile_file(
+            &profile.join("package.json"),
+            r#"{"name":"demo","version":"2.0.0","dependencies":{"changed":"1"}}"#,
+        );
+        let response = checkpoint_restore(state.clone(), created.checkpoint.id.clone()).await;
+        assert_eq!(response.status(), axum::http::StatusCode::ACCEPTED);
+        assert_eq!(
+            fs::read_to_string(profile.join("attempt.txt")).expect("failed attempt records"),
+            "failed"
+        );
+        let first = state
+            .checkpoint_restores
+            .load()
+            .expect("journal loads")
+            .expect("Prepared remains");
+        let ticket_id = first
+            .intent
+            .snapshot
+            .as_ref()
+            .expect("content binding remains")
+            .ticket
+            .ticket_id
+            .clone();
+
+        write_profile_file(
+            &fake_pnpm,
+            "require('fs').writeFileSync(require('path').join(process.cwd(), 'attempt.txt'), 'succeeded');\n",
+        );
+        let response = checkpoint_restore_retry(state.clone(), Some(ticket_id.clone())).await;
+        assert_eq!(response.status(), axum::http::StatusCode::OK);
+        assert!(state
+            .checkpoint_restores
+            .load()
+            .expect("journal reloads")
+            .is_none());
+        assert_eq!(
+            fs::read_to_string(profile.join("attempt.txt")).expect("successful retry records"),
+            "succeeded"
+        );
+        assert!(fs::read_to_string(profile.join("package.json"))
+            .expect("restored package reads")
+            .contains("1.0.0"));
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[tokio::test]
+    async fn startup_rolls_back_prepared_content_and_finishes_committed_content() {
+        let (state, root) = content_test_state("startup-content");
+        let response = checkpoint_create(state.clone(), Some("startup source".to_owned())).await;
+        let body = axum::body::to_bytes(response.into_body(), 64 * 1024)
+            .await
+            .expect("checkpoint response reads");
+        let checkpoint: CheckpointCreateResponse =
+            serde_json::from_slice(&body).expect("checkpoint response parses");
+        let snapshot_id = checkpoint
+            .checkpoint
+            .snapshot
+            .as_ref()
+            .expect("content checkpoint")
+            .snapshot_id
+            .clone();
+        let dsh_home = root.join("dsh-home");
+        let settings = dsh_home.join("settings.yaml");
+        let catalog = state.profiles.load().expect("profile catalog loads");
+        let base_intent = CheckpointRestoreIntent {
+            checkpoint_id: checkpoint.checkpoint.id.clone(),
+            previous_profiles: catalog.clone(),
+            previous_current_release: None,
+            previous_last_known_good: None,
+            target_profiles: catalog,
+            target_current_release: None,
+            target_last_known_good: None,
+            snapshot: None,
+        };
+
+        write_profile_file(
+            &settings,
+            "provider:\n  apiKey: DUMMY-CURRENT-SECRET\n  mode: current\n",
+        );
+        let lease = state
+            .snapshots
+            .acquire("demo".to_owned())
+            .await
+            .expect("snapshot owner acquires");
+        let ticket = lease
+            .prepare(snapshot_id.clone())
+            .await
+            .expect("restore prepares");
+        let mut prepared_intent = base_intent.clone();
+        prepared_intent.snapshot = Some(snapshots::binding_for(&lease, ticket.clone()));
+        state
+            .checkpoint_restores
+            .begin(prepared_intent.clone())
+            .expect("outer Prepared writes first");
+        lease.apply(ticket).await.expect("content applies");
+        drop(lease);
+        recover_checkpoint_restore_startup(
+            &state.checkpoint_restores,
+            &state.profiles,
+            &state.releases,
+            &state.snapshots,
+        )
+        .await
+        .expect("startup rolls Prepared back");
+        let rolled_back = fs::read_to_string(&settings).expect("rolled-back settings read");
+        assert!(rolled_back.contains("mode: current"));
+        assert!(rolled_back.contains("DUMMY-CURRENT-SECRET"));
+        assert!(state
+            .checkpoint_restores
+            .load()
+            .expect("journal loads")
+            .is_none());
+
+        let lease = state
+            .snapshots
+            .acquire("demo".to_owned())
+            .await
+            .expect("snapshot owner reacquires");
+        let ticket = lease.prepare(snapshot_id).await.expect("restore prepares");
+        let mut committed_intent = base_intent;
+        committed_intent.snapshot = Some(snapshots::binding_for(&lease, ticket.clone()));
+        state
+            .checkpoint_restores
+            .begin(committed_intent.clone())
+            .expect("outer Prepared writes");
+        lease.apply(ticket).await.expect("content reapplies");
+        state
+            .checkpoint_restores
+            .mark_committed(&committed_intent)
+            .expect("outer Committed writes");
+        drop(lease);
+        recover_checkpoint_restore_startup(
+            &state.checkpoint_restores,
+            &state.profiles,
+            &state.releases,
+            &state.snapshots,
+        )
+        .await
+        .expect("startup finishes Committed");
+        let committed = fs::read_to_string(settings).expect("committed settings read");
+        assert!(committed.contains("mode: old"));
+        assert!(committed.contains("DUMMY-CURRENT-SECRET"));
+        assert!(state
+            .checkpoint_restores
+            .load()
+            .expect("journal loads")
+            .is_none());
+        let _ = fs::remove_dir_all(root);
+    }
 
     fn release_marker_command(marker: &Path) -> (PathBuf, Vec<String>) {
         if cfg!(windows) {
@@ -2467,8 +3663,8 @@ mod checkpoint_tests {
         .expect("Harness release marker is written")
     }
 
-    #[test]
-    fn startup_recovers_prepared_and_validates_committed_checkpoint_restore() {
+    #[tokio::test]
+    async fn startup_recovers_prepared_and_validates_committed_checkpoint_restore() {
         let root = std::env::temp_dir().join(format!(
             "nexus-agent-checkpoint-recovery-{}-{}",
             std::process::id(),
@@ -2477,16 +3673,23 @@ mod checkpoint_tests {
         let paths = NexusPaths::from_root(root.clone());
         let profiles = ProfileStore::new(paths.clone());
         let releases = {
-        let config_store = ConfigStore::new(paths.clone());
-        let max_slots = config_store
-            .load()
-            .ok()
-            .and_then(|config| config.releases)
-            .map(|releases| releases.max_slots_usize())
-            .unwrap_or(DEFAULT_MAX_RELEASE_SLOTS);
-        ReleaseStore::new(paths.clone()).with_max_slots(max_slots)
-    };
+            let config_store = ConfigStore::new(paths.clone());
+            let max_slots = config_store
+                .load()
+                .ok()
+                .and_then(|config| config.releases)
+                .map(|releases| releases.max_slots_usize())
+                .unwrap_or(DEFAULT_MAX_RELEASE_SLOTS);
+            ReleaseStore::new(paths.clone()).with_max_slots(max_slots)
+        };
         let journals = CheckpointRestoreJournalStore::new(paths.clone());
+        let snapshot_coordinator = snapshots::SnapshotCoordinator::new(
+            paths.clone(),
+            Err(io::Error::new(
+                io::ErrorKind::NotFound,
+                "test DSH home unused",
+            )),
+        );
         releases
             .register("harness-a", "a", None, None)
             .expect("release A registers");
@@ -2509,6 +3712,7 @@ mod checkpoint_tests {
             target_profiles: target_profiles.clone(),
             target_current_release: target_releases.current_release.clone(),
             target_last_known_good: target_releases.last_known_good.clone(),
+            snapshot: None,
         };
 
         journals
@@ -2523,7 +3727,8 @@ mod checkpoint_tests {
         profiles
             .write(&target_profiles)
             .expect("partial target profile writes");
-        recover_checkpoint_restore_startup(&journals, &profiles, &releases)
+        recover_checkpoint_restore_startup(&journals, &profiles, &releases, &snapshot_coordinator)
+            .await
             .expect("Prepared rolls back on startup");
         assert_eq!(profiles.load().expect("profiles reload"), previous_profiles);
         assert_eq!(releases.load().expect("releases reload"), previous_releases);
@@ -2545,7 +3750,14 @@ mod checkpoint_tests {
         profiles
             .write(&previous_profiles)
             .expect("committed mismatch injects");
-        assert!(recover_checkpoint_restore_startup(&journals, &profiles, &releases).is_err());
+        assert!(recover_checkpoint_restore_startup(
+            &journals,
+            &profiles,
+            &releases,
+            &snapshot_coordinator,
+        )
+        .await
+        .is_err());
         assert_eq!(
             journals
                 .load()
@@ -2557,7 +3769,8 @@ mod checkpoint_tests {
         profiles
             .write(&target_profiles)
             .expect("target profile repairs");
-        recover_checkpoint_restore_startup(&journals, &profiles, &releases)
+        recover_checkpoint_restore_startup(&journals, &profiles, &releases, &snapshot_coordinator)
+            .await
             .expect("Committed validates on startup");
         assert_eq!(
             profiles.load().expect("target profiles reload"),
@@ -2580,16 +3793,30 @@ mod checkpoint_tests {
         ));
         let paths = NexusPaths::from_root(root.clone());
         paths.ensure_directories().expect("directories create");
+        let dsh_home = root.with_file_name(format!(
+            "nexus-agent-checkpoint-dsh-{}-{}",
+            std::process::id(),
+            nexus_core::unix_time_nanos_for_update()
+        ));
+        for profile in ["default", "restored", "web"] {
+            let profile_dir = dsh_home.join("profiles").join(profile);
+            fs::create_dir_all(&profile_dir).expect("synthetic DSH profile creates");
+            fs::write(
+                profile_dir.join("package.json"),
+                format!(r#"{{"name":"fixture-{profile}","dependencies":{{}}}}"#),
+            )
+            .expect("synthetic profile package writes");
+        }
         let releases = {
-        let config_store = ConfigStore::new(paths.clone());
-        let max_slots = config_store
-            .load()
-            .ok()
-            .and_then(|config| config.releases)
-            .map(|releases| releases.max_slots_usize())
-            .unwrap_or(DEFAULT_MAX_RELEASE_SLOTS);
-        ReleaseStore::new(paths.clone()).with_max_slots(max_slots)
-    };
+            let config_store = ConfigStore::new(paths.clone());
+            let max_slots = config_store
+                .load()
+                .ok()
+                .and_then(|config| config.releases)
+                .map(|releases| releases.max_slots_usize())
+                .unwrap_or(DEFAULT_MAX_RELEASE_SLOTS);
+            ReleaseStore::new(paths.clone()).with_max_slots(max_slots)
+        };
         releases
             .register("harness-a", "a", None, None)
             .expect("release A registers");
@@ -2627,9 +3854,10 @@ mod checkpoint_tests {
                     readiness_token_required: false,
                 }),
                 update: None,
-            
+
                 releases: None,
                 runtime: None,
+                snapshots: None,
             })
             .expect("Harness config writes");
         let profiles = ProfileStore::new(paths.clone());
@@ -2656,6 +3884,7 @@ mod checkpoint_tests {
             config,
             updater: UpdateExecutor::new(paths.clone(), releases.clone()),
             supervisor: supervisor.clone(),
+            snapshots: snapshots::SnapshotCoordinator::new(paths.clone(), Ok(dsh_home.clone())),
             harness_sync: Arc::new(Mutex::new(())),
             checkpoint_transition_gate: Arc::new(Mutex::new(Some(CheckpointTransitionGate {
                 reached: transition_reached,
@@ -2925,13 +4154,14 @@ mod checkpoint_tests {
             .expect("launch-pending journal reads")
             .is_none());
         let _ = fs::remove_dir_all(root);
+        let _ = fs::remove_dir_all(dsh_home);
     }
 }
 
 #[cfg(test)]
 mod switch_ownership_tests {
     use std::{
-        fs,
+        fs, io,
         path::PathBuf,
         sync::{atomic::AtomicU64, Arc},
         time::Duration,
@@ -2953,8 +4183,8 @@ mod switch_ownership_tests {
     };
 
     use super::{
-        config_control, execute_harness_action, update_control, AppState, HarnessSupervisor,
-        UpdateExecutor,
+        config_control, execute_harness_action, snapshots, update_control, AppState,
+        HarnessSupervisor, UpdateExecutor,
     };
 
     fn switch_test_state(label: &str) -> AppState {
@@ -2986,6 +4216,7 @@ mod switch_ownership_tests {
                 update: Some(update),
                 releases: None,
                 runtime: None,
+                snapshots: None,
             })
             .expect("update config writes");
         let releases = ReleaseStore::new(paths.clone());
@@ -3007,6 +4238,13 @@ mod switch_ownership_tests {
             config,
             updater: UpdateExecutor::new(paths.clone(), releases),
             supervisor,
+            snapshots: snapshots::SnapshotCoordinator::new(
+                paths.clone(),
+                Err(io::Error::new(
+                    io::ErrorKind::NotFound,
+                    "test DSH home unavailable",
+                )),
+            ),
             harness_sync: Arc::new(Mutex::new(())),
             checkpoint_transition_gate: Arc::new(Mutex::new(None)),
             agent_persist_failure: Arc::new(std::sync::atomic::AtomicBool::new(false)),

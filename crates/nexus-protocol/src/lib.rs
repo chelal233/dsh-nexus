@@ -412,18 +412,17 @@ impl CheckpointRestoreRequest {
     }
 }
 
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum CheckpointAction {
+    #[default]
     List,
     Create,
+    Detail,
+    Inspect,
     Restore,
-}
-
-impl Default for CheckpointAction {
-    fn default() -> Self {
-        Self::List
-    }
+    Retry,
+    Abort,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
@@ -445,12 +444,115 @@ pub struct CheckpointManifest {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub note: Option<String>,
     pub state: HarnessCheckpointState,
+    /// Absent on checkpoints created before content snapshots were wired.
+    /// Such manifests remain valid, but restore only the Harness selection.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub snapshot: Option<SnapshotReference>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum SnapshotKindPayload {
+    Healthy,
+    Manual,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct SnapshotSummaryPayload {
+    pub snapshot_id: String,
+    pub created_unix_ms: u64,
+    pub profile_name: String,
+    pub kind: SnapshotKindPayload,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub label: Option<String>,
+    pub dsh_version: String,
+    pub plugin_count: u64,
+    pub file_count: u64,
+    pub total_bytes: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct SnapshotReference {
+    pub snapshot_id: String,
+    pub summary: SnapshotSummaryPayload,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum SnapshotFileStatePayload {
+    Present,
+    Missing,
+    Omitted,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct SnapshotFilePayload {
+    pub path: String,
+    pub state: SnapshotFileStatePayload,
+    pub source_size: u64,
+    pub stored_size: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sha256: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mode: Option<u32>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub redacted_paths: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub omitted_reason: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct SnapshotDetailResponse {
+    pub api_version: String,
+    pub summary: SnapshotSummaryPayload,
+    pub files: Vec<SnapshotFilePayload>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct SnapshotInspectionPayload {
+    pub snapshot_id: String,
+    pub valid: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub summary: Option<SnapshotSummaryPayload>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub errors: Vec<String>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum CheckpointContentState {
+    #[default]
+    LegacyMetadataOnly,
+    Prepared,
+    Applied,
+    MaterializationPending,
+    Committed,
+    RolledBack,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct CheckpointRestoreStatus {
+    pub checkpoint_id: String,
+    pub snapshot_id: String,
+    pub ticket_id: String,
+    pub state: CheckpointContentState,
+    pub materialization_pending: bool,
+    pub retryable: bool,
+    pub abortable: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct CheckpointListResponse {
     pub api_version: String,
     pub checkpoints: Vec<CheckpointManifest>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub snapshots: Vec<SnapshotInspectionPayload>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pending_restore: Option<CheckpointRestoreStatus>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub healthy_capture_error: Option<String>,
 }
 
 impl CheckpointListResponse {
@@ -458,7 +560,22 @@ impl CheckpointListResponse {
         Self {
             api_version: API_VERSION.to_owned(),
             checkpoints,
+            snapshots: Vec::new(),
+            pending_restore: None,
+            healthy_capture_error: None,
         }
+    }
+
+    pub fn with_snapshot_state(
+        mut self,
+        snapshots: Vec<SnapshotInspectionPayload>,
+        pending_restore: Option<CheckpointRestoreStatus>,
+        healthy_capture_error: Option<String>,
+    ) -> Self {
+        self.snapshots = snapshots;
+        self.pending_restore = pending_restore;
+        self.healthy_capture_error = healthy_capture_error;
+        self
     }
 }
 
@@ -482,6 +599,10 @@ pub struct CheckpointRestoreResponse {
     pub api_version: String,
     pub restored: bool,
     pub checkpoint: CheckpointManifest,
+    #[serde(default)]
+    pub content_state: CheckpointContentState,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pending_restore: Option<CheckpointRestoreStatus>,
 }
 
 impl CheckpointRestoreResponse {
@@ -490,6 +611,23 @@ impl CheckpointRestoreResponse {
             api_version: API_VERSION.to_owned(),
             restored: true,
             checkpoint,
+            content_state: CheckpointContentState::LegacyMetadataOnly,
+            pending_restore: None,
+        }
+    }
+
+    pub fn content(
+        checkpoint: CheckpointManifest,
+        restored: bool,
+        content_state: CheckpointContentState,
+        pending_restore: Option<CheckpointRestoreStatus>,
+    ) -> Self {
+        Self {
+            api_version: API_VERSION.to_owned(),
+            restored,
+            checkpoint,
+            content_state,
+            pending_restore,
         }
     }
 }
@@ -1018,6 +1156,12 @@ pub struct UpdateConfigPayload {
     pub timeout_secs: Option<u64>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct SnapshotsConfigPayload {
+    pub healthy_slots: u32,
+    pub max_manual_snapshots: u32,
+}
+
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum ConfigAction {
@@ -1028,6 +1172,8 @@ pub enum ConfigAction {
     ClearUpdate,
     SetRuntime,
     ClearRuntime,
+    SetSnapshots,
+    ClearSnapshots,
 }
 
 impl Default for ConfigAction {
@@ -1045,6 +1191,8 @@ pub struct ConfigCommand {
     pub update: Option<UpdateConfigPayload>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub runtime: Option<RuntimeConfigPayload>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub snapshots: Option<SnapshotsConfigPayload>,
     /// Preserve a readiness URL whose sensitive query/userinfo was redacted
     /// from a prior ConfigResponse. The Agent resolves it from its existing
     /// on-disk Harness spec before validation.
@@ -1061,6 +1209,8 @@ pub struct ConfigResponse {
     pub update: Option<UpdateConfigPayload>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub runtime: Option<RuntimeConfigPayload>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub snapshots: Option<SnapshotsConfigPayload>,
     /// True when the returned readiness URL is display-safe but shorter than
     /// the on-disk value. Editors must preserve it unless the user replaces or
     /// clears the field explicitly.
@@ -1083,6 +1233,7 @@ impl ConfigResponse {
             harness,
             update,
             runtime: None,
+            snapshots: None,
             harness_readiness_url_redacted: false,
             harness_env_override: false,
             update_env_override: false,
@@ -1091,6 +1242,11 @@ impl ConfigResponse {
 
     pub fn with_runtime(mut self, runtime: Option<RuntimeConfigPayload>) -> Self {
         self.runtime = runtime;
+        self
+    }
+
+    pub fn with_snapshots(mut self, snapshots: Option<SnapshotsConfigPayload>) -> Self {
+        self.snapshots = snapshots;
         self
     }
 
@@ -1248,11 +1404,13 @@ mod tests {
         .expect("minimal runtime plan request parses");
         assert_eq!(request.source, RuntimeSource::Official);
         assert_eq!(request.mode, RuntimeInstallMode::Portable);
-        assert!(serde_json::from_value::<RuntimePlanRequest>(serde_json::json!({
-            "release_id": "release-a",
-            "manifest_path": "C:/outside/package.json"
-        }))
-        .is_err());
+        assert!(
+            serde_json::from_value::<RuntimePlanRequest>(serde_json::json!({
+                "release_id": "release-a",
+                "manifest_path": "C:/outside/package.json"
+            }))
+            .is_err()
+        );
     }
 
     #[test]
@@ -1270,10 +1428,10 @@ mod tests {
         assert_eq!(json["source"], "npmmirror");
         assert_eq!(json["mode"], "portable");
 
-        let set_runtime = serde_json::to_value(ConfigAction::SetRuntime)
-            .expect("runtime action serializes");
-        let clear_runtime = serde_json::to_value(ConfigAction::ClearRuntime)
-            .expect("runtime action serializes");
+        let set_runtime =
+            serde_json::to_value(ConfigAction::SetRuntime).expect("runtime action serializes");
+        let clear_runtime =
+            serde_json::to_value(ConfigAction::ClearRuntime).expect("runtime action serializes");
         assert_eq!(set_runtime, "set_runtime");
         assert_eq!(clear_runtime, "clear_runtime");
     }
@@ -1310,6 +1468,7 @@ mod tests {
                 profile: "web".to_owned(),
                 release: Some("r1".to_owned()),
             },
+            snapshot: None,
         };
         let response = CheckpointCreateResponse::from_manifest(manifest.clone());
         let encoded = serde_json::to_vec(&response).expect("checkpoint response serializes");
@@ -1345,6 +1504,7 @@ mod tests {
             serde_json::from_value(legacy).expect("legacy checkpoint manifest parses");
         assert_eq!(legacy.state.profile, "web");
         assert_eq!(legacy.state.release.as_deref(), Some("r1"));
+        assert_eq!(legacy.snapshot, None);
         let migrated = serde_json::to_value(legacy).expect("legacy checkpoint reserializes");
         assert!(migrated["state"].get("lifecycle").is_none());
         assert!(migrated["state"].get("harness").is_none());
@@ -1444,6 +1604,7 @@ mod tests {
             }),
             update: None,
             runtime: None,
+            snapshots: None,
             preserve_harness_readiness_url: false,
         };
         let json = serde_json::to_value(command).expect("config command serializes");

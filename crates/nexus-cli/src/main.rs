@@ -7,8 +7,8 @@ use nexus_protocol::{
     DiagnosticsCommand, DiagnosticsResponse, ErrorResponse, HarnessAction, HarnessCommand,
     HarnessResponse, ProfileAction, ProfileCommand, ProfileListResponse, ProfileSelectResponse,
     ReleaseAction, ReleaseCommand, ReleaseListResponse, RuntimeConfigPayload, RuntimeInstallMode,
-    RuntimeOwnership, RuntimePinPayload, RuntimeSource, StateResponse, UpdateAction, UpdateCommand,
-    UpdateResponse,
+    RuntimeOwnership, RuntimePinPayload, RuntimeSource, SnapshotDetailResponse,
+    SnapshotInspectionPayload, StateResponse, UpdateAction, UpdateCommand, UpdateResponse,
 };
 
 #[derive(Debug)]
@@ -101,20 +101,39 @@ fn parse_args() -> Result<Option<Options>, String> {
             "checkpoint" if command.is_none() => {
                 let action = args
                     .next()
-                    .ok_or_else(|| "checkpoint requires list, create, or restore ID".to_owned())?;
+                    .ok_or_else(|| "checkpoint requires list, create, detail ID, inspect ID, restore ID, retry [ID], or abort [ID]".to_owned())?;
                 let action = match action.to_string_lossy().as_ref() {
                     "list" => CheckpointAction::List,
                     "create" => CheckpointAction::Create,
+                    "detail" => CheckpointAction::Detail,
+                    "inspect" => CheckpointAction::Inspect,
                     "restore" => CheckpointAction::Restore,
+                    "retry" => CheckpointAction::Retry,
+                    "abort" => CheckpointAction::Abort,
                     value => return Err(format!("unknown checkpoint action: {value}")),
                 };
-                let id = if action == CheckpointAction::Restore {
+                let id = if matches!(
+                    action,
+                    CheckpointAction::Detail
+                        | CheckpointAction::Inspect
+                        | CheckpointAction::Restore
+                ) {
                     Some(
                         args.next()
-                            .ok_or_else(|| "checkpoint restore requires ID".to_owned())?
+                            .ok_or_else(|| "checkpoint action requires ID".to_owned())?
                             .to_string_lossy()
                             .into_owned(),
                     )
+                } else if matches!(action, CheckpointAction::Retry | CheckpointAction::Abort) {
+                    match args.peek() {
+                        Some(value) if !value.to_string_lossy().starts_with('-') => Some(
+                            args.next()
+                                .expect("peeked checkpoint id")
+                                .to_string_lossy()
+                                .into_owned(),
+                        ),
+                        _ => None,
+                    }
                 } else {
                     None
                 };
@@ -215,12 +234,15 @@ fn parse_args() -> Result<Option<Options>, String> {
                     "clear-runtime" => ConfigAction::ClearRuntime,
                     value => return Err(format!("unknown config action: {value}")),
                 };
-                let runtime = (action == ConfigAction::SetRuntime)
-                    .then(RuntimeConfigPayload::default);
+                let runtime =
+                    (action == ConfigAction::SetRuntime).then(RuntimeConfigPayload::default);
                 command = Some(Command::Config(action, runtime));
             }
             "--node" | "--pnpm" | "--git" => {
-                let tool = argument.to_string_lossy().trim_start_matches("--").to_owned();
+                let tool = argument
+                    .to_string_lossy()
+                    .trim_start_matches("--")
+                    .to_owned();
                 let ownership = args
                     .next()
                     .ok_or_else(|| format!("--{tool} requires system|nexus PATH"))?;
@@ -236,12 +258,14 @@ fn parse_args() -> Result<Option<Options>, String> {
                     .into_owned();
                 let pin = RuntimePinPayload { path, ownership };
                 match command.as_mut() {
-                    Some(Command::Config(ConfigAction::SetRuntime, Some(runtime))) => match tool.as_str() {
-                        "node" => runtime.node = Some(pin),
-                        "pnpm" => runtime.pnpm = Some(pin),
-                        "git" => runtime.git = Some(pin),
-                        _ => unreachable!(),
-                    },
+                    Some(Command::Config(ConfigAction::SetRuntime, Some(runtime))) => {
+                        match tool.as_str() {
+                            "node" => runtime.node = Some(pin),
+                            "pnpm" => runtime.pnpm = Some(pin),
+                            "git" => runtime.git = Some(pin),
+                            _ => unreachable!(),
+                        }
+                    }
                     _ => return Err(format!("--{tool} is valid only after config set-runtime")),
                 }
             }
@@ -255,8 +279,14 @@ fn parse_args() -> Result<Option<Options>, String> {
                     value => return Err(format!("invalid runtime source: {value}")),
                 };
                 match command.as_mut() {
-                    Some(Command::Config(ConfigAction::SetRuntime, Some(runtime))) => runtime.source = source,
-                    _ => return Err("--runtime-source is valid only after config set-runtime".to_owned()),
+                    Some(Command::Config(ConfigAction::SetRuntime, Some(runtime))) => {
+                        runtime.source = source
+                    }
+                    _ => {
+                        return Err(
+                            "--runtime-source is valid only after config set-runtime".to_owned()
+                        )
+                    }
                 }
             }
             "--runtime-mode" => {
@@ -269,8 +299,14 @@ fn parse_args() -> Result<Option<Options>, String> {
                     value => return Err(format!("invalid runtime mode: {value}")),
                 };
                 match command.as_mut() {
-                    Some(Command::Config(ConfigAction::SetRuntime, Some(runtime))) => runtime.mode = mode,
-                    _ => return Err("--runtime-mode is valid only after config set-runtime".to_owned()),
+                    Some(Command::Config(ConfigAction::SetRuntime, Some(runtime))) => {
+                        runtime.mode = mode
+                    }
+                    _ => {
+                        return Err(
+                            "--runtime-mode is valid only after config set-runtime".to_owned()
+                        )
+                    }
                 }
             }
             "--json" => json = true,
@@ -421,8 +457,9 @@ async fn run(options: Options) -> Result<(), String> {
                 action: *action,
                 release_id: release_id.clone(),
                 version: version.clone(),
-            
-                tag: None,})
+
+                tag: None,
+            })
             .send()
             .await
             .map_err(|error| format!("agent is unavailable: {error}"))?,
@@ -452,6 +489,7 @@ async fn run(options: Options) -> Result<(), String> {
                 harness: None,
                 update: None,
                 runtime: runtime.clone(),
+                snapshots: None,
                 preserve_harness_readiness_url: false,
             })
             .send()
@@ -545,9 +583,23 @@ async fn run(options: Options) -> Result<(), String> {
                     println!("no checkpoints");
                 } else {
                     for checkpoint in &checkpoints.checkpoints {
+                        let content = checkpoint
+                            .snapshot
+                            .as_ref()
+                            .map(|snapshot| snapshot.snapshot_id.as_str())
+                            .unwrap_or("legacy-metadata-only");
                         println!(
-                            "{} profile={} created_at_unix={}",
-                            checkpoint.id, checkpoint.profile, checkpoint.created_at_unix
+                            "{} profile={} created_at_unix={} content={}",
+                            checkpoint.id, checkpoint.profile, checkpoint.created_at_unix, content
+                        );
+                    }
+                    if let Some(pending) = &checkpoints.pending_restore {
+                        println!(
+                            "pending_restore={} state={:?} retryable={} abortable={}",
+                            pending.checkpoint_id,
+                            pending.state,
+                            pending.retryable,
+                            pending.abortable
                         );
                     }
                 }
@@ -563,7 +615,46 @@ async fn run(options: Options) -> Result<(), String> {
                     println!("created checkpoint: {}", checkpoint.checkpoint.id);
                 }
             }
-            CheckpointAction::Restore => {
+            CheckpointAction::Detail => {
+                let detail: SnapshotDetailResponse = serde_json::from_str(&body)
+                    .map_err(|error| format!("invalid agent response: {error}"))?;
+                if options.json {
+                    print_json_value(
+                        &serde_json::to_value(&detail).map_err(|error| error.to_string())?,
+                    )?;
+                } else {
+                    println!(
+                        "snapshot {} profile={} files={} bytes={}",
+                        detail.summary.snapshot_id,
+                        detail.summary.profile_name,
+                        detail.summary.file_count,
+                        detail.summary.total_bytes
+                    );
+                    for file in detail.files {
+                        println!(
+                            "{:?} {} stored_bytes={}",
+                            file.state, file.path, file.stored_size
+                        );
+                    }
+                }
+            }
+            CheckpointAction::Inspect => {
+                let inspection: SnapshotInspectionPayload = serde_json::from_str(&body)
+                    .map_err(|error| format!("invalid agent response: {error}"))?;
+                if options.json {
+                    print_json_value(
+                        &serde_json::to_value(&inspection).map_err(|error| error.to_string())?,
+                    )?;
+                } else if inspection.valid {
+                    println!("snapshot valid: {}", inspection.snapshot_id);
+                } else {
+                    println!("snapshot invalid: {}", inspection.snapshot_id);
+                    for error in inspection.errors {
+                        println!("  {error}");
+                    }
+                }
+            }
+            CheckpointAction::Restore | CheckpointAction::Retry | CheckpointAction::Abort => {
                 let checkpoint: CheckpointRestoreResponse = serde_json::from_str(&body)
                     .map_err(|error| format!("invalid agent response: {error}"))?;
                 if options.json {
@@ -571,7 +662,14 @@ async fn run(options: Options) -> Result<(), String> {
                         &serde_json::to_value(&checkpoint).map_err(|error| error.to_string())?,
                     )?;
                 } else {
-                    println!("restored checkpoint: {}", checkpoint.checkpoint.id);
+                    if checkpoint.restored {
+                        println!("restored checkpoint: {}", checkpoint.checkpoint.id);
+                    } else {
+                        println!(
+                            "checkpoint {} content state: {:?}",
+                            checkpoint.checkpoint.id, checkpoint.content_state
+                        );
+                    }
                 }
             }
         },
@@ -777,7 +875,11 @@ Usage:
   nexusctl profile select NAME [--json] [--port PORT]
   nexusctl checkpoint list [--json] [--port PORT]
   nexusctl checkpoint create [--note TEXT] [--json] [--port PORT]
+  nexusctl checkpoint detail ID [--json] [--port PORT]
+  nexusctl checkpoint inspect ID [--json] [--port PORT]
   nexusctl checkpoint restore ID [--json] [--port PORT]
+  nexusctl checkpoint retry [ID] [--json] [--port PORT]
+  nexusctl checkpoint abort [ID] [--json] [--port PORT]
   nexusctl release list|current [--json] [--port PORT]
   nexusctl release register ID VERSION [--source TEXT] [--note TEXT] [--json] [--port PORT]
   nexusctl release promote ID [--json] [--port PORT]

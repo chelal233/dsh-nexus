@@ -2,8 +2,9 @@
 
 use std::{
     collections::HashSet,
-    env, fs, io,
+    env,
     ffi::{OsStr, OsString},
+    fs, io,
     net::{IpAddr, Ipv4Addr, SocketAddr},
     path::{Path, PathBuf},
     sync::{Arc, Mutex},
@@ -15,8 +16,10 @@ use nexus_protocol::{
     DiagnosticsBundle, DiagnosticsFile, HarnessCandidate, HarnessCheckpointState,
     HarnessConfigPayload, HarnessDiscoveryResponse, HarnessLaunchMode, HarnessRuntimeInfo,
     HarnessState, ReleaseManifest, RuntimeConfigPayload, RuntimeInstallMode, RuntimeOwnership,
-    RuntimePinPayload, RuntimeSource, UpdateConfigPayload, UpdateRuntimeInfo, UpdateState,
+    RuntimePinPayload, RuntimeSource, SnapshotReference, SnapshotsConfigPayload,
+    UpdateConfigPayload, UpdateRuntimeInfo, UpdateState,
 };
+use nexus_snapshots::RestoreTicket;
 use serde::{Deserialize, Serialize};
 
 pub mod runtime_requirements;
@@ -27,6 +30,8 @@ pub const MAX_PROFILE_NAME_LEN: usize = 64;
 pub const PROFILE_SCHEMA_VERSION: u32 = 1;
 pub const CHECKPOINT_SCHEMA_VERSION: u32 = 1;
 pub const CHECKPOINT_RESTORE_SCHEMA_VERSION: u32 = 1;
+pub const DEFAULT_HEALTHY_SNAPSHOT_SLOTS: usize = 3;
+pub const DEFAULT_MAX_MANUAL_SNAPSHOTS: usize = 64;
 pub const RELEASE_SCHEMA_VERSION: u32 = 1;
 pub const MAX_RELEASE_ID_LEN: usize = 128;
 pub const MAX_RELEASE_VERSION_LEN: usize = 128;
@@ -214,7 +219,10 @@ impl RuntimeConfig {
         ] {
             if let Some(pin) = pin {
                 if pin.path.components().any(|component| {
-                    matches!(component, std::path::Component::CurDir | std::path::Component::ParentDir)
+                    matches!(
+                        component,
+                        std::path::Component::CurDir | std::path::Component::ParentDir
+                    )
                 }) {
                     return Err(io::Error::new(
                         io::ErrorKind::InvalidInput,
@@ -372,7 +380,12 @@ pub fn resolve_runtime_command(
             .path
             .extension()
             .and_then(|extension| extension.to_str())
-            .is_some_and(|extension| matches!(extension.to_ascii_lowercase().as_str(), "js" | "cjs" | "mjs"))
+            .is_some_and(|extension| {
+                matches!(
+                    extension.to_ascii_lowercase().as_str(),
+                    "js" | "cjs" | "mjs"
+                )
+            })
     {
         let node = config.node.as_ref().ok_or_else(|| {
             io::Error::new(
@@ -623,6 +636,17 @@ impl CheckpointStore {
         note: Option<String>,
         state: NexusStateSnapshot,
     ) -> io::Result<CheckpointManifest> {
+        self.create_with_snapshot(profile, release, note, state, None)
+    }
+
+    pub fn create_with_snapshot(
+        &self,
+        profile: &str,
+        release: Option<String>,
+        note: Option<String>,
+        state: NexusStateSnapshot,
+        snapshot: Option<SnapshotReference>,
+    ) -> io::Result<CheckpointManifest> {
         validate_profile_name(profile)?;
         if let Some(release) = release.as_deref() {
             validate_release_id(release)?;
@@ -657,6 +681,7 @@ impl CheckpointStore {
             release,
             note,
             state,
+            snapshot,
         };
         let path = self.path_for_id(&id)?;
         write_json_atomic(&self.paths.checkpoints_dir, &path, &manifest)?;
@@ -788,6 +813,17 @@ pub struct CheckpointRestoreIntent {
     pub target_profiles: ProfileCatalog,
     pub target_current_release: Option<String>,
     pub target_last_known_good: Option<String>,
+    /// Present for content restores. The path binding prevents a durable ticket
+    /// from being replayed against a different DSH home after Agent restart.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub snapshot: Option<BoundSnapshotRestore>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct BoundSnapshotRestore {
+    pub ticket: RestoreTicket,
+    pub dsh_home: PathBuf,
+    pub profile_name: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -795,6 +831,8 @@ pub struct CheckpointRestoreJournal {
     pub schema_version: u32,
     pub phase: CheckpointRestorePhase,
     pub intent: CheckpointRestoreIntent,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -841,6 +879,7 @@ impl CheckpointRestoreJournalStore {
             schema_version: CHECKPOINT_RESTORE_SCHEMA_VERSION,
             phase: CheckpointRestorePhase::Prepared,
             intent,
+            error: None,
         }))
     }
 
@@ -858,6 +897,36 @@ impl CheckpointRestoreJournalStore {
             ));
         }
         journal.phase = CheckpointRestorePhase::Committed;
+        journal.error = None;
+        self.write_unlocked(Some(journal))
+    }
+
+    pub fn record_error(
+        &self,
+        phase: CheckpointRestorePhase,
+        intent: &CheckpointRestoreIntent,
+        error: impl Into<String>,
+    ) -> io::Result<()> {
+        let _guard = self.lock_gate()?;
+        let Some(mut journal) = self.load_unlocked()? else {
+            return Err(io::Error::new(
+                io::ErrorKind::NotFound,
+                "checkpoint restore journal is missing",
+            ));
+        };
+        if journal.phase != phase || journal.intent != *intent {
+            return Err(invalid_data(
+                "checkpoint restore journal changed before diagnostic update",
+            ));
+        }
+        let error = error.into();
+        if error.is_empty() || error.len() > 4096 || error.chars().any(char::is_control) {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "checkpoint restore diagnostic is empty, too long, or contains control characters",
+            ));
+        }
+        journal.error = Some(error);
         self.write_unlocked(Some(journal))
     }
 
@@ -959,6 +1028,28 @@ fn validate_checkpoint_restore_intent(intent: &CheckpointRestoreIntent) -> io::R
     {
         return Err(invalid_data("target checkpoint release pointers are equal"));
     }
+    if let Some(snapshot) = &intent.snapshot {
+        if !snapshot.dsh_home.is_absolute()
+            || snapshot.dsh_home.as_os_str().is_empty()
+            || snapshot
+                .dsh_home
+                .to_string_lossy()
+                .chars()
+                .any(char::is_control)
+        {
+            return Err(invalid_data(
+                "checkpoint snapshot restore must bind an absolute DSH home",
+            ));
+        }
+        validate_profile_name(&snapshot.profile_name)?;
+        if snapshot.profile_name != snapshot.ticket.profile_name
+            || snapshot.profile_name != intent.target_profiles.active_profile
+        {
+            return Err(invalid_data(
+                "checkpoint snapshot restore profile binding is inconsistent",
+            ));
+        }
+    }
     Ok(())
 }
 
@@ -977,6 +1068,15 @@ fn validate_checkpoint_manifest(manifest: &CheckpointManifest) -> io::Result<()>
         return Err(invalid_data(
             "checkpoint state release does not match release",
         ));
+    }
+    if let Some(snapshot) = &manifest.snapshot {
+        if snapshot.snapshot_id != snapshot.summary.snapshot_id
+            || snapshot.summary.profile_name != manifest.profile
+        {
+            return Err(invalid_data(
+                "checkpoint snapshot reference does not match its manifest",
+            ));
+        }
     }
     Ok(())
 }
@@ -1088,7 +1188,11 @@ impl ReleaseStore {
 
     fn ensure_slot_capacity(&self, catalog: &ReleaseCatalog) -> io::Result<()> {
         if catalog.releases.len() >= self.max_slots {
-            let ids: Vec<&str> = catalog.releases.iter().map(|item| item.id.as_str()).collect();
+            let ids: Vec<&str> = catalog
+                .releases
+                .iter()
+                .map(|item| item.id.as_str())
+                .collect();
             return Err(io::Error::new(
                 io::ErrorKind::ResourceBusy,
                 format!(
@@ -1742,6 +1846,10 @@ pub struct HarnessLogSession {
     /// duplicate Harness.
     #[serde(default)]
     pub launch_pending: bool,
+    /// Durable once-per-run latch. It records an attempted healthy snapshot,
+    /// including a failed attempt, so an Agent restart does not duplicate it.
+    #[serde(default)]
+    pub healthy_snapshot_attempted: bool,
     pub created_at_unix: u64,
 }
 
@@ -1769,6 +1877,7 @@ impl HarnessLogSession {
             stdout_log_name,
             stderr_log_name,
             launch_pending,
+            healthy_snapshot_attempted: false,
             created_at_unix,
         }
     }
@@ -2509,12 +2618,11 @@ mod tests {
     use super::{
         build_pnpm_args, build_runtime_child_env, discover_harness_candidates_in_roots, is_within,
         load_harness_launch_spec, normalize_discovery_path, read_runtime_metadata,
-        resolve_runtime_command, write_runtime_metadata, AgentState,
-        CheckpointRestoreIntent, CheckpointRestoreJournalStore, CheckpointRestorePhase,
-        CheckpointStore, ConfigStore, DiagnosticsStore, HarnessLaunchSpec, HarnessLogSession,
-        HarnessLogSessionStore, NexusConfig, NexusConfigFile, NexusPaths, NexusRuntimeMetadata,
-        ProfileCatalog, ProfileStore, ReleaseStore, ReleasesConfig, RuntimeConfig, RuntimePin,
-        UpdateSpec,
+        resolve_runtime_command, write_runtime_metadata, AgentState, CheckpointRestoreIntent,
+        CheckpointRestoreJournalStore, CheckpointRestorePhase, CheckpointStore, ConfigStore,
+        DiagnosticsStore, HarnessLaunchSpec, HarnessLogSession, HarnessLogSessionStore,
+        NexusConfig, NexusConfigFile, NexusPaths, NexusRuntimeMetadata, ProfileCatalog,
+        ProfileStore, ReleaseStore, ReleasesConfig, RuntimeConfig, RuntimePin, UpdateSpec,
     };
 
     #[test]
@@ -2999,6 +3107,7 @@ mod tests {
             target_profiles,
             target_current_release: target_releases.current_release,
             target_last_known_good: target_releases.last_known_good,
+            snapshot: None,
         };
         let journal = CheckpointRestoreJournalStore::new(paths);
         journal.begin(intent.clone()).expect("Prepared writes");
@@ -3450,6 +3559,7 @@ mod tests {
             }),
             releases: None,
             runtime: None,
+            snapshots: None,
         };
 
         store.write(&document).expect("config writes");
@@ -3492,10 +3602,14 @@ mod tests {
                     Ok(())
                 })
                 .expect("second transaction succeeds");
-            second_done_tx.send(()).expect("second completion is observed");
+            second_done_tx
+                .send(())
+                .expect("second completion is observed");
         });
         let _ = second_done_rx.recv_timeout(std::time::Duration::from_millis(100));
-        release_first_tx.send(()).expect("first transaction releases");
+        release_first_tx
+            .send(())
+            .expect("first transaction releases");
         first_thread.join().expect("first transaction joins");
         second_thread.join().expect("second transaction joins");
 
@@ -3527,11 +3641,13 @@ mod tests {
             })
             .expect("missing runtime pin is structurally valid");
         fs::remove_dir_all(&paths.runtimes_dir).expect("runtime directory removes");
-        assert_eq!(store.load().expect("config remains repairable").runtime, Some(runtime));
+        assert_eq!(
+            store.load().expect("config remains repairable").runtime,
+            Some(runtime)
+        );
 
         let legacy: NexusConfigFile =
-            serde_json::from_str(r#"{"releases":{"max_slots":3}}"#)
-                .expect("legacy config parses");
+            serde_json::from_str(r#"{"releases":{"max_slots":3}}"#).expect("legacy config parses");
         assert_eq!(legacy.runtime, None);
         let invalid = RuntimeConfig {
             node: Some(RuntimePin {
@@ -4667,6 +4783,8 @@ pub struct NexusConfigFile {
     pub releases: Option<ReleasesConfig>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub runtime: Option<RuntimeConfig>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub snapshots: Option<SnapshotsConfig>,
 }
 
 /// Nexus-owned release slot capacity settings.
@@ -4684,6 +4802,38 @@ impl ReleasesConfig {
 
 fn default_max_release_slots() -> u32 {
     DEFAULT_MAX_RELEASE_SLOTS as u32
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct SnapshotsConfig {
+    #[serde(default = "default_healthy_snapshot_slots")]
+    pub healthy_slots: u32,
+    #[serde(default = "default_max_manual_snapshots")]
+    pub max_manual_snapshots: u32,
+}
+
+impl SnapshotsConfig {
+    pub fn to_payload(&self) -> SnapshotsConfigPayload {
+        SnapshotsConfigPayload {
+            healthy_slots: self.healthy_slots,
+            max_manual_snapshots: self.max_manual_snapshots,
+        }
+    }
+
+    pub fn from_payload(payload: SnapshotsConfigPayload) -> Self {
+        Self {
+            healthy_slots: payload.healthy_slots,
+            max_manual_snapshots: payload.max_manual_snapshots,
+        }
+    }
+}
+
+fn default_healthy_snapshot_slots() -> u32 {
+    DEFAULT_HEALTHY_SNAPSHOT_SLOTS as u32
+}
+
+fn default_max_manual_snapshots() -> u32 {
+    DEFAULT_MAX_MANUAL_SNAPSHOTS as u32
 }
 
 /// Nexus-owned configuration writer. It owns only `config.json`; Harness
@@ -4767,6 +4917,20 @@ fn validate_config_document(paths: &NexusPaths, document: &NexusConfigFile) -> i
     }
     if let Some(runtime) = &document.runtime {
         runtime.validate_for_paths(paths)?;
+    }
+    if let Some(snapshots) = &document.snapshots {
+        if snapshots.healthy_slots == 0 || snapshots.healthy_slots > 32 {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "snapshots.healthy_slots must be between 1 and 32",
+            ));
+        }
+        if snapshots.max_manual_snapshots == 0 || snapshots.max_manual_snapshots > 1024 {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "snapshots.max_manual_snapshots must be between 1 and 1024",
+            ));
+        }
     }
     Ok(())
 }

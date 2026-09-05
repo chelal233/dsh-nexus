@@ -1,4 +1,4 @@
-updated: 2026-09-05 13:28 by Codex (P0 运行时与快照基础修复均独立复核通过，172 项组合测试及 CLI 检查通过)
+updated: 2026-09-05 by Codex (P0 快照内容引擎已接入 Agent，恢复事务/健康快照/依赖物化的本地合成回归通过)
 
 # dsh-nexus 项目状态与需求基线
 
@@ -7,8 +7,9 @@ updated: 2026-09-05 13:28 by Codex (P0 运行时与快照基础修复均独立�
 - 已独立复核通过：runtime `8261a6e` + `a98beb8`；snapshot engine `0b8fb81` + `9875c84`。运行时 GET/plan 的前置读取、观察和 child cleanup 共享同一 deadline 与全局三许可；snapshot 的必需清单、槽位中断恢复、回滚路径和持久顺序四项问题已修复。
 - 隔离基线工作树：`E:/git/dsh-nexus-phases/p0-integration`，分支 `codex/nexus-p0/integration`。原 `main` 及接管前草稿保持不变。来源与组合验证见 `artifacts/takeover/p0-foundation-integration-report.md`。
 - 组合验证：Agent 101、Core 30、Launcher Core 11、Protocol 13、Snapshots 17，共 172 项及 doc-tests 通过；CLI offline check 通过。Tauri/前端在后续接线完成后再合批验证。
-- `nexus-snapshots` 目前是独立内容/事务引擎：七文件白名单、结构化已知敏感字段保护、健康默认三槽与手动保留、外层 journal 决策驱动的恢复 API。Agent checkpoint 仍需接入该引擎；现有界面仍不是文件快照恢复界面。
-- 下一批：运行时供给与确认、实际 cold clone/build/Node 配置；Agent snapshot journal/健康钩子/物化、官方插件与原生 Profile 适配；恢复四标签页与实际 Node/GUI 验收。P1/P2 未开始。
+- `nexus-snapshots` 已接入 Agent checkpoint：新 checkpoint 持有真实内容引用/摘要，支持 manual capture/list/detail/inspect/restore/retry/abort；legacy manifest 明确保持 metadata-only。外层两阶段 journal 绑定实际 DSH_HOME/profile，Prepared 物化失败保持 pending，Retry/Abort 显式决策，启动时 Prepared 回滚、Committed finish。
+- 健康 Running/log-session 以持久 once latch 自动捕获一次，默认三健康槽与 manual 保留独立；物化统一消费 runtime pins/env/pnpm args，Windows Job Object 负责 owned descendants 清理。现有界面仍未接恢复四标签页。
+- 下一批：运行时供给与确认、实际 cold clone/build/Node 配置；官方插件与原生 Profile 适配；恢复四标签页与实际 Node/GUI 验收。P1/P2 未开始。
 - 验收边界：当前是静态/离线/故障注入与真实 Windows junction 验证；未做物理断电、真实安装或真实 Harness/GUI。系统安装产品路径要实现并模拟验证，本机仅允许便携模式实测。
 - 手动 capture 中断可能留下无法证明身份的 `.staging-*`，当前 inventory 会拒绝继续并要求明确清理；不得静默选择或删除不明候选。恢复界面需给出此类可操作诊断。
 
@@ -119,8 +120,8 @@ updated: 2026-09-05 13:28 by Codex (P0 运行时与快照基础修复均独立�
 
 - `UpdateSpec.ref_name` 单一字段（默认 "main"）：`crates/nexus-core/src/lib.rs:3863` → tag 枚举要替换的正是这里的产品形态
 - release 槽位：`releases/<id>/manifest.json` + `release-pointers.json`（current/last-known-good 原子指针）
-- checkpoint：`checkpoints/` + 两阶段 intent journal（`run/`），恢复仅元数据（待升级为配置文件快照）
+- checkpoint：`checkpoints/` manifest + `snapshots/` 七文件内容 + 两阶段 intent journal（`run/`）；legacy manifest 仍仅恢复元数据
 - 更新执行器：clone→可选 build/verify→原子发布槽位，任务持久化于 `update-state.json`
 - 就绪探针：loopback 纯 HTTP(2xx) 或 `tcp://`（防 SSRF；官方 DSH 根页无 token 返回 401，故 tcp 探针）
 - Profile 渲染：`HarnessLaunchSpec.args` 中 `{profile}` / `{release}` / `{release_root}` 占位符
-- **共享 runtime 命令基元（已建，consumer 接线待后续）**：`RuntimeConfig` pins + `resolve_runtime_command` + `build_runtime_child_env` + `build_pnpm_args` 是 install/build/start/终端/插件/快照物化的唯一入口；不得在 consumer 复制 PATH、pnpm script 或 registry 参数构造
+- **共享 runtime 命令基元（快照物化已接线）**：`RuntimeConfig` pins + `resolve_runtime_command` + `build_runtime_child_env` + `build_pnpm_args` 是 install/build/start/终端/插件/快照物化的唯一入口；快照物化已消费该入口，其余 consumer 不得复制 PATH、pnpm script 或 registry 参数构造

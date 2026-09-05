@@ -165,14 +165,16 @@ The Agent exposes:
   Harness-native and adds native create/switch operations without a delete
   operation in this scope. The
   catalog must not be mistaken for that native implementation.
-- `GET|POST /v1/checkpoints` — current baseline lists, creates, or restores
-  Nexus-only manifest metadata. Restore is rejected while Harness is running;
-  after it succeeds, Agent state adopts the saved profile/release metadata but
-  does not start Harness. The confirmed snapshot target permits only
-  declarative profile/config data, excludes credentials and sessions, and
-  uses healthy-start N/default-3 automatic rotation plus a manual checkpoint;
-  recovery reuses the existing two-phase intent journal. The current
-  implementation remains manifest-only and has not been upgraded.
+- `GET|POST /v1/checkpoints` — lists legacy checkpoint manifests and validated
+  content snapshots, creates a manual content checkpoint, returns bounded
+  detail/inspection metadata, or performs `restore`, `retry`, and `abort`.
+  Legacy manifests remain readable and honestly report metadata-only restore.
+  Content restore is rejected while Harness is owned or running and never
+  starts Harness. A failed dependency materialization remains an explicit
+  Prepared transaction: read routes stay available, other mutations return a
+  conflict, Retry resumes the same ticket, and Abort rolls it back. A healthy
+  Harness log-session claims one durable automatic capture attempt; healthy
+  retention defaults to three independently of manual retention.
 - `GET|POST /v1/releases` — list/current, register an immutable slot manifest,
   promote a registered slot, or swap current with last-known-good. Promotion
   and rollback are rejected while Harness is starting/running; registration is
@@ -377,38 +379,34 @@ support create and switch, with no delete operation in this scope. Until that
 integration is implemented and accepted, catalog selection remains the legacy
 metadata bridge.
 
-Current baseline: Checkpoints are JSON manifests under the Nexus-owned
-`checkpoints/` directory. They record a safe ID, timestamp, profile, release
-metadata, optional note, and a selection-only state containing the same profile
-and release. The current implementation remains manifest-only; legacy
-manifests containing the former runtime summary remain readable, while those
-extra fields are ignored and are not applied by restore. Writes use an atomic
-same-directory publication. Restore validates that an optional release still
-names a registered, canonical slot and first writes a two-phase intent under
-`run/` containing the exact prior and target profile/current/LKG selections. A
-detached owner holds the supervisor lifecycle gate while publishing those
-stores and their derived Agent runtime metadata, then marks the intent
-committed. Cancellation cannot abandon a prepared restore. Startup and every
-later lifecycle transition recover a prepared intent to the exact prior
-selection, while a committed intent must exactly match the target selection or
-startup fails closed; only then is the intent cleared. Later Harness start and
-restart operations therefore cannot observe a mixed selection and resolve the
-restored release; a checkpoint with no release clears the current pointer.
-If publishing the committed phase reports an ambiguous post-rename durability
-error, Nexus re-reads the journal: an observed committed phase completes the
-target, an observed prepared phase rolls back the exact prior selection, and an
-unreadable or changed journal remains for fail-closed recovery instead of
-guessing and rolling back a possibly committed target.
-State, Harness, profile, and release reads use the same gate and return a
-recovery error instead of publishing a pending mixed view. The current restore
-path applies the manifest's Nexus selection metadata only; upstream data,
-sessions, and credentials are outside its manifest contract.
+Checkpoints are JSON manifests under the Nexus-owned `checkpoints/` directory.
+New manifests contain a content-snapshot reference and summary; old manifests
+without that reference remain readable and restore selection metadata only.
+The referenced snapshot is restricted by `nexus-snapshots` to seven fixed
+declarative profile/home files. Snapshot bytes remove the engine's explicit
+known sensitive fields, detail and inspection return metadata only, and restore
+merges current protected values into restored structure. Credentials, `.env`,
+sessions, and arbitrary caller paths are outside the contract.
 
-Confirmed target: a snapshot may contain only declarative `profile` and
-`config` data, never credentials or sessions. Healthy startup uses N rotations
-(default 3) automatically plus a manual checkpoint; recovery reuses the
-existing two-phase intent journal. This target snapshot integration has not
-upgraded the current manifest-only implementation.
+Content restore first prepares and validates an engine ticket, then stores that
+serializable ticket in the existing outer two-phase intent. The binding includes
+the canonical resolved `DSH_HOME` and target profile; restart or retry rejects a
+different home/profile. Outer Prepared decides rollback or resume-apply, while
+outer Committed decides finish-commit. No engine marker replaces that journal.
+A detached owner retains lifecycle, updater, and snapshot-I/O ownership after
+HTTP cancellation. Startup rolls Prepared back and only finishes Committed;
+failure leaves a diagnostic pending transaction while Agent continues serving
+read routes.
+
+Package, lockfile, or workspace changes require dependency materialization
+before the engine can commit. Agent uses the configured runtime pins,
+`build_runtime_child_env`, and `build_pnpm_args` to execute pinned pnpm as
+`install --frozen-lockfile`; it marks the ticket materialized only after exit
+success. Windows runs the suspended child in a kill-on-close Job Object before
+resuming its unique primary thread, so timeout/error cleanup covers descendants
+before Retry or Abort can proceed. Unix uses a private process group; the Unix
+runtime branch is compile-covered but has not received real-process acceptance
+in this Windows phase.
 
 Current baseline: Phase 2 reads optional Harness launch configuration from the
 Nexus-owned `config.json` under the `harness` key (a direct launch-spec object
@@ -750,13 +748,11 @@ unknown, or transitional Harness state likewise disables lifecycle controls.
   download, runtime injection, source switching, and install confirmation
   remain target items.
 
-### Confirmed target (pending implementation and acceptance)
+### Confirmed target (remaining implementation and acceptance)
 
-- Snapshot data is limited to declarative `profile` and `config` values; it
-  contains no credentials or sessions. Healthy startup uses N rotations
-  (default 3) automatically plus a manual checkpoint; recovery reuses the
-  existing two-phase intent journal. The current implementation remains
-  manifest-only until snapshot integration lands.
+- The snapshot content backend and Agent transaction wiring are implemented as
+  described above. Recovery UI labels/actions, native Profile integration, and
+  real Harness/GUI acceptance remain later work.
 - Runtime installation prefers a portable layout under the Nexus
   `data-root/runtimes` directory and passes its location through child-process
   environment. It does not modify system `PATH`. A system mode is maintained
@@ -810,9 +806,9 @@ from that canonical directory; it never guesses a release from the process
 working directory. Diagnostics are bounded and redacted as described above;
 they are not a general filesystem archive. Current profile selection is still
 the legacy metadata bridge; the confirmed target is Harness-native create and
-switch without delete. Current checkpoint restore remains manifest-only, while
-the declarative snapshot target is pending the upgrade and acceptance recorded
-above.
+switch without delete. New checkpoints use the declarative snapshot backend;
+legacy manifests remain selection-only by contract. Recovery UI and real
+Harness/GUI acceptance remain pending as recorded above.
 
 ## P0 foundation integration (2026-09-05)
 
