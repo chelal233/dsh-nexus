@@ -1,6 +1,16 @@
-updated: 2026-09-05 13:20 by Codex (P0 runtime foundation 独立审查阻断已在 fix1 隔离段修复并通过回归)
+updated: 2026-09-05 13:28 by Codex (P0 运行时与快照基础修复均独立复核通过，172 项组合测试及 CLI 检查通过)
 
 # dsh-nexus 项目状态与需求基线
+
+## 当前接管阶段：P0 基础集成，完整 P0 仍在执行
+
+- 已独立复核通过：runtime `8261a6e` + `a98beb8`；snapshot engine `0b8fb81` + `9875c84`。运行时 GET/plan 的前置读取、观察和 child cleanup 共享同一 deadline 与全局三许可；snapshot 的必需清单、槽位中断恢复、回滚路径和持久顺序四项问题已修复。
+- 隔离基线工作树：`E:/git/dsh-nexus-phases/p0-integration`，分支 `codex/nexus-p0/integration`。原 `main` 及接管前草稿保持不变。来源与组合验证见 `artifacts/takeover/p0-foundation-integration-report.md`。
+- 组合验证：Agent 101、Core 30、Launcher Core 11、Protocol 13、Snapshots 17，共 172 项及 doc-tests 通过；CLI offline check 通过。Tauri/前端在后续接线完成后再合批验证。
+- `nexus-snapshots` 目前是独立内容/事务引擎：七文件白名单、结构化已知敏感字段保护、健康默认三槽与手动保留、外层 journal 决策驱动的恢复 API。Agent checkpoint 仍需接入该引擎；现有界面仍不是文件快照恢复界面。
+- 下一批：运行时供给与确认、实际 cold clone/build/Node 配置；Agent snapshot journal/健康钩子/物化、官方插件与原生 Profile 适配；恢复四标签页与实际 Node/GUI 验收。P1/P2 未开始。
+- 验收边界：当前是静态/离线/故障注入与真实 Windows junction 验证；未做物理断电、真实安装或真实 Harness/GUI。系统安装产品路径要实现并模拟验证，本机仅允许便携模式实测。
+- 手动 capture 中断可能留下无法证明身份的 `.staging-*`，当前 inventory 会拒绝继续并要求明确清理；不得静默选择或删除不明候选。恢复界面需给出此类可操作诊断。
 
 ## 运行模式定界（用户 2026-09-05 拍板）
 

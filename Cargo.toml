@@ -6,6 +6,7 @@ members = [
     "crates/nexus-cli",
     "crates/nexus-launcher-core",
     "crates/nexus-launcher",
+    "crates/nexus-snapshots",
 ]
 resolver = "2"
 

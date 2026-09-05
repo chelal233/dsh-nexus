@@ -768,7 +768,7 @@ unknown, or transitional Harness state likewise disables lifecycle controls.
 - The runtime workflow reuses an already available runtime whenever possible
   and avoids extra downloads. Git only guides installation; local system
   installation tests are prohibited in this phase.
-- The Agent uses OS-assigned loopback `port 0`; identity discovery finds the
+- The target Agent uses OS-assigned loopback `port 0`; identity discovery finds the
   bound endpoint, and the internal port remains out of the UI.
 
 ### Open and unaccepted
@@ -813,3 +813,40 @@ the legacy metadata bridge; the confirmed target is Harness-native create and
 switch without delete. Current checkpoint restore remains manifest-only, while
 the declarative snapshot target is pending the upgrade and acceptance recorded
 above.
+
+## P0 foundation integration (2026-09-05)
+
+The isolated P0 base combines runtime foundation `8261a6e` and correction
+`a98beb8` with snapshot engine `0b8fb81` and correction `9875c84`. Both corrected
+source heads passed independent review. Their implementation blobs are preserved
+in the combined tree; source branches are retained. This is not completion of P0.
+
+Runtime GET and release-specific POST plan create one request deadline before
+configuration, catalog, or package-manifest reads. Preparation and observation
+use the same process-wide three-permit blocking owner. Timed-out filesystem
+closures retain their permit until they return; subsequent callers expire using
+their own deadline. Child execution and cleanup share the original deadline.
+
+`nexus-snapshots` supplies capture/list/inspect and explicit
+prepare/apply/rollback/commit/recover APIs. Its seven-file declarative allowlist
+requires a valid profile package manifest, preserves optional-file absence,
+redacts known structured sensitive fields, and preserves live protected values
+when restoring. Healthy slot publication recovers only validated slot-bound
+candidates. Undo content remains under the explicit DSH home; rollback checks
+backup ancestors, and namespace persistence precedes terminal transaction state.
+The caller's existing Prepared/Committed journal remains the commit authority.
+Dependency materialization must succeed before clearing its pending flag.
+
+Agent journal wiring, healthy capture hooks, actual materialization, plugin and
+native Profile adapters, and the recovery UI are still pending. Manual capture
+can leave an unidentified staging directory after a crash; inventory fails closed
+and requires explicit cleanup rather than selecting or deleting an unproven
+candidate. Only synthetic data and fault injection were used, including real
+Windows junction fixtures. No physical power-cut guarantee was tested.
+
+The current Agent default remains port 3090 (`DEFAULT_AGENT_PORT`); port 0 above
+is the separately agreed target, not an implementation change in this phase.
+Runtime supply, cold clone/install/build/Node launch, source confirmation, and
+native GUI acceptance remain P0 work. System installer behavior will be covered
+by a real implementation with an injected test runner; this workstation's actual
+installation acceptance is restricted to portable mode.
