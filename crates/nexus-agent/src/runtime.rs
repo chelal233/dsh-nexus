@@ -11,6 +11,7 @@ use std::{
     io::Read,
     path::{Path, PathBuf},
     process::Stdio,
+    sync::{Arc, OnceLock},
     time::Duration,
 };
 
@@ -19,6 +20,7 @@ use nexus_protocol::{RuntimeListResponse, RuntimeToolStatus};
 use tokio::{
     io::AsyncReadExt,
     process::{Child, Command},
+    sync::Semaphore,
     time::{timeout_at, Instant},
 };
 
@@ -31,6 +33,7 @@ const MAX_SYSTEM_CANDIDATES: usize = 32;
 const MAX_SYSTEM_PATH_ENTRIES: usize = 256;
 const MAX_PORTABLE_RUNTIME_ENTRIES: usize = 64;
 const MAX_PORTABLE_CANDIDATES: usize = 64;
+const MAX_BLOCKING_FS_OPERATIONS: usize = 3;
 
 const REASON_NOT_FOUND: &str = "not_found";
 const REASON_PROBE_CWD_UNAVAILABLE: &str = "probe_cwd_unavailable";
@@ -69,13 +72,117 @@ const PRODUCTION_PROBE_BUDGET: ProbeBudget = ProbeBudget {
     cleanup: CHILD_CLEANUP_TIMEOUT,
 };
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 struct ProbeConfig {
     search_path: Option<OsString>,
     data_root: PathBuf,
     data_root_is_safe: bool,
     portable_root: PathBuf,
     probe_cwd: Option<PathBuf>,
+    blocking_fs: BlockingFs,
+    blocking_hooks: BlockingHooks,
+    probe_lifecycle: ProbeLifecycle,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum BlockingStage {
+    Configure,
+    SystemDirectory,
+    PortableRoot,
+    ProbeCandidate,
+}
+
+#[derive(Clone, Default)]
+struct BlockingHooks {
+    #[cfg(test)]
+    callback: Option<Arc<dyn Fn(BlockingStage, &Path) + Send + Sync>>,
+}
+
+#[derive(Clone)]
+struct BlockingFs {
+    permits: Arc<Semaphore>,
+}
+
+impl BlockingFs {
+    #[cfg(test)]
+    fn new(limit: usize) -> Self {
+        Self {
+            permits: Arc::new(Semaphore::new(limit)),
+        }
+    }
+
+    async fn run<T, F>(&self, deadline: Instant, operation: F) -> Option<T>
+    where
+        T: Send + 'static,
+        F: FnOnce() -> T + Send + 'static,
+    {
+        if Instant::now() >= deadline {
+            return None;
+        }
+        let permit = timeout_at(deadline, Arc::clone(&self.permits).acquire_owned())
+            .await
+            .ok()?
+            .ok()?;
+        if Instant::now() >= deadline {
+            return None;
+        }
+        let task = tokio::task::spawn_blocking(move || {
+            let _permit = permit;
+            operation()
+        });
+        timeout_at(deadline, task).await.ok()?.ok()
+    }
+}
+
+fn production_blocking_fs() -> BlockingFs {
+    static PERMITS: OnceLock<Arc<Semaphore>> = OnceLock::new();
+    BlockingFs {
+        permits: Arc::clone(
+            PERMITS.get_or_init(|| Arc::new(Semaphore::new(MAX_BLOCKING_FS_OPERATIONS))),
+        ),
+    }
+}
+
+#[derive(Clone, Default)]
+struct ProbeLifecycle {
+    #[cfg(test)]
+    sender: Option<tokio::sync::mpsc::UnboundedSender<ProbeLifecycleEvent>>,
+}
+
+#[cfg(test)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ProbeLifecycleEvent {
+    Started,
+    Finished { reaped: bool },
+}
+
+impl ProbeLifecycle {
+    fn started(&self) {
+        #[cfg(test)]
+        if let Some(sender) = &self.sender {
+            let _ = sender.send(ProbeLifecycleEvent::Started);
+        }
+    }
+
+    fn finished(&self, reaped: bool) {
+        #[cfg(test)]
+        if let Some(sender) = &self.sender {
+            let _ = sender.send(ProbeLifecycleEvent::Finished { reaped });
+        }
+        #[cfg(not(test))]
+        let _ = reaped;
+    }
+}
+
+impl BlockingHooks {
+    fn notify(&self, stage: BlockingStage, path: &Path) {
+        #[cfg(test)]
+        if let Some(callback) = &self.callback {
+            callback(stage, path);
+        }
+        #[cfg(not(test))]
+        let _ = (stage, path);
+    }
 }
 
 struct ProbeFailure {
@@ -91,17 +198,32 @@ struct ProbeResult {
 }
 
 impl ProbeConfig {
-    fn from_paths(paths: &NexusPaths) -> Self {
-        let data_root_is_safe = fs::symlink_metadata(&paths.root)
-            .map(|metadata| !is_reparse_point(&metadata))
-            .unwrap_or(false);
-        let data_root = fs::canonicalize(&paths.root).unwrap_or_else(|_| paths.root.clone());
+    fn from_paths(
+        paths: &NexusPaths,
+        blocking_fs: BlockingFs,
+        blocking_hooks: BlockingHooks,
+    ) -> Self {
+        blocking_hooks.notify(BlockingStage::Configure, &paths.root);
+        let root_is_remote = is_remote_path(&paths.root);
+        let data_root_is_safe = !root_is_remote
+            && fs::symlink_metadata(&paths.root)
+                .map(|metadata| !is_reparse_point(&metadata))
+                .unwrap_or(false);
+        let data_root = if root_is_remote {
+            paths.root.clone()
+        } else {
+            fs::canonicalize(&paths.root).unwrap_or_else(|_| paths.root.clone())
+        };
+        let data_root_is_safe = data_root_is_safe && !is_remote_path(&data_root);
         Self {
             search_path: env::var_os("PATH"),
             data_root,
             data_root_is_safe,
             portable_root: paths.root.join("runtimes"),
             probe_cwd: select_probe_cwd(probe_cwd_candidates(paths)),
+            blocking_fs,
+            blocking_hooks,
+            probe_lifecycle: ProbeLifecycle::default(),
         }
     }
 }
@@ -121,29 +243,94 @@ fn probe_cwd_candidates(paths: &NexusPaths) -> Vec<PathBuf> {
 
 /// Observe every known runtime tool. Results are ordered as `RUNTIME_TOOLS`.
 pub async fn observe_runtimes(paths: &NexusPaths) -> RuntimeListResponse {
-    let config = ProbeConfig::from_paths(paths);
+    observe_runtimes_with_budget(
+        paths,
+        PRODUCTION_PROBE_BUDGET,
+        production_blocking_fs(),
+        BlockingHooks::default(),
+    )
+    .await
+}
+
+async fn observe_runtimes_with_budget(
+    paths: &NexusPaths,
+    budget: ProbeBudget,
+    blocking_fs: BlockingFs,
+    blocking_hooks: BlockingHooks,
+) -> RuntimeListResponse {
+    let deadline = Instant::now() + budget.round;
+    let owned_paths = paths.clone();
+    let config_blocking_fs = blocking_fs.clone();
+    let config = blocking_fs
+        .run(deadline, move || {
+            ProbeConfig::from_paths(&owned_paths, config_blocking_fs, blocking_hooks)
+        })
+        .await;
+    let Some(config) = config else {
+        return RuntimeListResponse::new(
+            RUNTIME_TOOLS
+                .iter()
+                .map(|name| budget_exceeded_status(name))
+                .collect(),
+        );
+    };
     let (git, node, pnpm) = tokio::join!(
-        observe_tool("git", config.clone()),
-        observe_tool("node", config.clone()),
-        observe_tool("pnpm", config),
+        observe_tool_until("git", config.clone(), deadline, budget),
+        observe_tool_until("node", config.clone(), deadline, budget),
+        observe_tool_until("pnpm", config, deadline, budget),
     );
     let tools = vec![git, node, pnpm];
     debug_assert_eq!(tools.len(), RUNTIME_TOOLS.len());
     RuntimeListResponse::new(tools)
 }
 
+#[cfg(test)]
 async fn observe_tool(name: &str, config: ProbeConfig) -> RuntimeToolStatus {
     observe_tool_with_budget(name, config, PRODUCTION_PROBE_BUDGET).await
 }
 
+#[cfg(test)]
 async fn observe_tool_with_budget(
     name: &str,
     config: ProbeConfig,
     budget: ProbeBudget,
 ) -> RuntimeToolStatus {
-    let mut first_failure = None;
     let deadline = Instant::now() + budget.round;
-    for path in system_candidates(name, config.search_path.as_deref()) {
+    observe_tool_until(name, config, deadline, budget).await
+}
+
+async fn observe_tool_until(
+    name: &str,
+    config: ProbeConfig,
+    deadline: Instant,
+    budget: ProbeBudget,
+) -> RuntimeToolStatus {
+    let mut first_failure = None;
+    let system_context = first_system_candidate_context(name, config.search_path.as_deref());
+    let search_path = config.search_path.clone();
+    let system_name = name.to_owned();
+    let system_hooks = config.blocking_hooks.clone();
+    let system = config
+        .blocking_fs
+        .run(deadline, move || {
+            system_candidates(
+                &system_name,
+                search_path.as_deref(),
+                &system_hooks,
+                deadline,
+            )
+        })
+        .await;
+    let Some(system) = system else {
+        record_failure(
+            &mut first_failure,
+            "system",
+            system_context.as_deref().unwrap_or_else(|| Path::new(name)),
+            REASON_PROBE_BUDGET_EXCEEDED,
+        );
+        return unavailable_status(name, first_failure);
+    };
+    for path in system {
         if Instant::now() >= deadline {
             record_failure(
                 &mut first_failure,
@@ -153,7 +340,7 @@ async fn observe_tool_with_budget(
             );
             break;
         }
-        match probe_path(name, &path, config.probe_cwd.as_deref(), deadline, budget).await {
+        match probe_path(name, &path, &config, deadline, budget).await {
             Ok(version) => return available_status(name, version, "system", &path),
             Err(reason) => record_failure(&mut first_failure, "system", &path, reason),
         }
@@ -171,9 +358,25 @@ async fn observe_tool_with_budget(
             );
         }
         let portable = if Instant::now() < deadline {
-            portable_candidates(name, &config)
+            let portable_config = config.clone();
+            let portable_name = name.to_owned();
+            config
+                .blocking_fs
+                .run(deadline, move || {
+                    portable_candidates(&portable_name, &portable_config, deadline)
+                })
+                .await
         } else {
-            Vec::new()
+            None
+        };
+        let Some(portable) = portable else {
+            record_failure(
+                &mut first_failure,
+                "nexus",
+                &config.portable_root,
+                REASON_PROBE_BUDGET_EXCEEDED,
+            );
+            return unavailable_status(name, first_failure);
         };
         for path in portable {
             if Instant::now() >= deadline {
@@ -185,7 +388,7 @@ async fn observe_tool_with_budget(
                 );
                 break;
             }
-            match probe_path(name, &path, config.probe_cwd.as_deref(), deadline, budget).await {
+            match probe_path(name, &path, &config, deadline, budget).await {
                 Ok(version) => return available_status(name, version, "nexus", &path),
                 Err(reason) => record_failure(&mut first_failure, "nexus", &path, reason),
             }
@@ -193,6 +396,17 @@ async fn observe_tool_with_budget(
     }
 
     unavailable_status(name, first_failure)
+}
+
+fn budget_exceeded_status(name: &str) -> RuntimeToolStatus {
+    RuntimeToolStatus {
+        name: name.to_owned(),
+        available: false,
+        version: None,
+        source: None,
+        path: None,
+        reason: Some(REASON_PROBE_BUDGET_EXCEEDED.to_owned()),
+    }
 }
 
 fn record_failure(
@@ -240,14 +454,29 @@ fn unavailable_status(name: &str, failure: Option<ProbeFailure>) -> RuntimeToolS
     }
 }
 
-fn system_candidates(name: &str, search_path: Option<&OsStr>) -> Vec<PathBuf> {
+fn system_candidates(
+    name: &str,
+    search_path: Option<&OsStr>,
+    blocking_hooks: &BlockingHooks,
+    deadline: Instant,
+) -> Vec<PathBuf> {
     let Some(search_path) = search_path else {
         return Vec::new();
     };
 
     let mut candidates = Vec::new();
     for directory in env::split_paths(search_path).take(MAX_SYSTEM_PATH_ENTRIES) {
+        if Instant::now() >= deadline {
+            break;
+        }
+        if !directory.is_absolute() || is_remote_path(&directory) {
+            continue;
+        }
+        blocking_hooks.notify(BlockingStage::SystemDirectory, &directory);
         for executable_name in executable_names(name) {
+            if Instant::now() >= deadline {
+                return candidates;
+            }
             let Some(path) = canonical_file(&directory.join(executable_name)) else {
                 continue;
             };
@@ -262,10 +491,26 @@ fn system_candidates(name: &str, search_path: Option<&OsStr>) -> Vec<PathBuf> {
     candidates
 }
 
-fn portable_candidates(name: &str, config: &ProbeConfig) -> Vec<PathBuf> {
+fn first_system_candidate_context(name: &str, search_path: Option<&OsStr>) -> Option<PathBuf> {
+    let executable = executable_names(name).into_iter().next()?;
+    env::split_paths(search_path?).find_map(|directory| {
+        (directory.is_absolute() && !is_unc_path(&directory)).then(|| directory.join(executable))
+    })
+}
+
+fn portable_candidates(name: &str, config: &ProbeConfig, deadline: Instant) -> Vec<PathBuf> {
     if !config.data_root_is_safe {
         return Vec::new();
     }
+    if Instant::now() >= deadline
+        || is_remote_path(&config.data_root)
+        || is_remote_path(&config.portable_root)
+    {
+        return Vec::new();
+    }
+    config
+        .blocking_hooks
+        .notify(BlockingStage::PortableRoot, &config.portable_root);
     let Some(data_root) = canonical_directory(&config.data_root) else {
         return Vec::new();
     };
@@ -278,6 +523,9 @@ fn portable_candidates(name: &str, config: &ProbeConfig) -> Vec<PathBuf> {
         return Vec::new();
     };
     for entry in entries.take(MAX_PORTABLE_RUNTIME_ENTRIES) {
+        if Instant::now() >= deadline {
+            break;
+        }
         let Ok(entry) = entry else {
             continue;
         };
@@ -305,6 +553,9 @@ fn portable_candidates(name: &str, config: &ProbeConfig) -> Vec<PathBuf> {
     roots.push(portable_root.clone());
     roots.extend(runtime_dirs);
     for runtime_dir in roots {
+        if Instant::now() >= deadline {
+            return candidates;
+        }
         for subdirectory in ["", "bin", "cmd", "node_modules/.bin"] {
             let directory = if subdirectory.is_empty() {
                 runtime_dir.clone()
@@ -312,6 +563,9 @@ fn portable_candidates(name: &str, config: &ProbeConfig) -> Vec<PathBuf> {
                 runtime_dir.join(subdirectory)
             };
             for executable_name in executable_names(name) {
+                if Instant::now() >= deadline {
+                    return candidates;
+                }
                 let Some(path) =
                     canonical_file_within(&portable_root, &directory.join(executable_name))
                 else {
@@ -352,10 +606,45 @@ fn executable_names(name: &str) -> Vec<&'static str> {
 async fn probe_path(
     name: &str,
     path: &Path,
-    probe_cwd: Option<&Path>,
+    config: &ProbeConfig,
     deadline: Instant,
     budget: ProbeBudget,
 ) -> Result<String, &'static str> {
+    let candidate = path.to_owned();
+    let probe_cwd = config.probe_cwd.clone();
+    let blocking_hooks = config.blocking_hooks.clone();
+    let command = config
+        .blocking_fs
+        .run(deadline, move || {
+            if Instant::now() >= cleanup_start(deadline, budget.cleanup) {
+                return Err(REASON_PROBE_BUDGET_EXCEEDED);
+            }
+            blocking_hooks.notify(BlockingStage::ProbeCandidate, &candidate);
+            prepare_probe_command(&candidate, probe_cwd.as_deref())
+        })
+        .await
+        .ok_or(REASON_PROBE_BUDGET_EXCEEDED)??;
+
+    let lifecycle = config.probe_lifecycle.clone();
+    // Keep the child-owning future alive when a caller cancels this probe.
+    // The detached task has its own child and cleanup deadlines, so dropping
+    // an HTTP request cannot strand an unbounded process wait.
+    let result = tokio::spawn(run_version_probe_observed(
+        command, deadline, budget, lifecycle,
+    ))
+    .await
+    .unwrap_or(ProbeResult {
+        output: None,
+        reaped: false,
+    });
+    if !result.reaped {
+        return Err(REASON_PROBE_FAILED);
+    }
+    let output = result.output.ok_or(REASON_PROBE_FAILED)?;
+    parse_version(name, &output).ok_or(REASON_INVALID_VERSION_OUTPUT)
+}
+
+fn prepare_probe_command(path: &Path, probe_cwd: Option<&Path>) -> Result<Command, &'static str> {
     // A Corepack-generated .cmd can download a manager and mutate the user's
     // Corepack cache. We cannot prove it is a read-only observation, so skip
     // the shim. A later runtime provisioning phase may resolve it explicitly.
@@ -382,21 +671,7 @@ async fn probe_path(
         .current_dir(probe_cwd)
         .kill_on_drop(true);
     apply_probe_environment(&mut command);
-
-    // Keep the child-owning future alive when a caller cancels this probe.
-    // The detached task has its own child and cleanup deadlines, so dropping
-    // an HTTP request cannot strand an unbounded process wait.
-    let result = tokio::spawn(run_version_probe(command, deadline, budget))
-        .await
-        .unwrap_or(ProbeResult {
-            output: None,
-            reaped: false,
-        });
-    if !result.reaped {
-        return Err(REASON_PROBE_FAILED);
-    }
-    let output = result.output.ok_or(REASON_PROBE_FAILED)?;
-    parse_version(name, &output).ok_or(REASON_INVALID_VERSION_OUTPUT)
+    Ok(command)
 }
 
 fn version_command(path: &Path) -> Option<Command> {
@@ -461,12 +736,37 @@ fn system_command_processor() -> Option<PathBuf> {
     canonical_file(&PathBuf::from(system_root).join("System32").join("cmd.exe"))
 }
 
+#[cfg(test)]
 async fn run_version_probe(
-    mut command: Command,
+    command: Command,
     deadline: Instant,
     budget: ProbeBudget,
 ) -> ProbeResult {
-    if Instant::now() >= deadline {
+    run_version_probe_observed(command, deadline, budget, ProbeLifecycle::default()).await
+}
+
+async fn run_version_probe_observed(
+    command: Command,
+    deadline: Instant,
+    budget: ProbeBudget,
+    lifecycle: ProbeLifecycle,
+) -> ProbeResult {
+    let result = run_version_probe_inner(command, deadline, budget, &lifecycle).await;
+    lifecycle.finished(result.reaped);
+    result
+}
+
+async fn run_version_probe_inner(
+    mut command: Command,
+    deadline: Instant,
+    budget: ProbeBudget,
+    lifecycle: &ProbeLifecycle,
+) -> ProbeResult {
+    let child_deadline = std::cmp::min(
+        cleanup_start(deadline, budget.cleanup),
+        Instant::now() + budget.child,
+    );
+    if Instant::now() >= child_deadline {
         return ProbeResult {
             output: None,
             reaped: true,
@@ -481,10 +781,11 @@ async fn run_version_probe(
             }
         }
     };
+    lifecycle.started();
     let stdout = match child.stdout.take() {
         Some(stdout) => stdout,
         None => {
-            let reaped = stop_child(&mut child, budget.cleanup).await;
+            let reaped = stop_child(&mut child, cleanup_deadline(deadline, budget.cleanup)).await;
             return ProbeResult {
                 output: None,
                 reaped,
@@ -492,11 +793,6 @@ async fn run_version_probe(
         }
     };
 
-    // Reserve the cleanup window inside the round budget so a timed-out
-    // child cannot make the next candidate wait beyond the HTTP client's
-    // bounded request window.
-    let probe_window = budget.round.saturating_sub(budget.cleanup);
-    let child_deadline = std::cmp::min(deadline, Instant::now() + budget.child.min(probe_window));
     let result = timeout_at(child_deadline, async {
         let mut bytes = Vec::new();
         let mut limited = stdout.take((MAX_PROBE_OUTPUT_BYTES + 1) as u64);
@@ -513,17 +809,22 @@ async fn run_version_probe(
 
     let (output, mut reaped) = result.unwrap_or((None, false));
     if !reaped {
-        reaped = stop_child(&mut child, budget.cleanup).await;
+        reaped = stop_child(&mut child, cleanup_deadline(deadline, budget.cleanup)).await;
     }
     ProbeResult { output, reaped }
 }
 
-async fn stop_child(child: &mut Child, cleanup_timeout: Duration) -> bool {
+fn cleanup_start(deadline: Instant, cleanup: Duration) -> Instant {
+    deadline.checked_sub(cleanup).unwrap_or(deadline)
+}
+
+fn cleanup_deadline(deadline: Instant, cleanup: Duration) -> Instant {
+    std::cmp::min(deadline, Instant::now() + cleanup)
+}
+
+async fn stop_child(child: &mut Child, deadline: Instant) -> bool {
     let _ = child.start_kill();
-    matches!(
-        timeout_at(Instant::now() + cleanup_timeout, child.wait()).await,
-        Ok(Ok(_))
-    )
+    matches!(timeout_at(deadline, child.wait()).await, Ok(Ok(_)))
 }
 
 fn parse_version(name: &str, output: &[u8]) -> Option<String> {
@@ -719,13 +1020,83 @@ fn is_safe_cmd_path(path: &Path) -> bool {
 }
 
 fn canonical_file(path: &Path) -> Option<PathBuf> {
+    if is_remote_path(path) {
+        return None;
+    }
     let path = fs::canonicalize(path).ok()?;
+    if is_remote_path(&path) {
+        return None;
+    }
     fs::metadata(&path).ok()?.is_file().then_some(path)
 }
 
 fn canonical_directory(path: &Path) -> Option<PathBuf> {
+    if is_remote_path(path) {
+        return None;
+    }
     let path = fs::canonicalize(path).ok()?;
+    if is_remote_path(&path) {
+        return None;
+    }
     fs::metadata(&path).ok()?.is_dir().then_some(path)
+}
+
+fn is_remote_path(path: &Path) -> bool {
+    #[cfg(windows)]
+    {
+        use std::path::{Component, Prefix};
+
+        match path.components().next() {
+            Some(Component::Prefix(prefix)) => match prefix.kind() {
+                Prefix::UNC(_, _) | Prefix::VerbatimUNC(_, _) => true,
+                Prefix::Disk(drive) | Prefix::VerbatimDisk(drive) => windows_drive_is_remote(drive),
+                Prefix::DeviceNS(_) | Prefix::Verbatim(_) => true,
+            },
+            _ => false,
+        }
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = path;
+        false
+    }
+}
+
+fn is_unc_path(path: &Path) -> bool {
+    #[cfg(windows)]
+    {
+        use std::path::{Component, Prefix};
+
+        matches!(
+            path.components().next(),
+            Some(Component::Prefix(prefix))
+                if matches!(prefix.kind(), Prefix::UNC(_, _) | Prefix::VerbatimUNC(_, _))
+        )
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = path;
+        false
+    }
+}
+
+#[cfg(windows)]
+fn windows_drive_is_remote(drive: u8) -> bool {
+    const DRIVE_REMOTE: u32 = 4;
+    #[link(name = "kernel32")]
+    extern "system" {
+        fn GetDriveTypeW(root_path_name: *const u16) -> u32;
+    }
+
+    let root = [
+        drive.to_ascii_uppercase() as u16,
+        b':' as u16,
+        b'\\' as u16,
+        0,
+    ];
+    // SAFETY: root is a local, NUL-terminated `X:\\` UTF-16 buffer that lives
+    // for the duration of this read-only Win32 query.
+    unsafe { GetDriveTypeW(root.as_ptr()) == DRIVE_REMOTE }
 }
 
 fn canonical_portable_root(data_root: &Path, portable_root: &Path) -> Option<PathBuf> {
@@ -791,16 +1162,25 @@ fn display_path(path: &Path) -> String {
 
 fn select_probe_cwd(candidates: impl IntoIterator<Item = PathBuf>) -> Option<PathBuf> {
     candidates.into_iter().find_map(|candidate| {
+        if is_remote_path(&candidate) {
+            return None;
+        }
         let canonical = fs::canonicalize(candidate).ok()?;
+        if is_remote_path(&canonical) {
+            return None;
+        }
         is_safe_probe_cwd(&canonical).then_some(canonical)
     })
 }
 
 fn is_safe_probe_cwd(path: &Path) -> bool {
+    if is_remote_path(path) {
+        return false;
+    }
     let Ok(path) = fs::canonicalize(path) else {
         return false;
     };
-    if !path.is_dir() {
+    if is_remote_path(&path) || !path.is_dir() {
         return false;
     }
     // Corepack walks upward from cwd when looking for packageManager. Check
@@ -838,7 +1218,10 @@ mod tests {
     use super::*;
     use std::{
         fs,
-        sync::atomic::{AtomicU64, Ordering},
+        sync::{
+            atomic::{AtomicU64, AtomicUsize, Ordering},
+            Condvar, Mutex,
+        },
     };
 
     static FIXTURE_COUNTER: AtomicU64 = AtomicU64::new(0);
@@ -963,7 +1346,290 @@ mod tests {
             data_root_is_safe: true,
             portable_root: root.join("data/runtimes"),
             probe_cwd: Some(probe_cwd),
+            blocking_fs: BlockingFs::new(MAX_BLOCKING_FS_OPERATIONS),
+            blocking_hooks: BlockingHooks::default(),
+            probe_lifecycle: ProbeLifecycle::default(),
         }
+    }
+
+    #[derive(Clone)]
+    struct BlockingGate(Arc<(Mutex<bool>, Condvar)>);
+
+    impl BlockingGate {
+        fn new() -> Self {
+            Self(Arc::new((Mutex::new(false), Condvar::new())))
+        }
+
+        fn wait(&self) {
+            let (lock, ready) = &*self.0;
+            let mut released = lock.lock().expect("release lock");
+            while !*released {
+                released = ready.wait(released).expect("release wait");
+            }
+        }
+
+        fn release(&self) {
+            let (lock, ready) = &*self.0;
+            *lock.lock().expect("release lock") = true;
+            ready.notify_all();
+        }
+    }
+
+    fn blocking_stage_hook(
+        target: BlockingStage,
+        target_index: usize,
+    ) -> (
+        BlockingHooks,
+        tokio::sync::oneshot::Receiver<()>,
+        BlockingGate,
+    ) {
+        let (entered_tx, entered_rx) = tokio::sync::oneshot::channel();
+        let entered_tx = Arc::new(Mutex::new(Some(entered_tx)));
+        let index = Arc::new(AtomicUsize::new(0));
+        let gate = BlockingGate::new();
+        let hooks = BlockingHooks {
+            callback: Some(Arc::new({
+                let entered_tx = Arc::clone(&entered_tx);
+                let index = Arc::clone(&index);
+                let gate = gate.clone();
+                move |stage, _| {
+                    if stage != target || index.fetch_add(1, Ordering::SeqCst) != target_index {
+                        return;
+                    }
+                    if let Some(sender) = entered_tx.lock().expect("sender lock").take() {
+                        let _ = sender.send(());
+                    }
+                    gate.wait();
+                }
+            })),
+        };
+        (hooks, entered_rx, gate)
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn slow_system_enumeration_cannot_block_the_round_response() {
+        let root = fixture_root("slow-enumeration");
+        let search_dir = root.join("system");
+        fs::create_dir_all(&search_dir).expect("system directory creates");
+        let mut config = config_for(&root, Some(&search_dir));
+        let (hooks, entered_rx, gate) = blocking_stage_hook(BlockingStage::SystemDirectory, 0);
+        config.blocking_hooks = hooks;
+        let budget = ProbeBudget {
+            round: Duration::from_millis(75),
+            child: Duration::from_millis(25),
+            cleanup: Duration::from_millis(10),
+        };
+
+        let observation = tokio::spawn(observe_tool_with_budget("pnpm", config, budget));
+        entered_rx.await.expect("enumeration entered");
+        let bounded = tokio::time::timeout(Duration::from_millis(200), observation).await;
+        gate.release();
+        assert!(bounded.is_ok(), "enumeration exceeded the round budget");
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn slow_probe_configuration_is_inside_the_request_budget() {
+        let root = fixture_root("slow-config");
+        let paths = NexusPaths::from_root(root.join("data"));
+        let (hooks, entered_rx, gate) = blocking_stage_hook(BlockingStage::Configure, 0);
+        let budget = ProbeBudget {
+            round: Duration::from_millis(75),
+            child: Duration::from_millis(25),
+            cleanup: Duration::from_millis(10),
+        };
+        let observation = tokio::spawn(async move {
+            observe_runtimes_with_budget(&paths, budget, BlockingFs::new(1), hooks).await
+        });
+        entered_rx.await.expect("configuration entered");
+        let bounded = tokio::time::timeout(Duration::from_millis(200), observation)
+            .await
+            .expect("configuration obeys request deadline")
+            .expect("observation task completes");
+        gate.release();
+        assert!(bounded
+            .tools
+            .iter()
+            .all(|tool| { tool.reason.as_deref() == Some(REASON_PROBE_BUDGET_EXCEEDED) }));
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[cfg(windows)]
+    #[tokio::test]
+    async fn unc_search_path_is_skipped_before_filesystem_enumeration() {
+        let root = fixture_root("unc-skip");
+        let mut config = config_for(&root, None);
+        config.search_path = Some(OsString::from(r"\\server\share"));
+        let entered = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        config.blocking_hooks.callback = Some(Arc::new({
+            let entered = Arc::clone(&entered);
+            move |stage, _| {
+                if stage == BlockingStage::SystemDirectory {
+                    entered.fetch_add(1, Ordering::SeqCst);
+                }
+            }
+        }));
+        let status = tokio::time::timeout(
+            Duration::from_millis(200),
+            observe_tool_with_budget(
+                "pnpm",
+                config,
+                ProbeBudget {
+                    round: Duration::from_millis(75),
+                    child: Duration::from_millis(25),
+                    cleanup: Duration::from_millis(10),
+                },
+            ),
+        )
+        .await
+        .expect("UNC path does not block the response");
+        assert!(!status.available);
+        assert_eq!(entered.load(Ordering::SeqCst), 0);
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn late_blocked_candidate_cannot_extend_round_or_cleanup_budget() {
+        let root = fixture_root("late-candidate");
+        let first = root.join("system-first");
+        let second = root.join("system-second");
+        write_hanging_fixture(&first, "pnpm");
+        write_version_fixture(&second, "pnpm", "10.15.0");
+        let mut config = config_for(&root, None);
+        config.search_path =
+            Some(env::join_paths([&first, &second]).expect("fixture PATH encodes"));
+        let (hooks, entered_rx, gate) = blocking_stage_hook(BlockingStage::ProbeCandidate, 1);
+        config.blocking_hooks = hooks;
+        let budget = ProbeBudget {
+            round: Duration::from_millis(140),
+            child: Duration::from_millis(50),
+            cleanup: Duration::from_millis(20),
+        };
+        let observation = tokio::spawn(observe_tool_with_budget("pnpm", config, budget));
+        tokio::time::timeout(Duration::from_millis(120), entered_rx)
+            .await
+            .expect("second candidate is reached")
+            .expect("second candidate signal remains open");
+        let bounded = tokio::time::timeout(Duration::from_millis(240), observation).await;
+        gate.release();
+        assert!(
+            bounded.is_ok(),
+            "late candidate extended the round deadline"
+        );
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[tokio::test]
+    async fn cancelling_observer_keeps_detached_child_cleanup_bounded() {
+        let root = fixture_root("cancel-cleanup");
+        let system_dir = root.join("system");
+        write_hanging_fixture(&system_dir, "pnpm");
+        let mut config = config_for(&root, Some(&system_dir));
+        let (events_tx, mut events_rx) = tokio::sync::mpsc::unbounded_channel();
+        config.probe_lifecycle.sender = Some(events_tx);
+        let observation = tokio::spawn(observe_tool_with_budget(
+            "pnpm",
+            config,
+            ProbeBudget {
+                round: Duration::from_millis(180),
+                child: Duration::from_millis(80),
+                cleanup: Duration::from_millis(30),
+            },
+        ));
+        assert_eq!(
+            tokio::time::timeout(Duration::from_secs(1), events_rx.recv())
+                .await
+                .expect("probe starts")
+                .expect("probe event channel remains open"),
+            ProbeLifecycleEvent::Started
+        );
+        observation.abort();
+        let _ = observation.await;
+        let finished = tokio::time::timeout(Duration::from_millis(300), async {
+            loop {
+                if let Some(ProbeLifecycleEvent::Finished { reaped }) = events_rx.recv().await {
+                    break reaped;
+                }
+            }
+        })
+        .await
+        .expect("detached cleanup remains bounded");
+        assert!(finished, "cancelled probe must reap its child");
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn blocked_filesystem_workers_have_a_hard_concurrency_limit() {
+        let root = fixture_root("blocking-limit");
+        let search_dir = root.join("system");
+        fs::create_dir_all(&search_dir).expect("system directory creates");
+        let blocking_fs = BlockingFs::new(2);
+        let gate = BlockingGate::new();
+        let active = Arc::new(AtomicUsize::new(0));
+        let maximum = Arc::new(AtomicUsize::new(0));
+        let (entered_tx, mut entered_rx) = tokio::sync::mpsc::unbounded_channel();
+        let (finished_tx, mut finished_rx) = tokio::sync::mpsc::unbounded_channel();
+        let hooks = BlockingHooks {
+            callback: Some(Arc::new({
+                let gate = gate.clone();
+                let active = Arc::clone(&active);
+                let maximum = Arc::clone(&maximum);
+                move |stage, _| {
+                    if stage != BlockingStage::SystemDirectory {
+                        return;
+                    }
+                    let count = active.fetch_add(1, Ordering::SeqCst) + 1;
+                    maximum.fetch_max(count, Ordering::SeqCst);
+                    let _ = entered_tx.send(());
+                    gate.wait();
+                    active.fetch_sub(1, Ordering::SeqCst);
+                    let _ = finished_tx.send(());
+                }
+            })),
+        };
+        let mut config = config_for(&root, Some(&search_dir));
+        config.blocking_fs = blocking_fs;
+        config.blocking_hooks = hooks;
+        let budget = ProbeBudget {
+            round: Duration::from_millis(75),
+            child: Duration::from_millis(25),
+            cleanup: Duration::from_millis(10),
+        };
+        let holders = (0..2)
+            .map(|_| tokio::spawn(observe_tool_with_budget("pnpm", config.clone(), budget)))
+            .collect::<Vec<_>>();
+        for _ in 0..2 {
+            tokio::time::timeout(Duration::from_secs(1), entered_rx.recv())
+                .await
+                .expect("bounded worker enters")
+                .expect("entry channel remains open");
+        }
+        let waiters = (0..6)
+            .map(|_| tokio::spawn(observe_tool_with_budget("pnpm", config.clone(), budget)))
+            .collect::<Vec<_>>();
+        for waiter in waiters {
+            tokio::time::timeout(Duration::from_millis(200), waiter)
+                .await
+                .expect("waiting request obeys deadline")
+                .expect("waiting observation completes");
+        }
+        for holder in holders {
+            tokio::time::timeout(Duration::from_millis(200), holder)
+                .await
+                .expect("holder request obeys deadline")
+                .expect("holder observation completes");
+        }
+        assert_eq!(maximum.load(Ordering::SeqCst), 2);
+        assert!(entered_rx.try_recv().is_err());
+        gate.release();
+        for _ in 0..2 {
+            tokio::time::timeout(Duration::from_secs(1), finished_rx.recv())
+                .await
+                .expect("blocked worker exits after release")
+                .expect("finish channel remains open");
+        }
+        assert_eq!(active.load(Ordering::SeqCst), 0);
+        let _ = fs::remove_dir_all(root);
     }
 
     #[tokio::test]
@@ -1140,7 +1806,15 @@ mod tests {
         assert_eq!(status.reason.as_deref(), Some(REASON_PROBE_BUDGET_EXCEEDED));
         assert_eq!(
             status.path.as_deref(),
-            Some(display_path(&fs::canonicalize(path).unwrap()).as_str())
+            Some(
+                display_path(
+                    &path
+                        .parent()
+                        .expect("fixture has parent")
+                        .join(executable_names("pnpm")[0]),
+                )
+                .as_str()
+            )
         );
         let _ = fs::remove_dir_all(root);
     }
@@ -1234,7 +1908,10 @@ mod tests {
         write_version_fixture(&outside, "pnpm", "10.3.0");
         symlink(&outside, &escaped).expect("portable escape symlink creates");
         let config = config_for(&root, None);
-        assert!(portable_candidates("pnpm", &config).is_empty());
+        assert!(
+            portable_candidates("pnpm", &config, Instant::now() + Duration::from_secs(1))
+                .is_empty()
+        );
         let _ = fs::remove_dir_all(root);
     }
 

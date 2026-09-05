@@ -1,4 +1,4 @@
-updated: 2026-09-05 00:39 by ZCode (GLM, 接管 Codex 会话后的需求对账)
+updated: 2026-09-05 11:28 by Codex (P0-4a runtime request-budget 修复待独立复核)
 
 # dsh-nexus 项目状态与需求基线
 
@@ -77,17 +77,19 @@ updated: 2026-09-05 00:39 by ZCode (GLM, 接管 Codex 会话后的需求对账)
 - Desktop Market 插件市场/广告（用户的"未来思考"）
 - Agent API 鉴权 token（文档标注未来协议变更）
 
-## 当前仓库状态（2026-09-05 11:04 更新，runtime-fix1 review-fix）
+## 当前仓库状态（2026-09-05 11:28 更新，runtime-budget Sol replacement）
 
 - **前序 Codex/ZCode 阶段已结束**：P0-1/P0-2/P0-3 的提交与既有验证记录保留；不再描述旧会话仍在收尾
 - **P0-1 已完成（提交 1e1838b feat: enumerate upstream release tags）**：GET /v1/releases/tags（git ls-remote --tags，复用 UpdateSpec.source 校验，timeout 默认 120s）、TagListResponse 协议类型、parse_ls_remote_tags 纯函数+单测（去重/剥 ^{}/倒序）、Tauri 白名单+测试、UpdatesView「上游标签」面板（按钮+下拉+已选显示）、i18n 中英。端到端实测：真实枚举 deepseek-harness 全部 tag（dsh-v0.1.3-alpha.1 最新在前）
 - **P0-2 已完成（提交 ec905f3 feat: bound release slots with explicit removal）**：ReleaseStore 加 max_slots（默认3，`with_max_slots`），config.json 新增 `releases.max_slots` section（1-32 校验，agent 启动时读取）；register/register_prepared 满槽返回 ResourceBusy→HTTP 409 `release_slots_full`（消息列出已有槽位）；新 `remove(id)` + `ReleaseAction::Remove`（quiescent 守卫，current/LKG 拒绝→`release_slot_protected` 409）；data_error_response 补 ResourceBusy→CONFLICT 映射；UI 槽位行加释放按钮（current/LKG 隐藏，标记"当前使用/上次可用"）。core 新增 2 个行为测试。端到端实测全过（a:201 b:201 c:409 满，promote 后 rm-current:409 rm-free:200）
 - **P0-3 已完成（提交 feat: switch release tag with install and promotion）**：UpdateAction::Switch + UpdateCommand.tag；`UpdateExecutor::switch_tag(tag)`——校验 tag→持 executor gate 持久化 config.ref_name=tag→已装同 version 槽位直 promote（秒切快速路径）→未装则走 install_owned（clone --branch tag→构建→register_prepared）→成功后自动 promote；handler 层 quiescent 守卫（Harness 运行中拒绝 release_change_conflict）；UI 已选 tag 显示"切换到此标签"主按钮。端到端实测：register version=dsh-v0.1.2-rc.1 → switch → current=harness-x，config ref 已更新。nexus-cli UpdateCommand 字段同步
-- **P0-4a runtime-discovery review-fix 当前接管**：隔离分支 `codex/nexus-takeover/runtime-fix1`（基于 `fc0c5d1`）保留前序只读 GET `/v1/runtime`，并完善 system 优先、`<data-root>/runtimes` 固定浅层 portable 候选、绝对 path/source/version 和 unavailable reason；git 保持 PATH-only
+- **P0-4a runtime-budget 修复待主控独立复核**：隔离分支 `codex/nexus-takeover/runtime-budget` 固定基线 `69d508493102c1460adb679f34aa89c9acebb630`；只改 `runtime.rs`、阶段报告与本状态文件，不合并、不部署
+- **失败根因已修复**：原先配置、PATH/portable 枚举与 shim/cwd 文件检查在 async deadline 外同步执行，UNC/映射盘/异常文件系统可突破 6 秒声明；晚候选的 child deadline 后还会另加 cleanup。现在整个 runtime 请求从配置起共用 6 秒 absolute deadline，同步文件系统工作经全局 3 许可 bounded blocking owner，先取许可再 spawn，后续请求不会无限堆积挂起 blocking task
+- **真实保证边界**：标准 Rust 不能强杀已阻塞的同步文件系统线程；超时任务会继续占用许可直到返回，但永久占位最多 3 个，所有后续请求仍按 deadline 返回。Windows UNC 和映射网络盘候选预拒绝；child 只运行到 `round_deadline - cleanup`，kill/wait 使用同一轮次剩余预算，取消调用方不会取消 detached child owner
 - **P0-4a 安全边界已补齐**：PATH/PATHEXT 受限且候选有上限；Corepack canonical/shebang/script 检测 fail-closed，Corepack 不执行并关闭 network/download prompt/default latest/auto pin/project spec；探测 cwd 拒绝祖先 manifest；cmd/bat 采用绝对系统 command processor、拒绝 shell 元字符并隐藏控制台；输出/轮次/子进程/kill+wait 清理有界；数据根与 runtimes 根 reparse point 拒绝，portable canonical 候选必须留在 runtimes 根内
 - **P0-1 共享接线缺口已修复**：`nexus-launcher-core` Agent allowlist 补 `/v1/runtime` 与既有 `/v1/releases/tags`，两者只允许无 body GET；POST 和非空 GET body 拒绝；Tauri runtime 移除重复 validator，复用共享 gate
-- **P0-4a 验证已更新**：runtime 定向 20 项、Agent 82、launcher-core 11、protocol 11、Tauri 7 tests 均通过；Tauri 资源由本工作树 `CARGO_NET_OFFLINE=true` 准备脚本生成且被忽略。当前主机只有 Windows target，Unix Corepack/symlink 条件测试代码已添加但未在本机编译/实跑，Windows junction escape fixture 也未实跑
-- **当前阶段报告**：`artifacts/takeover/runtime-discovery-report.md`；本轮未启动真实 Harness、未安装/下载、未改 PATH 或用户配置
+- **P0-4a 验证已更新**：修复前受控慢枚举测试 exit 101；修复后 runtime 定向 26/26、Agent 88/88 与 doc-tests 通过。新增慢配置/枚举、UNC 跳过、晚候选阻塞、取消清理与 blocking owner 硬上限的确定性覆盖；既有 launcher-core 11、protocol 11、Tauri 7 基线未改且本轮按边界未重跑
+- **当前阶段报告**：`artifacts/takeover/runtime-discovery-report.md`；本轮未启动真实 Harness，未安装/下载，未改系统 PATH 或用户配置。Unix 分支、Windows junction/真实映射盘/GUI 仍明确未验
 - **P0-4b/c 与 UI 仍待做**：安装/下载、Corepack 显式配置、运行时注入和界面不属于本阶段
 - **Corepack 官方事实**：官方 `https://github.com/nodejs/corepack` 说明仅 Node `>=14.19` 且 `<25` 随 Node 附带 Corepack；不能假设所有 Node 版本自带 Corepack 或 pnpm 调用不会下载
 - 坑：i18n.ts 是 en+zh 两个同 key 对象，勿用全文件 key 去重；本机有钩子会把 	 转义还原成真实 TAB，Rust 里避免 char 转义字面量，用 split_whitespace 类方案
