@@ -840,7 +840,7 @@ fn tree_is_empty(tree: &OwnedProcessTree) -> io::Result<bool> {
 }
 
 #[cfg(windows)]
-fn create_kill_on_close_job() -> io::Result<windows_sys::Win32::Foundation::HANDLE> {
+pub(crate) fn create_kill_on_close_job() -> io::Result<windows_sys::Win32::Foundation::HANDLE> {
     use windows_sys::Win32::System::JobObjects::{
         CreateJobObjectW, JobObjectExtendedLimitInformation, SetInformationJobObject,
         JOBOBJECT_EXTENDED_LIMIT_INFORMATION, JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
@@ -868,12 +868,10 @@ fn create_kill_on_close_job() -> io::Result<windows_sys::Win32::Foundation::HAND
 }
 
 #[cfg(windows)]
-fn assign_child_to_job(
-    child: &Child,
+pub(crate) fn assign_process_to_job(
+    process: windows_sys::Win32::Foundation::HANDLE,
     job: windows_sys::Win32::Foundation::HANDLE,
 ) -> io::Result<()> {
-    use std::os::windows::io::AsRawHandle;
-    let process = child.as_raw_handle().cast();
     let ok =
         unsafe { windows_sys::Win32::System::JobObjects::AssignProcessToJobObject(job, process) };
     if ok == 0 {
@@ -882,6 +880,25 @@ fn assign_child_to_job(
         Ok(())
     }
 }
+
+pub(crate) fn assign_child_to_job(
+    child: &Child,
+    job: windows_sys::Win32::Foundation::HANDLE,
+) -> io::Result<()> {
+    use std::os::windows::io::AsRawHandle;
+    assign_process_to_job(child.as_raw_handle().cast(), job)
+}
+
+pub(crate) fn terminate_job_tree(job: usize) -> io::Result<()> {
+    use windows_sys::Win32::System::JobObjects::TerminateJobObject;
+    let ok = unsafe { TerminateJobObject(job as windows_sys::Win32::Foundation::HANDLE, 1) };
+    if ok == 0 {
+        Err(io::Error::last_os_error())
+    } else {
+        Ok(())
+    }
+}
+
 
 #[cfg(windows)]
 fn resume_process_primary_thread(process_id: u32) -> io::Result<()> {

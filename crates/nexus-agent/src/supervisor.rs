@@ -72,6 +72,12 @@ impl std::error::Error for HarnessSupervisorError {}
 
 const HARNESS_PROGRAM_ENV: &str = "NEXUS_HARNESS_PROGRAM";
 
+/// Process-wide Job Object handle (as usize) holding the running Harness
+/// process tree. Kill-on-close ties the whole tree to this Agent process;
+/// the stop path terminates the tree explicitly.
+#[cfg(not(test))]
+static HARNESS_JOB: std::sync::Mutex<Option<usize>> = std::sync::Mutex::new(None);
+
 struct SupervisorInner {
     child: Option<Child>,
     runtime: HarnessRuntimeInfo,
@@ -797,6 +803,21 @@ impl HarnessSupervisor {
                 return Err(HarnessSupervisorError::Spawn(error));
             };
             inner.runtime = HarnessRuntimeInfo::starting(pid, now);
+            #[cfg(all(windows, not(test)))]
+            {
+                // Tie the whole Harness process tree (plugin children
+                // included) to a kill-on-close Job Object owned by this
+                // Agent process.
+                if let Ok(job) = crate::dsh::create_kill_on_close_job() {
+                    if let Some(handle) = child.raw_handle() {
+                        if crate::dsh::assign_process_to_job(handle.cast(), job).is_ok() {
+                            if let Ok(mut slot) = HARNESS_JOB.lock() {
+                                *slot = Some(job as usize);
+                            }
+                        }
+                    }
+                }
+            }
             inner.child = Some(child);
             inner.start_ownership_pending = true;
             let owner_epoch = next_operation_epoch(&mut inner);
@@ -1019,6 +1040,16 @@ impl HarnessSupervisor {
             Ok(Some(exit)) => exit,
             Ok(None) => {
                 killed = true;
+                #[cfg(all(windows, not(test)))]
+                {
+                    // The graceful window elapsed without an exit: terminate
+                    // the entire job tree, not only the direct child.
+                    if let Ok(slot) = HARNESS_JOB.lock() {
+                        if let Some(job) = *slot {
+                            let _ = crate::dsh::terminate_job_tree(job);
+                        }
+                    }
+                }
                 if let Err(error) = child.kill().await {
                     self.restore_stop_child(
                         stop_generation,

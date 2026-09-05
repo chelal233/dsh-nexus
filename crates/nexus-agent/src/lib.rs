@@ -50,7 +50,7 @@ use nexus_protocol::{
     PluginRemoveResponse, ProfileAction, ProfileCommand, ProfileListResponse,
     ProfileSelectResponse, RecoveryLogTail, RecoveryStatusResponse, ReleaseAction, ReleaseCommand,
     ReleaseListResponse, RuntimeInstallMode, RuntimePlanRequest, RuntimeSource,
-    CheckpointManifest, SnapshotDetailResponse, SnapshotReference, StateResponse, TagListResponse,
+    CheckpointManifest, SnapshotReference, StateResponse, TagListResponse,
     UpdateAction, UpdateCommand, UpdateResponse, UpdateState,
 };
 use tokio::{
@@ -945,7 +945,7 @@ async fn execute_harness_action(
             // Repoint the profile module link farm at the running slot before
             // spawn: a crashed boot from a different slot can leave stale
             // official-package links that break plugin resolution.
-            heal_module_farm_best_effort(&state, &profile);
+            heal_module_farm_best_effort(&state);
             state
                 .supervisor
                 .start_with_profile_locked(&profile, &lifecycle)
@@ -1579,7 +1579,7 @@ async fn checkpoint_snapshot_read(
 /// the standard two-phase restore and materialization apply unchanged. The
 /// snapshot's harness version must still be an installed release slot.
 /// Best-effort module farm heal before Harness start. Never blocks a launch.
-fn heal_module_farm_best_effort(state: &AppState, profile: &str) {
+fn heal_module_farm_best_effort(state: &AppState) {
     let result = (|| -> io::Result<()> {
         let catalog = state.releases.load()?;
         let Some(current) = catalog.current_release.clone() else {
