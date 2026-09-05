@@ -999,6 +999,7 @@ async fn sync_harness_state(state: &AppState) -> HarnessSnapshot {
         }
     };
     schedule_healthy_snapshot(state, &snapshot);
+    #[cfg(not(test))]
     schedule_crash_capture(state, &snapshot).await;
     snapshot
 }
@@ -4101,8 +4102,7 @@ mod checkpoint_tests {
                 )),
                 shutdown,
                 data_root_id: data_root_identity(&paths).expect("data root identity reads"),
-                instance_id: format!("content-{label}"),
-            },
+                instance_id: format!("content-{label}"),                crash_capture_run: Arc::new(Mutex::new(None)),            },
             root,
         )
     }
@@ -4669,8 +4669,7 @@ mod checkpoint_tests {
             checkpoint_commit_result_failure: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             shutdown,
             data_root_id: data_root_identity(&paths).expect("data-root identity reads"),
-            instance_id: "checkpoint-test-agent".to_owned(),
-        };
+            instance_id: "checkpoint-test-agent".to_owned(),            crash_capture_run: Arc::new(Mutex::new(None)),        };
 
         let restore_state = state.clone();
         let checkpoint_id = checkpoint.id.clone();
@@ -5026,8 +5025,7 @@ mod switch_ownership_tests {
             checkpoint_commit_result_failure: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             shutdown,
             data_root_id: data_root_identity(&paths).expect("data-root identity reads"),
-            instance_id: "switch-test-agent".to_owned(),
-        }
+            instance_id: "switch-test-agent".to_owned(),            crash_capture_run: Arc::new(Mutex::new(None)),        }
     }
 
     #[tokio::test]

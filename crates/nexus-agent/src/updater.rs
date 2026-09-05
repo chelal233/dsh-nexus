@@ -691,7 +691,6 @@ pub async fn list_remote_tags(
 #[cfg(test)]
 mod tests {
     use super::{parse_ls_remote_tags, resolve_release_id, resolve_release_version, UpdateExecutor, UpdateExecutorError};
-    use crate::HarnessLaunchSpec;
     #[test]
     fn parse_ls_remote_tags_dedupes_and_reverses() {
         let stdout = "abc	refs/tags/v0.9.0
