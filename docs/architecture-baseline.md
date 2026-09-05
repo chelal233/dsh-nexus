@@ -850,3 +850,15 @@ Runtime supply, cold clone/install/build/Node launch, source confirmation, and
 native GUI acceptance remain P0 work. System installer behavior will be covered
 by a real implementation with an injected test runner; this workstation's actual
 installation acceptance is restricted to portable mode.
+
+## P0 runtime supply library (isolated, 2026-09-05)
+
+`nexus-runtime-supply` sits between the read-only release runtime planner and later cold-install orchestration. Its public flow is `RuntimeSupplyPlanner::plan(fresh RuntimePlanResponse)` followed by `RuntimeSupplier::execute_confirmed(fresh RuntimePlanResponse, server-held SupplyPlan, exact token, cancellation)`. The token is a deterministic SHA-256 over the complete typed plan. Execution does not trust a re-serialized plan alone: it checks the current foundation plan/host/destination/policy revision, reconstructs source requests from compiled policy, and re-observes reuse candidates before any publication.
+
+The library returns absolute `RuntimeConfig` pins with `system` or `nexus` ownership and does not persist them. The Agent must use the shared `ConfigStore::transaction` only after successful supply. Every later install/build/start/materialization/plugin/terminal caller continues through `resolve_runtime_command`, `build_runtime_child_env`, and `build_pnpm_args`; pnpm JavaScript entries are invoked as pinned Node plus the entry path.
+
+Official and npmmirror endpoints are typed and bounded. Node artifacts require a valid cleartext OpenPGP release checksum manifest from the compiled keyring and an exact SHA-256 match. pnpm portable artifacts require exact signed npm metadata and SHA-512 SRI. An exact existing Corepack cache is inspected read-only and probed as Node plus `pnpm.mjs`; Corepack itself is never run. The portable publisher rejects traversal, links/reparse points, devices, Windows-unsafe names, collisions, and size/count overflow, writes to same-volume owned staging, syncs content/metadata, and atomically renames a complete cache. Windows publication uses an OS-exclusive file handle; a crash may leave the marker filename, but no live lock, so the next owner can recover it safely.
+
+Windows probes own their descendant tree through a kill-on-close Job Object and bound output/time. System installation uses private fixed specifications for the verified Node MSI and pinned official pnpm user script. Timeout/cancellation after installer launch is an uncertain external state: the system installer is not blindly killed, the result requires a fresh observation, and no pin is returned until the expected absolute path reports the exact version.
+
+This crate is not yet an Agent route or persisted cold operation. It has not performed a real download, MSI/script installation, Corepack invocation, system PATH/config change, Harness launch, or GUI acceptance. See `artifacts/takeover/p0-runtime-supply-report.md` for verification and trust boundaries.

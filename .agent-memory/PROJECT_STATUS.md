@@ -124,3 +124,11 @@ updated: 2026-09-05 13:28 by Codex (P0 运行时与快照基础修复均独立�
 - 就绪探针：loopback 纯 HTTP(2xx) 或 `tcp://`（防 SSRF；官方 DSH 根页无 token 返回 401，故 tcp 探针）
 - Profile 渲染：`HarnessLaunchSpec.args` 中 `{profile}` / `{release}` / `{release_root}` 占位符
 - **共享 runtime 命令基元（已建，consumer 接线待后续）**：`RuntimeConfig` pins + `resolve_runtime_command` + `build_runtime_child_env` + `build_pnpm_args` 是 install/build/start/终端/插件/快照物化的唯一入口；不得在 consumer 复制 PATH、pnpm script 或 registry 参数构造
+
+## P0 runtime supply isolated segment (2026-09-05)
+
+- `nexus-runtime-supply` now provides exact, confirmed supply planning/execution for Windows portable and typed system paths. Plans bind the fresh foundation plan, policy revision, source/mode, host, absolute destination, exact versions, artifact digests/signing identities, cache identity, and ownership. Execution re-derives policy-owned requests and observations; caller URLs/argv are not accepted.
+- Reuse order is verified existing pins -> exact read-only Corepack pnpm cache -> complete Nexus-owned cache -> confirmed acquisition. Portable Node ZIP and exact pnpm npm tarball use publisher signature/checksum or npm signature/SRI verification, bounded safe extraction, version probes, same-volume staged atomic publication, directory sync, and concurrent reuse. Child processes use the existing shared runtime command/env primitives.
+- System Node MSI and official pnpm user script are represented by fixed internal specs and postflight absolute-path/version probes. Unknown timeout/cancellation returns `NeedsVerification` and no pin. Acceptance used injected runners only; no installer, Corepack shim, PATH/global config change, real DSH home, or Harness was run.
+- Offline crate tests pass 15/15 and crate-only strict Clippy passes. Full dependency Clippy remains blocked by seven pre-existing `nexus-protocol` style lints outside this segment. Report: `artifacts/takeover/p0-runtime-supply-report.md`.
+- This segment is library-only. Agent persisted orchestration/API/UI confirmation, cold clone/install/build/promotion, consumer wiring, and real portable build-to-launch acceptance remain P0 work.
