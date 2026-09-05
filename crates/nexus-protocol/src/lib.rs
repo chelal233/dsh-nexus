@@ -44,6 +44,11 @@ pub struct HealthResponse {
     pub data_root_id: String,
     /// Opaque per-process correlation value for launcher metadata.
     pub instance_id: String,
+    /// Absolute path of the running Agent executable. Launchers compare this
+    /// against their own resolved binary to detect a stale Agent left over
+    /// from an older build and restart it deliberately.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub binary_path: Option<String>,
     /// Capability version for the split Node `entry` + `args` Harness config.
     /// Missing in older Agent responses and therefore defaults to zero.
     #[serde(default)]
@@ -58,6 +63,7 @@ impl HealthResponse {
             status: HealthStatus::Ok,
             data_root_id,
             instance_id,
+            binary_path: None,
             harness_config_wire_version: HARNESS_CONFIG_WIRE_VERSION,
         }
     }
@@ -69,6 +75,7 @@ impl HealthResponse {
             status: HealthStatus::ShuttingDown,
             data_root_id,
             instance_id,
+            binary_path: None,
             harness_config_wire_version: HARNESS_CONFIG_WIRE_VERSION,
         }
     }

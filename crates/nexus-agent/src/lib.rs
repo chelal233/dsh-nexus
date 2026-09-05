@@ -627,11 +627,16 @@ fn add_console_cors_headers(response: &mut Response, origin: &str) {
 
 async fn health(State(state): State<AppState>) -> Json<HealthResponse> {
     let current = state.runtime.read().await;
-    let response = if current.lifecycle == AgentLifecycleState::ShuttingDown {
+    let mut response = if current.lifecycle == AgentLifecycleState::ShuttingDown {
         HealthResponse::shutting_down(state.data_root_id.clone(), state.instance_id.clone())
     } else {
         HealthResponse::healthy(state.data_root_id.clone(), state.instance_id.clone())
     };
+    if response.binary_path.is_none() {
+        response.binary_path = std::env::current_exe()
+            .ok()
+            .map(|path| path.to_string_lossy().into_owned());
+    }
     Json(response)
 }
 

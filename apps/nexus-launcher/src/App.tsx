@@ -1011,7 +1011,7 @@ function App() {
     const poll = async () => {
       await refresh();
       if (cancelled) return;
-      const interval = harnessPollState.current === "starting" ? 400 : 8000;
+      const interval = (harnessPollState.current === "starting" || harnessPollState.current === "failed") ? 400 : 8000;
       timer = window.setTimeout(() => void poll(), interval);
     };
     void poll();

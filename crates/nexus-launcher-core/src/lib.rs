@@ -662,16 +662,45 @@ impl AgentRuntime {
         Ok(health)
     }
 
+    /// Whether a probed Agent was started from the same binary this launcher
+    /// would spawn. Agents older than the `binary_path` field (None) are
+    /// adopted as-is for backward compatibility.
+    fn binary_is_fresh(&self, health: &HealthResponse) -> bool {
+        let Some(running) = health.binary_path.as_deref() else {
+            return true;
+        };
+        let Ok(resolved) = resolve_agent_program_with_resource_dir(
+            self.program.as_deref(),
+            self.resource_dir.as_deref(),
+        ) else {
+            return true;
+        };
+        let normalize = |value: &str| -> String { value.replace('/', "\\").to_lowercase() };
+        if normalize(running) == normalize(&resolved.to_string_lossy()) {
+            return true;
+        }
+        match (fs::canonicalize(running), fs::canonicalize(&resolved)) {
+            (Ok(a), Ok(b)) => a == b,
+            _ => false,
+        }
+    }
+
     pub async fn start(&self, wait_secs: u64) -> Result<AgentStartResult, AgentRuntimeError> {
         if let Ok(health) = self.probe().await {
-            self.remember_resolved_program();
-            return Ok(AgentStartResult {
-                health,
-                started: false,
-                port: self.config.port,
-                pid: self.child_pid(),
-                program: self.resolved_program(),
-            });
+            if self.binary_is_fresh(&health) {
+                self.remember_resolved_program();
+                return Ok(AgentStartResult {
+                    health,
+                    started: false,
+                    port: self.config.port,
+                    pid: self.child_pid(),
+                    program: self.resolved_program(),
+                });
+            }
+            // A running Agent from a different binary generation: stop it
+            // gracefully through its own endpoint so the fresh binary can
+            // take over, then fall through to a normal spawn.
+            let _ = self.stop(wait_secs).await;
         }
 
         let _operation = self.operation.lock().await;
