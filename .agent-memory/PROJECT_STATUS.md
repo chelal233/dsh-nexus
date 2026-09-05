@@ -9,6 +9,14 @@ eleases\...` 双路径 → Harness 启动 os error 267（目录名称无效）
 - **修正**：retarget 改为把值中**从开头到槽位段结束**的整个前缀替换为 `{release_root}`（值以占位符开头）；用户 config.json 的 args[0] 已二次修复为 `{release_root}pps/cli/lib/bin.js`
 - 教训：Windows 文本模式 python 写入会把 LF 转 CRLF，改 Rust 源码后需归一化行尾（本次已 amend）；`{release_root}` 是子串替换语义，占位符应位于值的开头
 
+## P0 缺陷修复第三轮：release_root verbatim 路径（2026-09-05）
+
+- 用户切回 rc.1 后启动仍报 EISDIR lstat 'C:'（node 主模块解析失败）。手动复现 rc.1 bin.js 引导正常，排除入口文件问题
+- 根因：`ReleaseStore::release_root` 的 canonicalize 返回 Windows verbatim 路径（反斜杠问号前缀形式）；`{release_root}` 渲染出的入口 = verbatim + 混合斜杠，node 模块解析器无法处理（run 11 正常是因为当时 config 是具体路径未走 canonicalize）
+- 修复：release_root 返回前剥掉 verbatim/UNC 前缀（dunce 风格）；影响 spawn cwd、入口渲染、{release_root} 占位符全链路
+- 待用户指认：「启动中/关闭中」过渡态显示错误的具体页面/元素（i18n 映射 Starting→启动中 存在，怀疑是轮询快照滞后或某特定面板的 state 来源）
+- 上一轮遗留：切换后自动物化 profile 依赖仍待拍板
+
 ## P0 反馈第九轮（2026-09-05）
 
 删除设置页「更新配置」面板（分支/引用由版本槽位决定，Git 程序由运行时设置决定，来源挪走）：来源 URL 改为「上游标签与冷切换」面板内的可编辑输入 + 「保存来源」按钮，保存走 set_update（完整 UpdateSpec payload，ref_name/git_program 等取当前 config 现值，避免 ref_name 缺省重置为 main）。
