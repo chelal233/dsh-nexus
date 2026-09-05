@@ -238,3 +238,6 @@ dd { overflow: hidden; margin: 5px 0 0; color: var(--text); font-size: 12px; fon
 }
 
 .panel-divider{border:0;border-top:1px solid rgba(128,128,128,.25);margin:14px 0;width:100%;}
+
+.profile-children{margin-left:20px;padding-left:16px;border-left:2px solid rgba(128,128,128,.3);display:flex;flex-direction:column;gap:12px;margin-top:12px;}
+.profile-children-title{font-weight:600;opacity:.75;font-size:13px;}
