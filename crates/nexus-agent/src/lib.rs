@@ -2473,9 +2473,6 @@ async fn release_control(
     match command.action {
         ReleaseAction::List | ReleaseAction::Current => release_list(State(state)).await,
         ReleaseAction::Register => {
-            if let Err(response) = ensure_checkpoint_mutation_ready(&state).await {
-                return response;
-            }
             let Some(id) = command.id.as_deref() else {
                 return data_error_response(
                     io::Error::new(io::ErrorKind::InvalidInput, "release id is required"),
@@ -2488,6 +2485,13 @@ async fn release_control(
                     "release_invalid",
                 );
             };
+            let _update_gate = match state.updater.try_acquire_gate() {
+                Ok(gate) => gate,
+                Err(error) => return update_error_response(error),
+            };
+            if let Err(response) = ensure_checkpoint_mutation_ready(&state).await {
+                return response;
+            }
             match state
                 .releases
                 .register(id, version, command.source, command.note)
@@ -3696,8 +3700,9 @@ mod checkpoint_tests {
     };
     use nexus_protocol::{
         AgentLifecycleState, CheckpointCreateResponse, CheckpointRestoreResponse, HarnessState,
-        RuntimeInstallMode, RuntimeOwnership, RuntimeSource,
+        ReleaseAction, ReleaseCommand, RuntimeInstallMode, RuntimeOwnership, RuntimeSource,
     };
+    use axum::{extract::State, http::StatusCode, Json};
     use tokio::{
         sync::{oneshot, watch, Mutex, RwLock},
         time::{sleep, timeout},
@@ -3706,8 +3711,8 @@ mod checkpoint_tests {
     use super::{
         checkpoint_create, checkpoint_restore, checkpoint_restore_abort, checkpoint_restore_retry,
         execute_harness_action, recover_checkpoint_restore_startup, snapshots, sync_harness_state,
-        update_agent_state, AppState, CheckpointTransitionGate, HarnessSupervisor, UpdateExecutor,
-        DEFAULT_MAX_RELEASE_SLOTS,
+        release_control, update_agent_state, AppState, CheckpointTransitionGate, HarnessSupervisor,
+        UpdateExecutor, DEFAULT_MAX_RELEASE_SLOTS,
     };
 
     fn write_profile_file(path: &Path, content: &str) {
@@ -3799,6 +3804,33 @@ mod checkpoint_tests {
             },
             root,
         )
+    }
+
+    #[tokio::test]
+    async fn release_register_cannot_mutate_while_cold_publication_owns_update_gate() {
+        let (state, root) = content_test_state("register-gate");
+        let _cold_update_gate = state
+            .updater
+            .try_acquire_gate()
+            .expect("synthetic cold publication owns updater gate");
+        let response = release_control(
+            State(state.clone()),
+            Json(ReleaseCommand {
+                action: ReleaseAction::Register,
+                id: Some("external-slot".to_owned()),
+                version: Some("1.0.0".to_owned()),
+                source: None,
+                note: None,
+            }),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::CONFLICT);
+        assert!(!state
+            .paths
+            .releases_dir
+            .join("external-slot")
+            .exists());
+        fs::remove_dir_all(root).expect("fixture removes");
     }
 
     #[tokio::test]

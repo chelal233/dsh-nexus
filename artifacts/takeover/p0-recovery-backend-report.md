@@ -91,3 +91,15 @@ healthy rotation, and manual retention tests also remained green.
 - Plugin stdout/stderr reading caps the opened reader at 64 KiB plus one
   sentinel byte before applying the existing truncation annotation.
 - `cargo test -p nexus-agent`: 122 passed; `git diff --check`: passed.
+
+## Follow-up cold publication gate fix
+
+`ReleaseAction::Register` now validates its request, acquires the shared
+updater mutation gate, and only then checks pending checkpoint/publication
+state and registers the release. This matches the cold publication ownership
+boundary without changing cold transaction or owner APIs. A synthetic cold
+owner fixture holds the updater gate and confirms registration is rejected
+without creating the requested slot.
+
+- `cargo test -p nexus-agent`: PASS after the follow-up.
+- `git diff --check`: PASS.
