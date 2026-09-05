@@ -13,9 +13,9 @@ use std::{
 };
 
 use nexus_core::{
-    build_pnpm_args, build_runtime_child_env, resolve_runtime_command, unix_time_nanos_for_update,
-    unix_time_seconds, validate_update_ref, write_json_atomic, HarnessLaunchSpec, NexusPaths,
-    RuntimeConfig, RuntimePin,
+    build_pnpm_args, build_runtime_child_env, redact_diagnostics_payload, resolve_runtime_command,
+    unix_time_nanos_for_update, unix_time_seconds, validate_update_ref, write_json_atomic,
+    HarnessLaunchSpec, NexusPaths, RuntimeConfig, RuntimePin,
 };
 use nexus_protocol::{
     ColdOperation, ColdOperationPhase, HarnessLaunchMode, RuntimeInstallMode, RuntimeOwnership,
@@ -33,6 +33,21 @@ const COLD_STATE_FILE: &str = "cold-operation.json";
 const PUBLICATION_FILE: &str = "cold-publication.json";
 const APPROVED_UPSTREAM: &str = "https://github.com/deepseek-ai/deepseek-harness";
 const COMMAND_TIMEOUT: Duration = Duration::from_secs(900);
+const COMMAND_DIAGNOSTIC_BYTES: usize = 64 * 1024;
+
+#[derive(Debug)]
+struct ColdCommandFailure {
+    message: String,
+    owner_quiescent: bool,
+}
+
+impl std::fmt::Display for ColdCommandFailure {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(&self.message)
+    }
+}
+
+impl std::error::Error for ColdCommandFailure {}
 
 #[derive(serde::Serialize, serde::Deserialize)]
 struct PublicationIntent {
@@ -76,13 +91,32 @@ impl ColdCoordinator {
         if !operation.phase.is_terminal()
             && operation.phase != ColdOperationPhase::AwaitingConfirmation
         {
-            remove_owned_directory(&self.paths.downloads_dir, Path::new(&operation.candidate))?;
             operation.phase = ColdOperationPhase::Failed;
+            operation.progress_percent = 100;
             operation.updated_at_unix = Some(unix_time_seconds());
             operation.error = Some(
                 "previous cold-install owner was not attached; start the tag switch again"
                     .to_owned(),
             );
+            operation.owner_quiescent = true;
+            operation.cleanup_pending = true;
+            operation.cleanup_error = None;
+            self.write(&operation)?;
+        }
+        if operation.cleanup_pending {
+            // A previous in-memory owner cannot survive Agent restart. Retain
+            // the primary terminal result and retry only the owned residue.
+            operation.owner_quiescent = true;
+            match remove_owned_directory(&self.paths.downloads_dir, Path::new(&operation.candidate))
+            {
+                Ok(()) => {
+                    operation.cleanup_pending = false;
+                    operation.cleanup_error = None;
+                }
+                Err(error) => {
+                    operation.cleanup_error = Some(format!("candidate cleanup failed: {error}"));
+                }
+            }
             self.write(&operation)?;
         }
         Ok(())
@@ -94,6 +128,12 @@ impl ColdCoordinator {
 
     pub(crate) fn publication_pending(&self) -> bool {
         self.intent_path().exists()
+    }
+
+    pub(crate) fn cleanup_pending(&self) -> io::Result<bool> {
+        Ok(self
+            .load()?
+            .is_some_and(|operation| operation.cleanup_pending))
     }
 
     fn write_intent(&self, intent: &PublicationIntent) -> io::Result<()> {
@@ -171,6 +211,9 @@ impl ColdCoordinator {
             })?;
             operation.phase = ColdOperationPhase::Succeeded;
             operation.error = None;
+            operation.owner_quiescent = true;
+            operation.cleanup_pending = false;
+            operation.cleanup_error = None;
         } else {
             nexus_core::ConfigStore::new(self.paths.clone()).write(&intent.previous_config)?;
             releases.restore_release_pointers(
@@ -189,6 +232,9 @@ impl ColdCoordinator {
             operation.phase = ColdOperationPhase::Failed;
             operation.error =
                 Some("publication interrupted before commit; previous selection restored".into());
+            operation.owner_quiescent = true;
+            operation.cleanup_pending = false;
+            operation.cleanup_error = None;
         }
         remove_owned_directory(&self.paths.downloads_dir, Path::new(&operation.candidate))?;
         operation.progress_percent = 100;
@@ -211,6 +257,33 @@ impl ColdCoordinator {
         self.paths.ensure_directories()?;
         let path = self.paths.root.join(COLD_STATE_FILE);
         write_json_atomic(&self.paths.root, &path, operation)
+    }
+
+    fn write_failure_pending(
+        &self,
+        operation_id: &str,
+        primary: &str,
+        owner_quiescent: bool,
+        cleanup_error: String,
+    ) -> io::Result<()> {
+        let Some(mut operation) = self
+            .load()?
+            .filter(|operation| operation.operation_id == operation_id)
+        else {
+            return Ok(());
+        };
+        operation.phase = if operation.phase == ColdOperationPhase::Cancelling {
+            ColdOperationPhase::Cancelled
+        } else {
+            ColdOperationPhase::Failed
+        };
+        operation.progress_percent = 100;
+        operation.updated_at_unix = Some(unix_time_seconds());
+        operation.error = Some(primary.to_owned());
+        operation.owner_quiescent = owner_quiescent;
+        operation.cleanup_pending = true;
+        operation.cleanup_error = Some(cleanup_error);
+        self.write(&operation)
     }
 
     async fn update(
@@ -268,6 +341,12 @@ impl ColdCoordinator {
             ));
         }
         if let Some(current) = self.load()? {
+            if current.cleanup_pending {
+                return Err(io::Error::new(
+                    io::ErrorKind::ResourceBusy,
+                    "cold cleanup is pending; retry cancel or restart Nexus",
+                ));
+            }
             if !current.phase.is_terminal() {
                 return Err(io::Error::new(
                     io::ErrorKind::ResourceBusy,
@@ -299,6 +378,9 @@ impl ColdCoordinator {
             supply_plan: None,
             confirmation: None,
             error: None,
+            owner_quiescent: false,
+            cleanup_pending: false,
+            cleanup_error: None,
         };
         self.write(&operation)?;
         let token = CancellationToken::default();
@@ -331,6 +413,23 @@ impl ColdCoordinator {
             ));
         }
         if operation.phase.is_terminal() {
+            if operation.cleanup_pending && operation.owner_quiescent {
+                match remove_owned_directory(
+                    &self.paths.downloads_dir,
+                    Path::new(&operation.candidate),
+                ) {
+                    Ok(()) => {
+                        operation.cleanup_pending = false;
+                        operation.cleanup_error = None;
+                    }
+                    Err(error) => {
+                        operation.cleanup_error =
+                            Some(format!("candidate cleanup failed: {error}"));
+                    }
+                }
+                operation.updated_at_unix = Some(unix_time_seconds());
+                self.write(&operation)?;
+            }
             return Ok(operation);
         }
         if let Some((id, token)) = self.cancellation.lock().await.as_ref() {
@@ -339,8 +438,21 @@ impl ColdCoordinator {
             }
         }
         if operation.phase == ColdOperationPhase::AwaitingConfirmation {
-            remove_owned_directory(&self.paths.downloads_dir, Path::new(&operation.candidate))?;
             operation.phase = ColdOperationPhase::Cancelled;
+            operation.progress_percent = 100;
+            operation.owner_quiescent = true;
+            operation.cleanup_pending = true;
+            operation.error = Some("cold install cancelled".to_owned());
+            match remove_owned_directory(&self.paths.downloads_dir, Path::new(&operation.candidate))
+            {
+                Ok(()) => {
+                    operation.cleanup_pending = false;
+                    operation.cleanup_error = None;
+                }
+                Err(error) => {
+                    operation.cleanup_error = Some(format!("candidate cleanup failed: {error}"))
+                }
+            }
         } else {
             operation.phase = ColdOperationPhase::Cancelling;
         }
@@ -380,34 +492,15 @@ impl ColdCoordinator {
         self.owner_active.store(true, Ordering::Release);
         Ok(operation)
     }
-
-    async fn fail(&self, operation_id: &str, error: impl ToString) {
-        let phase = if self
-            .load()
-            .ok()
-            .flatten()
-            .is_some_and(|op| op.phase == ColdOperationPhase::Cancelling)
-        {
-            ColdOperationPhase::Cancelled
-        } else {
-            ColdOperationPhase::Failed
-        };
-        let _ = self
-            .update(operation_id, phase, 100, Some(error.to_string()))
-            .await;
-    }
 }
 
 pub(crate) async fn prepare(state: AppState, operation_id: String) {
     if let Err(error) = prepare_inner(&state, &operation_id).await {
-        if !error.to_string().contains("owned process cleanup")
-            && settle_failure(&state, &operation_id).await.is_ok()
-        {
-            state.cold.fail(&operation_id, error).await;
-        }
+        let _ = settle_failure(&state, &operation_id, error).await;
     }
     if state.cold.load().ok().flatten().is_some_and(|operation| {
         operation.operation_id == operation_id
+            && operation.owner_quiescent
             && (operation.phase.is_terminal()
                 || operation.phase == ColdOperationPhase::AwaitingConfirmation)
     }) {
@@ -463,10 +556,12 @@ async fn prepare_inner(state: &AppState, operation_id: &str) -> io::Result<()> {
             .chain(args.into_iter().map(OsString::from)),
         None,
         &runtime,
+        &state.paths.run_dir,
         &cancellation,
     )
     .await?;
-    let revision = candidate_revision(&runtime, &candidate, &cancellation).await?;
+    let revision =
+        candidate_revision(&runtime, &candidate, &state.paths.run_dir, &cancellation).await?;
     record_candidate_revision(state, operation_id, &revision).await?;
     ensure_not_cancelled(&cancellation)?;
     state
@@ -525,19 +620,17 @@ async fn prepare_inner(state: &AppState, operation_id: &str) -> io::Result<()> {
     current.foundation_plan_id = Some(plan.plan_id);
     current.confirmation = Some(supply.supply_plan_id.clone());
     current.supply_plan = Some(serde_json::to_value(supply).map_err(io::Error::other)?);
+    current.owner_quiescent = true;
     state.cold.write(&current)
 }
 
 pub(crate) async fn confirm(state: AppState, operation_id: String, confirmation: String) {
     if let Err(error) = confirm_inner(&state, &operation_id, &confirmation).await {
-        if !error.to_string().contains("owned process cleanup")
-            && settle_failure(&state, &operation_id).await.is_ok()
-        {
-            state.cold.fail(&operation_id, error).await;
-        }
+        let _ = settle_failure(&state, &operation_id, error).await;
     }
     if state.cold.load().ok().flatten().is_some_and(|operation| {
         operation.operation_id == operation_id
+            && operation.owner_quiescent
             && (operation.phase.is_terminal()
                 || operation.phase == ColdOperationPhase::AwaitingConfirmation)
     }) {
@@ -561,8 +654,13 @@ async fn confirm_inner(state: &AppState, operation_id: &str, confirmation: &str)
     }
     let candidate = PathBuf::from(&operation.candidate);
     let runtime = resolved_runtime_config(state).await?;
-    let revision =
-        candidate_revision(&runtime, &candidate, &state.cold.token(operation_id).await).await?;
+    let revision = candidate_revision(
+        &runtime,
+        &candidate,
+        &state.paths.run_dir,
+        &state.cold.token(operation_id).await,
+    )
+    .await?;
     if operation.candidate_revision.as_deref() != Some(&revision) {
         return Err(io::Error::new(
             io::ErrorKind::InvalidInput,
@@ -620,6 +718,7 @@ async fn build_and_publish(
         &runtime,
         ["install", "--frozen-lockfile"],
         &candidate,
+        &state.paths.run_dir,
         &cancellation,
     )
     .await?;
@@ -627,14 +726,22 @@ async fn build_and_publish(
         .cold
         .update(operation_id, ColdOperationPhase::Building, 72, None)
         .await?;
-    run_pnpm(&runtime, ["build"], &candidate, &cancellation).await?;
+    run_pnpm(
+        &runtime,
+        ["build"],
+        &candidate,
+        &state.paths.run_dir,
+        &cancellation,
+    )
+    .await?;
     state
         .cold
         .update(operation_id, ColdOperationPhase::Verifying, 85, None)
         .await?;
     verify_built_cli(&candidate)?;
     ensure_not_cancelled(&cancellation)?;
-    let revision = candidate_revision(&runtime, &candidate, &cancellation).await?;
+    let revision =
+        candidate_revision(&runtime, &candidate, &state.paths.run_dir, &cancellation).await?;
     if operation.candidate_revision.as_deref() != Some(&revision) {
         return Err(io::Error::new(
             io::ErrorKind::InvalidInput,
@@ -785,6 +892,9 @@ async fn build_and_publish(
     final_operation.phase = ColdOperationPhase::Succeeded;
     final_operation.progress_percent = 100;
     final_operation.updated_at_unix = Some(unix_time_seconds());
+    final_operation.owner_quiescent = true;
+    final_operation.cleanup_pending = false;
+    final_operation.cleanup_error = None;
     state.cold.write(&final_operation)?;
     fs::remove_file(state.cold.intent_path())?;
     Ok(())
@@ -981,6 +1091,7 @@ async fn run_pnpm(
     runtime: &RuntimeConfig,
     args: impl IntoIterator<Item = &'static str>,
     cwd: &Path,
+    diagnostic_dir: &Path,
     cancellation: &CancellationToken,
 ) -> io::Result<()> {
     let command = resolve_runtime_command(runtime, "pnpm")?.ok_or_else(|| {
@@ -993,6 +1104,7 @@ async fn run_pnpm(
         command.prefix_args.into_iter().chain(args),
         Some(cwd),
         runtime,
+        diagnostic_dir,
         cancellation,
     )
     .await
@@ -1004,6 +1116,7 @@ async fn run_command(
     args: impl IntoIterator<Item = OsString>,
     cwd: Option<&Path>,
     runtime: &RuntimeConfig,
+    diagnostic_dir: &Path,
     cancellation: &CancellationToken,
 ) -> io::Result<()> {
     ensure_not_cancelled(cancellation)?;
@@ -1011,40 +1124,126 @@ async fn run_command(
     command
         .args(args)
         .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null());
+        .stdout(Stdio::null());
     if let Some(cwd) = cwd {
         command.current_dir(cwd);
     }
     for (key, value) in build_runtime_child_env(runtime, std::env::var_os("PATH").as_deref())? {
         command.env(key, value);
     }
-    run_owned_command(command, phase, COMMAND_TIMEOUT, cancellation).await
+    run_owned_command(
+        command,
+        phase,
+        COMMAND_TIMEOUT,
+        diagnostic_dir,
+        cancellation,
+    )
+    .await
 }
 
 async fn run_owned_command(
     mut command: std::process::Command,
     phase: &str,
     duration: Duration,
+    diagnostic_dir: &Path,
     cancellation: &CancellationToken,
 ) -> io::Result<()> {
+    fs::create_dir_all(diagnostic_dir)?;
+    let diagnostic_path = diagnostic_dir.join(format!(
+        "cold-command-{}-{}.stderr.tmp",
+        std::process::id(),
+        unix_time_nanos_for_update()
+    ));
+    let diagnostic = fs::OpenOptions::new()
+        .create_new(true)
+        .write(true)
+        .open(&diagnostic_path)?;
+    command.stderr(Stdio::from(diagnostic));
     let token = cancellation.clone();
     let phase = phase.to_owned();
-    tokio::task::spawn_blocking(move || {
-        let status = crate::dsh::run_cold_process(&mut command, duration, || token.is_cancelled())?;
-        if status.success() {
-            Ok(())
-        } else {
-            Err(io::Error::other(format!("{phase} exited with {status}")))
-        }
+    let result = tokio::task::spawn_blocking(move || {
+        crate::dsh::run_cold_process(&mut command, duration, || token.is_cancelled())
     })
     .await
-    .map_err(io::Error::other)?
+    .map_err(io::Error::other)?;
+    let diagnostic = read_command_diagnostic(&diagnostic_path);
+    let cleanup = fs::remove_file(&diagnostic_path);
+    let (diagnostic, truncated) = diagnostic?;
+    let suffix = if diagnostic.is_empty() {
+        String::new()
+    } else {
+        format!(
+            "; stderr{}: {}",
+            if truncated { " (tail truncated)" } else { "" },
+            diagnostic.trim()
+        )
+    };
+    let command_result = match result {
+        Ok(status) if status.success() => Ok(()),
+        Ok(status) => Err(io::Error::other(format!(
+            "{phase} exited with {status}{suffix}"
+        ))),
+        Err(error) => {
+            let owner_quiescent = crate::dsh::cold_process_owner_quiescent(&error);
+            Err(io::Error::new(
+                error.kind(),
+                ColdCommandFailure {
+                    message: format!("{phase} failed: {error}{suffix}"),
+                    owner_quiescent,
+                },
+            ))
+        }
+    };
+    match (command_result, cleanup) {
+        (result, Ok(())) => result,
+        (Ok(()), Err(cleanup)) => Err(io::Error::new(
+            cleanup.kind(),
+            format!("{phase} diagnostic cleanup failed: {cleanup}"),
+        )),
+        (Err(primary), Err(cleanup)) => {
+            let owner_quiescent = primary
+                .get_ref()
+                .and_then(|source| source.downcast_ref::<ColdCommandFailure>())
+                .map_or(true, |failure| failure.owner_quiescent);
+            Err(io::Error::new(
+                primary.kind(),
+                ColdCommandFailure {
+                    message: format!("{primary}; diagnostic cleanup also failed: {cleanup}"),
+                    owner_quiescent,
+                },
+            ))
+        }
+    }
+}
+
+fn read_command_diagnostic(path: &Path) -> io::Result<(String, bool)> {
+    use io::{Read, Seek, SeekFrom};
+
+    let mut file = fs::File::open(path)?;
+    let length = file.metadata()?.len();
+    let truncated = length > COMMAND_DIAGNOSTIC_BYTES as u64;
+    if truncated {
+        file.seek(SeekFrom::End(-(COMMAND_DIAGNOSTIC_BYTES as i64)))?;
+    }
+    let mut bytes = Vec::with_capacity(length.min(COMMAND_DIAGNOSTIC_BYTES as u64) as usize);
+    file.take(COMMAND_DIAGNOSTIC_BYTES as u64)
+        .read_to_end(&mut bytes)?;
+    if truncated {
+        if let Some(boundary) = bytes.iter().position(|byte| *byte == b'\n') {
+            bytes.drain(..=boundary);
+        } else {
+            bytes.clear();
+        }
+    }
+    let lossy = String::from_utf8_lossy(&bytes);
+    let redacted = redact_diagnostics_payload(lossy.as_bytes()).0;
+    Ok((String::from_utf8_lossy(&redacted).into_owned(), truncated))
 }
 
 async fn candidate_revision(
     runtime: &RuntimeConfig,
     candidate: &Path,
+    diagnostic_dir: &Path,
     cancellation: &CancellationToken,
 ) -> io::Result<String> {
     ensure_not_cancelled(cancellation)?;
@@ -1074,6 +1273,7 @@ async fn candidate_revision(
         command,
         "git revision probe",
         Duration::from_secs(30),
+        diagnostic_dir,
         cancellation,
     )
     .await;
@@ -1177,35 +1377,133 @@ fn supply_error(error: impl ToString) -> io::Error {
     io::Error::other(error.to_string())
 }
 
-async fn settle_failure(state: &AppState, operation_id: &str) -> io::Result<()> {
+async fn settle_failure(
+    state: &AppState,
+    operation_id: &str,
+    primary: io::Error,
+) -> io::Result<()> {
+    let primary_text = primary.to_string();
+    let owner_quiescent = primary
+        .get_ref()
+        .and_then(|source| source.downcast_ref::<ColdCommandFailure>())
+        .map_or(true, |failure| failure.owner_quiescent);
     let _lifecycle = state.supervisor.acquire_lifecycle().await;
-    let _updater = state
-        .updater
-        .try_acquire_gate()
-        .map_err(|error| io::Error::new(io::ErrorKind::ResourceBusy, error.to_string()))?;
+    let _updater = match state.updater.try_acquire_gate() {
+        Ok(updater) => updater,
+        Err(error) => {
+            let error = io::Error::new(io::ErrorKind::ResourceBusy, error.to_string());
+            let _gate = state.cold.gate.lock().await;
+            state.cold.write_failure_pending(
+                operation_id,
+                &primary_text,
+                owner_quiescent,
+                format!("failure reconciliation is pending: {error}"),
+            )?;
+            return Err(error);
+        }
+    };
     let _gate = state.cold.gate.lock().await;
-    if let Some(operation) = state.cold.reconcile_publication()? {
+    let reconciled = match state.cold.reconcile_publication() {
+        Ok(operation) => operation,
+        Err(reconcile_error) => {
+            state.cold.write_failure_pending(
+                operation_id,
+                &primary_text,
+                owner_quiescent,
+                format!("publication reconciliation failed: {reconcile_error}"),
+            )?;
+            return Err(reconcile_error);
+        }
+    };
+    if let Some(operation) = reconciled {
         let catalog = state.releases.load()?;
-        super::persist_release_catalog_state(state, &catalog, false)
-            .await
-            .map_err(io::Error::other)?;
-        state.cold.finish_publication(&operation)?;
+        if let Err(error) = super::persist_release_catalog_state(state, &catalog, false).await {
+            let error = io::Error::other(error);
+            state.cold.write_failure_pending(
+                operation_id,
+                &primary_text,
+                owner_quiescent,
+                format!("publication state synchronization failed: {error}"),
+            )?;
+            return Err(error);
+        }
+        if let Err(error) = state.cold.finish_publication(&operation) {
+            state.cold.write_failure_pending(
+                operation_id,
+                &primary_text,
+                owner_quiescent,
+                format!("publication finalization failed: {error}"),
+            )?;
+            return Err(error);
+        }
+        if operation.phase == ColdOperationPhase::Succeeded {
+            return Ok(());
+        }
     }
-    if let Some(operation) = state
+    let Some(mut operation) = state
         .cold
         .load()?
         .filter(|op| op.operation_id == operation_id)
-    {
-        remove_owned_directory(&state.paths.downloads_dir, Path::new(&operation.candidate))?;
+    else {
+        return Ok(());
+    };
+    operation.phase = if operation.phase == ColdOperationPhase::Cancelling {
+        ColdOperationPhase::Cancelled
+    } else {
+        ColdOperationPhase::Failed
+    };
+    operation.progress_percent = 100;
+    operation.updated_at_unix = Some(unix_time_seconds());
+    operation.error = Some(primary_text);
+    operation.owner_quiescent = owner_quiescent;
+    operation.cleanup_pending = true;
+    operation.cleanup_error = if owner_quiescent {
+        None
+    } else {
+        Some("owned process cleanup did not prove quiescence; restart Nexus to recover".into())
+    };
+    state.cold.write(&operation)?;
+
+    if owner_quiescent {
+        match remove_owned_directory(&state.paths.downloads_dir, Path::new(&operation.candidate)) {
+            Ok(()) => {
+                operation.cleanup_pending = false;
+                operation.cleanup_error = None;
+            }
+            Err(error) => {
+                operation.cleanup_error = Some(format!("candidate cleanup failed: {error}"));
+            }
+        }
+        operation.updated_at_unix = Some(unix_time_seconds());
+        state.cold.write(&operation)?;
     }
     Ok(())
 }
 
 fn remove_owned_directory(parent: &Path, target: &Path) -> io::Result<()> {
-    if !target.exists() {
-        return Ok(());
-    }
     let parent = fs::canonicalize(parent)?;
+    let Some(target_parent) = target.parent() else {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "cleanup target escapes owned root",
+        ));
+    };
+    let target_parent = fs::canonicalize(target_parent)?;
+    if target_parent != parent {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "cleanup target escapes owned root",
+        ));
+    }
+    let metadata = match fs::symlink_metadata(target) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(()),
+        Err(error) => return Err(cleanup_entry_error(target, "root", error)),
+    };
+    if is_link_or_reparse(&metadata) {
+        return remove_link_object(target, &metadata)
+            .map_err(|error| cleanup_entry_error(target, "root reparse point", error));
+    }
     let target = fs::canonicalize(target)?;
     if target == parent || !nexus_core::is_within(&parent, &target) {
         return Err(io::Error::new(
@@ -1224,29 +1522,112 @@ fn remove_owned_directory(parent: &Path, target: &Path) -> io::Result<()> {
                 "owned candidate cleanup exceeded its bound",
             ));
         }
-        let metadata = fs::symlink_metadata(&path)?;
-        if metadata.is_dir() && !metadata.file_type().is_symlink() {
+        let metadata = fs::symlink_metadata(&path)
+            .map_err(|error| cleanup_entry_error(&path, "metadata", error))?;
+        if metadata.is_dir() && !is_link_or_reparse(&metadata) {
             if expanded {
-                fs::remove_dir(&path)?;
+                remove_directory_entry(&path)
+                    .map_err(|error| cleanup_entry_error(&path, "directory", error))?;
             } else {
                 stack.push((path.clone(), true));
-                for entry in fs::read_dir(&path)? {
+                for entry in fs::read_dir(&path)
+                    .map_err(|error| cleanup_entry_error(&path, "read directory", error))?
+                {
                     if stack.len() > 1_000_000 || std::time::Instant::now() >= deadline {
                         return Err(io::Error::new(
                             io::ErrorKind::TimedOut,
                             "owned candidate cleanup exceeded its bound",
                         ));
                     }
-                    stack.push((entry?.path(), false));
+                    let entry = entry
+                        .map_err(|error| cleanup_entry_error(&path, "directory entry", error))?;
+                    stack.push((entry.path(), false));
                 }
             }
-        } else if metadata.is_dir() {
-            fs::remove_dir(path)?;
+        } else if is_link_or_reparse(&metadata) {
+            remove_link_object(&path, &metadata)
+                .map_err(|error| cleanup_entry_error(&path, "reparse point", error))?;
         } else {
-            fs::remove_file(path)?;
+            remove_file_entry(&path).map_err(|error| cleanup_entry_error(&path, "file", error))?;
         }
     }
     Ok(())
+}
+
+fn cleanup_entry_error(path: &Path, entry_type: &str, error: io::Error) -> io::Error {
+    io::Error::new(
+        error.kind(),
+        format!(
+            "{entry_type} cleanup failed at {} (os error {:?}): {error}",
+            path.display(),
+            error.raw_os_error()
+        ),
+    )
+}
+
+fn is_link_or_reparse(metadata: &fs::Metadata) -> bool {
+    if metadata.file_type().is_symlink() {
+        return true;
+    }
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::MetadataExt;
+        metadata.file_attributes()
+            & windows_sys::Win32::Storage::FileSystem::FILE_ATTRIBUTE_REPARSE_POINT
+            != 0
+    }
+    #[cfg(not(windows))]
+    false
+}
+
+fn remove_link_object(path: &Path, metadata: &fs::Metadata) -> io::Result<()> {
+    if metadata.is_dir() {
+        match fs::remove_dir(path) {
+            Ok(()) => Ok(()),
+            Err(first) => fs::remove_file(path).map_err(|_| first),
+        }
+    } else {
+        match fs::remove_file(path) {
+            Ok(()) => Ok(()),
+            Err(first) => fs::remove_dir(path).map_err(|_| first),
+        }
+    }
+}
+
+fn remove_file_entry(path: &Path) -> io::Result<()> {
+    match fs::remove_file(path) {
+        Ok(()) => Ok(()),
+        Err(first) => {
+            #[cfg(windows)]
+            {
+                let mut permissions = fs::metadata(path)?.permissions();
+                if permissions.readonly() {
+                    permissions.set_readonly(false);
+                    fs::set_permissions(path, permissions)?;
+                    return fs::remove_file(path);
+                }
+            }
+            Err(first)
+        }
+    }
+}
+
+fn remove_directory_entry(path: &Path) -> io::Result<()> {
+    match fs::remove_dir(path) {
+        Ok(()) => Ok(()),
+        Err(first) => {
+            #[cfg(windows)]
+            {
+                let mut permissions = fs::metadata(path)?.permissions();
+                if permissions.readonly() {
+                    permissions.set_readonly(false);
+                    fs::set_permissions(path, permissions)?;
+                    return fs::remove_dir(path);
+                }
+            }
+            Err(first)
+        }
+    }
 }
 
 trait RuntimeConfigValidationExt {
@@ -1433,8 +1814,16 @@ while ($true) {{ Start-Sleep -Seconds 1 }}"#, child.display())).unwrap();
                 .stdout(Stdio::null())
                 .stderr(Stdio::null());
             let token = cold.token(&op.operation_id).await;
+            let diagnostic_dir = cold.paths.run_dir.clone();
             let runner = tokio::spawn(async move {
-                run_owned_command(command, "cold fixture", Duration::from_secs(5), &token).await
+                run_owned_command(
+                    command,
+                    "cold fixture",
+                    Duration::from_secs(5),
+                    &diagnostic_dir,
+                    &token,
+                )
+                .await
             });
             tokio::time::timeout(Duration::from_secs(4), async {
                 while !marker.exists() {
@@ -1478,7 +1867,18 @@ while ($true) {{ Start-Sleep -Seconds 1 }}"#, child.display())).unwrap();
                 .await
                 .is_err());
             remove_owned_directory(&cold.paths.downloads_dir, Path::new(&op.candidate)).unwrap();
-            cold.fail(&op.operation_id, error).await;
+            cold.update(
+                &op.operation_id,
+                if cancel {
+                    ColdOperationPhase::Cancelled
+                } else {
+                    ColdOperationPhase::Failed
+                },
+                100,
+                Some(error.to_string()),
+            )
+            .await
+            .unwrap();
             assert!(cold
                 .begin(
                     "v-other".into(),
@@ -1498,6 +1898,210 @@ while ($true) {{ Start-Sleep -Seconds 1 }}"#, child.display())).unwrap();
             .unwrap();
             fs::remove_dir_all(root).unwrap();
         }
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn candidate_cleanup_unlinks_reparse_points_and_clears_readonly_files() {
+        use std::os::windows::fs::{symlink_dir, symlink_file};
+
+        let root = std::env::temp_dir().join(format!(
+            "nexus-cold-cleanup-links-{}",
+            unix_time_nanos_for_update()
+        ));
+        let paths = NexusPaths::from_root(root.clone());
+        paths.ensure_directories().unwrap();
+        let candidate = paths.downloads_dir.join(".candidate");
+        let outside = root.join("outside");
+        fs::create_dir_all(candidate.join("inside-dir")).unwrap();
+        fs::create_dir_all(outside.join("outside-dir")).unwrap();
+        fs::write(candidate.join("inside.txt"), b"inside").unwrap();
+        fs::write(outside.join("outside.txt"), b"outside").unwrap();
+        symlink_dir(
+            candidate.join("inside-dir"),
+            candidate.join("inside-dir-link"),
+        )
+        .unwrap();
+        symlink_dir(
+            outside.join("outside-dir"),
+            candidate.join("outside-dir-link"),
+        )
+        .unwrap();
+        symlink_file(
+            candidate.join("inside.txt"),
+            candidate.join("inside-file-link"),
+        )
+        .unwrap();
+        symlink_file(
+            outside.join("outside.txt"),
+            candidate.join("outside-file-link"),
+        )
+        .unwrap();
+        let readonly = candidate.join("readonly.txt");
+        fs::write(&readonly, b"readonly checkout file").unwrap();
+        let mut permissions = fs::metadata(&readonly).unwrap().permissions();
+        permissions.set_readonly(true);
+        fs::set_permissions(&readonly, permissions).unwrap();
+
+        remove_owned_directory(&paths.downloads_dir, &candidate).unwrap();
+
+        assert!(!candidate.exists());
+        assert!(outside.join("outside-dir").is_dir());
+        assert_eq!(fs::read(outside.join("outside.txt")).unwrap(), b"outside");
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[cfg(windows)]
+    #[tokio::test]
+    async fn failing_command_captures_bounded_redacted_stderr() {
+        let root = std::env::temp_dir().join(format!(
+            "nexus-cold-command-stderr-{}",
+            unix_time_nanos_for_update()
+        ));
+        let run_dir = root.join("run");
+        let mut command = std::process::Command::new("cmd.exe");
+        command.args([
+            "/D",
+            "/S",
+            "/C",
+            "(for /L %i in (1,1,7000) do @echo padding-padding-padding 1>&2) & (echo visible-stderr-sentinel 1>&2) & (echo Authorization: Bearer TOPSECRET 1>&2) & exit /b 7",
+        ]);
+        let error = run_owned_command(
+            command,
+            "synthetic-command",
+            Duration::from_secs(10),
+            &run_dir,
+            &CancellationToken::default(),
+        )
+        .await
+        .unwrap_err()
+        .to_string();
+        assert!(error.contains("synthetic-command exited"));
+        assert!(error.contains("tail truncated"));
+        assert!(error.contains("visible-stderr-sentinel"));
+        assert!(error.contains("[REDACTED]"));
+        assert!(!error.contains("TOPSECRET"));
+        assert!(error.len() <= COMMAND_DIAGNOSTIC_BYTES + 256);
+        assert_eq!(fs::read_dir(&run_dir).unwrap().count(), 0);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[tokio::test]
+    async fn cleanup_error_is_secondary_and_restart_recovers_pending_candidate() {
+        let state = crate::switch_ownership_tests::switch_test_state("cold-cleanup-secondary");
+        let original = state
+            .cold
+            .begin(
+                "v-cleanup".into(),
+                RuntimeSource::Official,
+                RuntimeInstallMode::Portable,
+            )
+            .await
+            .unwrap();
+        let outside = state.paths.root.join("outside-candidate");
+        fs::create_dir_all(&outside).unwrap();
+        let mut operation = original.clone();
+        operation.phase = ColdOperationPhase::Cloning;
+        operation.candidate = outside.to_string_lossy().into_owned();
+        state.cold.write(&operation).unwrap();
+
+        settle_failure(
+            &state,
+            &operation.operation_id,
+            io::Error::other("synthetic primary failure"),
+        )
+        .await
+        .unwrap();
+        let failed = state.cold.load().unwrap().unwrap();
+        assert_eq!(failed.phase, ColdOperationPhase::Failed);
+        assert_eq!(failed.error.as_deref(), Some("synthetic primary failure"));
+        assert!(failed.owner_quiescent);
+        assert!(failed.cleanup_pending);
+        assert!(failed
+            .cleanup_error
+            .as_deref()
+            .unwrap()
+            .contains("cleanup target escapes owned root"));
+        let retried = state.cold.cancel(&operation.operation_id).await.unwrap();
+        assert!(retried.cleanup_pending);
+        assert!(state
+            .cold
+            .begin(
+                "v-blocked".into(),
+                RuntimeSource::Official,
+                RuntimeInstallMode::Portable,
+            )
+            .await
+            .is_err());
+
+        fs::create_dir_all(&original.candidate).unwrap();
+        let readonly = Path::new(&original.candidate).join("readonly.txt");
+        fs::write(&readonly, b"readonly").unwrap();
+        #[cfg(windows)]
+        {
+            let mut permissions = fs::metadata(&readonly).unwrap().permissions();
+            permissions.set_readonly(true);
+            fs::set_permissions(&readonly, permissions).unwrap();
+        }
+        let mut repaired = state.cold.load().unwrap().unwrap();
+        repaired.candidate = original.candidate.clone();
+        state.cold.write(&repaired).unwrap();
+        state.cold.owner_active.store(false, Ordering::Release);
+        let restarted = ColdCoordinator::new(state.paths.clone());
+        restarted.recover().unwrap();
+        let recovered = restarted.load().unwrap().unwrap();
+        assert_eq!(
+            recovered.error.as_deref(),
+            Some("synthetic primary failure")
+        );
+        assert!(!recovered.cleanup_pending);
+        assert!(recovered.cleanup_error.is_none());
+        assert!(!Path::new(&original.candidate).exists());
+        restarted
+            .begin(
+                "v-next".into(),
+                RuntimeSource::Official,
+                RuntimeInstallMode::Portable,
+            )
+            .await
+            .unwrap();
+        fs::remove_dir_all(&state.paths.root).unwrap();
+    }
+
+    #[tokio::test]
+    async fn busy_reconciliation_gate_still_persists_primary_failure() {
+        let state = crate::switch_ownership_tests::switch_test_state("cold-busy-reconcile");
+        let operation = state
+            .cold
+            .begin(
+                "v-busy".into(),
+                RuntimeSource::Official,
+                RuntimeInstallMode::Portable,
+            )
+            .await
+            .unwrap();
+        let updater = state.updater.try_acquire_gate().unwrap();
+        let result = settle_failure(
+            &state,
+            &operation.operation_id,
+            io::Error::other("primary survives busy gate"),
+        )
+        .await;
+        assert_eq!(result.unwrap_err().kind(), io::ErrorKind::ResourceBusy);
+        let failed = state.cold.load().unwrap().unwrap();
+        assert_eq!(failed.phase, ColdOperationPhase::Failed);
+        assert_eq!(failed.error.as_deref(), Some("primary survives busy gate"));
+        assert!(failed.cleanup_pending);
+        assert!(failed
+            .cleanup_error
+            .as_deref()
+            .unwrap()
+            .contains("failure reconciliation is pending"));
+        drop(updater);
+        state.cold.owner_active.store(false, Ordering::Release);
+        let retried = state.cold.cancel(&operation.operation_id).await.unwrap();
+        assert!(!retried.cleanup_pending);
+        fs::remove_dir_all(&state.paths.root).unwrap();
     }
 
     #[tokio::test]

@@ -577,6 +577,27 @@ pub(crate) fn run_cold_process(
     run_owned_process_cancelled(command, timeout, ProcessTreeFault::None, cancelled)
 }
 
+#[derive(Debug)]
+struct OwnedProcessCleanupError(String);
+
+impl std::fmt::Display for OwnedProcessCleanupError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(&self.0)
+    }
+}
+
+impl std::error::Error for OwnedProcessCleanupError {}
+
+fn owned_process_cleanup_error(message: String) -> io::Error {
+    io::Error::other(OwnedProcessCleanupError(message))
+}
+
+pub(crate) fn cold_process_owner_quiescent(error: &io::Error) -> bool {
+    !error
+        .get_ref()
+        .is_some_and(|source| source.downcast_ref::<OwnedProcessCleanupError>().is_some())
+}
+
 fn run_owned_process_cancelled(
     command: &mut Command,
     timeout: Duration,
@@ -595,7 +616,9 @@ fn run_owned_process_cancelled(
             Ok(Some(status)) => {
                 tree.wait_for_tree_exit(Duration::from_secs(5))
                     .map_err(|error| {
-                        io::Error::other(format!("owned process cleanup failed: {error}"))
+                        owned_process_cleanup_error(format!(
+                            "owned process cleanup failed: {error}"
+                        ))
                     })?;
                 return Ok(status);
             }
@@ -605,7 +628,7 @@ fn run_owned_process_cancelled(
         if cancelled() {
             tree.terminate_and_wait(Duration::from_secs(10))
                 .map_err(|error| {
-                    io::Error::other(format!("owned process cleanup failed: {error}"))
+                    owned_process_cleanup_error(format!("owned process cleanup failed: {error}"))
                 })?;
             return Err(io::Error::new(
                 io::ErrorKind::Interrupted,
@@ -615,7 +638,7 @@ fn run_owned_process_cancelled(
         if Instant::now() >= deadline {
             tree.terminate_and_wait(Duration::from_secs(10))
                 .map_err(|error| {
-                    io::Error::other(format!("owned process cleanup failed: {error}"))
+                    owned_process_cleanup_error(format!("owned process cleanup failed: {error}"))
                 })?;
             return Err(io::Error::new(
                 io::ErrorKind::TimedOut,
@@ -736,7 +759,9 @@ impl OwnedProcessTree {
             Ok(()) => Err(primary),
             Err(cleanup) => Err(io::Error::new(
                 primary.kind(),
-                format!("{primary}; owned process cleanup also failed: {cleanup}"),
+                OwnedProcessCleanupError(format!(
+                    "{primary}; owned process cleanup also failed: {cleanup}"
+                )),
             )),
         }
     }

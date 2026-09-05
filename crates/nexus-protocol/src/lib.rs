@@ -1053,6 +1053,15 @@ pub struct ColdOperation {
     pub confirmation: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
+    /// True once the process owner has proved that no command tree remains.
+    #[serde(default)]
+    pub owner_quiescent: bool,
+    /// Keeps the mutation gate closed while server-owned residue remains.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub cleanup_pending: bool,
+    /// Secondary cleanup/reconciliation failure; never replaces `error`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cleanup_error: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]

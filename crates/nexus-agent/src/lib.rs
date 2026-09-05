@@ -1386,6 +1386,17 @@ async fn ensure_checkpoint_mutation_ready(
             "cold publication recovery is pending; restart the Agent to reconcile it",
         ));
     }
+    match state.cold.cleanup_pending() {
+        Ok(true) => {
+            return Err(api_error_response(
+                StatusCode::CONFLICT,
+                "cold_cleanup_pending",
+                "cold cleanup is pending; retry cancel or restart the Agent",
+            ));
+        }
+        Ok(false) => {}
+        Err(error) => return Err(data_error_response(error, "cold_operation_unavailable")),
+    }
     if let Err(error) = settle_checkpoint_restore(state).await {
         return Err(data_error_response(
             io::Error::other(error.to_string()),

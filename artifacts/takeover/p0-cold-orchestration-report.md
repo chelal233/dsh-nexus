@@ -81,3 +81,60 @@ No real upstream clone/build, runtime download, MSI/script execution, Corepack
 execution, Harness start, original DSH home access, system PATH change, GUI
 interaction, merge, or deployment occurred. Real isolated portable build and
 Harness acceptance remains with the root acceptance phase.
+
+## Cold failure convergence closure (2026-09-05)
+
+Real acceptance found operation `cold-1788601658283382700` stranded at
+`cloning / 10%` after the Git child had exited. The original Git cause remains
+unrecoverable because that build discarded stderr. This fix does not guess it.
+
+Cold Git clone/revision and pnpm install/build now write stderr to unique
+server-owned files below the Nexus run directory. The owner reads at most a
+64-KiB tail after the process tree has settled, drops a partial first line when
+truncated, applies the existing diagnostics credential redaction, reports the
+phase and exit status, and removes the temporary file. Pipes are not used, so a
+verbose child cannot deadlock on an unconsumed buffer.
+
+Failure persistence is independent of candidate cleanup. `error` retains the
+primary command/orchestration failure; `cleanup_error` retains the secondary
+cleanup or reconciliation failure. `owner_quiescent` records whether the owned
+process primitive proved the tree empty, while `cleanup_pending` keeps cold and
+shared mutation gates closed. A failed operation is therefore terminal and
+diagnosable instead of remaining in `cloning`. Explicit cancel retries a
+quiescent pending cleanup. Startup treats the former in-memory owner as
+quiescent, retries the bounded cleanup, and starts with the primary failure
+still intact if residue remains. A new begin cannot overwrite pending residue.
+
+Candidate deletion still accepts only an exact direct child of the canonical
+server-owned parent. It uses `symlink_metadata`, detects Windows reparse points,
+unlinks link objects with a restricted directory/file fallback, never walks the
+link target, and clears the Windows read-only attribute only on an owned regular
+file or empty directory before one retry. Entry count and 30-second bounds
+remain. Errors include entry kind, exact path and raw OS error when available.
+
+Synthetic Windows evidence:
+
+- Directory and file symlinks targeting both inside and outside the candidate
+  were removed with the candidate; both outside targets remained byte-for-byte
+  present. A read-only checkout-shaped file was also removed.
+- A failing real `cmd.exe` child produced a visible stderr sentinel and a
+  credential-shaped line. The terminal error retained the sentinel and exit
+  result, emitted `[REDACTED]`, omitted the secret, and left no diagnostic temp
+  file.
+- An injected containment cleanup failure persisted `Failed`, the primary
+  error, separate actionable `cleanup_error`, `owner_quiescent=true`, and
+  `cleanup_pending=true`; cancel retried without clearing the evidence, begin
+  stayed blocked, and restart cleared a repaired read-only candidate and then
+  admitted the next begin.
+- `cargo test --offline -p nexus-agent -p nexus-core -p nexus-protocol
+  --no-fail-fast`: PASS (Agent 128, Core 30, Protocol 13; doc targets passed).
+  `git diff --check`: PASS.
+
+No running Agent, listener, acceptance candidate, real upstream, real DSH home,
+runtime installation, Harness process, release registration, publication,
+promotion, GUI, merge, or deployment was touched. Remaining acceptance is a new
+isolated real cold switch after the root owner replaces/restarts the Agent. It
+must either publish the requested tag or reach a terminal failed/cancelled
+operation with bounded redacted stderr; any cleanup failure must remain visible
+in `cleanup_error` with `cleanup_pending=true`, and process/listener checks must
+confirm no descendant or unintended target was affected.
