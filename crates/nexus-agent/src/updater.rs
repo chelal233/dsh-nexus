@@ -364,14 +364,16 @@ impl UpdateExecutor {
             format!("releases/{old_current}"),
         ];
         let rewrite = |value: &mut String| -> bool {
-            let mut changed = false;
             for pattern in &patterns {
-                if value.contains(pattern.as_str()) {
-                    *value = value.replace(pattern.as_str(), "{release_root}");
-                    changed = true;
+                if let Some(position) = value.find(pattern.as_str()) {
+                    // Cut everything before the slot segment too: the parent
+                    // prefix must not survive, or rendering would produce a
+                    // doubled path like `Nexus\C:\...eleases\...`.
+                    *value = format!("{{release_root}}{}", &value[position + pattern.len()..]);
+                    return true;
                 }
             }
-            changed
+            false
         };
         let mut changed = false;
         let mut program = harness.program.to_string_lossy().into_owned();
