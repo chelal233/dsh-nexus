@@ -539,6 +539,8 @@ async fn prepare_inner(state: &AppState, operation_id: &str) -> io::Result<()> {
     let runtime = resolved_runtime_config(state).await?;
     let git = resolve_runtime_command(&runtime, "git")?.ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "Git is required for cold install; install Git or configure an absolute Git runtime pin"))?;
     let args = [
+        "-c",
+        "core.longpaths=true",
         "clone",
         "--no-tags",
         "--depth",

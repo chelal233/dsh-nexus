@@ -138,3 +138,7 @@ must either publish the requested tag or reach a terminal failed/cancelled
 operation with bounded redacted stderr; any cleanup failure must remain visible
 in `cleanup_error` with `cleanup_pending=true`, and process/listener checks must
 confirm no descendant or unintended target was affected.
+
+## Real Windows cold acceptance: checkout path correction
+
+Real isolated clone of the approved dsh-v0.1.2-alpha.3 tag exposed Git checkout error 128 (Filename too long) under the owned candidate path. Cold clone now passes command-local `-c core.longpaths=true`; no global Git setting is changed. Repeating the actual clone reached AwaitingConfirmation with verified revision dd6322d604e00eec1ba5e0c8541159906a21094a. The real supply plan reused Node24.19.0 and exact Corepack-cache pnpm11.7.0. Installation/build and Harness/UI acceptance remain in progress; this is checkout acceptance only.
