@@ -124,6 +124,11 @@ dd { overflow: hidden; margin: 5px 0 0; color: var(--text); font-size: 12px; fon
 .status-block { display: grid; gap: 13px; }
 .status-block strong { color: var(--text); font-size: 16px; font-weight: 600; }
 .status-block span:last-child { color: var(--muted); font-size: 11px; }
+.status-block progress { width: 100%; height: 8px; accent-color: var(--accent); }
+.recovery-tabs { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 13px; }
+.snapshot-file { display: grid !important; width: 100%; gap: 7px !important; }
+.snapshot-file pre, .output-block { overflow: auto; max-height: 260px; margin: 4px 0; border: 1px solid var(--line); border-radius: 8px; padding: 10px; color: var(--text); background: rgba(0, 0, 0, 0.2); font: 11px/1.5 Consolas, monospace; white-space: pre-wrap; overflow-wrap: anywhere; }
+.snapshot-file small, .truncation-note { color: var(--warning); font-size: 10px; }
 .integration-list { display: grid; gap: 2px; }
 .integration-list div { display: grid; grid-template-columns: 20px 1fr auto; align-items: center; gap: 8px; border-top: 1px solid var(--line); padding: 11px 0; color: var(--muted); font-size: 12px; }
 .integration-list div:first-child { border-top: 0; padding-top: 0; }

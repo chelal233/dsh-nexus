@@ -18,7 +18,14 @@ or vendor Harness source code.
 The product boundary is explicit: Launcher owns UI navigation, presentation,
 and Agent transport, while Agent owns business state and lifecycle behavior.
 Launcher is a replaceable UI shell and must not become a second owner of Agent
-business rules. Harness upstream source remains unchanged.
+state or business rules. Harness upstream source remains unchanged.
+
+The P0 runtime and recovery surfaces follow this boundary: every request
+uses the allowlisted native `proxy_request` bridge; cold operations remain
+Agent-owned and never start Harness implicitly. Manual recovery stays reachable
+when Harness is unhealthy. Profile/plugin and rollback mutations follow the
+Agent's stopped/unowned gate, while bounded redacted diagnostics remain
+readable.
 
 ## Non-negotiable boundaries
 

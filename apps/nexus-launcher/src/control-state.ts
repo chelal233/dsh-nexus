@@ -45,3 +45,36 @@ export function launcherContentMode(
   if (loading && !hasStatus) return "loading";
   return "content";
 }
+
+export type LatestRequest = {
+  begin: () => number;
+  isCurrent: (token: number) => boolean;
+  cancel: () => void;
+};
+
+/** Prevents a completed older request from replacing newer refresh/action state. */
+export function createLatestRequest(): LatestRequest {
+  let generation = 0;
+  return {
+    begin: () => ++generation,
+    isCurrent: (token) => token === generation,
+    cancel: () => { generation += 1; },
+  };
+}
+
+export function coldOperationIsTerminal(phase: unknown): boolean {
+  return phase === "succeeded" || phase === "cancelled" || phase === "failed";
+}
+
+export function recoveryMutationGate(
+  harnessStopRequired: boolean,
+  harnessState: unknown,
+  busy: boolean,
+): { disabled: boolean; reason: "busy" | "stop_required" | "not_stopped" | null } {
+  if (busy) return { disabled: true, reason: "busy" };
+  if (harnessStopRequired) return { disabled: true, reason: "stop_required" };
+  if (harnessState !== "stopped" && harnessState !== "detached" && harnessState !== "failed") {
+    return { disabled: true, reason: "not_stopped" };
+  }
+  return { disabled: false, reason: null };
+}

@@ -2,10 +2,13 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import {
+  coldOperationIsTerminal,
+  createLatestRequest,
   failClosedSnapshot,
   harnessControlGate,
   invalidatesHarnessCredentials,
   launcherContentMode,
+  recoveryMutationGate,
 } from "../src/control-state.ts";
 
 test("an unattached running Harness disables all lifecycle controls", () => {
@@ -63,4 +66,25 @@ test("Harness and Agent lifecycle actions invalidate credentials before transpor
   assert.equal(invalidatesHarnessCredentials("/v1/harness", "restart"), true);
   assert.equal(invalidatesHarnessCredentials("/v1/harness", "stop"), true);
   assert.equal(invalidatesHarnessCredentials("/v1/harness", "open"), false);
+});
+
+test("latest request token rejects late refresh and cancelled responses", () => {
+  const request = createLatestRequest();
+  const first = request.begin();
+  const second = request.begin();
+  assert.equal(request.isCurrent(first), false);
+  assert.equal(request.isCurrent(second), true);
+  request.cancel();
+  assert.equal(request.isCurrent(second), false);
+});
+
+test("cold terminal phases and recovery stopped gate are fail closed", () => {
+  assert.equal(coldOperationIsTerminal("succeeded"), true);
+  assert.equal(coldOperationIsTerminal("cancelled"), true);
+  assert.equal(coldOperationIsTerminal("failed"), true);
+  assert.equal(coldOperationIsTerminal("installing"), false);
+  assert.deepEqual(recoveryMutationGate(false, "stopped", false), { disabled: false, reason: null });
+  assert.deepEqual(recoveryMutationGate(true, "stopped", false), { disabled: true, reason: "stop_required" });
+  assert.deepEqual(recoveryMutationGate(false, "running", false), { disabled: true, reason: "not_stopped" });
+  assert.deepEqual(recoveryMutationGate(false, "failed", true), { disabled: true, reason: "busy" });
 });

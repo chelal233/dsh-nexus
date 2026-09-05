@@ -1,0 +1,93 @@
+import assert from "node:assert/strict";
+import test from "node:test";
+
+import { createElement } from "react";
+import { renderToStaticMarkup } from "react-dom/server";
+import { createServer } from "vite";
+
+const startup = { available: true, running: true };
+const baseSnapshot = {
+  startup,
+  endpointErrors: {},
+  status: {}, health: {}, state: {}, harnessRuntime: {}, harnessUi: {},
+  profiles: {}, checkpoints: {}, releases: {}, updates: {}, diagnostics: {}, config: {}, recovery: {},
+};
+const props = {
+  busyAction: null,
+  credentialInvalidationPending: false,
+  runAction: async () => true,
+  refresh: async () => undefined,
+  themeMode: "system",
+  setThemeMode: () => undefined,
+};
+
+async function loadViews() {
+  const vite = await createServer({ root: process.cwd(), appType: "custom", logLevel: "silent", server: { middlewareMode: true } });
+  const app = await vite.ssrLoadModule("/src/App.tsx");
+  return { vite, RecoveryView: app.RecoveryView, UpdatesView: app.UpdatesView, CheckpointsView: app.CheckpointsView };
+}
+
+test("manual recovery exposes four tabs and truthful plugin inventory while Harness is failed", async () => {
+  const { vite, RecoveryView } = await loadViews();
+  try {
+    const snapshot = {
+      ...baseSnapshot,
+      recovery: { manual_entry_available: true, harness_stop_required: false, harness: { state: "failed" } },
+      profiles: { active_profile: "web", manifests: [{ name: "web", bundles: ["dsh-base"], plugins: [
+        { package: "dsh-base", version: "1.0.0", builtin: true, removable: false },
+        { package: "extra-plugin", version: "2.0.0", builtin: false, removable: true },
+      ] }] },
+    };
+    const markup = renderToStaticMarkup(createElement(RecoveryView, { ...props, snapshot }));
+    assert.match(markup, /Manual recovery remains available/);
+    for (const label of ["Plugins", "Rollback", "Native profiles", "Diagnostics"]) assert.match(markup, new RegExp(label));
+    assert.match(markup, /dsh-base/);
+    assert.match(markup, /Built-in/);
+    assert.match(markup, /extra-plugin/);
+    assert.match(markup, /Removable/);
+  } finally { await vite.close(); }
+});
+
+test("cold confirmation renders exact version, destination, effects, and explicit actions", async () => {
+  const { vite, UpdatesView } = await loadViews();
+  try {
+    const snapshot = {
+      ...baseSnapshot,
+      config: { runtime: { source: "official", mode: "system", node: { path: "C:\\node.exe", ownership: "system" } } },
+      updates: { update: { state: "running" }, operation: {
+        operation_id: "cold-7", phase: "awaiting_confirmation", tag: "v1.2.3", progress_percent: 25,
+        confirmation: "sha256:plan", supply_plan: {
+          supply_plan_id: "sha256:plan", destination_root: "C:\\Nexus\\runtimes",
+          node: { version: "24.20.0", disposition: "install_system", path: "C:\\Program Files\\nodejs\\node.exe" },
+          pnpm: { version: "11.7.0", disposition: "install_system", path: "C:\\pnpm\\pnpm.exe" },
+        },
+      } },
+      releases: { releases: [] },
+    };
+    const markup = renderToStaticMarkup(createElement(UpdatesView, { ...props, snapshot }));
+    assert.match(markup, /24\.20\.0/);
+    assert.match(markup, /C:\\Nexus\\runtimes/);
+    assert.match(markup, /install_system/);
+    assert.match(markup, /Confirm exact plan/);
+    assert.match(markup, /Cancel/);
+    assert.match(markup, /never start Harness automatically/);
+  } finally { await vite.close(); }
+});
+
+test("checkpoint fixtures show legacy truth and pending retry or abort", async () => {
+  const { vite, CheckpointsView } = await loadViews();
+  try {
+    const snapshot = { ...baseSnapshot, recovery: { harness_stop_required: false, harness: { state: "stopped" } }, checkpoints: {
+      checkpoints: [{ id: "legacy-1", profile: "web", created_at_unix: 1, state: { profile: "web" } }],
+      pending_restore: { checkpoint_id: "cp-2", snapshot_id: "snap-2", ticket_id: "ticket-2", state: "materialization_pending", retryable: true, abortable: true, error: "install failed" },
+      healthy_capture_error: "snapshot store busy",
+    } };
+    const markup = renderToStaticMarkup(createElement(CheckpointsView, { ...props, snapshot }));
+    assert.match(markup, /Legacy metadata only/);
+    assert.match(markup, /materialization pending/i);
+    assert.match(markup, /install failed/);
+    assert.match(markup, /Retry/);
+    assert.match(markup, /Abort/);
+    assert.match(markup, /snapshot store busy/);
+  } finally { await vite.close(); }
+});

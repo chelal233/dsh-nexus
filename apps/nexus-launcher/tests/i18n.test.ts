@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { translateForTest } from "../src/i18n.ts";
+import { translateForTest, translationKeysForTest } from "../src/i18n.ts";
 
 test("supports English and Simplified Chinese translations with interpolation", () => {
   assert.equal(translateForTest("en", "Overview"), "Overview");
@@ -14,4 +14,8 @@ test("supports English and Simplified Chinese translations with interpolation", 
     translateForTest("zh", "Harness is not configured. Open Settings to configure it."),
     "Harness 尚未配置，请打开设置完成配置。",
   );
+});
+
+test("English and Simplified Chinese dictionaries expose the same keys", () => {
+  assert.deepEqual(translationKeysForTest("zh"), translationKeysForTest("en"));
 });
