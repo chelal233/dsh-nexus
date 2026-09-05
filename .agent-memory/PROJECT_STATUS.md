@@ -2,6 +2,13 @@ updated: 2026-09-05 by Codex (P0 快照内容引擎已接入 Agent，恢复事�
 
 # dsh-nexus 项目状态与需求基线
 
+## P0 缺陷修复：切换后启动配置钉死旧槽位（2026-09-05）
+
+- **用户报障**：切回 rc.1 后 Harness 仍报 alpha.5 的错（栈路径指向 alpha-5 槽位）。**根因**：冷切换安装时把 harness.program/args 物化为 alpha-5 具体路径写进 config.json；switch 只切 release 指针，不同步启动配置 → 启动的永远是旧槽位代码
+- **修复（提交 fix: retarget harness config to release placeholder on switch）**：`UpdateExecutor::retarget_harness_config`——promote 后把 config 中指向旧槽位的 `releases\<old>`/`releases/<old>` 前缀改写为 `{release_root}` 占位符（supervisor 为子串替换，mid-path 可用，渲染时跟随 current 指针）。挂在 promote_for_switch 单一漏斗（快/慢路径都覆盖）。附单元测试
+- **用户 config.json 已就地修复**（args[0] → `Nexus\{release_root}pps/cli/lib/bin.js`），下次启动 Harness 即生效，无需重启 Agent
+- **待办提醒**：这类“profile 依赖与 harness 版本不匹配”的启动失败（rc.1↔alpha.5 切换后 node_modules 过期）仍需“切换后自动物化 profile 依赖”根治——用户拍板后实施
+
 ## P0 反馈第七轮（2026-09-05）
 
 概览 Harness 卡片的启动日志尾随改为**二级弹窗**（新增通用 Modal 组件：遮罩+居中卡片+右上关闭，点击遮罩可关闭），不再内联拉伸页面。按钮文案「查看启动日志」。**待用户拍板**：冷切换成功且版本变化后自动对当前配置档执行 pnpm 物化（修复 alpha.5 类“配置档依赖与 harness 版本不匹配”启动失败；写入 .dsh profile 行为与已验收的恢复物化一致）——用户确认后实现，然后 P0 收束进 P1。
