@@ -37,6 +37,7 @@ import {
   runtimeSettingsGate,
 } from "./control-state";
 import { useI18n, type Locale, type Translator } from "./i18n";
+import { notify, notificationsEnabledPreference, setNotificationsEnabledPreference } from "./notifications";
 
 type JsonObject = Record<string, unknown>;
 type IconComponent = React.ComponentType<IconProps>;
@@ -1132,6 +1133,26 @@ function App() {
   const connectionTone = snapshot.status ? (isRunning ? "good" : "warn") : "bad";
   const contentMode = launcherContentMode(bridgeError, loading, snapshot.status !== null);
 
+  const notifiedRunRef = useRef("");
+  useEffect(() => {
+    const runtime = asObject(snapshot.harnessRuntime);
+    const state = stringValue(runtime, "state");
+    const pid = numberValue(runtime, "pid") ?? "";
+    const startedAt = numberValue(runtime, "started_at_unix") ?? "";
+    const runId = `${pid}:${startedAt}`;
+    if (state === "failed" && notifiedRunRef.current !== runId) {
+      notifiedRunRef.current = runId;
+      const error = stringValue(runtime, "error") || "";
+      if (notificationsEnabledPreference()) {
+        void notify("Nexus Launcher", t("Harness failed to start or crashed. Check the Overview page for details."));
+      }
+      void error;
+    }
+    if (state === "running" && notifiedRunRef.current !== runId) {
+      notifiedRunRef.current = runId;
+    }
+  }, [snapshot.harnessRuntime, t]);
+
   const content = useMemo(() => {
     const common = { snapshot, busyAction, credentialInvalidationPending, runAction, refresh, themeMode, setThemeMode, openSettings: () => setActiveModule("settings") };
     switch (activeModule) {
@@ -1638,6 +1659,7 @@ function HarnessDiscoveryPanel({
 
 function SettingsView({ snapshot, themeMode, setThemeMode, busyAction, runAction }: ViewProps) {
   const { locale, setLocale, t } = useI18n();
+  const [notificationsEnabled, setNotificationsEnabled] = useState(notificationsEnabledPreference());
   const config = asObject(snapshot.config);
   const harness = nestedValue(config, "harness");
   const update = nestedValue(config, "update");
@@ -1889,7 +1911,7 @@ function SettingsView({ snapshot, themeMode, setThemeMode, busyAction, runAction
         {!hasHarnessConfig && !editingHarness && <EmptyState title={t("Harness is not configured")} detail={t("The Agent remains usable as a control plane until an external Harness is configured.")} />}
       </Panel>
      </div>
-     <Panel title={t("Native integration")} icon={<Bell size={18} />}><div className="integration-list"><div><CheckCircle size={18} /><span>{t("Single instance guard")}</span><strong>{t("Enabled")}</strong></div><div><Bell size={18} /><span>{t("Desktop notifications")}</span><strong>{t("Available through Tauri")}</strong></div><div><Key size={18} /><span>{t("API transport")}</span><strong>{t("Rust loopback proxy")}</strong></div></div></Panel>
+     <Panel title={t("Native integration")} icon={<Bell size={18} />}><div className="integration-list"><div><CheckCircle size={18} /><span>{t("Single instance guard")}</span><strong>{t("Enabled")}</strong></div><div><Bell size={18} /><span>{t("Desktop notifications")}</span><label className="form-check"><input type="checkbox" checked={notificationsEnabled} onChange={(event) => { setNotificationsEnabledPreference(event.target.checked); setNotificationsEnabled(event.target.checked); }} /><span>{t("Enabled")}</span></label></div><div><Key size={18} /><span>{t("API transport")}</span><strong>{t("Rust loopback proxy")}</strong></div></div></Panel>
   </>;
 }
 
