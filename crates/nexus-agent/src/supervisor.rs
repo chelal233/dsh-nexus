@@ -380,6 +380,29 @@ impl HarnessSupervisor {
         }
     }
 
+    /// Durably claim the healthy-snapshot attempt for one concrete Harness log
+    /// session. Returns false when this run was already claimed or is no longer
+    /// the current Running observation.
+    pub(crate) async fn claim_healthy_snapshot_attempt(
+        &self,
+        run_id: &str,
+        generation: u64,
+    ) -> io::Result<bool> {
+        let mut inner = self.inner.lock().await;
+        if inner.runtime.state != HarnessState::Running
+            || inner.log_session.run_id != run_id
+            || inner.log_session.generation != generation
+            || inner.log_session.healthy_snapshot_attempted
+        {
+            return Ok(false);
+        }
+        let mut claimed = inner.log_session.clone();
+        claimed.healthy_snapshot_attempted = true;
+        self.log_sessions.write(&claimed)?;
+        inner.log_session = claimed;
+        Ok(true)
+    }
+
     /// Recover a persisted observation without claiming an old PID is under
     /// this Agent's control. A healthy configured loopback endpoint is enough
     /// to restore Running with no process identity only for legacy readiness;
@@ -2770,8 +2793,8 @@ mod tests {
     };
 
     use nexus_core::{
-        unix_time_seconds, AgentState, ConfigStore, HarnessLaunchSpec, NexusConfigFile, NexusPaths,
-        RuntimeMetadataStore,
+        unix_time_nanos_for_update, unix_time_seconds, AgentState, ConfigStore, HarnessLaunchSpec,
+        NexusConfigFile, NexusPaths, RuntimeMetadataStore,
     };
     use nexus_launcher_core::read_harness_ui_info;
     use nexus_protocol::{HarnessRuntimeInfo, HarnessState};
@@ -2846,6 +2869,57 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn healthy_snapshot_claim_is_durable_once_per_running_log_session() {
+        let root = std::env::temp_dir().join(format!(
+            "nexus-agent-healthy-claim-{}-{}",
+            std::process::id(),
+            unix_time_nanos_for_update()
+        ));
+        let paths = NexusPaths::from_root(root.clone());
+        let supervisor = HarnessSupervisor::new(paths).expect("supervisor creates");
+        {
+            let mut inner = supervisor.inner.lock().await;
+            inner.generation = 7;
+            inner.runtime = HarnessRuntimeInfo {
+                state: HarnessState::Running,
+                pid: Some(4242),
+                exit_code: None,
+                error: None,
+                started_at_unix: Some(unix_time_seconds()),
+                updated_at_unix: Some(unix_time_seconds()),
+            };
+            inner.log_session.run_id = "run-seven".to_owned();
+            inner.log_session.generation = 7;
+            inner.log_session.healthy_snapshot_attempted = false;
+            supervisor
+                .log_sessions
+                .write(&inner.log_session)
+                .expect("unclaimed session writes");
+        }
+        assert!(supervisor
+            .claim_healthy_snapshot_attempt("run-seven", 7)
+            .await
+            .expect("first claim persists"));
+        assert!(!supervisor
+            .claim_healthy_snapshot_attempt("run-seven", 7)
+            .await
+            .expect("duplicate claim is readable"));
+        assert!(!supervisor
+            .claim_healthy_snapshot_attempt("other-run", 7)
+            .await
+            .expect("different run cannot claim current session"));
+        assert!(
+            supervisor
+                .log_sessions
+                .read()
+                .expect("durable session reads")
+                .expect("durable session exists")
+                .healthy_snapshot_attempted
+        );
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[tokio::test]
     async fn supervisor_reports_missing_program_as_readable_error() {
         let root =
             std::env::temp_dir().join(format!("nexus-agent-unconfigured-{}", std::process::id()));
@@ -2906,9 +2980,10 @@ mod tests {
                     readiness_token_required: false,
                 }),
                 update: None,
-            
+
                 releases: None,
                 runtime: None,
+                snapshots: None,
             })
             .expect("Harness config writes");
 
@@ -2968,9 +3043,10 @@ mod tests {
                     readiness_token_required: false,
                 }),
                 update: None,
-            
+
                 releases: None,
                 runtime: None,
+                snapshots: None,
             })
             .expect("Harness config writes");
         let supervisor = HarnessSupervisor::new(paths).expect("supervisor creates");
@@ -3095,9 +3171,10 @@ mod tests {
                     readiness_token_required: false,
                 }),
                 update: None,
-            
+
                 releases: None,
                 runtime: None,
+                snapshots: None,
             })
             .expect("Harness config writes");
         let supervisor = HarnessSupervisor::new(paths).expect("supervisor creates");
@@ -3194,9 +3271,10 @@ mod tests {
                     readiness_token_required: false,
                 }),
                 update: None,
-            
+
                 releases: None,
                 runtime: None,
+                snapshots: None,
             })
             .expect("Harness config writes");
         RuntimeMetadataStore::new(paths.clone())
@@ -3303,9 +3381,10 @@ mod tests {
                     readiness_token_required: false,
                 }),
                 update: None,
-            
+
                 releases: None,
                 runtime: None,
+                snapshots: None,
             })
             .expect("Harness config writes");
         let supervisor = HarnessSupervisor::new(paths).expect("supervisor creates");
@@ -3527,9 +3606,10 @@ mod tests {
                     readiness_token_required: false,
                 }),
                 update: None,
-            
+
                 releases: None,
                 runtime: None,
+                snapshots: None,
             })
             .expect("Harness config writes");
 
@@ -3602,9 +3682,10 @@ mod tests {
                     readiness_token_required: false,
                 }),
                 update: None,
-            
+
                 releases: None,
                 runtime: None,
+                snapshots: None,
             })
             .expect("Harness config writes");
 
@@ -3681,9 +3762,10 @@ mod tests {
                     readiness_token_required: true,
                 }),
                 update: None,
-            
+
                 releases: None,
                 runtime: None,
+                snapshots: None,
             })
             .expect("Harness config writes");
         let supervisor = HarnessSupervisor::new(paths.clone()).expect("supervisor creates");
@@ -3753,9 +3835,10 @@ mod tests {
                     readiness_token_required: true,
                 }),
                 update: None,
-            
+
                 releases: None,
                 runtime: None,
+                snapshots: None,
             })
             .expect("Harness config writes");
         let supervisor = HarnessSupervisor::new(paths.clone()).expect("supervisor creates");
@@ -3820,9 +3903,10 @@ mod tests {
                     readiness_token_required: false,
                 }),
                 update: None,
-            
+
                 releases: None,
                 runtime: None,
+                snapshots: None,
             })
             .expect("Harness config writes");
 
@@ -3901,9 +3985,10 @@ mod tests {
                     readiness_token_required: false,
                 }),
                 update: None,
-            
+
                 releases: None,
                 runtime: None,
+                snapshots: None,
             })
             .expect("Harness config writes");
         let supervisor = HarnessSupervisor::new(paths).expect("supervisor creates");
@@ -3994,9 +4079,10 @@ mod tests {
                     readiness_token_required: false,
                 }),
                 update: None,
-            
+
                 releases: None,
                 runtime: None,
+                snapshots: None,
             })
             .expect("Harness config writes");
         let supervisor = HarnessSupervisor::new(paths.clone()).expect("supervisor creates");
@@ -4083,9 +4169,10 @@ mod tests {
                     readiness_token_required: false,
                 }),
                 update: None,
-            
+
                 releases: None,
                 runtime: None,
+                snapshots: None,
             })
             .expect("Harness config writes");
         let supervisor =
@@ -4145,9 +4232,10 @@ mod tests {
                     readiness_token_required: false,
                 }),
                 update: None,
-            
+
                 releases: None,
                 runtime: None,
+                snapshots: None,
             })
             .expect("Harness config writes");
         let supervisor = HarnessSupervisor::new(paths.clone()).expect("supervisor creates");
@@ -4204,9 +4292,10 @@ mod tests {
                     readiness_token_required: false,
                 }),
                 update: None,
-            
+
                 releases: None,
                 runtime: None,
+                snapshots: None,
             })
             .expect("Harness config writes");
         let supervisor = HarnessSupervisor::with_graceful_wait(paths, Duration::from_millis(100))
@@ -4256,9 +4345,10 @@ mod tests {
                     readiness_token_required: false,
                 }),
                 update: None,
-            
+
                 releases: None,
                 runtime: None,
+                snapshots: None,
             })
             .expect("Harness config writes");
         let supervisor = HarnessSupervisor::with_graceful_wait(paths, Duration::from_millis(500))
@@ -4342,9 +4432,10 @@ mod tests {
                     readiness_token_required: false,
                 }),
                 update: None,
-            
+
                 releases: None,
                 runtime: None,
+                snapshots: None,
             })
             .expect("Harness config writes");
         let supervisor = HarnessSupervisor::with_graceful_wait(paths, Duration::from_millis(100))
@@ -4455,9 +4546,10 @@ mod tests {
                     readiness_token_required: false,
                 }),
                 update: None,
-            
+
                 releases: None,
                 runtime: None,
+                snapshots: None,
             })
             .expect("Harness config writes");
         let supervisor = HarnessSupervisor::new(paths).expect("supervisor creates");
@@ -4504,9 +4596,10 @@ mod tests {
                     readiness_token_required: false,
                 }),
                 update: None,
-            
+
                 releases: None,
                 runtime: None,
+                snapshots: None,
             })
             .expect("Harness config writes");
         let supervisor = HarnessSupervisor::new(paths).expect("supervisor creates");
@@ -4561,9 +4654,10 @@ mod tests {
                     readiness_token_required: false,
                 }),
                 update: None,
-            
+
                 releases: None,
                 runtime: None,
+                snapshots: None,
             })
             .expect("Harness config writes");
         let supervisor = HarnessSupervisor::new(paths).expect("supervisor creates");
@@ -4651,9 +4745,10 @@ mod tests {
                     readiness_token_required: false,
                 }),
                 update: None,
-            
+
                 releases: None,
                 runtime: None,
+                snapshots: None,
             })
             .expect("Harness config writes");
         let supervisor = HarnessSupervisor::new(paths).expect("supervisor creates");
@@ -4931,9 +5026,10 @@ mod tests {
                     readiness_token_required: true,
                 }),
                 update: None,
-            
+
                 releases: None,
                 runtime: None,
+                snapshots: None,
             })
             .expect("Harness config writes");
         RuntimeMetadataStore::new(paths.clone())
@@ -4983,9 +5079,10 @@ mod tests {
                     readiness_token_required: false,
                 }),
                 update: None,
-            
+
                 releases: None,
                 runtime: None,
+                snapshots: None,
             })
             .expect("Harness config writes");
         RuntimeMetadataStore::new(paths.clone())
@@ -5258,9 +5355,10 @@ mod tests {
                     readiness_token_required: false,
                 }),
                 update: None,
-            
+
                 releases: None,
                 runtime: None,
+                snapshots: None,
             })
             .expect("Harness config writes");
         let first = HarnessSupervisor::new(paths.clone()).expect("first supervisor creates");
@@ -5341,9 +5439,10 @@ mod tests {
                     readiness_token_required: false,
                 }),
                 update: None,
-            
+
                 releases: None,
                 runtime: None,
+                snapshots: None,
             })
             .expect("Harness config writes");
 
@@ -5449,9 +5548,10 @@ mod tests {
                     readiness_token_required: false,
                 }),
                 update: None,
-            
+
                 releases: None,
                 runtime: None,
+                snapshots: None,
             })
             .expect("Harness config writes");
         let supervisor = HarnessSupervisor::new(paths.clone()).expect("supervisor creates");
@@ -5527,9 +5627,10 @@ mod tests {
                     readiness_token_required: false,
                 }),
                 update: None,
-            
+
                 releases: None,
                 runtime: None,
+                snapshots: None,
             })
             .expect("Harness config writes");
         let first = HarnessSupervisor::new(paths.clone()).expect("first supervisor creates");
@@ -5607,9 +5708,10 @@ mod tests {
                     readiness_token_required: true,
                 }),
                 update: None,
-            
+
                 releases: None,
                 runtime: None,
+                snapshots: None,
             })
             .expect("Harness config writes");
         let supervisor =
@@ -5840,9 +5942,10 @@ mod tests {
                     readiness_token_required: false,
                 }),
                 update: None,
-            
+
                 releases: None,
                 runtime: None,
+                snapshots: None,
             })
             .expect("Harness config writes");
         let supervisor =
@@ -5969,9 +6072,10 @@ mod tests {
                     readiness_token_required: false,
                 }),
                 update: None,
-            
+
                 releases: None,
                 runtime: None,
+                snapshots: None,
             })
             .expect("Harness config writes");
         RuntimeMetadataStore::new(paths.clone())
@@ -6087,9 +6191,10 @@ mod tests {
                     readiness_token_required: false,
                 }),
                 update: None,
-            
+
                 releases: None,
                 runtime: None,
+                snapshots: None,
             })
             .expect("Harness config writes");
         let supervisor = HarnessSupervisor::new(paths.clone()).expect("supervisor creates");

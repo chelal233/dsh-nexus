@@ -1389,12 +1389,16 @@ name = "nexus-agent"
 version = "0.1.0"
 dependencies = [
  "axum",
+ "libc",
  "nexus-core",
  "nexus-launcher-core",
  "nexus-protocol",
+ "nexus-snapshots",
+ "serde_json",
  "tokio",
  "tracing",
  "tracing-subscriber",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -1413,6 +1417,7 @@ name = "nexus-core"
 version = "0.1.0"
 dependencies = [
  "nexus-protocol",
+ "nexus-snapshots",
  "serde",
  "serde_json",
  "windows-sys 0.61.2",

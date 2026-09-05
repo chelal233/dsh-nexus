@@ -745,6 +745,7 @@ def	refs/tags/v0.9.0^{}
                 }),
                 releases: None,
                 runtime: None,
+                snapshots: None,
             })
             .expect("update config writes");
     }
@@ -819,6 +820,7 @@ def	refs/tags/v0.9.0^{}
             
                 releases: None,
                 runtime: None,
+                snapshots: None,
             })
             .expect("update config writes");
         let executor = UpdateExecutor::new(paths.clone(), ReleaseStore::new(paths));
@@ -1001,6 +1003,7 @@ def	refs/tags/v0.9.0^{}
                 update: None,
                 releases: None,
                 runtime: None,
+                snapshots: None,
             })
             .expect("update config clears");
         let guard = executor

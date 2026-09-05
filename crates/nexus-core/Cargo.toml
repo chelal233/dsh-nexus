@@ -7,6 +7,7 @@ publish.workspace = true
 
 [dependencies]
 nexus-protocol = { path = "../nexus-protocol" }
+nexus-snapshots = { path = "../nexus-snapshots" }
 serde.workspace = true
 serde_json.workspace = true
 
