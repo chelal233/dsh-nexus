@@ -4,9 +4,14 @@ updated: 2026-09-05 by Codex (P0 快照内容引擎已接入 Agent，恢复事�
 
 ## P0 缺陷修复第二轮：占位符双路径（2026-09-05）
 
-- 首次 retarget 修复引入回归：替换 `releases\<old>` 时保留了值的前缀（`Nexus\`），渲染后变成 `Nexus\C:\...eleases\...` 双路径 → Harness 启动 os error 267（目录名称无效）
+- 首次 retarget 修复引入回归：替换 `releases\<old>` 时保留了值的前缀（`Nexus\`），渲染后变成 `Nexus\C:\...
+eleases\...` 双路径 → Harness 启动 os error 267（目录名称无效）
 - **修正**：retarget 改为把值中**从开头到槽位段结束**的整个前缀替换为 `{release_root}`（值以占位符开头）；用户 config.json 的 args[0] 已二次修复为 `{release_root}pps/cli/lib/bin.js`
 - 教训：Windows 文本模式 python 写入会把 LF 转 CRLF，改 Rust 源码后需归一化行尾（本次已 amend）；`{release_root}` 是子串替换语义，占位符应位于值的开头
+
+## P0 反馈第九轮（2026-09-05）
+
+删除设置页「更新配置」面板（分支/引用由版本槽位决定，Git 程序由运行时设置决定，来源挪走）：来源 URL 改为「上游标签与冷切换」面板内的可编辑输入 + 「保存来源」按钮，保存走 set_update（完整 UpdateSpec payload，ref_name/git_program 等取当前 config 现值，避免 ref_name 缺省重置为 main）。
 
 ## P0 反馈第八轮（2026-09-05，direct 模式退役 + 运行时归位）
 
