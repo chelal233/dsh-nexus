@@ -297,21 +297,11 @@ impl UpdateExecutor {
                 "injected switch promotion failure",
             )));
         }
-        let previous_current = self
-            .releases
-            .load()
-            .map_err(UpdateExecutorError::Persistence)?
-            .current_release;
+        // releases.promote retargets stale harness launch paths internally.
         let catalog = self
             .releases
             .promote(release_id)
             .map_err(UpdateExecutorError::Persistence)?;
-        if let Some(old_current) = previous_current {
-            if old_current != release_id {
-                Self::retarget_harness_config(&self.paths, &old_current)
-                    .map_err(UpdateExecutorError::Configuration)?;
-            }
-        }
         Ok(catalog)
     }
 
@@ -347,51 +337,6 @@ impl UpdateExecutor {
             .filter(|item| item.version == tag)
             .max_by_key(|item| item.installed_at_unix)
             .cloned())
-    }
-
-    /// Rewrite persisted Harness launch paths that still reference the
-    /// previously promoted slot into `{release_root}` placeholders, so the
-    /// next launch resolves against the current pointer instead of a stale
-    /// slot directory. Returns whether the configuration changed.
-    fn retarget_harness_config(paths: &NexusPaths, old_current: &str) -> io::Result<bool> {
-        let store = ConfigStore::new(paths.clone());
-        let mut document = store.load()?;
-        let Some(harness) = document.harness.as_mut() else {
-            return Ok(false);
-        };
-        let patterns = [
-            format!("releases\\{old_current}"),
-            format!("releases/{old_current}"),
-        ];
-        let rewrite = |value: &mut String| -> bool {
-            for pattern in &patterns {
-                if let Some(position) = value.find(pattern.as_str()) {
-                    // Cut everything before the slot segment too: the parent
-                    // prefix must not survive, or rendering would produce a
-                    // doubled path like `Nexus\C:\...eleases\...`.
-                    *value = format!("{{release_root}}{}", &value[position + pattern.len()..]);
-                    return true;
-                }
-            }
-            false
-        };
-        let mut changed = false;
-        let mut program = harness.program.to_string_lossy().into_owned();
-        changed |= rewrite(&mut program);
-        harness.program = program.into();
-        for argument in &mut harness.args {
-            changed |= rewrite(argument);
-        }
-        if let Some(working_dir) = harness.working_dir.as_mut() {
-            let mut text = working_dir.to_string_lossy().into_owned();
-            changed |= rewrite(&mut text);
-            *working_dir = text.into();
-        }
-        if !changed {
-            return Ok(false);
-        }
-        store.write(&document)?;
-        Ok(true)
     }
 
     pub async fn install(
@@ -826,48 +771,6 @@ def	refs/tags/v0.9.0^{}
         assert!(id.starts_with("harness-feature-test-"));
         let version = resolve_release_version(None, &spec).expect("version derives");
         assert_eq!(version, "feature/test");
-    }
-
-    #[test]
-    fn retarget_rewrites_stale_slot_paths_to_placeholder() {
-        let root = std::env::temp_dir().join(format!(
-            "nexus-retarget-{}-{}",
-            std::process::id(),
-            nexus_core::unix_time_seconds()
-        ));
-        let paths = NexusPaths::from_root(root.clone());
-        let store = ConfigStore::new(paths.clone());
-        let stale_program = paths
-            .releases_dir
-            .join("harness-old-1")
-            .join("apps")
-            .join("cli")
-            .join("lib")
-            .join("bin.js");
-        store
-            .write(&NexusConfigFile {
-                harness: Some(HarnessLaunchSpec {
-                    mode: Default::default(),
-                    program: stale_program.clone(),
-                    args: vec![stale_program.to_string_lossy().into_owned()],
-                    working_dir: None,
-                    readiness_url: None,
-                    readiness_timeout_secs: None,
-                    readiness_token_required: false,
-                }),
-                update: None,
-                releases: None,
-                runtime: None,
-                snapshots: None,
-            })
-            .expect("config written");
-        let changed = UpdateExecutor::retarget_harness_config(&paths, "harness-old-1").expect("retarget ok");
-        assert!(changed);
-        let document = store.load().expect("reload");
-        let harness = document.harness.expect("harness kept");
-        assert!(harness.program.to_string_lossy().contains("{release_root}"));
-        assert!(!harness.program.to_string_lossy().contains("harness-old-1"));
-        assert!(harness.args.iter().all(|item| item.contains("{release_root}")));
     }
 
     #[tokio::test]

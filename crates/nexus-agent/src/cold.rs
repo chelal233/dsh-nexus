@@ -810,23 +810,25 @@ async fn build_and_publish(
     final_operation.progress_percent = 90;
     final_operation.updated_at_unix = Some(unix_time_seconds());
     state.cold.write(&final_operation)?;
-    let release_root = state.paths.releases_dir.join(&operation.release_id);
     let node = runtime
         .node
         .as_ref()
         .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "verified Node pin is missing"))?
         .path
         .clone();
-    let entry = release_root.join("apps/cli/lib/bin.js");
+    // The launch configuration must reference the `{release_root}`
+    // placeholder, never a concrete slot directory, so later switches,
+    // rollbacks, and checkpoint restores keep the launch on the current
+    // pointer.
     let harness = HarnessLaunchSpec {
         mode: HarnessLaunchMode::Node,
         program: node,
         args: vec![
-            entry.to_string_lossy().into_owned(),
+            "{release_root}\\apps/cli/lib/bin.js".to_owned(),
             "--profile".to_owned(),
             "{profile}".to_owned(),
         ],
-        working_dir: Some(release_root),
+        working_dir: Some(PathBuf::from("{release_root}")),
         readiness_url: None,
         readiness_timeout_secs: None,
         readiness_token_required: false,

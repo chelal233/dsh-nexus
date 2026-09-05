@@ -1709,18 +1709,24 @@ function SettingsView({ snapshot, themeMode, setThemeMode, busyAction, runAction
       }
       timeout = parsed;
     }
-    let argsText: string;
     if (draft.argsRedacted && !draft.replaceRedactedArgs) {
-      argsText = draft.args;
-    } else {
-      argsText = rowsToArgsText(argRows);
-      if (!argRows.some((row) => row.key.trim() === "--profile")) {
-        argsText = argsText ? `--profile\n{profile}\n${argsText}` : "--profile\n{profile}";
-      }
-      if (argsText.includes("[REDACTED]")) {
-        setFormError(t("Replace hidden arguments before saving."));
-        return;
-      }
+      setFormError(t("Replace hidden arguments before saving."));
+      return;
+    }
+    const incompleteRow = argRows.find(
+      (row) => !row.key.trim() || (row.key.trim() === "--" && !row.value.trim()),
+    );
+    if (incompleteRow !== undefined) {
+      setFormError(t("Finish or remove the empty argument row before saving."));
+      return;
+    }
+    let argsText = rowsToArgsText(argRows);
+    if (!argRows.some((row) => row.key.trim() === "--profile")) {
+      argsText = argsText ? `--profile\n{profile}\n${argsText}` : "--profile\n{profile}";
+    }
+    if (argsText.includes("[REDACTED]")) {
+      setFormError(t("Replace hidden arguments before saving."));
+      return;
     }
     const harnessPayload = harnessConfigPayloadFromDraft({
       ...draft,
@@ -1734,7 +1740,7 @@ function SettingsView({ snapshot, themeMode, setThemeMode, busyAction, runAction
     const saved = await runAction(t("Save Harness configuration"), "/v1/config", {
       action: "set_harness",
       harness: harnessPayload,
-      preserve_harness_readiness_url: draft.readinessUrlRedacted && Boolean(readinessUrl),
+      preserve_harness_readiness_url: draft.readinessUrlRedacted,
     });
     if (saved === true) {
       draftDirtyRef.current = false;

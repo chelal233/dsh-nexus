@@ -1403,9 +1403,11 @@ impl ReleaseStore {
             ));
         }
         if catalog.current_release.as_deref() != Some(id) {
+            let previous = catalog.current_release.clone();
             if let Some(previous) = catalog.current_release.replace(id.to_owned()) {
                 catalog.last_known_good = Some(previous);
             }
+            self.retarget_launch_placeholder(&previous.unwrap_or_default(), Some(id))?;
             self.write_pointers(&catalog)?;
         }
         Ok(catalog)
@@ -1444,6 +1446,73 @@ impl ReleaseStore {
         Ok(catalog)
     }
 
+    /// Rewrite persisted Harness launch paths that still reference the
+    /// previously promoted slot into `{release_root}` placeholders, so the
+    /// next launch follows the current pointer instead of a stale slot
+    /// directory. A cleared target (no release) is left untouched.
+    fn retarget_launch_placeholder(
+        &self,
+        old_current: &str,
+        new_current: Option<&str>,
+    ) -> io::Result<()> {
+        let Some(new_current) = new_current else {
+            return Ok(());
+        };
+        if old_current.is_empty() || old_current == new_current {
+            return Ok(());
+        }
+        let store = ConfigStore::new(self.paths.clone());
+        store
+            .transaction(|document| {
+                let Some(harness) = document.harness.as_mut() else {
+                    return Ok(false);
+                };
+                // Windows paths are case-insensitive and a shorter slot id
+                // must never match a longer sibling (`rc1` inside `rc10`), so
+                // the search lowercases and requires a non-identifier
+                // boundary after the match.
+                let needle = format!("releases\\{old_current}");
+                let needle_forward = format!("releases/{old_current}");
+                let rewrite = |value: &mut String| -> bool {
+                    let lowered = value.to_lowercase();
+                    for candidate in [&needle, &needle_forward] {
+                        let lowered_candidate = candidate.to_lowercase();
+                        if let Some(position) = lowered.find(lowered_candidate.as_str()) {
+                            let end = position + candidate.len();
+                            let rest = value[end..].chars().next();
+                            if rest.is_some_and(|character| {
+                                character.is_alphanumeric()
+                                    || character == '_'
+                                    || character == '.'
+                            }) {
+                                continue;
+                            }
+                            // Cut everything before the slot segment too: the
+                            // parent prefix must not survive, or rendering
+                            // would produce a doubled absolute path.
+                            *value = format!("{{release_root}}{}", &value[end..]);
+                            return true;
+                        }
+                    }
+                    false
+                };
+                let mut changed = false;
+                let mut program = harness.program.to_string_lossy().into_owned();
+                changed |= rewrite(&mut program);
+                harness.program = program.into();
+                for argument in &mut harness.args {
+                    changed |= rewrite(argument);
+                }
+                if let Some(working_dir) = harness.working_dir.as_mut() {
+                    let mut text = working_dir.to_string_lossy().into_owned();
+                    changed |= rewrite(&mut text);
+                    *working_dir = text.into();
+                }
+                Ok(changed)
+            })?;
+        Ok(())
+    }
+
     /// Atomically restore the release selection captured by a checkpoint.
     /// A selected release must still be a registered, contained slot. A
     /// checkpoint without a release clears the current pointer. The prior
@@ -1457,7 +1526,12 @@ impl ReleaseStore {
         }
         let _guard = self.lock_gate()?;
         let mut catalog = self.load_unlocked()?;
+        let previous_current = catalog.current_release.clone();
         self.apply_checkpoint_release(&mut catalog, release_id)?;
+        self.retarget_launch_placeholder(
+            previous_current.as_deref().unwrap_or_default(),
+            catalog.current_release.as_deref(),
+        )?;
         self.write_pointers(&catalog)?;
         Ok(catalog)
     }
@@ -1535,8 +1609,13 @@ impl ReleaseStore {
                 "no last-known-good release is available",
             ));
         };
-        let previous = catalog.current_release.replace(last_known_good);
+        let previous_current = catalog.current_release.clone();
+        let previous = catalog.current_release.replace(last_known_good.clone());
         catalog.last_known_good = previous;
+        self.retarget_launch_placeholder(
+            previous_current.as_deref().unwrap_or_default(),
+            Some(&last_known_good),
+        )?;
         self.write_pointers(&catalog)?;
         Ok(catalog)
     }
