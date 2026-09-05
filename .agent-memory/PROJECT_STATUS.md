@@ -2,6 +2,13 @@ updated: 2026-09-05 by Codex (P0 快照内容引擎已接入 Agent，恢复事�
 
 # dsh-nexus 项目状态与需求基线
 
+## P0 反馈第八轮（2026-09-05，direct 模式退役 + 运行时归位）
+
+1. **运行时设置整块（含运行时状态面板）从更新页迁至设置页**，置于 Harness 配置面板之前；更新页切换标签 payload 改用 config 持久化的 source/mode
+2. **Harness 配置极简化（node-only）**：删除 Launch mode 选择器（direct 选项退役）、program/entry/工作目录手动输入、HarnessDiscoveryPanel 自动识别整块；只保留 就绪检测 URL（可选）+超时+token 勾选 + **结构化附加参数**（key-value 行编辑，`--profile {profile}` 自动保证存在并跟随当前配置档；保存时 program 兜底=node pin/`node`，entry 兜底=`{release_root}/apps/cli/lib/bin.js`）
+3. 后端协议未动（direct 兼容保留，UI 不再暴露）；harness-config.test.ts 纯函数测试全部保留通过
+4. 教训：SettingsView 的 discovery 块删除后注意散落的 setSelectedCandidateId 引用；大段 JSX 替换后跑 tsc 定位重复闭括号
+
 ## P0 缺陷修复：切换后启动配置钉死旧槽位（2026-09-05）
 
 - **用户报障**：切回 rc.1 后 Harness 仍报 alpha.5 的错（栈路径指向 alpha-5 槽位）。**根因**：冷切换安装时把 harness.program/args 物化为 alpha-5 具体路径写进 config.json；switch 只切 release 指针，不同步启动配置 → 启动的永远是旧槽位代码
