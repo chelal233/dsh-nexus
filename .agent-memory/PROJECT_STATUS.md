@@ -46,6 +46,10 @@ ActionButton 全局补 `type="button"`：此前所有 ActionButton 在 `<form>` 
 - **当前机器状态**：release=alpha.5 槽位→已切 rc.1（指针 rc.1，dsh-file-upload 已从清单移除，manifest 干净）；启动仍失败（导出缺失，因农场=alpha.1 包）；`.nexus-backup-20260906/` 与 `node_modules.stale-alpha1` 保留；plugin-desktop\node_modules 的 0.1.2-alpha.1 三件套验证过满足全部导出（应急可 junction，但 loader 不走 profiles/node_modules 解析 @deepseek-ai/*——loader 内部映射优先，junction 方案无效已证实）
 - **已知可行组合**：desktop 自带 0.1.2-alpha.1 harness + 其捆绑官方包曾正常运行数周（用户原生态）；本地三个 GitHub tag 槽位均与 rc.2 时代插件存在导出面不匹配
 
+## P1 决策记录（2026-09-06，自动化第十一轮）
+
+- **CTRL_BREAK 优雅停止方案已实施又回退**（revert: ctrl break delivery）：实施后测试运行器被控制台事件误杀（0xC000013A，PID 组复用可能命中无辜进程），且 Node 默认不处理 CTRL_BREAK（无真实优雅收益，行为与 TerminateProcess 等价）。最终停止路径 = 5s 宽限窗（对有 handler 的进程有效）+ Job Tree 终止兜底。**结论：Windows 下 node 类负载没有真正的优雅停止，5s 等待是合理成本**，不再尝试信号方案
+
 ## P1 进展（2026-09-06，自动化第十轮）
 
 - **Job Object 已接入 Harness spawn**（提交 fix: assign harness process tree to a kill-on-close job object）：spawn 时创建 kill-on-close Job 并分配整棵进程树（dsh.rs 新增 assign_process_to_job 按 HANDLE 泛化）；stop 超时后 TerminateJobObject 终止整棵树（此前只杀直接子进程，插件/esbuild 孙子进程泄漏占端口）；Agent 进程退出时句柄关闭 → 整树死亡（"Agent 随 Launcher 退出"语义完整）。测试构建（cfg not(test)）跳过 Job 以避免并行测试互杀，生产行为完整
