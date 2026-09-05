@@ -202,12 +202,8 @@ async fn proxy_request(
         .map(serde_json::to_vec)
         .transpose()
         .map_err(|error| format!("Agent request body could not be encoded: {error}"))?;
-    if path == "/v1/runtime" {
-        validate_runtime_request(&method, encoded_body.as_deref())?;
-    } else {
-        validate_agent_request(&path, &method, encoded_body.as_deref())
-            .map_err(|error| error.to_string())?;
-    }
+    validate_agent_request(&path, &method, encoded_body.as_deref())
+        .map_err(|error| error.to_string())?;
     let health = state
         .runtime
         .probe()
@@ -221,16 +217,6 @@ async fn proxy_request(
         .request_value(method, &path, body.as_ref())
         .await
         .map_err(|error| error.to_string())
-}
-
-fn validate_runtime_request(method: &Method, body: Option<&[u8]>) -> Result<(), String> {
-    if *method != Method::GET {
-        return Err("Runtime discovery accepts GET only".to_owned());
-    }
-    if body.is_some_and(|body| !body.is_empty()) {
-        return Err("Runtime discovery GET requests cannot include a body".to_owned());
-    }
-    Ok(())
 }
 
 fn validate_native_agent_request(method: &Method, body: Option<&Value>) -> Result<(), String> {
@@ -508,13 +494,12 @@ mod tests {
         assert!(is_allowed_route("/v1/runtime"));
         assert!(is_allowed_route("/v1/agent"));
         assert!(!is_allowed_route("/v1/health?url=https://example.com"));
-    }
-
-    #[test]
-    fn runtime_route_is_read_only_get() {
-        assert!(validate_runtime_request(&Method::GET, None).is_ok());
-        assert!(validate_runtime_request(&Method::POST, None).is_err());
-        assert!(validate_runtime_request(&Method::GET, Some(b"{}")).is_err());
+        assert!(validate_agent_request("/v1/runtime", &Method::GET, None).is_ok());
+        assert!(validate_agent_request("/v1/runtime", &Method::POST, None).is_err());
+        assert!(validate_agent_request("/v1/runtime", &Method::GET, Some(b"{}")).is_err());
+        assert!(validate_agent_request("/v1/releases/tags", &Method::GET, None).is_ok());
+        assert!(validate_agent_request("/v1/releases/tags", &Method::POST, None).is_err());
+        assert!(validate_agent_request("/v1/releases/tags", &Method::GET, Some(b"{}")).is_err());
     }
 
     #[test]
