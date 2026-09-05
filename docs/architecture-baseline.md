@@ -170,7 +170,8 @@ The Agent exposes:
   after it succeeds, Agent state adopts the saved profile/release metadata but
   does not start Harness. The confirmed snapshot target permits only
   declarative profile/config data, excludes credentials and sessions, and
-  uses healthy-start N/default-3 rotation plus a manual journal; the current
+  uses healthy-start N/default-3 automatic rotation plus a manual checkpoint;
+  recovery reuses the existing two-phase intent journal. The current
   implementation remains manifest-only and has not been upgraded.
 - `GET|POST /v1/releases` — list/current, register an immutable slot manifest,
   promote a registered slot, or swap current with last-known-good. Promotion
@@ -182,19 +183,22 @@ The Agent exposes:
   verify commands, then atomically publishes the candidate as a release slot.
   The command never edits or vendors the upstream Harness checkout. A failed
   job is recorded in `update-state.json` and its candidate is discarded. Once
-  an install is accepted, a detached Agent-owned task retains the executor gate,
-  candidate, and every spawned command through process wait/reap and durable
-  terminal-state publication. Cancelling the HTTP request therefore cannot
-  orphan the command or authorize a concurrent install/configuration change.
+  an ordinary Install is accepted, a detached Agent-owned task retains the
+  executor gate, candidate, and every spawned command through process wait/reap
+  and durable terminal-state publication. Cancelling the HTTP request
+  therefore cannot orphan the command or authorize a concurrent
+  install/configuration change. This detached-owner guarantee is limited to
+  ordinary Install; explicit Switch cancellation and its cold-install
+  build-to-Node-launch path remain unverified.
   Spawned commands are also kill-on-runtime-drop; after an Agent restart, a
   durable stale `running` record is failed closed before another install begins.
 - `GET|POST /v1/diagnostics` — current baseline lists or collects bounded
   Nexus-owned diagnostic bundles. Collection copies runtime metadata and text
   logs into a new `diagnostics/<id>/` directory, redacting common
-  credential-bearing lines and omitting binary payloads. The path boundary is
-  an implementation policy, not a blanket claim about every future runtime
-  integration; any `.dsh`/`DSH_HOME` access would require an explicit,
-  separately scoped contract.
+  credential-bearing lines and omitting binary payloads. Current diagnostics
+  does not traverse `$HOME/.dsh`, Harness data, or the process environment.
+  Future snapshot, Profile, and terminal allowlists are separate contracts and
+  do not grant diagnostics general read access.
 - `GET|POST /v1/config` — inspect or mutate the Nexus-owned Harness launch and
   external update specifications. Mutations validate all paths, arguments,
   refs, and URLs before an atomic write to `config.json`; changing Harness
@@ -379,8 +383,9 @@ sessions, and credentials are outside its manifest contract.
 
 Confirmed target: a snapshot may contain only declarative `profile` and
 `config` data, never credentials or sessions. Healthy startup uses N rotations
-(default 3) plus a manual journal. This target snapshot schema and rotation
-policy have not upgraded the current manifest-only implementation.
+(default 3) automatically plus a manual checkpoint; recovery reuses the
+existing two-phase intent journal. This target snapshot integration has not
+upgraded the current manifest-only implementation.
 
 Current baseline: Phase 2 reads optional Harness launch configuration from the
 Nexus-owned `config.json` under the `harness` key (a direct launch-spec object
@@ -405,9 +410,10 @@ When `mode` is omitted, the current legacy resolver follows its direct
 behavior for compatibility. The old direct parser remains retained and its
 removal is outside this phase. In `node` mode, `program` is the Node runtime,
 `entry` is the JavaScript entry point, and `args` contains only arguments after
-that entry. Node is the only runtime path tested for this handoff; the direct
-path has not been removed or promoted to a tested path. The Settings view
-exposes both modes and keeps manual configuration as a fallback.
+that entry. Node is the only supported and future acceptance path for this
+runtime handoff; this documentation phase includes no runtime acceptance. The
+direct path has not been removed or promoted to an accepted path. The Settings
+view exposes both modes and keeps manual configuration as a fallback.
 
 `readiness_url` accepts either an HTTP loopback URL (the supervisor requires a
 2xx response) or an explicit `tcp://127.0.0.1:<port>`/`tcp://[::1]:<port>`
@@ -676,8 +682,9 @@ unknown, or transitional Harness state likewise disables lifecycle controls.
   owner of business state and lifecycle. Harness upstream source is unchanged.
 - Profile handling currently uses the Nexus catalog as a legacy metadata
   bridge. The native Profile create/switch contract is still a target.
-- Node is the only runtime path tested for this handoff. The legacy direct
-  parser remains retained, and removing it is outside this phase.
+- Node is the only supported and future acceptance path for this runtime
+  handoff. This documentation phase includes no runtime acceptance. The legacy
+  direct parser remains retained, and removing it is outside this phase.
 - The current Agent listener is loopback `127.0.0.1:3090`; the OS-assigned
   port and identity-discovery design below is not yet accepted.
 - Commit `1e1838b` covers tag enumeration, `ec905f3` covers slot
@@ -694,8 +701,9 @@ unknown, or transitional Harness state likewise disables lifecycle controls.
 
 - Snapshot data is limited to declarative `profile` and `config` values; it
   contains no credentials or sessions. Healthy startup uses N rotations
-  (default 3) plus a manual journal. The current implementation remains
-  manifest-only until this upgrade lands.
+  (default 3) automatically plus a manual checkpoint; recovery reuses the
+  existing two-phase intent journal. The current implementation remains
+  manifest-only until snapshot integration lands.
 - Runtime installation prefers a portable layout under the Nexus
   `data-root/runtimes` directory and passes its location through child-process
   environment. It does not modify system `PATH`. A system mode is maintained
@@ -735,10 +743,13 @@ available via `nexus-launcher api` (with `console` as a legacy alias), while
 native packaging is under `apps/nexus-launcher/` directly against Agent. Future
 Electron integration consumes the same Agent JSON API and does not link the
 Rust bridge directly. Embedded and external browser access is limited to
-validated loopback origins on the configured API port. Release registration/promotion remain
-explicit metadata operations;
-the update executor installs a verified immutable slot but does not silently
-change the active pointer or start Harness. Once a slot is explicitly promoted,
+validated loopback origins on the configured API port. Release
+registration/promotion remain explicit metadata operations for ordinary
+Install: ordinary Install does not automatically promote. Explicit Switch is
+the separate path that automatically installs and promotes. The detached-owner
+and executor-gate guarantee applies to ordinary Install; Switch cancellation
+and the cold-install build-to-Node-launch path remain unverified. Once a slot
+is explicitly promoted,
 the supervisor resolves `{release_root}` from the catalog and performs launch
 from that canonical directory; it never guesses a release from the process
 working directory. Diagnostics are bounded and redacted as described above;

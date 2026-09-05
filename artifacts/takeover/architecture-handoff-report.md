@@ -1,17 +1,17 @@
 # Architecture handoff report
 
-Task: `nexus-takeover`
-Phase: `architecture-handoff`
+Task: `nexus-takeover-fix1`
+Phase: `architecture-fix1`
 Owner: `verify_checkout`
-Base ref: `df3cff00cb5e740f223897756f2c7f5bf9c44207`
-Branch: `codex/nexus-takeover/architecture-handoff`
-Worktree: `E:\git\dsh-nexus-phases\architecture-handoff`
+Base ref: `c9ae469668c649077241c323948306b52d20b431`
+Branch: `codex/nexus-takeover/architecture-fix1`
+Worktree: `E:\git\dsh-nexus-phases\architecture-fix1`
 
 ## Worktree handshake
 
-`worktree_verified`: root `E:/git/dsh-nexus-phases/architecture-handoff`,
-branch `codex/nexus-takeover/architecture-handoff`, and `HEAD` equal to the
-declared base `df3cff00cb5e740f223897756f2c7f5bf9c44207`. The worktree was
+`worktree_verified`: root `E:/git/dsh-nexus-phases/architecture-fix1`,
+branch `codex/nexus-takeover/architecture-fix1`, and `HEAD` equal to the
+declared base `c9ae469668c649077241c323948306b52d20b431`. The worktree was
 clean before the document changes.
 
 ## Scope and sources
@@ -32,14 +32,21 @@ source code, business data, or runtime output was read.
 - Profile currently uses the Nexus catalog as a legacy metadata bridge. The
   confirmed native Profile create/switch behavior is still a target and has no
   delete operation in this scope.
-- Node is the only runtime path tested for this handoff. The legacy direct
-  parser remains retained; removing it is outside this phase.
+- Node is the only supported and future acceptance path for this runtime
+  handoff. This documentation phase includes no runtime acceptance. The legacy
+  direct parser remains retained; removing it is outside this phase.
 - The current Agent loopback listener is `127.0.0.1:3090`.
+- Current diagnostics does not traverse `$HOME/.dsh`, Harness data, or the
+  process environment. Future snapshot, Profile, and terminal allowlists are
+  separate contracts and do not grant diagnostics general read access.
 - `1e1838b` records tag enumeration, `ec905f3` records slot
   capacity/protection/release, and `df3cff0` records explicit switch with
   automatic install/promote. These commits do not prove cold-install
   build-to-Node-launch acceptance. Ordinary install remains install-only and
-  does not automatically promote.
+  does not automatically promote; explicit Switch is the separate path that
+  automatically installs and promotes. The detached-owner/executor-gate
+  guarantee is limited to ordinary Install; Switch cancellation and the
+  cold-install path remain unverified.
 - The P0-4 runtime draft is in an independent uncommitted phase. Runtime
   discovery, portable download, path pinning, source switching, and install
   confirmation remain unverified.
@@ -49,8 +56,10 @@ source code, business data, or runtime output was read.
 ## Confirmed target, pending implementation and acceptance
 
 - Snapshots contain only declarative `profile` and `config` data, with no
-  credentials or sessions. Healthy startup uses N rotations (default 3) plus
-  a manual journal. The current implementation remains manifest-only.
+  credentials or sessions. Healthy startup uses N rotations (default 3)
+  automatically plus a manual checkpoint; recovery reuses the existing
+  two-phase intent journal. Snapshot integration remains unverified and the
+  current implementation remains manifest-only.
 - Runtime installation prefers a portable runtime below the Nexus
   `data-root/runtimes` directory and passes its location through child-process
   environment without changing system `PATH`. System mode is maintained by
@@ -69,10 +78,11 @@ source code, business data, or runtime output was read.
 
 This phase is a documentation and Git cross-check. It is not runtime
 acceptance. Cold-install build-to-Node-launch, runtime discovery, downloads,
-path pinning, source switching, install confirmation, snapshot rotation and
-journal behavior, and the target port identity flow remain open. No code was
-changed and no compile or test command was run.
+path pinning, source switching, install confirmation, snapshot integration,
+and the target port identity flow remain open. No code was changed and no
+compile or test command was run.
 
-Verification for this phase is `git diff --check`; the report and baseline
-document are committed only after that check passes. The phase does not merge,
-deploy, delete its worktree, or modify the main worktree.
+Verification for this phase is `git diff --check` plus exact scoped retrieval
+of the corrected phrases in the two declared documents; the report and
+baseline document are committed only after those checks pass. The phase does
+not merge, deploy, delete its worktree, or modify the main worktree.
