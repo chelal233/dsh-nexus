@@ -187,9 +187,11 @@ The Agent exposes:
   executor gate, candidate, and every spawned command through process wait/reap
   and durable terminal-state publication. Cancelling the HTTP request
   therefore cannot orphan the command or authorize a concurrent
-  install/configuration change. This detached-owner guarantee is limited to
-  ordinary Install; explicit Switch cancellation and its cold-install
-  build-to-Node-launch path remain unverified.
+  install/configuration change. Explicit Switch now acquires lifecycle then
+  updater ownership and transfers both gates to a detached owner. Cancellation
+  cannot release either gate before promotion, terminal update persistence,
+  and Agent current-release synchronization finish. Real cold-install
+  build-to-Node-launch acceptance remains pending.
   Spawned commands are also kill-on-runtime-drop; after an Agent restart, a
   durable stale `running` record is failed closed before another install begins.
 - `GET|POST /v1/diagnostics` — current baseline lists or collects bounded
@@ -683,8 +685,9 @@ unknown, or transitional Harness state likewise disables lifecycle controls.
 - Profile handling currently uses the Nexus catalog as a legacy metadata
   bridge. The native Profile create/switch contract is still a target.
 - Node is the only supported and future acceptance path for this runtime
-  handoff. This documentation phase includes no runtime acceptance. The legacy
-  direct parser remains retained, and removing it is outside this phase.
+  handoff. The integrated runtime observation and switch contracts have fresh
+  local combination-test evidence. The legacy direct parser remains retained,
+  and removing it is outside this phase.
 - The current Agent listener is loopback `127.0.0.1:3090`; the OS-assigned
   port and identity-discovery design below is not yet accepted.
 - Commit `1e1838b` covers tag enumeration, `ec905f3` covers slot
@@ -693,9 +696,13 @@ unknown, or transitional Harness state likewise disables lifecycle controls.
   build-to-Node-launch acceptance. Ordinary install remains install-only and
   does not automatically promote; that behavior must not be conflated with
   explicit switch.
-- The P0-4 runtime draft is in an independent, uncommitted phase. Runtime
-  discovery, portable download, path pinning, source switching, and install
-  confirmation are all target items pending verification.
+- Read-only `GET /v1/runtime` is integrated with one six-second absolute request
+  budget, a global three-permit blocking owner, and bounded detached child
+  cleanup. The shared Agent route gate permits this endpoint and release tags
+  only as bodyless GET requests. The native Settings panel requests status only
+  on explicit user action, strictly parses the fixed tool set, and renders
+  bilingual source labels. Portable download, runtime injection, source
+  switching, and install confirmation remain target items.
 
 ### Confirmed target (pending implementation and acceptance)
 
@@ -720,14 +727,16 @@ unknown, or transitional Harness state likewise disables lifecycle controls.
 
 ### Open and unaccepted
 
-The current switch path has a lifecycle early-release and cancellation-owner
-handoff risk. It needs a separately reviewed fix and runtime evidence; this
-documentation phase does not change that code or mark it accepted.
+The switch lifecycle early-release and cancellation-owner risk is fixed in the
+integration branch. Explicit Switch retains lifecycle and updater ownership in
+a detached task, reports success only after promotion, and reports terminal
+failure for command, promotion, catalog-load, or Agent synchronization errors.
 
-This handoff records document and Git evidence only. It is not runtime
-acceptance: cold-install build-to-Node-launch, runtime discovery, downloads,
-path pinning, source switching, install confirmation, and the target port
-identity flow remain unverified.
+Fresh integrated local suites cover runtime observation, shared GET-only route
+validation, the manual status UI, and Switch ownership. They are not real
+runtime acceptance: cold-install build-to-Node-launch, downloads, runtime
+injection, source switching, install confirmation, native GUI interaction, a
+real Harness process, and the target port identity flow remain unverified.
 
 ## Current scope and exclusions
 
@@ -746,10 +755,10 @@ Rust bridge directly. Embedded and external browser access is limited to
 validated loopback origins on the configured API port. Release
 registration/promotion remain explicit metadata operations for ordinary
 Install: ordinary Install does not automatically promote. Explicit Switch is
-the separate path that automatically installs and promotes. The detached-owner
-and executor-gate guarantee applies to ordinary Install; Switch cancellation
-and the cold-install build-to-Node-launch path remain unverified. Once a slot
-is explicitly promoted,
+the separate path that automatically installs and promotes. Both paths retain
+their required detached ownership; Switch additionally retains the supervisor
+lifecycle gate through terminal finalization. The real cold-install
+build-to-Node-launch path remains unverified. Once a slot is explicitly promoted,
 the supervisor resolves `{release_root}` from the catalog and performs launch
 from that canonical directory; it never guesses a release from the process
 working directory. Diagnostics are bounded and redacted as described above;
