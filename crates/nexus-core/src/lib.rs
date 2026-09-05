@@ -409,8 +409,8 @@ pub fn resolve_runtime_command(
 }
 
 pub const PNPM_MINIMUM_RELEASE_AGE_ARG: &str = "--config.minimumReleaseAge=0";
-pub const PNPM_OFFICIAL_REGISTRY_ARG: &str = "--registry=https://registry.npmjs.org";
-pub const PNPM_NPMMIRROR_REGISTRY_ARG: &str = "--registry=https://registry.npmmirror.com";
+pub const PNPM_OFFICIAL_REGISTRY_ARG: &str = "--config.registry=https://registry.npmjs.org";
+pub const PNPM_NPMMIRROR_REGISTRY_ARG: &str = "--config.registry=https://registry.npmmirror.com";
 
 /// Add the shared process-local pnpm policy without writing user pnpm config.
 pub fn build_pnpm_args(
@@ -3719,7 +3719,7 @@ mod tests {
         assert_eq!(path_entries[1], pnpm_verbatim.parent().unwrap());
         let args = build_pnpm_args(&config, ["install".into()]);
         assert_eq!(args[0], "--config.minimumReleaseAge=0");
-        assert_eq!(args[1], "--registry=https://registry.npmmirror.com");
+        assert_eq!(args[1], "--config.registry=https://registry.npmmirror.com");
         assert_eq!(args[2], "install");
 
         let paths = NexusPaths::from_root(root.clone());

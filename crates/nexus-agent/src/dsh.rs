@@ -1178,7 +1178,7 @@ fs.writeFileSync(path.join(process.cwd(), 'materialized.json'), JSON.stringify({
             observed["argv"],
             serde_json::json!([
                 "--config.minimumReleaseAge=0",
-                "--registry=https://registry.npmjs.org",
+                "--config.registry=https://registry.npmjs.org",
                 "install",
                 "--frozen-lockfile"
             ])
