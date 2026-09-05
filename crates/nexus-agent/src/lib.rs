@@ -673,6 +673,32 @@ fn redact_recovery_error(error: Option<&str>) -> Option<String> {
     })
 }
 
+fn recovery_log_payload(mut bytes: Vec<u8>, limit: usize, truncated: bool) -> (String, bool) {
+    if truncated {
+        if let Some(position) = bytes.iter().position(|byte| *byte == b'\n') {
+            bytes.drain(..=position);
+        }
+    }
+    // The extra byte is only a truncation sentinel. Drop it before decoding or
+    // redacting, then cap the final UTF-8 text after those transformations.
+    bytes.truncate(limit);
+    let raw = String::from_utf8_lossy(&bytes);
+    let fatal = raw.lines().any(|line| {
+        let line = line.trim_start().to_ascii_lowercase();
+        line.starts_with("fatal:") || line.starts_with("[fatal]") || line.starts_with("fatal ")
+    });
+    let redacted = redact_diagnostics_payload(&bytes).0;
+    let mut content = String::from_utf8_lossy(&redacted).into_owned();
+    if content.len() > limit {
+        let mut end = limit;
+        while !content.is_char_boundary(end) {
+            end -= 1;
+        }
+        content.truncate(end);
+    }
+    (content, fatal)
+}
+
 async fn recovery_status(State(state): State<AppState>) -> axum::response::Response {
     let lifecycle = state.supervisor.acquire_lifecycle().await;
     let mut harness = sync_harness_state(&state).await.into_response().harness;
@@ -765,22 +791,8 @@ fn recovery_log_tail(
     file.take(MAX_RECOVERY_LOG_BYTES.saturating_add(1))
         .read_to_end(&mut bytes)?;
     let truncated = metadata_truncated || bytes.len() > limit;
-    if truncated {
-        if let Some(position) = bytes.iter().position(|byte| *byte == b'\n') {
-            bytes.drain(..=position);
-        }
-    }
-    let raw = String::from_utf8_lossy(&bytes);
-    let fatal = raw.lines().any(|line| {
-        let line = line.trim_start().to_ascii_lowercase();
-        line.starts_with("fatal:") || line.starts_with("[fatal]") || line.starts_with("fatal ")
-    });
-    let redacted = redact_diagnostics_payload(&bytes).0;
-    Ok((
-        String::from_utf8_lossy(&redacted).into_owned(),
-        truncated,
-        fatal,
-    ))
+    let (content, fatal) = recovery_log_payload(bytes, limit, truncated);
+    Ok((content, truncated, fatal))
 }
 
 /// Return the current validated Harness URL/token observation for UI clients.
@@ -3423,7 +3435,8 @@ mod cors_tests {
         acquire_runtime_lock, are_allowed_cors_headers, harness_ui_process_is_presentable,
         is_allowed_console_origin_for_port, is_allowed_cors_method, proxy_identity_values_match,
         recovery_log_tail, redact_config_args, redact_config_url, redact_recovery_error,
-        MAX_RECOVERY_LOG_BYTES, PROXY_DATA_ROOT_HEADER, PROXY_INSTANCE_HEADER,
+        recovery_log_payload, MAX_RECOVERY_LOG_BYTES, PROXY_DATA_ROOT_HEADER,
+        PROXY_INSTANCE_HEADER,
         RecoveryStatusResponse,
     };
     use nexus_core::HarnessLogSession;
@@ -3652,6 +3665,21 @@ mod cors_tests {
         assert!(content.len() <= MAX_RECOVERY_LOG_BYTES as usize);
         assert!(recovery_log_tail(&paths, "../outside.log").is_err());
         std::fs::remove_dir_all(root).expect("fixture removes");
+    }
+
+    #[test]
+    fn recovery_payload_drops_sentinel_and_preserves_utf8_bound_after_redaction() {
+        let limit = MAX_RECOVERY_LOG_BYTES as usize;
+        let (ascii, _) = recovery_log_payload(vec![b'x'; limit + 1], limit, true);
+        assert_eq!(ascii.len(), limit);
+
+        let (multibyte, _) = recovery_log_payload("€".repeat(limit).into_bytes(), limit, true);
+        assert!(multibyte.len() <= limit);
+        assert!(multibyte.is_char_boundary(multibyte.len()));
+
+        let (invalid, _) = recovery_log_payload(vec![0xff; limit + 1], limit, true);
+        assert!(invalid.len() <= limit);
+        assert!(invalid.contains("binary diagnostics payload omitted"));
     }
 
     #[test]

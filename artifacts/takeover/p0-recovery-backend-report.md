@@ -103,3 +103,12 @@ without creating the requested slot.
 
 - `cargo test -p nexus-agent`: PASS after the follow-up.
 - `git diff --check`: PASS.
+
+## Follow-up recovery sentinel fix
+
+The recovery tail helper now removes the `limit + 1` sentinel before decoding
+or redaction, then caps the already redacted response at the 16 KiB limit on a
+UTF-8 character boundary. The truncation flag remains derived from the
+metadata/read sentinel, including newline-free concurrent growth. Focused
+coverage includes 16,385 newline-free bytes, multibyte UTF-8, and invalid
+UTF-8 payloads.
