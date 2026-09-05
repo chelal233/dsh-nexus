@@ -38,6 +38,14 @@ ActionButton 全局补 `type="button"`：此前所有 ActionButton 在 `<form>` 
 - 启动中/停止中的 i18n 与状态机均正确；用户观察到的错误状态源自插件树崩溃窗口
 - 当前唯一阻断不变：desktop 配置档插件树损坏 → 用户走快照恢复（rc.1 时期健康快照）即愈
 
+## P0 链接农场重建实验（2026-09-06，自动化第四轮）
+
+- 实验：删除 `profiles/node_modules` 链接农场 → 启动 rc.1 → **农场被重建且 @deepseek-ai/dsh-settings 版本 = 0.1.3-alpha.1**（npm 上不存在此版本，来自本地 alpha.1 槽位的 workspace 链接）
+- 同轮删除农场后首次启动：导出错误全部消失（只剩 file-upload 重复——快照恢复把清单里的 file-upload 带回，已再次从清单移除）；随后启动：农场重建（alpha.1 包）→ 导出错误复现
+- **结论**：农场每次启动重建，但 @deepseek-ai/* 解析到了 alpha.1 槽位的包（rc.1 启动却链接 alpha.1 的包！）——物化器的包来源存在持久化的陈旧引用，或解析顺序问题。需要读上游 app-boot 源码（profile.ts 的 symlink 维护循环 + index.js 的闭包发现）确定：1) 闭包发现的包来源路径；2) 为什么 rc.1 启动会链接 alpha.1 槽位的包
+- **当前机器状态**：release=alpha.5 槽位→已切 rc.1（指针 rc.1，dsh-file-upload 已从清单移除，manifest 干净）；启动仍失败（导出缺失，因农场=alpha.1 包）；`.nexus-backup-20260906/` 与 `node_modules.stale-alpha1` 保留；plugin-desktop\node_modules 的 0.1.2-alpha.1 三件套验证过满足全部导出（应急可 junction，但 loader 不走 profiles/node_modules 解析 @deepseek-ai/*——loader 内部映射优先，junction 方案无效已证实）
+- **已知可行组合**：desktop 自带 0.1.2-alpha.1 harness + 其捆绑官方包曾正常运行数周（用户原生态）；本地三个 GitHub tag 槽位均与 rc.2 时代插件存在导出面不匹配
+
 ## P0 链接农场机制实锤（2026-09-06，自动化第三轮）
 
 - **机制实锤**：`~/.dsh/profiles/node_modules/` 是 harness 启动时自动创建的**链接农场**（junction/link，非真实目录）——全部指向"当前运行槽位"的 vendor/packages（插件借此解析官方依赖）。这就是上游"Profile module fallback"的落地形态
