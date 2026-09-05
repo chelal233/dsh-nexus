@@ -1018,6 +1018,7 @@ pub enum ColdOperationPhase {
     Verifying,
     Registering,
     Promoting,
+    Cancelling,
     Succeeded,
     Cancelled,
     Failed,

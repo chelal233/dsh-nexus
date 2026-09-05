@@ -563,6 +563,23 @@ fn run_owned_process_inner(
     timeout: Duration,
     fault: ProcessTreeFault,
 ) -> io::Result<ExitStatus> {
+    run_owned_process_cancelled(command, timeout, fault, || false)
+}
+
+pub(crate) fn run_cold_process(
+    command: &mut Command,
+    timeout: Duration,
+    cancelled: impl Fn() -> bool,
+) -> io::Result<ExitStatus> {
+    run_owned_process_cancelled(command, timeout, ProcessTreeFault::None, cancelled)
+}
+
+fn run_owned_process_cancelled(
+    command: &mut Command,
+    timeout: Duration,
+    fault: ProcessTreeFault,
+    cancelled: impl Fn() -> bool,
+) -> io::Result<ExitStatus> {
     configure_owned_process(command);
     let child = command.spawn()?;
     let mut tree = OwnedProcessTree::new(child, fault)?;
@@ -573,14 +590,30 @@ fn run_owned_process_inner(
     loop {
         match tree.try_wait() {
             Ok(Some(status)) => {
-                tree.wait_for_tree_exit(Duration::from_secs(5))?;
+                tree.wait_for_tree_exit(Duration::from_secs(5))
+                    .map_err(|error| {
+                        io::Error::other(format!("owned process cleanup failed: {error}"))
+                    })?;
                 return Ok(status);
             }
             Ok(None) => {}
             Err(error) => return tree.cleanup_failure(error),
         }
+        if cancelled() {
+            tree.terminate_and_wait(Duration::from_secs(10))
+                .map_err(|error| {
+                    io::Error::other(format!("owned process cleanup failed: {error}"))
+                })?;
+            return Err(io::Error::new(
+                io::ErrorKind::Interrupted,
+                "cold install cancelled",
+            ));
+        }
         if Instant::now() >= deadline {
-            tree.terminate_and_wait(Duration::from_secs(10))?;
+            tree.terminate_and_wait(Duration::from_secs(10))
+                .map_err(|error| {
+                    io::Error::other(format!("owned process cleanup failed: {error}"))
+                })?;
             return Err(io::Error::new(
                 io::ErrorKind::TimedOut,
                 format!(

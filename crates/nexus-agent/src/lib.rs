@@ -204,12 +204,12 @@ pub async fn run_with_instance_id(
     recover_checkpoint_restore_startup(&checkpoint_restores, &profiles, &releases, &snapshots)
         .await?;
     let profile_catalog = profiles.load()?;
-    let release_catalog = releases.load()?;
     let diagnostics = DiagnosticsStore::new(paths.clone());
     let updater = UpdateExecutor::new(paths.clone(), releases.clone());
     let _ = updater.recover_unattached()?;
     let cold = cold::ColdCoordinator::new(paths.clone());
     cold.recover()?;
+    let release_catalog = releases.load()?;
     let supervisor = HarnessSupervisor::new(paths.clone())?;
     let metadata = supervisor.metadata_store();
     // A restart can only recover a persisted Harness state by proving the
@@ -1359,6 +1359,13 @@ async fn checkpoint_list(State(state): State<AppState>) -> axum::response::Respo
 async fn ensure_checkpoint_mutation_ready(
     state: &AppState,
 ) -> Result<(), axum::response::Response> {
+    if state.cold.publication_pending() {
+        return Err(api_error_response(
+            StatusCode::CONFLICT,
+            "cold_publication_pending",
+            "cold publication recovery is pending; restart the Agent to reconcile it",
+        ));
+    }
     if let Err(error) = settle_checkpoint_restore(state).await {
         return Err(data_error_response(
             io::Error::other(error.to_string()),
@@ -4575,7 +4582,7 @@ mod switch_ownership_tests {
         config_control, snapshots, update_control, AppState, HarnessSupervisor, UpdateExecutor,
     };
 
-    fn switch_test_state(label: &str) -> AppState {
+    pub(crate) fn switch_test_state(label: &str) -> AppState {
         let root = std::env::temp_dir().join(format!(
             "nexus-switch-{label}-{}-{}",
             std::process::id(),
@@ -4674,7 +4681,7 @@ mod switch_ownership_tests {
         let _ = fs::remove_dir_all(root);
         assert_eq!(
             cancelled.phase,
-            nexus_protocol::ColdOperationPhase::Cancelled
+            nexus_protocol::ColdOperationPhase::Cancelling
         );
     }
 

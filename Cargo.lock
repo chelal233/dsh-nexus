@@ -1395,6 +1395,7 @@ dependencies = [
  "nexus-protocol",
  "nexus-runtime-supply",
  "nexus-snapshots",
+ "serde",
  "serde_json",
  "tokio",
  "tracing",
