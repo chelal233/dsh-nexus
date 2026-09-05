@@ -9,6 +9,7 @@ import {
   invalidatesHarnessCredentials,
   launcherContentMode,
   recoveryMutationGate,
+  runtimeSettingsGate,
 } from "../src/control-state.ts";
 
 test("an unattached running Harness disables all lifecycle controls", () => {
@@ -66,6 +67,14 @@ test("Harness and Agent lifecycle actions invalidate credentials before transpor
   assert.equal(invalidatesHarnessCredentials("/v1/harness", "restart"), true);
   assert.equal(invalidatesHarnessCredentials("/v1/harness", "stop"), true);
   assert.equal(invalidatesHarnessCredentials("/v1/harness", "open"), false);
+});
+
+test("runtime settings gate mirrors stopped, idle, and cold cleanup prerequisites", () => {
+  assert.equal(runtimeSettingsGate("running", 42, "idle", undefined, false, false).reason, "harness_not_stopped");
+  assert.equal(runtimeSettingsGate("stopped", undefined, "running", undefined, false, false).reason, "update_active");
+  assert.equal(runtimeSettingsGate("stopped", undefined, "idle", "installing", false, false).reason, "cold_active");
+  assert.equal(runtimeSettingsGate("stopped", undefined, "idle", "failed", true, false).reason, "cleanup_pending");
+  assert.deepEqual(runtimeSettingsGate("stopped", undefined, "idle", "failed", false, false), { disabled: false, reason: null });
 });
 
 test("latest request token rejects late refresh and cancelled responses", () => {

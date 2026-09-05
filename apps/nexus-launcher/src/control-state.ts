@@ -78,3 +78,29 @@ export function recoveryMutationGate(
   }
   return { disabled: false, reason: null };
 }
+
+export type RuntimeSettingsGate = {
+  disabled: boolean;
+  reason: "busy" | "harness_not_stopped" | "update_active" | "cold_active" | "cleanup_pending" | null;
+};
+
+/** Mirrors the backend prerequisites while keeping the backend authoritative. */
+export function runtimeSettingsGate(
+  harnessState: unknown,
+  harnessPid: number | undefined,
+  updateState: unknown,
+  coldPhase: unknown,
+  cleanupPending: boolean,
+  busy: boolean,
+): RuntimeSettingsGate {
+  if (busy) return { disabled: true, reason: "busy" };
+  if (!["stopped", "detached", "failed"].includes(String(harnessState)) || harnessPid !== undefined) {
+    return { disabled: true, reason: "harness_not_stopped" };
+  }
+  if (updateState === "running") return { disabled: true, reason: "update_active" };
+  if (coldPhase !== undefined && coldPhase !== null && !coldOperationIsTerminal(coldPhase)) {
+    return { disabled: true, reason: "cold_active" };
+  }
+  if (cleanupPending) return { disabled: true, reason: "cleanup_pending" };
+  return { disabled: false, reason: null };
+}
