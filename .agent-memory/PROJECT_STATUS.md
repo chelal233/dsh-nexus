@@ -38,6 +38,14 @@ ActionButton 全局补 `type="button"`：此前所有 ActionButton 在 `<form>` 
 - 启动中/停止中的 i18n 与状态机均正确；用户观察到的错误状态源自插件树崩溃窗口
 - 当前唯一阻断不变：desktop 配置档插件树损坏 → 用户走快照恢复（rc.1 时期健康快照）即愈
 
+## P0 链接农场机制实锤（2026-09-06，自动化第三轮）
+
+- **机制实锤**：`~/.dsh/profiles/node_modules/` 是 harness 启动时自动创建的**链接农场**（junction/link，非真实目录）——全部指向"当前运行槽位"的 vendor/packages（插件借此解析官方依赖）。这就是上游"Profile module fallback"的落地形态
+- **切换 bug 的完整机制**：alpha.1 启动把链接农场指向 alpha.1 槽位；**切回 rc.1 后链接农场未跟随更新**（仍指 alpha.1 槽位）→ 插件解析到 alpha.1 版本的官方包 → 导出缺失 → 插件树崩溃。恢复快照只回滚了声明式文件（package.json/lockfile/patch），链接农场不在快照内容里，也没有任何流程更新它
+- **下一个自动化任务（精确定位）**：1) 在 `~/.dsh/` 下搜索引用 alpha.1 槽位路径（`harness-dsh-v0-1-3-alpha-1-1788631620419639700`）的文件（排除 node_modules 内部链接本体），找到记录"当前槽位路径"的指针文件；2) 确认 harness 物化器读取该指针的位置（槽位源码 `packages/boot/app-boot` 的 profile.ts / index.js 中搜索 node_modules 链接农场的创建逻辑与指针来源）；3) 修复方向：Nexus 在 switch/promote/restore 时同步更新该指针（或在启动 Harness 前重写链接农场指向当前槽位）；4) 修复后：删链接农场 → 启动 rc.1 → 验证农场重建指向 rc.1 且插件树加载成功
+- 已备份：`~/.dsh/profiles/node_modules.stale-alpha1`（alpha.1 指向版本的完整副本）；`.nexus-backup-20260906/`（fallback 内容）
+- 快照直接恢复功能已实现并验证：restore 快照 id → 合成 checkpoint → 指针回 rc.1 → 声明式文件回滚（dsh-file-upload 回到清单）。唯一剩余 = 链接农场指针更新
+
 ## P0 插件树兼容性终局分析（2026-09-06，自动化第二轮）
 
 - 实测矩阵：desktop 捆绑 0.1.2-alpha.1 官方包**满足全部所需导出**（settingsNamespace/deepEqualJson/DEFAULT_PREPARED/assertNever/CallId 全 ✓）；rc.1 内部缺 settingsNamespace 等；alpha.1 内部几乎全缺；alpha.5 部分 ✓ 部分 ✗。**配置档里 9 月 2 日物化的插件副本（desktop 时代）与任何本地槽位都不匹配**
