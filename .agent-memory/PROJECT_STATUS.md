@@ -2,6 +2,13 @@ updated: 2026-09-05 by Codex (P0 快照内容引擎已接入 Agent，恢复事�
 
 # dsh-nexus 项目状态与需求基线
 
+## P0 反馈第二轮（2026-09-05，提交 nest-profile-children）
+
+1. **配置档树形层级**：配置档目录行加「查看」按钮（与"选择=切换当前 profile"区分，当前 profile 默认为查看对象）；查看中 profile 的子资源（检查点/快照清单/插件/启动恢复状态）以缩进+左边线的 `.profile-children` 容器呈现，标注「属于配置档: X」；CheckpointsView 新增 profileFilter（按 item.profile 与 summary.profile_name 过滤）；ProfilePlugins 接受 profile 参数（卸载命令作用于被查看的 profile）
+2. **数据归属已证实**：SnapshotSummary 含 profile_name+plugin_count——快照/检查点内容=profile 的插件清单+配置文件，dsh_version 仅元数据 → 层级=配置档→(插件/检查点/快照清单) 全部从属配置档（用户提出的"若基于 harness 则插件在前"不适用）
+3. **冷切换状态归位**：UpdatesView 重排=「运行时设置」独立面板（折叠来源/模式+pin 输入+保存）；「上游标签与冷切换」合并面板（tag 拉取/选择/切换 + 分隔线 + 冷切换进度）；确认计划面板与版本槽位保持
+4. **Agent 操作收敛**：概览页 Start/Stop/Restart 三键 → 仅「强制重启 Agent」一键（restart 动作）；文案=Agent 随 Launcher 启动退出
+
 ## P0 用户反馈修复（2026-09-05，提交 3b3b161）
 
 用户以 GUI 截图反馈 4 项，已全部落地（纯前端，无后端改动）：
