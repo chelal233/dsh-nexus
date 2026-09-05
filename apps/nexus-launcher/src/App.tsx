@@ -1368,61 +1368,12 @@ export function UpdatesView({ snapshot, busyAction, runAction, refresh }: ViewPr
   const runtime = nestedValue(snapshot.config, "runtime");
   const persistedSource = stringValue(runtime, "source") || "official";
   const persistedMode = stringValue(runtime, "mode") || "portable";
-  const [source, setSource] = useState(persistedSource);
-  const [mode, setMode] = useState(persistedMode);
   const [tagList, setTagList] = useState<JsonObject | null>(null);
   const [selectedTag, setSelectedTag] = useState<string>("");
   const [tagsLoading, setTagsLoading] = useState(false);
   const [tagsError, setTagsError] = useState<string | null>(null);
   const latestTags = useRef(createLatestRequest());
-  const runtimeConfigKey = useRef("");
-  const [runtimeSetupOpen, setRuntimeSetupOpen] = useState(false);
-  const [pins, setPins] = useState<{ node: string; pnpm: string; git: string }>({ node: "", pnpm: "", git: "" });
-  const [runtimeTools, setRuntimeTools] = useState<JsonObject[] | null>(null);
   useEffect(() => () => latestTags.current.cancel(), []);
-  useEffect(() => {
-    let cancelled = false;
-    (async () => {
-      try {
-        const value = await proxyRequest<JsonObject>("/v1/runtime");
-        if (!cancelled) setRuntimeTools(arrayValue(value, "tools").map((tool) => asObject(tool)));
-      } catch {
-        if (!cancelled) setRuntimeTools([]);
-      }
-    })();
-    return () => { cancelled = true; };
-  }, []);
-  useEffect(() => {
-    if (runtimeTools && runtimeTools.some((tool) => !booleanValue(tool, "available"))) setRuntimeSetupOpen(true);
-  }, [runtimeTools]);
-  const [runtimeStatus, setRuntimeStatus] = useState<RuntimeStatusViewState>({
-    phase: "idle",
-    status: null,
-    error: null,
-  });
-  const runtimeController = useMemo(
-    () => createRuntimeStatusController(
-      (path, method) => proxyRequest<unknown>(path, method),
-      setRuntimeStatus,
-    ),
-    [],
-  );
-  const checkRuntime = useCallback(async () => {
-    await runtimeController.check(snapshot.startup?.available === true);
-  }, [runtimeController, snapshot.startup?.available]);
-  useEffect(() => {
-    const key = `${persistedSource}\u0000${persistedMode}`;
-    if (runtimeConfigKey.current !== key) {
-      runtimeConfigKey.current = key;
-      setSource(persistedSource);
-      setMode(persistedMode);
-      setPins({
-        node: stringValue(nestedValue(runtime, "node"), "path") || "",
-        pnpm: stringValue(nestedValue(runtime, "pnpm"), "path") || "",
-        git: stringValue(nestedValue(runtime, "git"), "path") || "",
-      });
-    }
-  }, [persistedMode, persistedSource, runtime]);
   const tags: string[] = tagList ? arrayValue(tagList, "tags").map((tag) => String(tag)) : [];
   const loadTags = useCallback(async () => {
     const token = latestTags.current.begin();
@@ -1442,17 +1393,12 @@ export function UpdatesView({ snapshot, busyAction, runAction, refresh }: ViewPr
   const pendingConfirmation = operationPhase === "awaiting_confirmation";
   const supply = nestedValue(operation, "supply_plan");
   const confirmation = stringValue(operation, "confirmation") || stringValue(supply, "supply_plan_id");
-  const operationMode = stringValue(operation, "mode") || stringValue(supply, "mode") || mode;
-  const pinOrEmpty = (name: "node" | "pnpm" | "git") => pins[name].trim() ? { path: pins[name].trim(), ownership: "system" } : null;
-  const runtimePayload = { node: pinOrEmpty("node"), pnpm: pinOrEmpty("pnpm"), git: pinOrEmpty("git"), source, mode };
-  const harness = harnessRuntimeValue(snapshot.harnessRuntime);
+  const operationMode = stringValue(operation, "mode") || stringValue(supply, "mode") || persistedMode;
   const cleanupPending = booleanValue(operation, "cleanup_pending");
-  const runtimeGate = runtimeSettingsGate(stringValue(harness, "state"), numberValue(harness, "pid"), updateState, operationPhase, cleanupPending, busyAction !== null);
-  const runtimeGateReason = runtimeGate.reason === "harness_not_stopped" ? t("Harness must be positively stopped before saving runtime settings.") : runtimeGate.reason === "update_active" ? t("Wait for the update to become idle before saving runtime settings.") : runtimeGate.reason === "cold_active" ? t("Wait for the cold switch to finish before saving runtime settings.") : runtimeGate.reason === "cleanup_pending" ? t("Retry cold cleanup before saving runtime settings.") : null;
   return <><PageIntro kicker={t("Releases / Updates")} title={t("Updates")} detail={t("Cold switches are asynchronous and never start Harness automatically.")} />
-    <Panel title={t("Runtime settings")} icon={<Cpu size={18} />}><div className="status-block"><div className="button-row"><ActionButton onClick={() => setRuntimeSetupOpen((open) => !open)}>{runtimeSetupOpen ? t("Hide source and install mode") : t("Change runtime source or install mode")}</ActionButton></div>{runtimeSetupOpen && <div className="form-grid"><label className="form-field"><span className="field-label">{t("Source")}</span><select className="form-input" value={source} onChange={(e) => setSource(e.target.value)}><option value="official">{t("Official")}</option><option value="npmmirror">npmmirror</option></select></label><label className="form-field"><span className="field-label">{t("Install mode")}</span><select className="form-input" value={mode} onChange={(e) => setMode(e.target.value)}><option value="portable">{t("Portable")}</option><option value="system">{t("System install")}</option></select></label></div>}{runtimeSetupOpen && <p className="field-help">{t("These settings only matter when runtimes must be installed or replaced.")}</p>}<div className="form-grid">{(["node", "pnpm", "git"] as const).map((name) => <label key={name} className="form-field"><span className="field-label">{name} {t("pin")}</span><input className="form-input" value={pins[name]} placeholder={stringValue(nestedValue(runtime, name), "path") || t("Leave blank for automatic discovery")} onChange={(event) => setPins((current) => ({ ...current, [name]: event.target.value }))} /></label>)}</div><p className="field-help">{t("Manual paths are saved as system pins. Leave blank to let Nexus resolve automatically.")}</p><ActionButton disabled={runtimeGate.disabled} onClick={() => void runAction(t("Save runtime settings"), "/v1/config", { action: "set_runtime", runtime: runtimePayload })}>{t("Save runtime settings")}</ActionButton>{runtimeGateReason && <p className="field-help" role="status">{runtimeGateReason}</p>}<hr className="panel-divider" /><RuntimeStatusPanel agentAvailable={snapshot.startup?.available === true} state={runtimeStatus} onCheck={() => void checkRuntime()} /></div></Panel>
     
-    <Panel title={t("Upstream tags & cold switch")} icon={<CloudArrowUp size={18} />}><div className="status-block"><ActionButton disabled={tagsLoading} onClick={() => void loadTags()}>{tagsLoading ? t("Listing tags") : t("List upstream tags")}</ActionButton>{tagsError ? <span>{tagsError} · <button className="button subtle" onClick={() => void loadTags()}>{t("Refresh")}</button></span> : <span>{tagList ? `${t("Source")}: ${stringValue(tagList, "source")}` : t("No tags loaded")}</span>}{tags.length > 0 && <select value={selectedTag} onChange={(event) => setSelectedTag(event.target.value)} aria-label={t("Upstream tags")}><option value="">{t("Select a tag")}</option>{tags.map((tag) => <option key={tag} value={tag}>{tag}</option>)}</select>}{selectedTag && <ActionButton tone="primary" disabled={busyAction !== null || tagsLoading || (!!operationId && !coldOperationIsTerminal(operationPhase))} onClick={() => void runAction(t("Switch to tag"), "/v1/updates", { action: "switch", tag: selectedTag, source, mode })}>{releases.some((item) => stringValue(item, "version") === selectedTag) ? t("Switch to tag") : t("Fetch this tag")}</ActionButton>}{selectedTag && <span>{`${t("Selected tag")}: ${selectedTag}`}</span>}</div>{pendingConfirmation && <div className="status-block"><strong>{t("Confirm runtime supply plan")}</strong><SupplyPlanDetails operation={operation} supply={supply} /><p className="form-error"><WarningCircle size={15}/>{operationMode === "system" ? t("System mode may show an installer or elevation prompt and can require restart verification.") : t("Portable mode writes only to the Nexus-owned runtime destination.")}</p><div className="button-row"><ActionButton tone="primary" disabled={!operationId || !confirmation || busyAction !== null} onClick={() => void runAction(t("Confirm cold switch"), "/v1/updates", { action: "confirm", operation_id: operationId, confirmation })}>{t("Confirm exact plan")}</ActionButton><ActionButton tone="danger" disabled={!operationId || busyAction !== null} onClick={() => void runAction(t("Cancel cold switch"), "/v1/updates", { action: "cancel", operation_id: operationId })}>{t("Cancel")}</ActionButton></div></div>}
+    
+    <Panel title={t("Upstream tags & cold switch")} icon={<CloudArrowUp size={18} />}><div className="status-block"><ActionButton disabled={tagsLoading} onClick={() => void loadTags()}>{tagsLoading ? t("Listing tags") : t("List upstream tags")}</ActionButton>{tagsError ? <span>{tagsError} · <button className="button subtle" onClick={() => void loadTags()}>{t("Refresh")}</button></span> : <span>{tagList ? `${t("Source")}: ${stringValue(tagList, "source")}` : t("No tags loaded")}</span>}{tags.length > 0 && <select value={selectedTag} onChange={(event) => setSelectedTag(event.target.value)} aria-label={t("Upstream tags")}><option value="">{t("Select a tag")}</option>{tags.map((tag) => <option key={tag} value={tag}>{tag}</option>)}</select>}{selectedTag && <ActionButton tone="primary" disabled={busyAction !== null || tagsLoading || (!!operationId && !coldOperationIsTerminal(operationPhase))} onClick={() => void runAction(t("Switch to tag"), "/v1/updates", { action: "switch", tag: selectedTag, source: persistedSource, mode: persistedMode })}>{releases.some((item) => stringValue(item, "version") === selectedTag) ? t("Switch to tag") : t("Fetch this tag")}</ActionButton>}{selectedTag && <span>{`${t("Selected tag")}: ${selectedTag}`}</span>}</div>{pendingConfirmation && <div className="status-block"><strong>{t("Confirm runtime supply plan")}</strong><SupplyPlanDetails operation={operation} supply={supply} /><p className="form-error"><WarningCircle size={15}/>{operationMode === "system" ? t("System mode may show an installer or elevation prompt and can require restart verification.") : t("Portable mode writes only to the Nexus-owned runtime destination.")}</p><div className="button-row"><ActionButton tone="primary" disabled={!operationId || !confirmation || busyAction !== null} onClick={() => void runAction(t("Confirm cold switch"), "/v1/updates", { action: "confirm", operation_id: operationId, confirmation })}>{t("Confirm exact plan")}</ActionButton><ActionButton tone="danger" disabled={!operationId || busyAction !== null} onClick={() => void runAction(t("Cancel cold switch"), "/v1/updates", { action: "cancel", operation_id: operationId })}>{t("Cancel")}</ActionButton></div></div>}
     {((!!operationId && !coldOperationIsTerminal(operationPhase)) || updateState === "running") && <><hr className="panel-divider" /><div className="status-block"><StatusPill label={localizedRuntimeState(operationPhase || updateState, t)} tone={operationPhase === "failed" || updateState === "failed" ? "bad" : pendingConfirmation ? "warn" : operationPhase === "succeeded" ? "good" : "neutral"}/><strong>{operationId || stringValue(update, "release_id") || t("No active update")}</strong>{operationId && <progress max="100" value={numberValue(operation, "progress_percent") || 0}>{numberValue(operation, "progress_percent") || 0}%</progress>}<span>{stringValue(operation, "error") || stringValue(update, "error") || t("No update error reported")}</span>{stringValue(operation, "cleanup_error") && <p className="form-error" role="alert"><WarningCircle size={15}/>{t("Cleanup error")}: {stringValue(operation, "cleanup_error")}</p>}{operationId && <span>{t("Owner quiescent")}: {booleanValue(operation, "owner_quiescent") ? t("Yes") : t("No")}{cleanupPending ? ` · ${t("Cleanup pending")}` : ""}</span>}<div className="button-row"><ActionButton disabled={busyAction !== null} onClick={() => void refresh()}>{t("Refresh")}</ActionButton>{operationId && (!coldOperationIsTerminal(operationPhase) || cleanupPending) && <ActionButton tone="danger" disabled={busyAction !== null || operationPhase === "cancelling"} onClick={() => void runAction(t("Cancel cold switch"), "/v1/updates", { action: "cancel", operation_id: operationId })}>{cleanupPending ? t("Retry cleanup") : t("Cancel")}</ActionButton>}</div></div></>}</Panel>
     <Panel title={t("Release slots")} icon={<Package size={18} />}><DataList items={releases} emptyTitle={t("No release slots")} emptyDetail={t("A successful cold switch registers and promotes its immutable slot without starting Harness.")} render={(item) => { const slotId = stringValue(item, "id") || ""; const current = stringValue(snapshot.releases, "current_release"); const lkg = stringValue(snapshot.releases, "last_known_good"); const protectedSlot = slotId === current || slotId === lkg; return <><div><strong>{slotId || t("Release")}</strong><span>{stringValue(item, "version") || t("Unknown version")}{slotId === current ? ` · ${t("Current")}` : slotId === lkg ? ` · ${t("Last known good")}` : ""}</span></div><span className="row-meta">{slotId !== current && <ActionButton disabled={busyAction !== null} onClick={() => void runAction(t("Switch to this version"), "/v1/releases", { action: "promote", id: slotId })}>{t("Switch to this version")}</ActionButton>}{!protectedSlot && <ActionButton disabled={busyAction !== null} onClick={() => void runAction(t("Release slot"), "/v1/releases", { action: "remove", id: slotId })}>{t("Release slot")}</ActionButton>}</span></>; }} /></Panel>
   </>;
@@ -1658,10 +1604,7 @@ function SettingsView({ snapshot, themeMode, setThemeMode, busyAction, runAction
   const [draft, setDraft] = useState<HarnessConfigDraft>(() => harnessDraftFromConfig(config));
   const [draftDirty, setDraftDirty] = useState(false);
   const [formError, setFormError] = useState<string | null>(null);
-  const [discovery, setDiscovery] = useState<JsonObject | null>(null);
-  const [discoveryLoading, setDiscoveryLoading] = useState(false);
-  const [discoveryError, setDiscoveryError] = useState<string | null>(null);
-  const [selectedCandidateId, setSelectedCandidateId] = useState<string | undefined>(undefined);
+  const [argRows, setArgRows] = useState<Array<{ key: string; value: string }>>([]);
 
   const draftDirtyRef = useRef(false);
 
@@ -1691,7 +1634,6 @@ function SettingsView({ snapshot, themeMode, setThemeMode, busyAction, runAction
     }));
     draftDirtyRef.current = true;
     setDraftDirty(true);
-    setSelectedCandidateId(undefined);
     setFormError(null);
   };
 
@@ -1722,66 +1664,17 @@ function SettingsView({ snapshot, themeMode, setThemeMode, busyAction, runAction
     });
     draftDirtyRef.current = true;
     setDraftDirty(true);
-    setSelectedCandidateId(undefined);
     setFormError(null);
   };
 
-  const applyCandidate = useCallback((candidate: HarnessCandidate) => {
-    setDraft((current) => ({
-      ...current,
-      mode: candidate.mode,
-      program: candidate.program,
-      entry: candidate.entry,
-      args: candidate.args.join("\n"),
-      workingDir: candidate.workingDir,
-      readinessUrl: candidate.readinessUrl,
-      timeout: candidate.readinessTimeout,
-      readinessTokenRequired: candidate.readinessTokenRequired,
-      readinessUrlRedacted: false,
-      argsRedacted: false,
-      replaceRedactedArgs: false,
-    }));
-    draftDirtyRef.current = true;
-    setDraftDirty(true);
-    setSelectedCandidateId(candidate.id);
-    setFormError(null);
-    setEditingHarness(true);
-  }, []);
-
-  const detectHarness = useCallback(async () => {
-    setDiscoveryLoading(true);
-    setDiscoveryError(null);
-    try {
-      const result = await proxyRequest<JsonObject>("/v1/harness/discover");
-      const candidates = harnessCandidates(result);
-      setDiscovery(result);
-      if (selectedCandidateId && !candidates.some((candidate) => candidate.id === selectedCandidateId)) {
-        setSelectedCandidateId(undefined);
-      }
-      // A single unconfigured result is safe to pre-fill, but saving remains
-      // an explicit user action. Multiple results stay visible for selection.
-      if (!hasHarnessConfig && !draftDirtyRef.current && candidates.length === 1) {
-        applyCandidate(candidates[0]);
-      }
-    } catch (cause) {
-      setDiscovery({ candidates: [] });
-      setDiscoveryError(errorMessage(cause));
-    } finally {
-      setDiscoveryLoading(false);
-    }
-  }, [applyCandidate, hasHarnessConfig, selectedCandidateId]);
-
-  useEffect(() => {
-    if (!editingHarness || snapshot.startup?.available !== true || discovery !== null || discoveryLoading) return;
-    void detectHarness();
-  }, [detectHarness, discovery, discoveryLoading, editingHarness, snapshot.startup?.available]);
 
   const openEditor = () => {
-    setDraft(harnessDraftFromConfig(config));
+    const nextDraft = harnessDraftFromConfig(config);
+    setDraft(nextDraft);
+    setArgRows(argsToRows(nextDraft.args));
     // Keep the editor open while the background poll refreshes runtime data.
     draftDirtyRef.current = true;
     setDraftDirty(true);
-    setSelectedCandidateId(undefined);
     setFormError(null);
     setEditingHarness(true);
   };
@@ -1789,22 +1682,11 @@ function SettingsView({ snapshot, themeMode, setThemeMode, busyAction, runAction
   const saveHarness = async (event: React.FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     setFormError(null);
-    const program = draft.program.trim();
-    if (!program) {
-      setFormError(t("A program path is required."));
-      return;
-    }
-    const entry = draft.entry.trim();
-    if (draft.mode === "node" && !entry) {
-      setFormError(t("A Harness entry is required for Node mode."));
-      return;
-    }
+    const runtimePinPath = stringValue(nestedValue(config.runtime, "node"), "path") || "";
+    const program = draft.program.trim() || runtimePinPath || "node";
+    const entry = draft.entry.trim() || "{release_root}/apps/cli/lib/bin.js";
     if (draft.mode === "node" && (numberValue(snapshot.health, "harness_config_wire_version") ?? 0) < 2) {
       setFormError(t("This Agent does not advertise the explicit Node Harness configuration contract. Update Agent before saving Node mode."));
-      return;
-    }
-    if (draft.args.includes("[REDACTED]") || entry.includes("[REDACTED]")) {
-      setFormError(t("Replace hidden arguments before saving."));
       return;
     }
     const readinessUrl = draft.readinessUrl.trim();
@@ -1822,11 +1704,26 @@ function SettingsView({ snapshot, themeMode, setThemeMode, busyAction, runAction
       }
       timeout = parsed;
     }
+    let argsText: string;
     if (draft.argsRedacted && !draft.replaceRedactedArgs) {
-      setFormError(t("Existing sensitive arguments are hidden. Enable replacement before saving."));
-      return;
+      argsText = draft.args;
+    } else {
+      argsText = rowsToArgsText(argRows);
+      if (!argRows.some((row) => row.key.trim() === "--profile")) {
+        argsText = argsText ? `--profile\n{profile}\n${argsText}` : "--profile\n{profile}";
+      }
+      if (argsText.includes("[REDACTED]")) {
+        setFormError(t("Replace hidden arguments before saving."));
+        return;
+      }
     }
-    const harnessPayload = harnessConfigPayloadFromDraft(draft);
+    const harnessPayload = harnessConfigPayloadFromDraft({
+      ...draft,
+      mode: "node",
+      program,
+      entry,
+      args: argsText,
+    });
     harnessPayload.readiness_url = readinessUrl || null;
     harnessPayload.readiness_timeout_secs = timeout ?? null;
     const saved = await runAction(t("Save Harness configuration"), "/v1/config", {
@@ -1839,7 +1736,6 @@ function SettingsView({ snapshot, themeMode, setThemeMode, busyAction, runAction
       setDraftDirty(false);
       setEditingHarness(false);
       setFormError(null);
-      setSelectedCandidateId(undefined);
     }
   };
 
@@ -1848,12 +1744,11 @@ function SettingsView({ snapshot, themeMode, setThemeMode, busyAction, runAction
     const cleared = await runAction(t("Clear Harness configuration"), "/v1/config", { action: "clear_harness" });
     if (cleared === true) {
       setDraft(emptyHarnessDraft);
+      setArgRows([]);
       draftDirtyRef.current = false;
       setDraftDirty(false);
       setEditingHarness(true);
       setFormError(null);
-      setSelectedCandidateId(undefined);
-      setDiscovery(null);
     }
   };
 
@@ -1863,9 +1758,44 @@ function SettingsView({ snapshot, themeMode, setThemeMode, busyAction, runAction
     ? stringValue(harness, "entry") || configuredArgs[0] || t("Not configured")
     : undefined;
 
+  const [runtimeSetupOpen, setRuntimeSetupOpen] = useState(false);
+  const [pins, setPins] = useState<{ node: string; pnpm: string; git: string }>({ node: "", pnpm: "", git: "" });
+  const [runtimeStatus, setRuntimeStatus] = useState<RuntimeStatusViewState>({
+    phase: "idle",
+    status: null,
+    error: null,
+  });
+  const runtimeController = useMemo(
+    () => createRuntimeStatusController(
+      (path, method) => proxyRequest<unknown>(path, method),
+      setRuntimeStatus,
+    ),
+    [],
+  );
+  const checkRuntime = useCallback(async () => {
+    await runtimeController.check(snapshot.startup?.available === true);
+  }, [runtimeController, snapshot.startup?.available]);
+  const updatesSnapshot = asObject(snapshot.updates);
+  const runtimeUpdateState = stringValue(asObject(updatesSnapshot.update), "state");
+  const runtimeOperationPhase = stringValue(asObject(updatesSnapshot.operation), "phase");
+  const runtimeCleanupPending = booleanValue(asObject(updatesSnapshot.operation), "cleanup_pending");
+  const runtimeGate = runtimeSettingsGate(harnessState, numberValue(harnessRuntime, "pid"), runtimeUpdateState, runtimeOperationPhase, runtimeCleanupPending, busyAction !== null);
+  const runtimeGateReason = runtimeGate.reason === "harness_not_stopped" ? t("Harness must be positively stopped before saving runtime settings.") : runtimeGate.reason === "update_active" ? t("Wait for the update to become idle before saving runtime settings.") : runtimeGate.reason === "cold_active" ? t("Wait for the cold switch to finish before saving runtime settings.") : runtimeGate.reason === "cleanup_pending" ? t("Retry cold cleanup before saving runtime settings.") : null;
+  const runtime = nestedValue(config, "runtime");
+  const [runtimeSource, setRuntimeSource] = useState(stringValue(runtime, "source") || "official");
+  const [runtimeMode, setRuntimeMode] = useState(stringValue(runtime, "mode") || "portable");
+  useEffect(() => {
+    setRuntimeSource(stringValue(runtime, "source") || "official");
+    setRuntimeMode(stringValue(runtime, "mode") || "portable");
+    const nodePath = stringValue(nestedValue(runtime, "node"), "path") || "";
+    const pnpmPath = stringValue(nestedValue(runtime, "pnpm"), "path") || "";
+    const gitPath = stringValue(nestedValue(runtime, "git"), "path") || "";
+    setPins((current) => (current.node === nodePath && current.pnpm === pnpmPath && current.git === gitPath ? current : { node: nodePath, pnpm: pnpmPath, git: gitPath }));
+  }, [runtime]);
   return <>
     <PageIntro kicker={t("System / Settings")} title={t("Settings")} detail={t("Configuration remains Agent-owned. This view intentionally exposes metadata, not credentials or raw environment values.")} />
     <div className="grid-two">
+<Panel title={t("Runtime settings")} icon={<Cpu size={18} />}><div className="status-block"><div className="button-row"><ActionButton onClick={() => setRuntimeSetupOpen((open) => !open)}>{runtimeSetupOpen ? t("Hide source and install mode") : t("Change runtime source or install mode")}</ActionButton></div>{runtimeSetupOpen && <div className="form-grid"><label className="form-field"><span className="field-label">{t("Source")}</span><select className="form-input" value={runtimeSource} onChange={(e) => setRuntimeSource(e.target.value)}><option value="official">{t("Official")}</option><option value="npmmirror">npmmirror</option></select></label><label className="form-field"><span className="field-label">{t("Install mode")}</span><select className="form-input" value={runtimeMode} onChange={(e) => setRuntimeMode(e.target.value)}><option value="portable">{t("Portable")}</option><option value="system">{t("System install")}</option></select></label></div>}{runtimeSetupOpen && <p className="field-help">{t("These settings only matter when runtimes must be installed or replaced.")}</p>}<div className="form-grid">{(["node", "pnpm", "git"] as const).map((name) => <label key={name} className="form-field"><span className="field-label">{name} {t("pin")}</span><input className="form-input" value={pins[name]} placeholder={stringValue(nestedValue(runtime, name), "path") || t("Leave blank for automatic discovery")} onChange={(event) => setPins((current) => ({ ...current, [name]: event.target.value }))} /></label>)}</div><p className="field-help">{t("Manual paths are saved as system pins. Leave blank to let Nexus resolve automatically.")}</p><ActionButton disabled={runtimeGate.disabled} onClick={() => void runAction(t("Save runtime settings"), "/v1/config", { action: "set_runtime", runtime: { node: pins.node.trim() ? { path: pins.node.trim(), ownership: "system" } : null, pnpm: pins.pnpm.trim() ? { path: pins.pnpm.trim(), ownership: "system" } : null, git: pins.git.trim() ? { path: pins.git.trim(), ownership: "system" } : null, source: runtimeSource, mode: runtimeMode } })}>{t("Save runtime settings")}</ActionButton>{runtimeGateReason && <p className="field-help" role="status">{runtimeGateReason}</p>}</div><hr className="panel-divider" /><RuntimeStatusPanel agentAvailable={snapshot.startup?.available === true} state={runtimeStatus} onCheck={() => void checkRuntime()} /></Panel>
       <Panel title={t("Appearance")} icon={<Gear size={18} />}>
         <label className="field-label" htmlFor="theme-mode">{t("Theme")}</label>
         <select id="theme-mode" className="theme-select" value={themeMode} onChange={(event) => setThemeMode(event.target.value as ThemeMode)}>
@@ -1882,27 +1812,25 @@ function SettingsView({ snapshot, themeMode, setThemeMode, busyAction, runAction
         <p className="panel-description">{t("Configure the external Harness here. Editing config.json is only a fallback.")}</p>
         {harnessEnvOverride && <p className="field-help" role="status">{t("Environment variables override part of this Harness configuration. Saved file values remain in place, but the override wins at launch time.")}</p>}
         {!editingHarness && hasHarnessConfig ? <>
-          <dl className="detail-list"><div><dt>{t("Launch mode")}</dt><dd>{candidateModeLabel(configuredMode, t)}</dd></div><div><dt>{configuredMode === "node" ? t("Node executable") : t("Program")}</dt><dd>{stringValue(harness, "program") || t("Not configured")}</dd></div>{configuredMode === "node" && <div><dt>{t("Harness entry")}</dt><dd>{configuredEntry}</dd></div>}<div><dt>{t("Working directory")}</dt><dd>{stringValue(harness, "working_dir") || t("Default")}</dd></div><div><dt>{t("Readiness URL")}</dt><dd>{isLoopbackReadinessTarget(stringValue(harness, "readiness_url")) ? stringValue(harness, "readiness_url") : t("Not shown")}</dd></div></dl>
+          <dl className="detail-list"><div><dt>{t("Node executable")}</dt><dd>{stringValue(harness, "program") || t("Not configured")}</dd></div><div><dt>{t("Harness entry")}</dt><dd>{configuredEntry}</dd></div><div><dt>{t("Readiness URL")}</dt><dd>{isLoopbackReadinessTarget(stringValue(harness, "readiness_url")) ? stringValue(harness, "readiness_url") : t("Not shown")}</dd></div></dl>
           <div className="form-actions"><button type="button" className="button" disabled={configControlsDisabled} onClick={openEditor}>{t("Edit configuration")}</button><button type="button" className="button danger" disabled={configControlsDisabled} onClick={() => void clearHarness()}>{t("Clear configuration")}</button></div>
         </> : <form className="config-form" onSubmit={(event) => void saveHarness(event)}>
-          <HarnessDiscoveryPanel value={discovery} loading={discoveryLoading} error={discoveryError} disabled={configControlsDisabled} selectedId={selectedCandidateId} suppressAutoOpen={draftDirty} onDetect={() => void detectHarness()} onSelect={applyCandidate} />
-          <div className="panel-toolbar"><strong>{t("Manual configuration")}</strong></div>
+          <p className="field-help">{t("Harness always runs in Node mode from the active release slot. The executable, entry, and profile wiring are managed by Nexus.")}</p>
           <div className="form-grid">
-            <label className="form-field full"><span className="field-label">{t("Launch mode")}</span><select className="theme-select" value={draft.mode} onChange={(event) => updateLaunchMode(event.target.value as HarnessLaunchMode)} disabled={configControlsDisabled}><option value="direct">{t("Direct executable")}</option><option value="node">{t("Node runtime")}</option></select><span className="field-help">{t("Select how the external Harness is started. Direct runs the executable or command; Node runs the selected entry through the Node runtime.")}</span></label>
-            <label className="form-field full"><span className="field-label">{draft.mode === "node" ? t("Node executable") : t("Program")}</span><input className="form-input" value={draft.program} onChange={(event) => updateDraft("program", event.target.value)} placeholder={draft.mode === "node" ? t("Node executable path or command") : t("Program path or command")} disabled={configControlsDisabled} required /></label>
-            {draft.mode === "node" && <label className="form-field full"><span className="field-label">{t("Harness entry")}</span><input className="form-input" value={draft.entry} onChange={(event) => updateDraft("entry", event.target.value)} placeholder={t("Harness entry script or package")} disabled={configControlsDisabled} required /></label>}
-            <label className="form-field"><span className="field-label">{draft.mode === "node" ? t("Node project directory") : t("Working directory")} <em>{t("Optional")}</em></span><input className="form-input" value={draft.workingDir} onChange={(event) => updateDraft("workingDir", event.target.value)} placeholder={t("Agent default")} disabled={configControlsDisabled} /></label>
             <label className="form-field"><span className="field-label">{t("Readiness timeout (seconds)")} <em>{t("Optional")}</em></span><input className="form-input" inputMode="numeric" value={draft.timeout} onChange={(event) => updateDraft("timeout", event.target.value)} placeholder={t("Agent default")} disabled={configControlsDisabled} /></label>
             <label className="form-field full"><span className="field-label">{t("Readiness URL")} <em>{t("Optional")}</em></span><input className="form-input" type="text" value={draft.readinessUrl} onChange={(event) => updateDraft("readinessUrl", event.target.value)} placeholder={t("Readiness URL example")} disabled={configControlsDisabled} /><span className="field-help">{t("Use an HTTP loopback URL for a 2xx check, or tcp://127.0.0.1:PORT when the Harness protects its page with authentication.")}</span></label>
             <label className="form-check full"><input type="checkbox" checked={draft.readinessTokenRequired} onChange={(event) => updateDraft("readinessTokenRequired", event.target.checked)} disabled={configControlsDisabled || !draft.readinessUrl.trim()} /><span>{t("Require a fresh Harness token before accepting readiness")}</span></label>
-            <p className="field-help full">{t("Enable this for token-protected Harness services. A listener alone is not enough; the Agent must observe a fresh URL in its current Harness log session.")}</p>
-            <label className="form-field full"><span className="field-label">{draft.mode === "node" ? t("Node arguments") : t("Arguments")}</span><textarea className="form-textarea" value={draft.args} onChange={(event) => updateDraft("args", event.target.value)} placeholder={draft.mode === "node" ? t("Arguments passed to the Node Harness entry, one per line. Use {profile}, {release}, or {release_root} when needed.") : t("One argument per line. Use {profile}, {release}, or {release_root} when needed.")} disabled={configControlsDisabled || (draft.argsRedacted && !draft.replaceRedactedArgs)} /></label>
           </div>
-          <p className="field-help">{draft.mode === "node" ? t("Arguments passed to the Node Harness entry, one per line. Use {profile}, {release}, or {release_root} when needed.") : t("One argument per line. Use {profile}, {release}, or {release_root} when needed.")}</p>
-          {draft.argsRedacted && <label className="form-check"><input type="checkbox" checked={draft.replaceRedactedArgs} onChange={(event) => updateDraft("replaceRedactedArgs", event.target.checked)} disabled={configControlsDisabled} /><span>{t("Replace hidden arguments")}</span></label>}
+          <div className="form-field full"><span className="field-label">{t("Additional arguments")}</span>
+            <p className="field-help">{t("The profile argument always follows the active profile and is added automatically.")}</p>
+            {!draft.argsRedacted && <>{argRows.map((row, index) => <div className="kv-row" key={index}><input className="form-input" value={row.key} placeholder="--flag" disabled={configControlsDisabled} onChange={(event) => setArgRows((current) => current.map((item, i) => i === index ? { ...item, key: event.target.value } : item))} /><input className="form-input" value={row.value} placeholder={t("Value (optional)")} disabled={configControlsDisabled} onChange={(event) => setArgRows((current) => current.map((item, i) => i === index ? { ...item, value: event.target.value } : item))} /><ActionButton tone="danger" disabled={configControlsDisabled} onClick={() => setArgRows((current) => current.filter((_, i) => i !== index))}>{t("Remove")}</ActionButton></div>)}</>}
+            {draft.argsRedacted && <p className="form-error" role="alert"><WarningCircle size={15}/>{t("Existing sensitive arguments are hidden. Enable replacement before saving.")}</p>}
+            {draft.argsRedacted && <label className="form-check"><input type="checkbox" checked={draft.replaceRedactedArgs} onChange={(event) => updateDraft("replaceRedactedArgs", event.target.checked)} disabled={configControlsDisabled} /><span>{t("Replace hidden arguments")}</span></label>}
+            {!draft.argsRedacted && <div className="button-row"><ActionButton disabled={configControlsDisabled} onClick={() => setArgRows((current) => [...current, { key: "--", value: "" }])}>{t("Add argument")}</ActionButton></div>}
+          </div>
           {formError && <div className="form-error" role="alert"><WarningCircle size={16} />{formError}</div>}
           {harnessState === "running" && <p className="field-help" role="status">{t("Stop Harness before changing its launch configuration.")}</p>}
-          <div className="form-actions"><button type="submit" className="button primary" disabled={configControlsDisabled}>{t("Save configuration")}</button>{hasHarnessConfig && <button type="button" className="button" disabled={configControlsDisabled} onClick={() => { draftDirtyRef.current = false; setDraftDirty(false); setSelectedCandidateId(undefined); setFormError(null); setEditingHarness(false); }}>{t("Cancel")}</button>}{hasHarnessConfig && <button type="button" className="button danger" disabled={configControlsDisabled} onClick={() => void clearHarness()}>{t("Clear configuration")}</button>}</div>
+          <div className="form-actions"><button type="submit" className="button primary" disabled={configControlsDisabled}>{t("Save configuration")}</button>{hasHarnessConfig && <button type="button" className="button" disabled={configControlsDisabled} onClick={() => { draftDirtyRef.current = false; setDraftDirty(false); setFormError(null); setEditingHarness(false); }}>{t("Cancel")}</button>}{hasHarnessConfig && <button type="button" className="button danger" disabled={configControlsDisabled} onClick={() => void clearHarness()}>{t("Clear configuration")}</button>}</div>
         </form>}
         {!hasHarnessConfig && !editingHarness && <EmptyState title={t("Harness is not configured")} detail={t("The Agent remains usable as a control plane until an external Harness is configured.")} />}
       </Panel>
@@ -1913,6 +1841,32 @@ function SettingsView({ snapshot, themeMode, setThemeMode, busyAction, runAction
      </div>
      <Panel title={t("Native integration")} icon={<Bell size={18} />}><div className="integration-list"><div><CheckCircle size={18} /><span>{t("Single instance guard")}</span><strong>{t("Enabled")}</strong></div><div><Bell size={18} /><span>{t("Desktop notifications")}</span><strong>{t("Available through Tauri")}</strong></div><div><Key size={18} /><span>{t("API transport")}</span><strong>{t("Rust loopback proxy")}</strong></div></div></Panel>
   </>;
+}
+
+function argsToRows(argsText: string): Array<{ key: string; value: string }> {
+  const tokens = argsText.split(/\r?\n/).map((value) => value.trim()).filter(Boolean);
+  const rows: Array<{ key: string; value: string }> = [];
+  for (let index = 0; index < tokens.length; index += 1) {
+    if (tokens[index].startsWith("--") && index + 1 < tokens.length && !tokens[index + 1].startsWith("--")) {
+      rows.push({ key: tokens[index], value: tokens[index + 1] });
+      index += 1;
+    } else {
+      rows.push({ key: tokens[index], value: "" });
+    }
+  }
+  return rows;
+}
+
+function rowsToArgsText(rows: Array<{ key: string; value: string }>): string {
+  const out: string[] = [];
+  for (const row of rows) {
+    const key = row.key.trim();
+    if (!key) continue;
+    out.push(key);
+    const value = row.value.trim();
+    if (value) out.push(value);
+  }
+  return out.join("\n");
 }
 
 function PageIntro({ kicker, title, detail }: { kicker: string; title: string; detail: string }) {
