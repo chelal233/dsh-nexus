@@ -59,6 +59,10 @@ ActionButton 全局补 `type="button"`：此前所有 ActionButton 在 `<form>` 
   4. E2E 实测：`--port 0` → 发现记录 49322 → 该端口 health ok + 实例身份匹配 ✓
 - 兼容性说明：NEXUS_AGENT_PORT/--port 显式钉死的部署照旧；nexusctl 旧用法（显式 --port）不受影响
 
+## P1 进展（2026-09-06，自动化第十七轮）
+
+- 崩溃自动留证的测试干扰已修（4cd0249）：cfg(not(test)) 跳过自动捕获；清理 unused 警告。130 测试全绿。工作协议补充：新增 AppState 字段必须同步全部测试构造器（本次 5 处）；带副作用的异步行为（诊断/快照写盘）在测试构建统一关闭
+
 ## P1 进展（2026-09-06，自动化第十四轮）
 
 - **配置文件快速查看/打开完成**（feat: quick-open profile files and directories from the profiles page）：ProfileAction::OpenPath + ProfileOpenPathResponse（协议）；agent `profile_open_path` 端点——四种有界目标（settings/profile_dir/profile_patch/plugin_manifest），路径仅由 DSH home+profile 派生，explorer/start 打开（CREATE_NO_WINDOW）；配置档页四按钮 + i18n。nexusctl ProfileCommand 字段补齐 + OpenPath 分支覆盖
