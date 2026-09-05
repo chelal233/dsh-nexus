@@ -50,6 +50,10 @@ ActionButton 全局补 `type="button"`：此前所有 ActionButton 在 `<form>` 
 
 - **CTRL_BREAK 优雅停止方案已实施又回退**（revert: ctrl break delivery）：实施后测试运行器被控制台事件误杀（0xC000013A，PID 组复用可能命中无辜进程），且 Node 默认不处理 CTRL_BREAK（无真实优雅收益，行为与 TerminateProcess 等价）。最终停止路径 = 5s 宽限窗（对有 handler 的进程有效）+ Job Tree 终止兜底。**结论：Windows 下 node 类负载没有真正的优雅停止，5s 等待是合理成本**，不再尝试信号方案
 
+## P1 进展（2026-09-06，自动化第十二轮）
+
+- **错误人话化映射落地**（feat: plain-language error mappings）：localizeBackendError 新增 11 类特征签名 → 人话+行动指引（插件树失败→恢复模式、导出不匹配→恢复快照、duplicate entry→移除旧副本、EISDIR/267→重建配置档、槽位满/受保护、快照版本未安装、连接拒绝/超时/拒绝访问）。中英双语，未命中签名回退后端原文
+
 ## P1 进展（2026-09-06，自动化第十轮）
 
 - **Job Object 已接入 Harness spawn**（提交 fix: assign harness process tree to a kill-on-close job object）：spawn 时创建 kill-on-close Job 并分配整棵进程树（dsh.rs 新增 assign_process_to_job 按 HANDLE 泛化）；stop 超时后 TerminateJobObject 终止整棵树（此前只杀直接子进程，插件/esbuild 孙子进程泄漏占端口）；Agent 进程退出时句柄关闭 → 整树死亡（"Agent 随 Launcher 退出"语义完整）。测试构建（cfg not(test)）跳过 Job 以避免并行测试互杀，生产行为完整
