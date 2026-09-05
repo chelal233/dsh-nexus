@@ -575,6 +575,138 @@ impl RuntimeListResponse {
     }
 }
 
+/// Ownership of one executable pinned in Nexus configuration.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum RuntimeOwnership {
+    System,
+    Nexus,
+}
+
+/// Distribution source selected for a future runtime provisioning action.
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum RuntimeSource {
+    #[default]
+    Official,
+    Npmmirror,
+}
+
+/// Installation boundary selected by the user. Portable is Nexus-owned and
+/// changes only child process environments; system mode is externally owned.
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum RuntimeInstallMode {
+    #[default]
+    Portable,
+    System,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct RuntimePinPayload {
+    pub path: String,
+    pub ownership: RuntimeOwnership,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct RuntimeConfigPayload {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub node: Option<RuntimePinPayload>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pnpm: Option<RuntimePinPayload>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub git: Option<RuntimePinPayload>,
+    #[serde(default)]
+    pub source: RuntimeSource,
+    #[serde(default)]
+    pub mode: RuntimeInstallMode,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct RuntimeNodeRequirement {
+    pub manifest: String,
+    pub range: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct RuntimePackageManagerRequirement {
+    pub manifest: String,
+    pub spec: String,
+    pub name: String,
+    pub version: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct RuntimeRequirements {
+    pub node: Vec<RuntimeNodeRequirement>,
+    pub package_manager: RuntimePackageManagerRequirement,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum RuntimePlanToolState {
+    Reusable,
+    Missing,
+    Incompatible,
+    Unverifiable,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct RuntimePlanTool {
+    pub name: String,
+    pub requirements: Vec<String>,
+    pub state: RuntimePlanToolState,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub version: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub path: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ownership: Option<RuntimeOwnership>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum RuntimePlanActionKind {
+    UsePinned,
+    UseExisting,
+    ProvisionPortable,
+    InstallSystem,
+    ConfigureExternal,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct RuntimePlanAction {
+    pub tool: String,
+    pub action: RuntimePlanActionKind,
+    pub reason: String,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct RuntimePlanRequest {
+    pub release_id: String,
+    #[serde(default)]
+    pub source: RuntimeSource,
+    #[serde(default)]
+    pub mode: RuntimeInstallMode,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct RuntimePlanResponse {
+    pub api_version: String,
+    /// Full deterministic serialization of this plan's revalidation facts.
+    /// This is intentionally not presented as a cryptographic hash.
+    pub plan_id: String,
+    pub release_id: String,
+    pub source: RuntimeSource,
+    pub mode: RuntimeInstallMode,
+    pub requirements: RuntimeRequirements,
+    pub tools: Vec<RuntimePlanTool>,
+    pub suggested_actions: Vec<RuntimePlanAction>,
+}
+
 /// Read-only enumeration of upstream git tags for the configured update
 /// source. Tag names are rendered without the `refs/tags/` prefix and without
 /// peeled `^{}` duplicates.
@@ -894,6 +1026,8 @@ pub enum ConfigAction {
     ClearHarness,
     SetUpdate,
     ClearUpdate,
+    SetRuntime,
+    ClearRuntime,
 }
 
 impl Default for ConfigAction {
@@ -909,6 +1043,8 @@ pub struct ConfigCommand {
     pub harness: Option<HarnessConfigPayload>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub update: Option<UpdateConfigPayload>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub runtime: Option<RuntimeConfigPayload>,
     /// Preserve a readiness URL whose sensitive query/userinfo was redacted
     /// from a prior ConfigResponse. The Agent resolves it from its existing
     /// on-disk Harness spec before validation.
@@ -923,6 +1059,8 @@ pub struct ConfigResponse {
     pub harness: Option<HarnessConfigPayload>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub update: Option<UpdateConfigPayload>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub runtime: Option<RuntimeConfigPayload>,
     /// True when the returned readiness URL is display-safe but shorter than
     /// the on-disk value. Editors must preserve it unless the user replaces or
     /// clears the field explicitly.
@@ -944,10 +1082,16 @@ impl ConfigResponse {
             api_version: API_VERSION.to_owned(),
             harness,
             update,
+            runtime: None,
             harness_readiness_url_redacted: false,
             harness_env_override: false,
             update_env_override: false,
         }
+    }
+
+    pub fn with_runtime(mut self, runtime: Option<RuntimeConfigPayload>) -> Self {
+        self.runtime = runtime;
+        self
     }
 
     pub fn with_harness_readiness_url_redacted(mut self, redacted: bool) -> Self {
@@ -971,8 +1115,9 @@ mod tests {
         HarnessCommand, HarnessConfigPayload, HarnessLaunchMode, HarnessResponse,
         HarnessRuntimeInfo, HarnessState, LifecycleAction, LifecycleCommand, ProfileListResponse,
         ProfileSelectRequest, ReleaseAction, ReleaseCommand, ReleaseListResponse, ReleaseManifest,
-        RuntimeListResponse, RuntimeToolStatus, UpdateAction, UpdateCommand, UpdateResponse,
-        UpdateRuntimeInfo,
+        RuntimeConfigPayload, RuntimeInstallMode, RuntimeListResponse, RuntimeOwnership,
+        RuntimePinPayload, RuntimePlanRequest, RuntimeSource, RuntimeToolStatus, UpdateAction,
+        UpdateCommand, UpdateResponse, UpdateRuntimeInfo,
     };
 
     #[test]
@@ -1093,6 +1238,44 @@ mod tests {
         }))
         .expect("legacy runtime status deserializes");
         assert_eq!(legacy.reason, None);
+    }
+
+    #[test]
+    fn runtime_plan_request_defaults_preferences_and_rejects_manifest_paths() {
+        let request: RuntimePlanRequest = serde_json::from_value(serde_json::json!({
+            "release_id": "release-a"
+        }))
+        .expect("minimal runtime plan request parses");
+        assert_eq!(request.source, RuntimeSource::Official);
+        assert_eq!(request.mode, RuntimeInstallMode::Portable);
+        assert!(serde_json::from_value::<RuntimePlanRequest>(serde_json::json!({
+            "release_id": "release-a",
+            "manifest_path": "C:/outside/package.json"
+        }))
+        .is_err());
+    }
+
+    #[test]
+    fn runtime_config_protocol_uses_explicit_pin_ownership() {
+        let payload = RuntimeConfigPayload {
+            node: Some(RuntimePinPayload {
+                path: "C:\\Nexus\\runtimes\\node.exe".to_owned(),
+                ownership: RuntimeOwnership::Nexus,
+            }),
+            source: RuntimeSource::Npmmirror,
+            ..RuntimeConfigPayload::default()
+        };
+        let json = serde_json::to_value(payload).expect("runtime config serializes");
+        assert_eq!(json["node"]["ownership"], "nexus");
+        assert_eq!(json["source"], "npmmirror");
+        assert_eq!(json["mode"], "portable");
+
+        let set_runtime = serde_json::to_value(ConfigAction::SetRuntime)
+            .expect("runtime action serializes");
+        let clear_runtime = serde_json::to_value(ConfigAction::ClearRuntime)
+            .expect("runtime action serializes");
+        assert_eq!(set_runtime, "set_runtime");
+        assert_eq!(clear_runtime, "clear_runtime");
     }
 
     #[test]
@@ -1260,6 +1443,7 @@ mod tests {
                 readiness_token_required: false,
             }),
             update: None,
+            runtime: None,
             preserve_harness_readiness_url: false,
         };
         let json = serde_json::to_value(command).expect("config command serializes");

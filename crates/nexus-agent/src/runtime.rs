@@ -15,8 +15,8 @@ use std::{
     time::Duration,
 };
 
-use nexus_core::NexusPaths;
-use nexus_protocol::{RuntimeListResponse, RuntimeToolStatus};
+use nexus_core::{resolve_runtime_command, NexusPaths, RuntimeConfig};
+use nexus_protocol::{RuntimeListResponse, RuntimeOwnership, RuntimeToolStatus};
 use tokio::{
     io::AsyncReadExt,
     process::{Child, Command},
@@ -44,6 +44,9 @@ const REASON_UNSUPPORTED_SHIM: &str = "unsupported_shim";
 const REASON_PROBE_FAILED: &str = "probe_failed";
 const REASON_INVALID_VERSION_OUTPUT: &str = "invalid_version_output";
 const REASON_PROBE_BUDGET_EXCEEDED: &str = "probe_budget_exceeded";
+const REASON_CONFIGURED_PATH_MISSING: &str = "configured_path_missing";
+const REASON_CONFIGURED_PATH_UNSAFE: &str = "configured_path_unsafe";
+const REASON_CONFIGURED_COMMAND_INVALID: &str = "configured_command_invalid";
 
 const COREPACK_PROBE_ENV: &[(&str, &str)] = &[
     // Do not let a Corepack-backed command reach a registry during discovery.
@@ -219,7 +222,7 @@ impl ProbeConfig {
             search_path: env::var_os("PATH"),
             data_root,
             data_root_is_safe,
-            portable_root: paths.root.join("runtimes"),
+            portable_root: paths.runtimes_dir.clone(),
             probe_cwd: select_probe_cwd(probe_cwd_candidates(paths)),
             blocking_fs,
             blocking_hooks,
@@ -242,9 +245,11 @@ fn probe_cwd_candidates(paths: &NexusPaths) -> Vec<PathBuf> {
 }
 
 /// Observe every known runtime tool. Results are ordered as `RUNTIME_TOOLS`.
+#[cfg(test)]
 pub async fn observe_runtimes(paths: &NexusPaths) -> RuntimeListResponse {
-    observe_runtimes_with_budget(
+    observe_runtimes_with_selection_budget(
         paths,
+        None,
         PRODUCTION_PROBE_BUDGET,
         production_blocking_fs(),
         BlockingHooks::default(),
@@ -252,8 +257,35 @@ pub async fn observe_runtimes(paths: &NexusPaths) -> RuntimeListResponse {
     .await
 }
 
+/// Observe the exact configured pins first. Missing or unsafe pins remain
+/// explicit failures and never fall back silently to a different PATH tool.
+pub(crate) async fn observe_runtime_selection(
+    paths: &NexusPaths,
+    runtime: Option<&RuntimeConfig>,
+) -> RuntimeListResponse {
+    observe_runtimes_with_selection_budget(
+        paths,
+        runtime.cloned(),
+        PRODUCTION_PROBE_BUDGET,
+        production_blocking_fs(),
+        BlockingHooks::default(),
+    )
+    .await
+}
+
+#[cfg(test)]
 async fn observe_runtimes_with_budget(
     paths: &NexusPaths,
+    budget: ProbeBudget,
+    blocking_fs: BlockingFs,
+    blocking_hooks: BlockingHooks,
+) -> RuntimeListResponse {
+    observe_runtimes_with_selection_budget(paths, None, budget, blocking_fs, blocking_hooks).await
+}
+
+async fn observe_runtimes_with_selection_budget(
+    paths: &NexusPaths,
+    runtime: Option<RuntimeConfig>,
     budget: ProbeBudget,
     blocking_fs: BlockingFs,
     blocking_hooks: BlockingHooks,
@@ -275,13 +307,188 @@ async fn observe_runtimes_with_budget(
         );
     };
     let (git, node, pnpm) = tokio::join!(
-        observe_tool_until("git", config.clone(), deadline, budget),
-        observe_tool_until("node", config.clone(), deadline, budget),
-        observe_tool_until("pnpm", config, deadline, budget),
+        observe_selected_tool_until("git", runtime.clone(), config.clone(), deadline, budget),
+        observe_selected_tool_until("node", runtime.clone(), config.clone(), deadline, budget),
+        observe_selected_tool_until("pnpm", runtime, config, deadline, budget),
     );
     let tools = vec![git, node, pnpm];
     debug_assert_eq!(tools.len(), RUNTIME_TOOLS.len());
     RuntimeListResponse::new(tools)
+}
+
+async fn observe_selected_tool_until(
+    name: &'static str,
+    runtime: Option<RuntimeConfig>,
+    config: ProbeConfig,
+    deadline: Instant,
+    budget: ProbeBudget,
+) -> RuntimeToolStatus {
+    if runtime.as_ref().and_then(|runtime| runtime.pin(name)).is_some() {
+        observe_configured_pin_until(name, runtime.expect("pin implies config"), config, deadline, budget)
+            .await
+    } else {
+        observe_tool_until(name, config, deadline, budget).await
+    }
+}
+
+async fn observe_configured_pin_until(
+    name: &'static str,
+    runtime: RuntimeConfig,
+    config: ProbeConfig,
+    deadline: Instant,
+    budget: ProbeBudget,
+) -> RuntimeToolStatus {
+    let pin = runtime.pin(name).expect("configured pin exists").clone();
+    let reported_path = pin.path.to_string_lossy().into_owned();
+    let ownership = pin.ownership;
+    let command_runtime = runtime.clone();
+    let command_config = config.clone();
+    let command = config
+        .blocking_fs
+        .run(deadline, move || {
+            prepare_configured_probe_command(name, &command_runtime, &command_config)
+        })
+        .await;
+    let command = match command {
+        None => {
+            return RuntimeToolStatus {
+                name: name.to_owned(),
+                available: false,
+                version: None,
+                source: Some(runtime_source(ownership).to_owned()),
+                path: Some(reported_path),
+                reason: Some(REASON_PROBE_BUDGET_EXCEEDED.to_owned()),
+            };
+        }
+        Some(Err(reason)) => {
+            return RuntimeToolStatus {
+                name: name.to_owned(),
+                available: false,
+                version: None,
+                source: Some(runtime_source(ownership).to_owned()),
+                path: Some(reported_path),
+                reason: Some(reason.to_owned()),
+            };
+        }
+        Some(Ok(command)) => command,
+    };
+    match run_prepared_version_probe(name, command, &config, deadline, budget).await {
+        Ok(version) => RuntimeToolStatus {
+            name: name.to_owned(),
+            available: true,
+            version: Some(version),
+            source: Some(runtime_source(ownership).to_owned()),
+            path: Some(reported_path),
+            reason: None,
+        },
+        Err(reason) => RuntimeToolStatus {
+            name: name.to_owned(),
+            available: false,
+            version: None,
+            source: Some(runtime_source(ownership).to_owned()),
+            path: Some(reported_path),
+            reason: Some(reason.to_owned()),
+        },
+    }
+}
+
+fn prepare_configured_probe_command(
+    name: &str,
+    runtime: &RuntimeConfig,
+    config: &ProbeConfig,
+) -> Result<Command, &'static str> {
+    let spec = resolve_runtime_command(runtime, name)
+        .map_err(|_| REASON_CONFIGURED_COMMAND_INVALID)?
+        .ok_or(REASON_CONFIGURED_COMMAND_INVALID)?;
+    let program_owner = if name == "pnpm" && !spec.prefix_args.is_empty() {
+        runtime
+            .node
+            .as_ref()
+            .map(|pin| pin.ownership)
+            .ok_or(REASON_CONFIGURED_COMMAND_INVALID)?
+    } else {
+        runtime
+            .pin(name)
+            .map(|pin| pin.ownership)
+            .ok_or(REASON_CONFIGURED_COMMAND_INVALID)?
+    };
+    let program = canonical_configured_path(&spec.program, program_owner, config)?;
+    if spec.prefix_args.is_empty() {
+        return prepare_probe_command(&program, config.probe_cwd.as_deref());
+    }
+    if name != "pnpm" || spec.prefix_args.len() != 1 {
+        return Err(REASON_CONFIGURED_COMMAND_INVALID);
+    }
+    let entry = PathBuf::from(&spec.prefix_args[0]);
+    let entry_owner = runtime
+        .pnpm
+        .as_ref()
+        .map(|pin| pin.ownership)
+        .ok_or(REASON_CONFIGURED_COMMAND_INVALID)?;
+    let entry = canonical_configured_path(&entry, entry_owner, config)?;
+    let probe_cwd = config
+        .probe_cwd
+        .as_deref()
+        .filter(|path| is_safe_probe_cwd(path))
+        .ok_or(REASON_PROBE_CWD_UNAVAILABLE)?;
+    if is_corepack_shim(&program) != Some(false) {
+        return Err(REASON_CONFIGURED_COMMAND_INVALID);
+    }
+    #[cfg(windows)]
+    if is_cmd_or_bat_path(&program) {
+        return Err(REASON_CONFIGURED_COMMAND_INVALID);
+    }
+    let mut command = Command::new(program);
+    command
+        .arg(entry)
+        .arg("--version")
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .current_dir(probe_cwd)
+        .kill_on_drop(true);
+    apply_probe_environment(&mut command);
+    Ok(command)
+}
+
+fn canonical_configured_path(
+    path: &Path,
+    ownership: RuntimeOwnership,
+    config: &ProbeConfig,
+) -> Result<PathBuf, &'static str> {
+    if !path.is_absolute() || is_remote_path(path) {
+        return Err(REASON_CONFIGURED_PATH_UNSAFE);
+    }
+    if !fs::metadata(path).is_ok_and(|metadata| metadata.is_file()) {
+        return Err(REASON_CONFIGURED_PATH_MISSING);
+    }
+    match ownership {
+        RuntimeOwnership::System => {
+            let path = fs::canonicalize(path).map_err(|_| REASON_CONFIGURED_PATH_MISSING)?;
+            if is_remote_path(&path) {
+                Err(REASON_CONFIGURED_PATH_UNSAFE)
+            } else {
+                Ok(path)
+            }
+        }
+        RuntimeOwnership::Nexus => {
+            if !config.data_root_is_safe {
+                return Err(REASON_CONFIGURED_PATH_UNSAFE);
+            }
+            let data_root = canonical_directory(&config.data_root)
+                .ok_or(REASON_CONFIGURED_PATH_UNSAFE)?;
+            let portable_root = canonical_portable_root(&data_root, &config.portable_root)
+                .ok_or(REASON_CONFIGURED_PATH_UNSAFE)?;
+            canonical_file_within(&portable_root, path).ok_or(REASON_CONFIGURED_PATH_UNSAFE)
+        }
+    }
+}
+
+fn runtime_source(ownership: RuntimeOwnership) -> &'static str {
+    match ownership {
+        RuntimeOwnership::System => "system",
+        RuntimeOwnership::Nexus => "nexus",
+    }
 }
 
 #[cfg(test)]
@@ -625,6 +832,16 @@ async fn probe_path(
         .await
         .ok_or(REASON_PROBE_BUDGET_EXCEEDED)??;
 
+    run_prepared_version_probe(name, command, config, deadline, budget).await
+}
+
+async fn run_prepared_version_probe(
+    name: &str,
+    command: Command,
+    config: &ProbeConfig,
+    deadline: Instant,
+    budget: ProbeBudget,
+) -> Result<String, &'static str> {
     let lifecycle = config.probe_lifecycle.clone();
     // Keep the child-owning future alive when a caller cancels this probe.
     // The detached task has its own child and cleanup deadlines, so dropping
@@ -1332,6 +1549,52 @@ mod tests {
             child: Duration::from_millis(50),
             cleanup: Duration::from_millis(25),
         }
+    }
+
+    #[tokio::test]
+    async fn configured_pin_is_probed_exactly_and_missing_pin_does_not_fallback() {
+        let root = fixture_root("configured-pin");
+        let system_dir = root.join("system");
+        let pnpm = write_version_fixture(&system_dir, "pnpm", "11.7.0");
+        let probe_config = config_for(&root, None);
+        let runtime = RuntimeConfig {
+            pnpm: Some(nexus_core::RuntimePin {
+                path: pnpm.clone(),
+                ownership: RuntimeOwnership::System,
+            }),
+            ..RuntimeConfig::default()
+        };
+        let status = observe_configured_pin_until(
+            "pnpm",
+            runtime,
+            probe_config.clone(),
+            Instant::now() + PRODUCTION_PROBE_BUDGET.round,
+            PRODUCTION_PROBE_BUDGET,
+        )
+        .await;
+        assert!(status.available);
+        assert_eq!(status.version.as_deref(), Some("11.7.0"));
+        assert_eq!(status.path.as_deref(), Some(pnpm.to_string_lossy().as_ref()));
+
+        let missing = root.join("missing").join(fixture_name("pnpm"));
+        let runtime = RuntimeConfig {
+            pnpm: Some(nexus_core::RuntimePin {
+                path: missing,
+                ownership: RuntimeOwnership::System,
+            }),
+            ..RuntimeConfig::default()
+        };
+        let status = observe_configured_pin_until(
+            "pnpm",
+            runtime,
+            probe_config,
+            Instant::now() + PRODUCTION_PROBE_BUDGET.round,
+            PRODUCTION_PROBE_BUDGET,
+        )
+        .await;
+        assert!(!status.available);
+        assert_eq!(status.reason.as_deref(), Some(REASON_CONFIGURED_PATH_MISSING));
+        let _ = fs::remove_dir_all(root);
     }
 
     fn config_for(root: &Path, search_dir: Option<&Path>) -> ProbeConfig {

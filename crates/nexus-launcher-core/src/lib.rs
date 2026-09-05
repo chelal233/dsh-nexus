@@ -57,6 +57,7 @@ const AGENT_ROUTES: &[&str] = &[
     "/v1/releases",
     "/v1/releases/tags",
     "/v1/runtime",
+    "/v1/runtime/plan",
     "/v1/updates",
     "/v1/diagnostics",
     "/v1/config",
@@ -421,6 +422,7 @@ pub fn validate_agent_request(
         | "/v1/harness/discover"
         | "/v1/releases/tags"
         | "/v1/runtime" => *method == Method::GET,
+        "/v1/runtime/plan" => *method == Method::POST,
         "/v1/harness" | "/v1/profiles" | "/v1/checkpoints" | "/v1/releases" | "/v1/updates"
         | "/v1/diagnostics" | "/v1/config" => *method == Method::GET || *method == Method::POST,
         "/v1/lifecycle" | "/v1/shutdown" => *method == Method::POST,
@@ -1278,12 +1280,15 @@ mod tests {
         assert!(is_allowed_agent_route("/v1/harness/discover"));
         assert!(is_allowed_agent_route("/v1/releases/tags"));
         assert!(is_allowed_agent_route("/v1/runtime"));
+        assert!(is_allowed_agent_route("/v1/runtime/plan"));
         assert!(!is_allowed_agent_route("/launcher/status"));
         assert!(validate_agent_request("/v1/health", &Method::GET, None).is_ok());
         assert!(validate_agent_request("/v1/harness/discover", &Method::GET, None).is_ok());
         assert!(validate_agent_request("/v1/runtime", &Method::GET, None).is_ok());
         assert!(validate_agent_request("/v1/runtime", &Method::POST, None).is_err());
         assert!(validate_agent_request("/v1/runtime", &Method::GET, Some(b"{}")).is_err());
+        assert!(validate_agent_request("/v1/runtime/plan", &Method::GET, None).is_err());
+        assert!(validate_agent_request("/v1/runtime/plan", &Method::POST, Some(b"{}")).is_ok());
         assert!(validate_agent_request("/v1/releases/tags", &Method::GET, None).is_ok());
         assert!(validate_agent_request("/v1/releases/tags", &Method::POST, None).is_err());
         assert!(validate_agent_request("/v1/releases/tags", &Method::GET, Some(b"{}")).is_err());

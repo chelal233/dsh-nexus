@@ -32,7 +32,8 @@ use nexus_core::{
     CheckpointRestoreJournal, CheckpointRestoreJournalStore, CheckpointRestorePhase,
     CheckpointStore, ConfigStore, DiagnosticsStore, HarnessLaunchSpec, HarnessLogSession,
     HarnessLogSessionStore, NexusConfig, NexusConfigFile, NexusStateSnapshot, ProfileCatalog,
-    ProfileStore, ReleaseCatalog, ReleaseStore, UpdateSpec, DEFAULT_MAX_RELEASE_SLOTS,
+    ProfileStore, ReleaseCatalog, ReleaseStore, RuntimeConfig, UpdateSpec,
+    DEFAULT_MAX_RELEASE_SLOTS,
     DEFAULT_PROFILE, HARNESS_ARGS_ENV,
     HARNESS_PROGRAM_ENV, HARNESS_READINESS_TIMEOUT_ENV, HARNESS_READINESS_URL_ENV,
     HARNESS_WORKING_DIR_ENV, UPDATE_BUILD_ARGS_ENV, UPDATE_BUILD_PROGRAM_ENV,
@@ -49,7 +50,8 @@ use nexus_protocol::{
     HarnessCommand, HarnessDiscoveryResponse, HarnessResponse, HarnessRuntimeInfo, HealthResponse,
     LifecycleAccepted, LifecycleAction, LifecycleCommand, ProfileAction, ProfileCommand,
     ProfileListResponse, ProfileSelectResponse, ReleaseAction, ReleaseCommand, ReleaseListResponse,
-    StateResponse, TagListResponse, UpdateAction, UpdateCommand, UpdateResponse, UpdateState,
+    RuntimePlanRequest, StateResponse, TagListResponse, UpdateAction, UpdateCommand,
+    UpdateResponse, UpdateState,
 };
 use tokio::{
     net::TcpListener,
@@ -57,6 +59,7 @@ use tokio::{
 };
 
 mod runtime;
+mod runtime_plan;
 mod supervisor;
 mod updater;
 
@@ -279,6 +282,7 @@ fn build_router(state: AppState) -> Router {
         .route("/v1/releases", get(release_list).post(release_control))
         .route("/v1/releases/tags", get(release_tags))
         .route("/v1/runtime", get(runtime_status))
+        .route("/v1/runtime/plan", post(runtime_plan))
         .route("/v1/updates", get(update_status).post(update_control))
         .route(
             "/v1/diagnostics",
@@ -1268,7 +1272,22 @@ async fn release_list(State(state): State<AppState>) -> axum::response::Response
 }
 
 async fn runtime_status(State(state): State<AppState>) -> axum::response::Response {
-    runtime_status_for_paths(&state.paths).await
+    let config = match state.config.load() {
+        Ok(config) => config,
+        Err(error) => return data_error_response(error, "config_unavailable"),
+    };
+    let response = runtime::observe_runtime_selection(&state.paths, config.runtime.as_ref()).await;
+    (StatusCode::OK, Json(response)).into_response()
+}
+
+async fn runtime_plan(
+    State(state): State<AppState>,
+    Json(request): Json<RuntimePlanRequest>,
+) -> axum::response::Response {
+    match runtime_plan::plan_registered_release(&state.releases, &state.config, request).await {
+        Ok(response) => (StatusCode::OK, Json(response)).into_response(),
+        Err(error) => data_error_response(error, "runtime_plan_failed"),
+    }
 }
 
 #[cfg(test)]
@@ -1300,6 +1319,7 @@ mod runtime_route_tests {
     }
 }
 
+#[cfg(test)]
 async fn runtime_status_for_paths(paths: &nexus_core::NexusPaths) -> axum::response::Response {
     let response = runtime::observe_runtimes(paths).await;
     (StatusCode::OK, Json(response)).into_response()
@@ -1629,7 +1649,7 @@ async fn config_control(
     match command.action {
         ConfigAction::Status => config_status(State(state)).await,
         ConfigAction::SetHarness => {
-            let Some(mut payload) = command.harness else {
+            let Some(payload) = command.harness else {
                 return data_error_response(
                     io::Error::new(
                         io::ErrorKind::InvalidInput,
@@ -1637,35 +1657,6 @@ async fn config_control(
                     ),
                     "config_invalid",
                 );
-            };
-            if command.preserve_harness_readiness_url {
-                let existing = match state.config.load() {
-                    Ok(document) => document.harness.and_then(|harness| harness.readiness_url),
-                    Err(error) => return data_error_response(error, "config_unavailable"),
-                };
-                if let Some(existing) = existing {
-                    payload.readiness_url = Some(existing);
-                } else if env::var_os(HARNESS_READINESS_URL_ENV)
-                    .is_some_and(|value| !value.is_empty())
-                {
-                    // An environment-only URL is intentionally never copied
-                    // into Nexus config. Keep the persisted field empty while
-                    // the effective response continues to report the env
-                    // override in a redacted form.
-                    payload.readiness_url = None;
-                } else {
-                    return data_error_response(
-                        io::Error::new(
-                            io::ErrorKind::InvalidInput,
-                            "cannot preserve a readiness URL when no existing URL is configured",
-                        ),
-                        "config_invalid",
-                    );
-                }
-            }
-            let harness = match HarnessLaunchSpec::from_payload(payload) {
-                Ok(harness) => harness,
-                Err(error) => return data_error_response(error, "config_invalid"),
             };
             let lifecycle = state.supervisor.acquire_lifecycle().await;
             if let Err(error) = settle_checkpoint_restore(&state).await {
@@ -1677,12 +1668,30 @@ async fn config_control(
             if let Err(response) = ensure_harness_stopped(&state, &lifecycle).await {
                 return response;
             }
-            let mut document = match state.config.load() {
-                Ok(document) => document,
-                Err(error) => return data_error_response(error, "config_unavailable"),
-            };
-            document.harness = Some(harness);
-            write_config_response(&state, document)
+            let preserve = command.preserve_harness_readiness_url;
+            transact_config_response(&state, move |document| {
+                let mut payload = payload;
+                if preserve {
+                    if let Some(existing) = document
+                        .harness
+                        .as_ref()
+                        .and_then(|harness| harness.readiness_url.clone())
+                    {
+                        payload.readiness_url = Some(existing);
+                    } else if env::var_os(HARNESS_READINESS_URL_ENV)
+                        .is_some_and(|value| !value.is_empty())
+                    {
+                        payload.readiness_url = None;
+                    } else {
+                        return Err(io::Error::new(
+                            io::ErrorKind::InvalidInput,
+                            "cannot preserve a readiness URL when no existing URL is configured",
+                        ));
+                    }
+                }
+                document.harness = Some(HarnessLaunchSpec::from_payload(payload)?);
+                Ok(())
+            })
         }
         ConfigAction::ClearHarness => {
             let lifecycle = state.supervisor.acquire_lifecycle().await;
@@ -1695,12 +1704,10 @@ async fn config_control(
             if let Err(response) = ensure_harness_stopped(&state, &lifecycle).await {
                 return response;
             }
-            let mut document = match state.config.load() {
-                Ok(document) => document,
-                Err(error) => return data_error_response(error, "config_unavailable"),
-            };
-            document.harness = None;
-            write_config_response(&state, document)
+            transact_config_response(&state, |document| {
+                document.harness = None;
+                Ok(())
+            })
         }
         ConfigAction::SetUpdate => {
             let Some(payload) = command.update else {
@@ -1723,12 +1730,10 @@ async fn config_control(
             if let Err(response) = ensure_update_idle(&state) {
                 return response;
             }
-            let mut document = match state.config.load() {
-                Ok(document) => document,
-                Err(error) => return data_error_response(error, "config_unavailable"),
-            };
-            document.update = Some(update);
-            write_config_response(&state, document)
+            transact_config_response(&state, move |document| {
+                document.update = Some(update);
+                Ok(())
+            })
         }
         ConfigAction::ClearUpdate => {
             let _update_gate = match state.updater.try_acquire_gate() {
@@ -1738,12 +1743,50 @@ async fn config_control(
             if let Err(response) = ensure_update_idle(&state) {
                 return response;
             }
-            let mut document = match state.config.load() {
-                Ok(document) => document,
-                Err(error) => return data_error_response(error, "config_unavailable"),
+            transact_config_response(&state, |document| {
+                document.update = None;
+                Ok(())
+            })
+        }
+        ConfigAction::SetRuntime | ConfigAction::ClearRuntime => {
+            let runtime = if command.action == ConfigAction::SetRuntime {
+                let Some(payload) = command.runtime else {
+                    return data_error_response(
+                        io::Error::new(
+                            io::ErrorKind::InvalidInput,
+                            "runtime configuration is required",
+                        ),
+                        "config_invalid",
+                    );
+                };
+                match RuntimeConfig::from_payload(payload) {
+                    Ok(runtime) => Some(runtime),
+                    Err(error) => return data_error_response(error, "config_invalid"),
+                }
+            } else {
+                None
             };
-            document.update = None;
-            write_config_response(&state, document)
+            let lifecycle = state.supervisor.acquire_lifecycle().await;
+            if let Err(error) = settle_checkpoint_restore(&state).await {
+                return data_error_response(
+                    io::Error::other(error.to_string()),
+                    "checkpoint_recovery_failed",
+                );
+            }
+            if let Err(response) = ensure_harness_stopped(&state, &lifecycle).await {
+                return response;
+            }
+            let _update_gate = match state.updater.try_acquire_gate() {
+                Ok(gate) => gate,
+                Err(error) => return update_error_response(error),
+            };
+            if let Err(response) = ensure_update_idle(&state) {
+                return response;
+            }
+            transact_config_response(&state, move |document| {
+                document.runtime = runtime;
+                Ok(())
+            })
         }
     }
 }
@@ -1768,6 +1811,7 @@ fn config_response(document: NexusConfigFile) -> ConfigResponse {
             payload
         }),
     )
+    .with_runtime(document.runtime.map(|runtime| runtime.to_payload()))
     .with_harness_readiness_url_redacted(harness_readiness_url_redacted)
 }
 
@@ -1805,6 +1849,7 @@ fn config_response_for_paths(
         harness: load_harness_launch_spec(paths)?.or(document.harness),
         update: load_update_spec(paths)?.or(document.update),
         releases: None,
+        runtime: document.runtime,
     };
     Ok(config_response(effective)
         .with_environment_overrides(harness_env_override, update_env_override))
@@ -1919,9 +1964,12 @@ fn redact_config_url(value: Option<String>) -> Option<String> {
     Some(sanitized)
 }
 
-fn write_config_response(state: &AppState, document: NexusConfigFile) -> axum::response::Response {
-    match state.config.write(&document) {
-        Ok(()) => match config_response_for_paths(&state.paths, document) {
+fn transact_config_response(
+    state: &AppState,
+    update: impl FnOnce(&mut NexusConfigFile) -> io::Result<()>,
+) -> axum::response::Response {
+    match state.config.transaction(update) {
+        Ok((document, ())) => match config_response_for_paths(&state.paths, document) {
             Ok(response) => (StatusCode::OK, Json(response)).into_response(),
             Err(error) => data_error_response(error, "config_unavailable"),
         },
@@ -2551,7 +2599,9 @@ mod checkpoint_tests {
                 }),
                 update: None,
             
-                releases: None,})
+                releases: None,
+                runtime: None,
+            })
             .expect("Harness config writes");
         let profiles = ProfileStore::new(paths.clone());
         profiles.load().expect("default profile creates");
@@ -2865,7 +2915,8 @@ mod switch_ownership_tests {
         ProfileStore, ReleaseStore, UpdateSpec,
     };
     use nexus_protocol::{
-        ConfigAction, ConfigCommand, HarnessAction, UpdateAction, UpdateCommand, UpdateState,
+        ConfigAction, ConfigCommand, HarnessAction, RuntimeConfigPayload, UpdateAction,
+        UpdateCommand, UpdateState,
     };
     use tokio::{
         sync::{oneshot, watch, Mutex, RwLock},
@@ -2905,6 +2956,7 @@ mod switch_ownership_tests {
                 harness: None,
                 update: Some(update),
                 releases: None,
+                runtime: None,
             })
             .expect("update config writes");
         let releases = ReleaseStore::new(paths.clone());
@@ -3147,6 +3199,54 @@ mod switch_ownership_tests {
             .expect("SetHarness resumes after lifecycle releases")
             .expect("SetHarness task joins");
         assert_eq!(response.status(), axum::http::StatusCode::OK);
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[tokio::test]
+    async fn runtime_config_waits_for_lifecycle_then_uses_try_update_gate() {
+        let state = switch_test_state("runtime-config-lock-order");
+        let root = state.paths.root.clone();
+        let lifecycle = state.supervisor.acquire_lifecycle().await;
+        let (attempt, attempt_rx) = oneshot::channel();
+        state.supervisor.observe_next_lifecycle_wait(attempt).await;
+        let task_state = state.clone();
+        let set_runtime = tokio::spawn(async move {
+            config_control(
+                State(task_state),
+                Json(ConfigCommand {
+                    action: ConfigAction::SetRuntime,
+                    runtime: Some(RuntimeConfigPayload::default()),
+                    ..Default::default()
+                }),
+            )
+            .await
+        });
+        timeout(Duration::from_secs(3), attempt_rx)
+            .await
+            .expect("SetRuntime attempts lifecycle before deadline")
+            .expect("SetRuntime lifecycle wait signal arrives");
+        assert!(!set_runtime.is_finished());
+        drop(lifecycle);
+        let response = timeout(Duration::from_secs(3), set_runtime)
+            .await
+            .expect("SetRuntime resumes")
+            .expect("SetRuntime task joins");
+        assert_eq!(response.status(), axum::http::StatusCode::OK);
+
+        let update_gate = state
+            .updater
+            .try_acquire_gate()
+            .expect("test owns update gate");
+        let response = config_control(
+            State(state.clone()),
+            Json(ConfigCommand {
+                action: ConfigAction::ClearRuntime,
+                ..Default::default()
+            }),
+        )
+        .await;
+        assert_eq!(response.status(), axum::http::StatusCode::CONFLICT);
+        drop(update_gate);
         let _ = fs::remove_dir_all(root);
     }
 

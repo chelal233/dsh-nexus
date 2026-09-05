@@ -3,6 +3,7 @@
 use std::{
     collections::HashSet,
     env, fs, io,
+    ffi::{OsStr, OsString},
     net::{IpAddr, Ipv4Addr, SocketAddr},
     path::{Path, PathBuf},
     sync::{Arc, Mutex},
@@ -13,9 +14,12 @@ use nexus_protocol::{
     decode_json, encode_json, AgentLifecycleState, AgentStatePayload, CheckpointManifest,
     DiagnosticsBundle, DiagnosticsFile, HarnessCandidate, HarnessCheckpointState,
     HarnessConfigPayload, HarnessDiscoveryResponse, HarnessLaunchMode, HarnessRuntimeInfo,
-    HarnessState, ReleaseManifest, UpdateConfigPayload, UpdateRuntimeInfo, UpdateState,
+    HarnessState, ReleaseManifest, RuntimeConfigPayload, RuntimeInstallMode, RuntimeOwnership,
+    RuntimePinPayload, RuntimeSource, UpdateConfigPayload, UpdateRuntimeInfo, UpdateState,
 };
 use serde::{Deserialize, Serialize};
+
+pub mod runtime_requirements;
 
 pub const DEFAULT_AGENT_PORT: u16 = 3090;
 pub const DEFAULT_PROFILE: &str = "web";
@@ -116,6 +120,7 @@ pub struct NexusPaths {
     pub logs_dir: PathBuf,
     pub checkpoints_dir: PathBuf,
     pub releases_dir: PathBuf,
+    pub runtimes_dir: PathBuf,
     pub downloads_dir: PathBuf,
     pub diagnostics_dir: PathBuf,
     pub run_dir: PathBuf,
@@ -132,6 +137,7 @@ impl NexusPaths {
             logs_dir: root.join("logs"),
             checkpoints_dir: root.join("checkpoints"),
             releases_dir: root.join("releases"),
+            runtimes_dir: root.join("runtimes"),
             downloads_dir: root.join("downloads"),
             diagnostics_dir: root.join("diagnostics"),
             run_dir: root.join("run"),
@@ -145,6 +151,7 @@ impl NexusPaths {
             &self.logs_dir,
             &self.checkpoints_dir,
             &self.releases_dir,
+            &self.runtimes_dir,
             &self.downloads_dir,
             &self.diagnostics_dir,
             &self.run_dir,
@@ -154,6 +161,255 @@ impl NexusPaths {
 
         Ok(())
     }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct RuntimePin {
+    pub path: PathBuf,
+    pub ownership: RuntimeOwnership,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct RuntimeConfig {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub node: Option<RuntimePin>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pnpm: Option<RuntimePin>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub git: Option<RuntimePin>,
+    #[serde(default)]
+    pub source: RuntimeSource,
+    #[serde(default)]
+    pub mode: RuntimeInstallMode,
+}
+
+impl RuntimeConfig {
+    pub fn validate(&self) -> io::Result<()> {
+        for (name, pin) in [
+            ("node", self.node.as_ref()),
+            ("pnpm", self.pnpm.as_ref()),
+            ("git", self.git.as_ref()),
+        ] {
+            if let Some(pin) = pin {
+                if !pin.path.is_absolute()
+                    || pin.path.as_os_str().is_empty()
+                    || pin.path.to_string_lossy().chars().any(char::is_control)
+                {
+                    return Err(io::Error::new(
+                        io::ErrorKind::InvalidInput,
+                        format!("runtime.{name}.path must be an absolute path without control characters"),
+                    ));
+                }
+            }
+        }
+        Ok(())
+    }
+
+    pub fn validate_for_paths(&self, paths: &NexusPaths) -> io::Result<()> {
+        self.validate()?;
+        for (name, pin) in [
+            ("node", self.node.as_ref()),
+            ("pnpm", self.pnpm.as_ref()),
+            ("git", self.git.as_ref()),
+        ] {
+            if let Some(pin) = pin {
+                if pin.path.components().any(|component| {
+                    matches!(component, std::path::Component::CurDir | std::path::Component::ParentDir)
+                }) {
+                    return Err(io::Error::new(
+                        io::ErrorKind::InvalidInput,
+                        format!("runtime.{name}.path cannot contain '.' or '..' components"),
+                    ));
+                }
+                if pin.ownership == RuntimeOwnership::Nexus
+                    && !lexically_within(&paths.runtimes_dir, &pin.path)
+                {
+                    return Err(io::Error::new(
+                        io::ErrorKind::InvalidInput,
+                        format!("runtime.{name} owned by Nexus must be below runtimes_dir"),
+                    ));
+                }
+            }
+        }
+        Ok(())
+    }
+
+    pub fn pin(&self, name: &str) -> Option<&RuntimePin> {
+        match name {
+            "node" => self.node.as_ref(),
+            "pnpm" => self.pnpm.as_ref(),
+            "git" => self.git.as_ref(),
+            _ => None,
+        }
+    }
+
+    pub fn to_payload(&self) -> RuntimeConfigPayload {
+        RuntimeConfigPayload {
+            node: self.node.as_ref().map(RuntimePin::to_payload),
+            pnpm: self.pnpm.as_ref().map(RuntimePin::to_payload),
+            git: self.git.as_ref().map(RuntimePin::to_payload),
+            source: self.source,
+            mode: self.mode,
+        }
+    }
+
+    pub fn from_payload(payload: RuntimeConfigPayload) -> io::Result<Self> {
+        let config = Self {
+            node: payload.node.map(RuntimePin::from_payload),
+            pnpm: payload.pnpm.map(RuntimePin::from_payload),
+            git: payload.git.map(RuntimePin::from_payload),
+            source: payload.source,
+            mode: payload.mode,
+        };
+        config.validate()?;
+        Ok(config)
+    }
+}
+
+fn lexically_within(root: &Path, path: &Path) -> bool {
+    #[cfg(windows)]
+    {
+        let root = root
+            .to_string_lossy()
+            .trim_end_matches(['\\', '/'])
+            .to_ascii_lowercase();
+        let path = path.to_string_lossy().to_ascii_lowercase();
+        path == root
+            || path
+                .strip_prefix(&root)
+                .is_some_and(|rest| rest.starts_with(['\\', '/']))
+    }
+    #[cfg(not(windows))]
+    {
+        path == root || path.starts_with(root)
+    }
+}
+
+impl RuntimePin {
+    fn to_payload(&self) -> RuntimePinPayload {
+        RuntimePinPayload {
+            path: self.path.to_string_lossy().into_owned(),
+            ownership: self.ownership,
+        }
+    }
+
+    fn from_payload(payload: RuntimePinPayload) -> Self {
+        Self {
+            path: PathBuf::from(payload.path),
+            ownership: payload.ownership,
+        }
+    }
+}
+
+/// Build the PATH value for a Nexus child without changing process or system
+/// environment. Consumers execute pinned programs directly and use this PATH
+/// only for their child processes and transitive executable lookup.
+pub fn build_runtime_child_env(
+    config: &RuntimeConfig,
+    ambient_path: Option<&OsStr>,
+) -> io::Result<Vec<(OsString, OsString)>> {
+    config.validate()?;
+    let mut directories = Vec::<PathBuf>::new();
+    for pin in [&config.node, &config.pnpm, &config.git]
+        .into_iter()
+        .flatten()
+    {
+        let directory = pin.path.parent().ok_or_else(|| {
+            io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "runtime pin has no parent directory",
+            )
+        })?;
+        if !directories.iter().any(|existing| existing == directory) {
+            directories.push(directory.to_owned());
+        }
+    }
+    if let Some(ambient_path) = ambient_path {
+        for directory in env::split_paths(ambient_path) {
+            if !directories.iter().any(|existing| existing == &directory) {
+                directories.push(directory);
+            }
+        }
+    }
+    if directories.is_empty() {
+        return Ok(Vec::new());
+    }
+    let path = env::join_paths(directories).map_err(|error| {
+        io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!("runtime child PATH cannot be encoded: {error}"),
+        )
+    })?;
+    Ok(vec![(OsString::from("PATH"), path)])
+}
+
+/// Process description derived from the single configured runtime pin set.
+/// A pinned pnpm JavaScript entry is always launched through the pinned Node,
+/// so downstream consumers never duplicate platform-specific command logic.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RuntimeCommandSpec {
+    pub program: PathBuf,
+    pub prefix_args: Vec<OsString>,
+}
+
+pub fn resolve_runtime_command(
+    config: &RuntimeConfig,
+    name: &str,
+) -> io::Result<Option<RuntimeCommandSpec>> {
+    config.validate()?;
+    let Some(pin) = config.pin(name) else {
+        return if matches!(name, "node" | "pnpm" | "git") {
+            Ok(None)
+        } else {
+            Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                format!("unknown runtime tool: {name}"),
+            ))
+        };
+    };
+    if name == "pnpm"
+        && pin
+            .path
+            .extension()
+            .and_then(|extension| extension.to_str())
+            .is_some_and(|extension| matches!(extension.to_ascii_lowercase().as_str(), "js" | "cjs" | "mjs"))
+    {
+        let node = config.node.as_ref().ok_or_else(|| {
+            io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "a pnpm JavaScript entry requires a pinned Node runtime",
+            )
+        })?;
+        return Ok(Some(RuntimeCommandSpec {
+            program: node.path.clone(),
+            prefix_args: vec![pin.path.clone().into_os_string()],
+        }));
+    }
+    Ok(Some(RuntimeCommandSpec {
+        program: pin.path.clone(),
+        prefix_args: Vec::new(),
+    }))
+}
+
+pub const PNPM_MINIMUM_RELEASE_AGE_ARG: &str = "--config.minimumReleaseAge=0";
+pub const PNPM_OFFICIAL_REGISTRY_ARG: &str = "--registry=https://registry.npmjs.org";
+pub const PNPM_NPMMIRROR_REGISTRY_ARG: &str = "--registry=https://registry.npmmirror.com";
+
+/// Add the shared process-local pnpm policy without writing user pnpm config.
+pub fn build_pnpm_args(
+    config: &RuntimeConfig,
+    args: impl IntoIterator<Item = OsString>,
+) -> Vec<OsString> {
+    let registry = match config.source {
+        RuntimeSource::Official => PNPM_OFFICIAL_REGISTRY_ARG,
+        RuntimeSource::Npmmirror => PNPM_NPMMIRROR_REGISTRY_ARG,
+    };
+    let mut result = vec![
+        OsString::from(PNPM_MINIMUM_RELEASE_AGE_ARG),
+        OsString::from(registry),
+    ];
+    result.extend(args);
+    result
 }
 
 /// Nexus-owned profile catalog.  Profiles are names only in this phase; the
@@ -2247,16 +2503,18 @@ mod tests {
 
     use nexus_protocol::{
         AgentLifecycleState, HarnessConfigPayload, HarnessLaunchMode, HarnessRuntimeInfo,
-        HarnessState,
+        HarnessState, RuntimeOwnership, RuntimeSource,
     };
 
     use super::{
-        discover_harness_candidates_in_roots, is_within, load_harness_launch_spec,
-        normalize_discovery_path, read_runtime_metadata, write_runtime_metadata, AgentState,
+        build_pnpm_args, build_runtime_child_env, discover_harness_candidates_in_roots, is_within,
+        load_harness_launch_spec, normalize_discovery_path, read_runtime_metadata,
+        resolve_runtime_command, write_runtime_metadata, AgentState,
         CheckpointRestoreIntent, CheckpointRestoreJournalStore, CheckpointRestorePhase,
         CheckpointStore, ConfigStore, DiagnosticsStore, HarnessLaunchSpec, HarnessLogSession,
         HarnessLogSessionStore, NexusConfig, NexusConfigFile, NexusPaths, NexusRuntimeMetadata,
-        ProfileCatalog, ProfileStore, ReleaseStore, UpdateSpec,
+        ProfileCatalog, ProfileStore, ReleaseStore, ReleasesConfig, RuntimeConfig, RuntimePin,
+        UpdateSpec,
     };
 
     #[test]
@@ -2269,6 +2527,10 @@ mod tests {
         assert_eq!(
             paths.releases_dir,
             PathBuf::from("workspace/nexus/releases")
+        );
+        assert_eq!(
+            paths.runtimes_dir,
+            PathBuf::from("workspace/nexus/runtimes")
         );
         assert_eq!(
             paths.release_pointers_file,
@@ -3187,6 +3449,7 @@ mod tests {
                 timeout_secs: Some(30),
             }),
             releases: None,
+            runtime: None,
         };
 
         store.write(&document).expect("config writes");
@@ -3199,6 +3462,128 @@ mod tests {
         assert!(store.write(&invalid).is_err());
         assert_eq!(store.load().expect("invalid write leaves config"), document);
         let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn config_transactions_from_distinct_instances_preserve_unrelated_fields() {
+        let root = unique_test_root("config-transaction-instances");
+        let paths = NexusPaths::from_root(root.clone());
+        let first = ConfigStore::new(paths.clone());
+        let second = ConfigStore::new(paths.clone());
+        let (first_loaded_tx, first_loaded_rx) = std::sync::mpsc::channel();
+        let (release_first_tx, release_first_rx) = std::sync::mpsc::channel();
+        let first_thread = std::thread::spawn(move || {
+            first
+                .transaction(|document| {
+                    document.releases = Some(ReleasesConfig { max_slots: 7 });
+                    first_loaded_tx.send(()).expect("first load is observed");
+                    release_first_rx.recv().expect("first write is released");
+                    Ok(())
+                })
+                .expect("first transaction succeeds");
+        });
+        first_loaded_rx.recv().expect("first transaction loaded");
+
+        let (second_done_tx, second_done_rx) = std::sync::mpsc::channel();
+        let second_thread = std::thread::spawn(move || {
+            second
+                .transaction(|document| {
+                    document.runtime = Some(RuntimeConfig::default());
+                    Ok(())
+                })
+                .expect("second transaction succeeds");
+            second_done_tx.send(()).expect("second completion is observed");
+        });
+        let _ = second_done_rx.recv_timeout(std::time::Duration::from_millis(100));
+        release_first_tx.send(()).expect("first transaction releases");
+        first_thread.join().expect("first transaction joins");
+        second_thread.join().expect("second transaction joins");
+
+        let document = ConfigStore::new(paths)
+            .load()
+            .expect("combined config loads");
+        assert_eq!(document.releases.map(|value| value.max_slots), Some(7));
+        assert_eq!(document.runtime, Some(RuntimeConfig::default()));
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn runtime_config_is_structural_and_survives_removed_pins() {
+        let root = unique_test_root("runtime-config-structural");
+        let paths = NexusPaths::from_root(root.clone());
+        let missing_node = paths.runtimes_dir.join("node/node.exe");
+        let runtime = RuntimeConfig {
+            node: Some(RuntimePin {
+                path: missing_node.clone(),
+                ownership: RuntimeOwnership::Nexus,
+            }),
+            ..RuntimeConfig::default()
+        };
+        let store = ConfigStore::new(paths.clone());
+        store
+            .write(&NexusConfigFile {
+                runtime: Some(runtime.clone()),
+                ..NexusConfigFile::default()
+            })
+            .expect("missing runtime pin is structurally valid");
+        fs::remove_dir_all(&paths.runtimes_dir).expect("runtime directory removes");
+        assert_eq!(store.load().expect("config remains repairable").runtime, Some(runtime));
+
+        let legacy: NexusConfigFile =
+            serde_json::from_str(r#"{"releases":{"max_slots":3}}"#)
+                .expect("legacy config parses");
+        assert_eq!(legacy.runtime, None);
+        let invalid = RuntimeConfig {
+            node: Some(RuntimePin {
+                path: PathBuf::from("relative/node"),
+                ownership: RuntimeOwnership::Nexus,
+            }),
+            ..RuntimeConfig::default()
+        };
+        assert!(invalid.validate().is_err());
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn shared_runtime_command_and_child_environment_cover_pnpm_js_entries() {
+        let root = unique_test_root("runtime-command");
+        let node = root.join("node/node.exe");
+        let pnpm = root.join("pnpm/bin/pnpm.mjs");
+        let config = RuntimeConfig {
+            node: Some(RuntimePin {
+                path: node.clone(),
+                ownership: RuntimeOwnership::Nexus,
+            }),
+            pnpm: Some(RuntimePin {
+                path: pnpm.clone(),
+                ownership: RuntimeOwnership::Nexus,
+            }),
+            source: RuntimeSource::Npmmirror,
+            ..RuntimeConfig::default()
+        };
+        let command = resolve_runtime_command(&config, "pnpm")
+            .expect("pnpm command resolves")
+            .expect("pnpm pin exists");
+        assert_eq!(command.program, node);
+        assert_eq!(command.prefix_args, vec![pnpm.into_os_string()]);
+        let environment = build_runtime_child_env(&config, None).expect("child PATH builds");
+        let path_entries: Vec<_> = std::env::split_paths(&environment[0].1).collect();
+        assert_eq!(path_entries[0], root.join("node"));
+        assert_eq!(path_entries[1], root.join("pnpm/bin"));
+        let args = build_pnpm_args(&config, ["install".into()]);
+        assert_eq!(args[0], "--config.minimumReleaseAge=0");
+        assert_eq!(args[1], "--registry=https://registry.npmmirror.com");
+        assert_eq!(args[2], "install");
+
+        let paths = NexusPaths::from_root(root.clone());
+        let outside = RuntimeConfig {
+            node: Some(RuntimePin {
+                path: root.join("outside/node.exe"),
+                ownership: RuntimeOwnership::Nexus,
+            }),
+            ..RuntimeConfig::default()
+        };
+        assert!(outside.validate_for_paths(&paths).is_err());
     }
 
     fn unique_test_root(label: &str) -> PathBuf {
@@ -4280,6 +4665,8 @@ pub struct NexusConfigFile {
     pub update: Option<UpdateSpec>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub releases: Option<ReleasesConfig>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub runtime: Option<RuntimeConfig>,
 }
 
 /// Nexus-owned release slot capacity settings.
@@ -4304,15 +4691,13 @@ fn default_max_release_slots() -> u32 {
 #[derive(Clone)]
 pub struct ConfigStore {
     paths: NexusPaths,
-    write_gate: Arc<Mutex<()>>,
 }
+
+static CONFIG_WRITE_GATE: Mutex<()> = Mutex::new(());
 
 impl ConfigStore {
     pub fn new(paths: NexusPaths) -> Self {
-        Self {
-            paths,
-            write_gate: Arc::new(Mutex::new(())),
-        }
+        Self { paths }
     }
 
     pub fn paths(&self) -> &NexusPaths {
@@ -4321,30 +4706,51 @@ impl ConfigStore {
 
     pub fn load(&self) -> io::Result<NexusConfigFile> {
         let _guard = self.lock_gate()?;
+        self.load_unlocked()
+    }
+
+    fn load_unlocked(&self) -> io::Result<NexusConfigFile> {
         if !self.paths.config_file.exists() {
             return Ok(NexusConfigFile::default());
         }
         let bytes = fs::read(&self.paths.config_file)?;
         let document: NexusConfigFile = decode_json(&bytes).map_err(invalid_data)?;
-        validate_config_document(&document)?;
+        validate_config_document(&self.paths, &document)?;
         Ok(document)
     }
 
     pub fn write(&self, document: &NexusConfigFile) -> io::Result<()> {
-        validate_config_document(document)?;
+        validate_config_document(&self.paths, document)?;
         let _guard = self.lock_gate()?;
+        self.write_unlocked(document)
+    }
+
+    fn write_unlocked(&self, document: &NexusConfigFile) -> io::Result<()> {
         self.paths.ensure_directories()?;
         write_json_atomic(&self.paths.root, &self.paths.config_file, document)
     }
 
-    fn lock_gate(&self) -> io::Result<std::sync::MutexGuard<'_, ()>> {
-        self.write_gate
+    /// Atomically read, modify, validate, and replace the shared config file.
+    pub fn transaction<T>(
+        &self,
+        update: impl FnOnce(&mut NexusConfigFile) -> io::Result<T>,
+    ) -> io::Result<(NexusConfigFile, T)> {
+        let _guard = self.lock_gate()?;
+        let mut document = self.load_unlocked()?;
+        let result = update(&mut document)?;
+        validate_config_document(&self.paths, &document)?;
+        self.write_unlocked(&document)?;
+        Ok((document, result))
+    }
+
+    fn lock_gate(&self) -> io::Result<std::sync::MutexGuard<'static, ()>> {
+        CONFIG_WRITE_GATE
             .lock()
             .map_err(|_| io::Error::other("config lock is poisoned"))
     }
 }
 
-fn validate_config_document(document: &NexusConfigFile) -> io::Result<()> {
+fn validate_config_document(paths: &NexusPaths, document: &NexusConfigFile) -> io::Result<()> {
     if let Some(harness) = &document.harness {
         harness.validate()?;
     }
@@ -4358,6 +4764,9 @@ fn validate_config_document(document: &NexusConfigFile) -> io::Result<()> {
                 "releases.max_slots must be between 1 and 32",
             ));
         }
+    }
+    if let Some(runtime) = &document.runtime {
+        runtime.validate_for_paths(paths)?;
     }
     Ok(())
 }

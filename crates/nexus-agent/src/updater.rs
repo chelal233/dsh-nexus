@@ -152,20 +152,23 @@ impl UpdateExecutor {
     ) -> Result<UpdateResponse, UpdateExecutorError> {
         validate_update_ref(&tag).map_err(UpdateExecutorError::Configuration)?;
         let config_store = ConfigStore::new(self.paths.clone());
-        let mut document = config_store
-            .load()
-            .map_err(UpdateExecutorError::Configuration)?;
-        if document.update.is_none() {
-            return Err(UpdateExecutorError::NotConfigured);
-        }
-        if document.update.as_ref().map(|spec| spec.ref_name.as_str()) != Some(tag.as_str()) {
-            if let Some(spec) = document.update.as_mut() {
-                spec.ref_name = tag.clone();
-            }
-            config_store
-                .write(&document)
-                .map_err(UpdateExecutorError::Configuration)?;
-        }
+        config_store
+            .transaction(|document| {
+                let spec = document.update.as_mut().ok_or_else(|| {
+                    io::Error::new(io::ErrorKind::NotFound, "update is not configured")
+                })?;
+                if spec.ref_name != tag {
+                    spec.ref_name = tag.clone();
+                }
+                Ok(())
+            })
+            .map_err(|error| {
+                if error.kind() == io::ErrorKind::NotFound {
+                    UpdateExecutorError::NotConfigured
+                } else {
+                    UpdateExecutorError::Configuration(error)
+                }
+            })?;
         if let Some(manifest) = self.latest_slot_for_tag(&tag)? {
             let started_at = unix_time_seconds();
             let catalog = match self.promote_for_switch(&manifest.id).await {
@@ -741,6 +744,7 @@ def	refs/tags/v0.9.0^{}
                     timeout_secs: Some(5),
                 }),
                 releases: None,
+                runtime: None,
             })
             .expect("update config writes");
     }
@@ -813,7 +817,9 @@ def	refs/tags/v0.9.0^{}
                     timeout_secs: Some(5),
                 }),
             
-                releases: None,})
+                releases: None,
+                runtime: None,
+            })
             .expect("update config writes");
         let executor = UpdateExecutor::new(paths.clone(), ReleaseStore::new(paths));
         let (started, started_rx) = oneshot::channel();
@@ -994,6 +1000,7 @@ def	refs/tags/v0.9.0^{}
                 harness: None,
                 update: None,
                 releases: None,
+                runtime: None,
             })
             .expect("update config clears");
         let guard = executor

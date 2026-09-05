@@ -45,6 +45,7 @@ const ALLOWED_ROUTES: &[&str] = &[
     "/v1/releases",
     "/v1/releases/tags",
     "/v1/runtime",
+    "/v1/runtime/plan",
     "/v1/updates",
     "/v1/diagnostics",
     "/v1/config",
@@ -492,11 +493,14 @@ mod tests {
         assert!(is_allowed_route("/v1/harness/discover"));
         assert!(is_allowed_route("/v1/releases/tags"));
         assert!(is_allowed_route("/v1/runtime"));
+        assert!(is_allowed_route("/v1/runtime/plan"));
         assert!(is_allowed_route("/v1/agent"));
         assert!(!is_allowed_route("/v1/health?url=https://example.com"));
         assert!(validate_agent_request("/v1/runtime", &Method::GET, None).is_ok());
         assert!(validate_agent_request("/v1/runtime", &Method::POST, None).is_err());
         assert!(validate_agent_request("/v1/runtime", &Method::GET, Some(b"{}")).is_err());
+        assert!(validate_agent_request("/v1/runtime/plan", &Method::GET, None).is_err());
+        assert!(validate_agent_request("/v1/runtime/plan", &Method::POST, Some(b"{}")).is_ok());
         assert!(validate_agent_request("/v1/releases/tags", &Method::GET, None).is_ok());
         assert!(validate_agent_request("/v1/releases/tags", &Method::POST, None).is_err());
         assert!(validate_agent_request("/v1/releases/tags", &Method::GET, Some(b"{}")).is_err());

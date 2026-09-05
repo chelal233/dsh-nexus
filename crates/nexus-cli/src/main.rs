@@ -6,7 +6,8 @@ use nexus_protocol::{
     CheckpointRestoreResponse, ConfigAction, ConfigCommand, ConfigResponse, DiagnosticsAction,
     DiagnosticsCommand, DiagnosticsResponse, ErrorResponse, HarnessAction, HarnessCommand,
     HarnessResponse, ProfileAction, ProfileCommand, ProfileListResponse, ProfileSelectResponse,
-    ReleaseAction, ReleaseCommand, ReleaseListResponse, StateResponse, UpdateAction, UpdateCommand,
+    ReleaseAction, ReleaseCommand, ReleaseListResponse, RuntimeConfigPayload, RuntimeInstallMode,
+    RuntimeOwnership, RuntimePinPayload, RuntimeSource, StateResponse, UpdateAction, UpdateCommand,
     UpdateResponse,
 };
 
@@ -32,7 +33,7 @@ enum Command {
     ),
     Update(UpdateAction, Option<String>, Option<String>),
     Diagnostics(DiagnosticsAction, Option<String>),
-    Config(ConfigAction),
+    Config(ConfigAction, Option<RuntimeConfigPayload>),
 }
 
 #[tokio::main]
@@ -204,15 +205,73 @@ fn parse_args() -> Result<Option<Options>, String> {
             }
             "config" if command.is_none() => {
                 let action = args.next().ok_or_else(|| {
-                    "config requires status, clear-harness, or clear-update".to_owned()
+                    "config requires status, set-runtime, clear-runtime, clear-harness, or clear-update".to_owned()
                 })?;
                 let action = match action.to_string_lossy().as_ref() {
                     "status" => ConfigAction::Status,
                     "clear-harness" => ConfigAction::ClearHarness,
                     "clear-update" => ConfigAction::ClearUpdate,
+                    "set-runtime" => ConfigAction::SetRuntime,
+                    "clear-runtime" => ConfigAction::ClearRuntime,
                     value => return Err(format!("unknown config action: {value}")),
                 };
-                command = Some(Command::Config(action));
+                let runtime = (action == ConfigAction::SetRuntime)
+                    .then(RuntimeConfigPayload::default);
+                command = Some(Command::Config(action, runtime));
+            }
+            "--node" | "--pnpm" | "--git" => {
+                let tool = argument.to_string_lossy().trim_start_matches("--").to_owned();
+                let ownership = args
+                    .next()
+                    .ok_or_else(|| format!("--{tool} requires system|nexus PATH"))?;
+                let ownership = match ownership.to_string_lossy().as_ref() {
+                    "system" => RuntimeOwnership::System,
+                    "nexus" => RuntimeOwnership::Nexus,
+                    value => return Err(format!("invalid --{tool} ownership: {value}")),
+                };
+                let path = args
+                    .next()
+                    .ok_or_else(|| format!("--{tool} requires system|nexus PATH"))?
+                    .to_string_lossy()
+                    .into_owned();
+                let pin = RuntimePinPayload { path, ownership };
+                match command.as_mut() {
+                    Some(Command::Config(ConfigAction::SetRuntime, Some(runtime))) => match tool.as_str() {
+                        "node" => runtime.node = Some(pin),
+                        "pnpm" => runtime.pnpm = Some(pin),
+                        "git" => runtime.git = Some(pin),
+                        _ => unreachable!(),
+                    },
+                    _ => return Err(format!("--{tool} is valid only after config set-runtime")),
+                }
+            }
+            "--runtime-source" => {
+                let value = args
+                    .next()
+                    .ok_or_else(|| "--runtime-source requires official|npmmirror".to_owned())?;
+                let source = match value.to_string_lossy().as_ref() {
+                    "official" => RuntimeSource::Official,
+                    "npmmirror" => RuntimeSource::Npmmirror,
+                    value => return Err(format!("invalid runtime source: {value}")),
+                };
+                match command.as_mut() {
+                    Some(Command::Config(ConfigAction::SetRuntime, Some(runtime))) => runtime.source = source,
+                    _ => return Err("--runtime-source is valid only after config set-runtime".to_owned()),
+                }
+            }
+            "--runtime-mode" => {
+                let value = args
+                    .next()
+                    .ok_or_else(|| "--runtime-mode requires portable|system".to_owned())?;
+                let mode = match value.to_string_lossy().as_ref() {
+                    "portable" => RuntimeInstallMode::Portable,
+                    "system" => RuntimeInstallMode::System,
+                    value => return Err(format!("invalid runtime mode: {value}")),
+                };
+                match command.as_mut() {
+                    Some(Command::Config(ConfigAction::SetRuntime, Some(runtime))) => runtime.mode = mode,
+                    _ => return Err("--runtime-mode is valid only after config set-runtime".to_owned()),
+                }
             }
             "--json" => json = true,
             "--note" => {
@@ -381,17 +440,18 @@ async fn run(options: Options) -> Result<(), String> {
             .send()
             .await
             .map_err(|error| format!("agent is unavailable: {error}"))?,
-        Command::Config(ConfigAction::Status) => client
+        Command::Config(ConfigAction::Status, _) => client
             .get(format!("http://{address}/v1/config"))
             .send()
             .await
             .map_err(|error| format!("agent is unavailable: {error}"))?,
-        Command::Config(action) => client
+        Command::Config(action, runtime) => client
             .post(format!("http://{address}/v1/config"))
             .json(&ConfigCommand {
                 action: *action,
                 harness: None,
                 update: None,
+                runtime: runtime.clone(),
                 preserve_harness_readiness_url: false,
             })
             .send()
@@ -605,7 +665,7 @@ async fn run(options: Options) -> Result<(), String> {
                 }
             }
         }
-        Command::Config(_) => {
+        Command::Config(_, _) => {
             let config: ConfigResponse = serde_json::from_str(&body)
                 .map_err(|error| format!("invalid agent response: {error}"))?;
             if options.json {
@@ -632,6 +692,23 @@ async fn run(options: Options) -> Result<(), String> {
                         println!("update_ref: {}", update.ref_name);
                     }
                     None => println!("update_configured: no"),
+                }
+                match config.runtime {
+                    Some(runtime) => {
+                        println!("runtime_configured: yes");
+                        println!("runtime_source: {:?}", runtime.source);
+                        println!("runtime_mode: {:?}", runtime.mode);
+                        for (name, pin) in [
+                            ("node", runtime.node),
+                            ("pnpm", runtime.pnpm),
+                            ("git", runtime.git),
+                        ] {
+                            if let Some(pin) = pin {
+                                println!("runtime_{name}: {:?} {}", pin.ownership, pin.path);
+                            }
+                        }
+                    }
+                    None => println!("runtime_configured: no"),
                 }
             }
         }
@@ -710,7 +787,10 @@ Usage:
   nexusctl diagnostics status [--json] [--port PORT]
   nexusctl diagnostics collect [--note TEXT] [--json] [--port PORT]
   nexusctl config status [--json] [--port PORT]
-  nexusctl config clear-harness|clear-update [--json] [--port PORT]
+  nexusctl config clear-harness|clear-update|clear-runtime [--json] [--port PORT]
+  nexusctl config set-runtime [--node OWNER PATH] [--pnpm OWNER PATH] [--git OWNER PATH]
+      [--runtime-source official|npmmirror] [--runtime-mode portable|system]
+      [--json] [--port PORT]
 
 Queries and controls the loopback Nexus Agent API."#
     );

@@ -177,6 +177,18 @@ The Agent exposes:
   promote a registered slot, or swap current with last-known-good. Promotion
   and rollback are rejected while Harness is starting/running; registration is
   metadata-only and does not install, start, or restart Harness.
+- `GET /v1/runtime` — observe `git`, `node`, and `pnpm` with one bounded
+  six-second round. Configured absolute pins are probed first and never
+  silently replaced by a PATH candidate; missing, incompatible, or unsafe
+  pins retain a machine-readable reason.
+- `POST /v1/runtime/plan` — build a read-only plan for one registered
+  `release_id`. The Agent reads only that slot's `package.json` and
+  `apps/cli/package.json`, parses `engines.node` and the exact
+  `packageManager` pin, compares them with bounded observations, and returns
+  reuse/missing/incompatible classifications plus suggested actions. Unknown
+  request fields, including caller-provided manifest paths, are rejected. The
+  `plan_id` is the complete deterministic serialized plan facts, not a
+  cryptographic hash; a later installer must recompute and compare them.
 - `GET|POST /v1/updates` — inspect durable update status or run one serialized
   external update job. An update clones the configured Git ref into a temporary
   Nexus `downloads/` candidate, optionally runs explicitly configured build and
@@ -201,8 +213,13 @@ The Agent exposes:
   does not traverse `$HOME/.dsh`, Harness data, or the process environment.
   Future snapshot, Profile, and terminal allowlists are separate contracts and
   do not grant diagnostics general read access.
-- `GET|POST /v1/config` — inspect or mutate the Nexus-owned Harness launch and
-  external update specifications. Mutations validate all paths, arguments,
+- `GET|POST /v1/config` — inspect or mutate the Nexus-owned Harness launch,
+  external update, and runtime pin specifications. Runtime mutations acquire
+  supervisor lifecycle ownership before trying updater ownership, so they
+  retain the established wait/conflict behavior. All config mutations use one
+  process-wide read-modify-write transaction across `ConfigStore` instances;
+  unrelated concurrent fields cannot be overwritten by a stale document.
+  Mutations validate all paths, ownership, arguments,
   refs, and URLs before an atomic write to `config.json`; changing Harness
   configuration while it is running, or update configuration while an update
   job is running, returns a conflict instead of interrupting either process.
@@ -335,7 +352,7 @@ This document does not make an unconditional no-read claim about `.dsh` or
 in an explicit, reviewed contract. That integration is outside this phase.
 
 The first path model reserves directories for `logs`, `checkpoints`,
-`releases`, `downloads`, and `run`, and stores the profile catalog in
+`releases`, `runtimes`, `downloads`, and `run`, and stores the profile catalog in
 `profiles.json`. Release slot manifests live below `releases/<id>/manifest.json`
 and the current/last-known-good pointers are atomically published in
 `release-pointers.json`. Update execution status is published separately in
@@ -408,6 +425,26 @@ parse-compatibility shape:
 }
 ```
 
+The optional `runtime` config contains independent absolute `node`, `pnpm`,
+and `git` pins, each with `system` or `nexus` ownership. `source` is
+`official` by default and may select `npmmirror`; install `mode` is `portable`
+by default and may select `system`. Validation is structural and does not
+require pinned files to remain present, so Settings can open and repair a
+config after a runtime was removed. A Nexus-owned pin must remain lexically
+below the data root's `runtimes/` directory, and every reuse decision later
+canonicalizes and probes the real file.
+
+Downstream install, build, start, terminal, plugin, and profile-materialization
+consumers use the shared runtime command and child-environment helpers. They
+execute pins directly, prefix only the child `PATH`, and never edit process,
+user, or system PATH. A pinned pnpm `.js`, `.cjs`, or `.mjs` entry is expressed
+as pinned Node plus the script argument. Shared pnpm arguments always include
+`--config.minimumReleaseAge=0` and an explicit registry matching `source`,
+without writing user pnpm configuration. The current planner does not scan an
+unconfigured Corepack cache; a known cached `bin/pnpm.mjs` can be pinned and
+verified through this command contract without invoking a downloading
+Corepack shim.
+
 When `mode` is omitted, the current legacy resolver follows its direct
 behavior for compatibility. The old direct parser remains retained and its
 removal is outside this phase. In `node` mode, `program` is the Node runtime,
@@ -454,7 +491,7 @@ The fields can be overridden explicitly for development and tests with
 separated), `NEXUS_HARNESS_WORKING_DIR`, `NEXUS_HARNESS_READINESS_URL`, and
 `NEXUS_HARNESS_READINESS_TIMEOUT_SECS`. Current baseline: `NEXUS_DATA_DIR`
 selects the Nexus root containing `config.json`, `state.json`, `profiles.json`,
-`checkpoints/`, `releases/`, `downloads/`, `update-state.json`,
+`checkpoints/`, `releases/`, `runtimes/`, `downloads/`, `update-state.json`,
 `diagnostics/`, and `logs`. The current configuration and manifest contract
 keeps credentials and sessions out of persisted Nexus metadata. It does not
 establish an unconditional no-read rule for every runtime component around

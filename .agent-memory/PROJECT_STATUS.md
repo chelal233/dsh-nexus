@@ -1,4 +1,4 @@
-updated: 2026-09-05 11:48 by Codex (runtime/UI/switch 隔离集成与组合验证完成)
+updated: 2026-09-05 12:24 by Codex (P0 runtime foundation 隔离段完成实现与组合验证)
 
 # dsh-nexus 项目状态与需求基线
 
@@ -85,15 +85,19 @@ updated: 2026-09-05 11:48 by Codex (runtime/UI/switch 隔离集成与组合验�
 - **P0-3 已完成（提交 feat: switch release tag with install and promotion）**：UpdateAction::Switch + UpdateCommand.tag；`UpdateExecutor::switch_tag(tag)`——校验 tag→持 executor gate 持久化 config.ref_name=tag→已装同 version 槽位直 promote（秒切快速路径）→未装则走 install_owned（clone --branch tag→构建→register_prepared）→成功后自动 promote；handler 层 quiescent 守卫（Harness 运行中拒绝 release_change_conflict）；UI 已选 tag 显示"切换到此标签"主按钮。端到端实测：register version=dsh-v0.1.2-rc.1 → switch → current=harness-x，config ref 已更新。nexus-cli UpdateCommand 字段同步
 - **隔离集成已完成并等待主控审固定 HEAD**：分支 `codex/nexus-takeover/integration` 从固定基线 `df3cff00cb5e740f223897756f2c7f5bf9c44207` 顺序 cherry-pick 8 个已独立复核提交，全部无冲突；本状态不表示已合并 main、部署或完成 GUI/真实 Harness 验收
 - **P0-4a runtime discovery 已集成**：Agent 提供只读 `GET /v1/runtime`；共享 `nexus-launcher-core` 同时允许 `/v1/runtime` 与 `/v1/releases/tags` 的无 body GET，并拒绝 POST 与非空 GET body
+- **P0-4 runtime foundation 已在隔离分支实现，尚未合并 main**：`config.json.runtime` 可选保存 node/pnpm/git 的绝对路径与逐 pin `system|nexus` ownership，来源默认 `official`/可选 `npmmirror`，安装模式默认 `portable`/可选 `system`；路径只做结构与 ownership 边界校验，不因文件已被删除而拒绝加载，Settings 后续仍可修复。`NexusPaths.runtimes_dir` 是唯一便携根
+- **配置并发已封口**：`ConfigStore::transaction` 用进程级共享粗粒度 Mutex 包住 load→mutate→validate→atomic replace；Agent 的 Set/Clear Harness、Set/Clear Update、Set/Clear Runtime 与 Switch ref 写入均已迁移，不同 `ConfigStore::new` 实例并发写不同字段不会再丢更新；readiness URL 保留语义仍在同一事务内
+- **release runtime requirements 与只读计划已实现**：纯解析器只读已注册 release 的 `package.json` 与 `apps/cli/package.json`（单文件 MAX+1 有界读取），支持当前所需 npm `^`、`>=`、`||`、exact 与显式 prerelease 规则，未知语法 fail closed；`POST /v1/runtime/plan` 只接收 `release_id`+source/mode，拒绝未知字段/任意 manifest path，返回 requirements、reuse/missing/incompatible/unverifiable、建议动作和完整 deterministic JSON `plan_id`（明确不是安全 hash，安装前必须重算比对）
+- **统一 pins/env/command 下游接口已建立**：配置 pin 优先走现有 6 秒 bounded observation，对真实 canonical path 执行版本探测；失败保留明确 reason，绝不只改 source 假复用。`resolve_runtime_command` 同时覆盖直接 executable 与 pinned Node + pnpm `.js|.cjs|.mjs` entry；`build_runtime_child_env` 只构造 child PATH；`build_pnpm_args` 统一进程局部 minimumReleaseAge=0 与 registry，不改系统/用户环境
 - **失败根因已修复**：原先配置、PATH/portable 枚举与 shim/cwd 文件检查在 async deadline 外同步执行，UNC/映射盘/异常文件系统可突破 6 秒声明；晚候选的 child deadline 后还会另加 cleanup。现在整个 runtime 请求从配置起共用 6 秒 absolute deadline，同步文件系统工作经全局 3 许可 bounded blocking owner，先取许可再 spawn，后续请求不会无限堆积挂起 blocking task
 - **真实保证边界**：标准 Rust 不能强杀已阻塞的同步文件系统线程；超时任务会继续占用许可直到返回，但永久占位最多 3 个，所有后续请求仍按 deadline 返回。Windows UNC 和映射网络盘候选预拒绝；child 只运行到 `round_deadline - cleanup`，kill/wait 使用同一轮次剩余预算，取消调用方不会取消 detached child owner
 - **P0-4a 安全边界已补齐**：PATH/PATHEXT 受限且候选有上限；Corepack canonical/shebang/script 检测 fail-closed，Corepack 不执行并关闭 network/download prompt/default latest/auto pin/project spec；探测 cwd 拒绝祖先 manifest；cmd/bat 采用绝对系统 command processor、拒绝 shell 元字符并隐藏控制台；输出/轮次/子进程/kill+wait 清理有界；数据根与 runtimes 根 reparse point 拒绝，portable canonical 候选必须留在 runtimes 根内
 - **P0-1 共享接线缺口已修复**：`nexus-launcher-core` Agent allowlist 补 `/v1/runtime` 与既有 `/v1/releases/tags`，两者只允许无 body GET；POST 和非空 GET body 拒绝；Tauri runtime 移除重复 validator，复用共享 gate
 - **手动 runtime 状态面板已集成**：Settings 只在显式 Check/Refresh 时请求 `GET /v1/runtime`；严格解析固定 `git`/`node`/`pnpm` 集合、顺序、可用元数据和绝对路径，失败清除旧成功结果；`system`/`nexus` 来源支持中英文显示
 - **Switch 生命周期所有权修复已集成**：显式 Switch 以 supervisor lifecycle → updater gate 固定顺序取得双锁并转交 detached owner；取消请求不会提前释放。冷 Switch 仅在 promotion 后发布 `Succeeded`，命令、promotion、catalog load 或 Agent current-release 最终同步失败均发布 `Failed`；promotion 后的同步失败不回滚 release pointer
-- **组合验证已完成**：`nexus-agent` 93/93、`nexus-launcher-core` 11/11、`nexus-protocol` 11/11、Tauri 7/7、前端 14/14 与 typecheck 全部通过；前端依赖由本地缓存离线准备，Tauri resources 由当前集成代码构建且保持 ignored。详见 `artifacts/takeover/integration-report.md`
+- **runtime foundation 组合验证已完成**：`cargo test --offline -p nexus-core -p nexus-agent -p nexus-protocol -p nexus-launcher-core` 通过（core 30、agent 97、protocol 13、launcher-core 11，另 doc-tests 全过）；`cargo check --offline -p nexus-cli` 通过。Tauri 只同步共享 route/validator 字面量，本隔离段未重复生成 resource binary 或做 GUI 总验收
 - **仍未验**：未启动真实 Harness，未做真实 cold-install build-to-Node-launch、下载/安装、系统 runtime、GUI 截图/交互、Unix 分支、Windows junction/真实映射盘或部署；未改系统 PATH 或用户配置
-- **P0-4b/c 仍待做**：runtime 下载/安装、Corepack 显式 provisioning、运行时注入、安装确认与来源切换等后续流程仍未实现/验收；手动只读 runtime 状态 UI 已完成
+- **P0-4 后续仍待做**：当前段没有下载、安装、执行 Corepack、启动 Harness、系统级变更或 GUI 总验收；下游需实现用户确认后的 portable/system 供给与冷安装，并让 install/build/start/terminal/plugin/profile materialization 全部消费上述同一 pins/env/command 接口。规划器暂不扫描未配置的 Corepack cache；本机已知 11.7.0 `bin/pnpm.mjs` 可由下游显式解析后 pin 并安全复用
 - **Corepack 官方事实**：官方 `https://github.com/nodejs/corepack` 说明仅 Node `>=14.19` 且 `<25` 随 Node 附带 Corepack；不能假设所有 Node 版本自带 Corepack 或 pnpm 调用不会下载
 - 坑：i18n.ts 是 en+zh 两个同 key 对象，勿用全文件 key 去重；本机有钩子会把 	 转义还原成真实 TAB，Rust 里避免 char 转义字面量，用 split_whitespace 类方案
 - GUI 截图验收按协议合批：批1（P0-1/2/3/4/8）完成后统一实测
@@ -109,4 +113,4 @@ updated: 2026-09-05 11:48 by Codex (runtime/UI/switch 隔离集成与组合验�
 - 更新执行器：clone→可选 build/verify→原子发布槽位，任务持久化于 `update-state.json`
 - 就绪探针：loopback 纯 HTTP(2xx) 或 `tcp://`（防 SSRF；官方 DSH 根页无 token 返回 401，故 tcp 探针）
 - Profile 渲染：`HarnessLaunchSpec.args` 中 `{profile}` / `{release}` / `{release_root}` 占位符
-- **DSH CLI 定位器（待建，多任务共用）**：插件管理/快照恢复物化/终端都要调官方 dsh 命令，参照 desktop-cli.ts 的 RunAsNode 引导，做统一的"运行时+安装方式 → dsh 命令"解析器
+- **共享 runtime 命令基元（已建，consumer 接线待后续）**：`RuntimeConfig` pins + `resolve_runtime_command` + `build_runtime_child_env` + `build_pnpm_args` 是 install/build/start/终端/插件/快照物化的唯一入口；不得在 consumer 复制 PATH、pnpm script 或 registry 参数构造
