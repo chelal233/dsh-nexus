@@ -395,7 +395,11 @@ pub fn resolve_runtime_command(
         })?;
         return Ok(Some(RuntimeCommandSpec {
             program: node.path.clone(),
-            prefix_args: vec![pin.path.clone().into_os_string()],
+            // Node's script loader treats a Win32 verbatim path as a literal
+            // path segment and attempts to lstat `C:`. Keep the configured
+            // path unchanged for identity and containment, but pass the
+            // ordinary drive/UNC spelling at this process boundary.
+            prefix_args: vec![normalize_discovery_path(&pin.path).into_os_string()],
         }));
     }
     Ok(Some(RuntimeCommandSpec {
@@ -2621,6 +2625,7 @@ pub fn is_within(root: &Path, path: &Path) -> bool {
 #[cfg(test)]
 mod tests {
     use std::{
+        ffi::OsString,
         fs,
         path::{Path, PathBuf},
     };
@@ -3683,14 +3688,16 @@ mod tests {
     fn shared_runtime_command_and_child_environment_cover_pnpm_js_entries() {
         let root = unique_test_root("runtime-command");
         let node = root.join("node/node.exe");
-        let pnpm = root.join("pnpm/bin/pnpm.mjs");
+        let pnpm_verbatim = PathBuf::from(
+            r"\\?\C:\Users\PC\AppData\Local\node\corepack\v1\pnpm\11.7.0\bin\pnpm.mjs",
+        );
         let config = RuntimeConfig {
             node: Some(RuntimePin {
                 path: node.clone(),
                 ownership: RuntimeOwnership::Nexus,
             }),
             pnpm: Some(RuntimePin {
-                path: pnpm.clone(),
+                path: pnpm_verbatim.clone(),
                 ownership: RuntimeOwnership::Nexus,
             }),
             source: RuntimeSource::Npmmirror,
@@ -3700,11 +3707,16 @@ mod tests {
             .expect("pnpm command resolves")
             .expect("pnpm pin exists");
         assert_eq!(command.program, node);
-        assert_eq!(command.prefix_args, vec![pnpm.into_os_string()]);
+        assert_eq!(
+            command.prefix_args,
+            vec![OsString::from(
+                r"C:\Users\PC\AppData\Local\node\corepack\v1\pnpm\11.7.0\bin\pnpm.mjs"
+            )]
+        );
         let environment = build_runtime_child_env(&config, None).expect("child PATH builds");
         let path_entries: Vec<_> = std::env::split_paths(&environment[0].1).collect();
         assert_eq!(path_entries[0], root.join("node"));
-        assert_eq!(path_entries[1], root.join("pnpm/bin"));
+        assert_eq!(path_entries[1], pnpm_verbatim.parent().unwrap());
         let args = build_pnpm_args(&config, ["install".into()]);
         assert_eq!(args[0], "--config.minimumReleaseAge=0");
         assert_eq!(args[1], "--registry=https://registry.npmmirror.com");
@@ -3719,6 +3731,18 @@ mod tests {
             ..RuntimeConfig::default()
         };
         assert!(outside.validate_for_paths(&paths).is_err());
+    }
+
+    #[test]
+    fn verbatim_runtime_paths_normalize_only_at_process_argument_boundary() {
+        assert_eq!(
+            normalize_discovery_path(Path::new(r"\\?\C:\runtime\node.exe")),
+            PathBuf::from(r"C:\runtime\node.exe")
+        );
+        assert_eq!(
+            normalize_discovery_path(Path::new(r"\\?\UNC\server\share\pnpm.mjs")),
+            PathBuf::from(r"\\server\share\pnpm.mjs")
+        );
     }
 
     fn unique_test_root(label: &str) -> PathBuf {
