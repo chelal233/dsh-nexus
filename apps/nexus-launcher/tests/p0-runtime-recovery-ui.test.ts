@@ -24,11 +24,11 @@ const props = {
 async function loadViews() {
   const vite = await createServer({ root: process.cwd(), appType: "custom", logLevel: "silent", server: { middlewareMode: true } });
   const app = await vite.ssrLoadModule("/src/App.tsx");
-  return { vite, ProfilesView: app.ProfilesView, UpdatesView: app.UpdatesView, CheckpointsView: app.CheckpointsView };
+  return { vite, ProfilesView: app.ProfilesView, ProfilePlugins: app.ProfilePlugins, UpdatesView: app.UpdatesView, CheckpointsView: app.CheckpointsView };
 }
 
-test("profile hub embeds checkpoints and a truthful plugin inventory", async () => {
-  const { vite, ProfilesView } = await loadViews();
+test("profile hub collapses children; profile plugins show truthful inventory", async () => {
+  const { vite, ProfilesView, ProfilePlugins } = await loadViews();
   try {
     const snapshot = {
       ...baseSnapshot,
@@ -40,13 +40,14 @@ test("profile hub embeds checkpoints and a truthful plugin inventory", async () 
     };
     const markup = renderToStaticMarkup(createElement(ProfilesView, { ...props, snapshot }));
     assert.match(markup, /Profile catalog/);
-    assert.match(markup, /Saved checkpoints/);
-    assert.match(markup, /Plugin inventory/);
-    assert.doesNotMatch(markup, /Manual recovery remains available/);
-    assert.match(markup, /dsh-base/);
-    assert.match(markup, /Built-in/);
-    assert.match(markup, /extra-plugin/);
-    assert.match(markup, /Removable/);
+    assert.match(markup, /▸/);
+    assert.doesNotMatch(markup, /Saved checkpoints/);
+    assert.doesNotMatch(markup, /Plugin inventory/);
+    const pluginsMarkup = renderToStaticMarkup(createElement(ProfilePlugins, { ...props, snapshot, profile: "web" }));
+    assert.match(pluginsMarkup, /dsh-base/);
+    assert.match(pluginsMarkup, /Built-in/);
+    assert.match(pluginsMarkup, /extra-plugin/);
+    assert.match(pluginsMarkup, /Removable/);
   } finally { await vite.close(); }
 });
 
