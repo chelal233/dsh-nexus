@@ -2,6 +2,16 @@ updated: 2026-09-05 by Codex (P0 快照内容引擎已接入 Agent，恢复事�
 
 # dsh-nexus 项目状态与需求基线
 
+## ZCode 独立确认（2026-09-05，P0 合入主线）
+
+- **main 已在 8feeb0b**（codex/nexus-p0/integration 快进合入），P0 全部落地：tag 枚举/槽位容量/一键切换（1e1838b/ec905f3/df3cff0）+ 运行时供给/冷安装/快照恢复/插件卸载（takeover 系列）
+- **ZCode 独立复核通过**：在 E:/git/dsh-nexus-phases/p0-integration 实测 cargo test 全 workspace **247 passed / 0 failed**，前端 22 passed / 0 failed，Tauri allowlist 含 /v1/runtime。与 artifacts/takeover/p0-final-acceptance.md 记录一致
+- ZCode 曾在 main 上有 P0-4a 检测端点半成品草稿（runtime.rs 探针+路由），确认被 Codex 的实现（observe_* 预算+pin+runtime-supply crate）完全超集覆盖，已丢弃并恢复其 tracked runtime.rs，合并阻塞解除
+- 用户已确认浏览器启动 Harness（GUI 实测的一部分）；认证 Web 用系统浏览器回退，iframe 内嵌未主张
+- P1/P2 未开始。遗留观察：.tmp-ui-audit/ 未跟踪目录待清理确认；系统级安装分支与 Unix 行为未实测（按红线本就留真机验证）
+
+# dsh-nexus 项目状态与需求基线
+
 ## 当前接管阶段：P0 基础集成，完整 P0 仍在执行
 
 - 已独立复核通过：runtime `8261a6e` + `a98beb8`；snapshot engine `0b8fb81` + `9875c84`。运行时 GET/plan 的前置读取、观察和 child cleanup 共享同一 deadline 与全局三许可；snapshot 的必需清单、槽位中断恢复、回滚路径和持久顺序四项问题已修复。
