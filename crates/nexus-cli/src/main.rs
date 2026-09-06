@@ -505,7 +505,8 @@ async fn run(options: Options) -> Result<(), String> {
         Command::Profile(
             ProfileAction::PluginInventory
             | ProfileAction::PluginRemove
-            | ProfileAction::OpenPath,
+            | ProfileAction::OpenPath
+            | ProfileAction::Create,
             _,
         ) => {
             return Err("invalid internal profile command".to_owned())
