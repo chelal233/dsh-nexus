@@ -227,7 +227,7 @@ export async function probe(node, entry, home, profile, timeoutMs) {
 
 export async function check(options) {
   const { home, selected, release_id, node, output, work, force = false, timeout_ms = 45000 } = options;
-  const trigger = ['version_switch', 'startup'].includes(options.trigger) ? options.trigger : null;
+  const trigger = ['version_switch', 'profile_switch', 'startup'].includes(options.trigger) ? options.trigger : null;
   const slot = fs.realpathSync(options.slot);
   const source = sourceInfo(home, selected);
   const key = crypto.createHash('sha256').update(JSON.stringify([checkerVersion, slot, release_id, source.source, source.fingerprint])).digest('hex');

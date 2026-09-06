@@ -90,6 +90,9 @@ test('cache reports preserve actual check provenance without rewriting its marke
     assert.equal(unknown.cache_reused,true);
     assert.equal(unknown.checked_at_unix,checked.checked_at_unix);
     assert.equal(fs.readFileSync(marker,'utf8'),legacyBefore);
+    const selected=await check({...f.options,force:true,trigger:'profile_switch'});
+    assert.equal(selected.trigger,'profile_switch');
+    assert.equal(selected.cache_reused,false);
   } finally { f.close(); }
 });
 

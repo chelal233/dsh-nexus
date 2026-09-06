@@ -5,7 +5,7 @@ use std::{
     process::Command,
     sync::{
         atomic::{AtomicBool, Ordering},
-        Arc,
+        Arc, Mutex,
     },
 };
 
@@ -59,6 +59,7 @@ struct AppState {
     runtime: Arc<AgentRuntime>,
     startup_attempted: Arc<AtomicBool>,
     desired_running: Arc<AtomicBool>,
+    harness_startup_error: Arc<Mutex<Option<String>>>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -75,6 +76,7 @@ impl AppState {
             runtime: Arc::new(runtime),
             startup_attempted: Arc::new(AtomicBool::new(false)),
             desired_running: Arc::new(AtomicBool::new(true)),
+            harness_startup_error: Arc::new(Mutex::new(None)),
         })
     }
 
@@ -91,31 +93,54 @@ impl AppState {
     }
 }
 
+#[derive(serde::Serialize)]
+struct StartupResponse {
+    #[serde(flatten)]
+    agent: AgentStatus,
+    harness_startup_error: Option<String>,
+}
+
+fn startup_response(state: &AppState, agent: AgentStatus) -> StartupResponse {
+    StartupResponse { agent, harness_startup_error: state.harness_startup_error.lock().ok().and_then(|value| value.clone()) }
+}
+
 #[tauri::command]
-async fn startup_status(state: tauri::State<'_, AppState>) -> Result<AgentStatus, String> {
+async fn startup_status(state: tauri::State<'_, AppState>) -> Result<StartupResponse, String> {
     if state.should_auto_start() {
         if let Err(error) = state.runtime.ensure_started(START_WAIT_SECS).await {
             // `status` retains a bounded, user-visible startup error and never
             // hides a failed Agent resolution behind a fallback port or process.
             let mut status = state.runtime.status().await;
             status.message = Some(error.to_string());
-            return Ok(status);
+            return Ok(startup_response(&state, status));
         }
-        start_configured_harness(&state).await;
+        schedule_configured_harness(state.inner().clone());
     }
-    Ok(state.runtime.status().await)
+    Ok(startup_response(&state, state.runtime.status().await))
 }
 
 /// The GUI is the user-facing launcher, so its first successful Agent
 /// handshake also performs the configured Harness bootstrap. Harness remains
 /// an independent child of Agent; this is only orchestration and a 409 means
 /// another owner already has it running.
-async fn start_configured_harness(state: &AppState) {
+fn schedule_configured_harness(state: AppState) {
+    // Agent readiness must not wait for a potentially long Harness preflight.
+    if let Ok(mut error) = state.harness_startup_error.lock() { *error = None; }
+    tauri::async_runtime::spawn(async move {
+        if let Err(error) = start_configured_harness(&state).await {
+            let bounded: String = error.chars().take(2048).collect();
+            let redacted = nexus_core::redact_diagnostics_payload(bounded.as_bytes()).0;
+            if let Ok(mut slot) = state.harness_startup_error.lock() { *slot = Some(String::from_utf8_lossy(&redacted).into_owned()); }
+        }
+    });
+}
+
+async fn start_configured_harness(state: &AppState) -> Result<(), String> {
     let health = match state.runtime.probe().await {
         Ok(health) => health,
         Err(error) => {
             eprintln!("nexus-launcher-app: Harness auto-start skipped: {error}");
-            return;
+            return Err(error.to_string());
         }
     };
     let client = state
@@ -126,25 +151,27 @@ async fn start_configured_harness(state: &AppState) {
         Ok(config) => config,
         Err(error) => {
             eprintln!("nexus-launcher-app: Harness auto-start config check failed: {error}");
-            return;
+            return Err(error.to_string());
         }
     };
     if !config.get("harness").is_some_and(|value| !value.is_null()) {
-        return;
+        return Ok(());
     }
+    if !state.desired_running.load(Ordering::Acquire) { return Ok(()); }
     if let Err(error) = client
         .post_json::<_, Value>("/v1/harness", &json!({ "action": "start" }))
         .await
     {
         let message = error.to_string();
         if !message.contains("HTTP 409") {
-            eprintln!("nexus-launcher-app: Harness auto-start failed: {message}");
+            return Err(message);
         }
     }
+    Ok(())
 }
 
 #[tauri::command]
-async fn retry_startup(state: tauri::State<'_, AppState>) -> Result<AgentStatus, String> {
+async fn retry_startup(state: tauri::State<'_, AppState>) -> Result<StartupResponse, String> {
     state.set_desired_running(true);
     state.startup_attempted.store(false, Ordering::Release);
     startup_status(state).await
@@ -165,6 +192,9 @@ async fn proxy_request(
         return Err(format!("Agent route is not allowed: {path}"));
     }
 
+    if method == Method::POST && path == "/v1/harness" {
+        if let Ok(mut error) = state.harness_startup_error.lock() { *error = None; }
+    }
     if path == "/v1/agent" {
         validate_native_agent_request(&method, body.as_ref())?;
         return execute_agent_action(&state, body.as_ref()).await;
@@ -271,7 +301,7 @@ async fn execute_agent_action(state: &AppState, body: Option<&Value>) -> Result<
             // the same best-effort configured-Harness bootstrap used during
             // the first GUI handshake so an explicit Agent restart does not
             // leave the saved Harness idle.
-            start_configured_harness(state).await;
+            schedule_configured_harness(state.clone());
             Ok(json!({ "accepted": true, "action": command.action }))
         }
         AgentAction::Stop => {
@@ -486,6 +516,49 @@ fn main() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn background_bootstrap_returns_before_harness_and_retains_failure() {
+        use std::{io::{Read, Write}, net::TcpListener, time::{Duration, Instant}};
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let root = std::env::temp_dir().join(format!("nexus-bootstrap-dialog-{}-{}", std::process::id(), listener.local_addr().unwrap().port()));
+        let runtime = Arc::new(AgentRuntime::new(NexusConfig { data_dir: Some(root.clone()), port: listener.local_addr().unwrap().port() }, None).unwrap());
+        let identity = runtime.data_root_id().to_owned();
+        let state = AppState { runtime, startup_attempted: Arc::new(AtomicBool::new(true)), desired_running: Arc::new(AtomicBool::new(true)), harness_startup_error: Arc::new(Mutex::new(None)) };
+        let (reached_tx, reached_rx) = std::sync::mpsc::channel();
+        let (release_tx, release_rx) = std::sync::mpsc::channel();
+        let server = std::thread::spawn(move || {
+            for route in ["GET /v1/health", "GET /v1/config", "POST /v1/harness"] {
+                let (mut stream, _) = listener.accept().unwrap();
+                stream.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
+                let mut bytes = [0u8; 8192];
+                let length = stream.read(&mut bytes).unwrap();
+                assert!(String::from_utf8_lossy(&bytes[..length]).starts_with(route));
+                let (status, body) = if route.ends_with("health") {
+                    ("200 OK", json!({"api_version":"v1","service":"nexus-agent","status":"ok","data_root_id":identity,"instance_id":"fixture"}).to_string())
+                } else if route.ends_with("config") {
+                    ("200 OK", json!({"harness":{"mode":"node"}}).to_string())
+                } else {
+                    reached_tx.send(()).unwrap();
+                    release_rx.recv_timeout(Duration::from_secs(10)).unwrap();
+                    ("500 Internal Server Error", json!({"api_version":"v1","code":"fixture","message":"Node entry missing"}).to_string())
+                };
+                write!(stream, "HTTP/1.1 {status}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len()).unwrap();
+            }
+        });
+        let begin = Instant::now();
+        schedule_configured_harness(state.clone());
+        assert!(begin.elapsed() < Duration::from_secs(1));
+        reached_rx.recv_timeout(Duration::from_secs(10)).unwrap();
+        assert!(state.harness_startup_error.lock().unwrap().is_none());
+        release_tx.send(()).unwrap();
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while state.harness_startup_error.lock().unwrap().is_none() && Instant::now() < deadline { std::thread::sleep(Duration::from_millis(10)); }
+        assert!(state.harness_startup_error.lock().unwrap().as_deref().unwrap().contains("Node entry missing"));
+        server.join().unwrap();
+        drop(state);
+        std::fs::remove_dir_all(root).unwrap();
+    }
 
     #[test]
     fn native_routes_are_direct_agent_routes() {

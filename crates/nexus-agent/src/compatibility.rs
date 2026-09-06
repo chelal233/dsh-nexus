@@ -18,6 +18,9 @@ pub(crate) fn latest_for_selection(
         || (report.status != "needs_choice" && Some(report.release_id.as_str()) != release) {
         return None;
     }
+    if report.status == "needs_choice" && report.trigger.as_deref() == Some("profile_switch") {
+        return (Some(report.release_id.as_str()) == release).then_some(report);
+    }
     let source = source_profile(home, selected).ok()?;
     (report.source_profile == source).then_some(report)
 }
@@ -127,9 +130,27 @@ pub(crate) async fn for_release(
     Ok(())
 }
 
+pub(crate) async fn for_profile_selection(state: &crate::AppState, profile: &str) -> io::Result<()> {
+    let Some(spec) = state.config.load()?.harness else { return Ok(()); };
+    if spec.mode != HarnessLaunchMode::Node { return Ok(()); }
+    let Some(release) = state.releases.load()?.current_release else { return Ok(()); };
+    prepare_with_trigger(&state.paths, state.snapshots.configured_dsh_home()?, profile,
+        &release, &state.releases.release_root(&release)?, &spec.program, true,
+        &CancellationToken::default(), "profile_switch").await?;
+    Ok(())
+}
+
 pub(crate) async fn prepare(
     paths: &NexusPaths, home: &Path, profile: &str, release: &str,
     slot: &Path, node: &Path, force: bool, cancellation: &CancellationToken,
+) -> io::Result<Option<CompatibilityReport>> {
+    prepare_with_trigger(paths, home, profile, release, slot, node, force, cancellation,
+        if force { "version_switch" } else { "startup" }).await
+}
+
+async fn prepare_with_trigger(
+    paths: &NexusPaths, home: &Path, profile: &str, release: &str,
+    slot: &Path, node: &Path, force: bool, cancellation: &CancellationToken, trigger: &str,
 ) -> io::Result<Option<CompatibilityReport>> {
     validate_profile_name(profile)?;
     let root = paths.root.join("compatibility");
@@ -161,7 +182,7 @@ pub(crate) async fn prepare(
     write_json_atomic(&root, &input, &serde_json::json!({
         "home":home,"selected":profile,"release_id":release,"slot":slot,
         "node":node,"work":work,"output":output,"force":force,
-        "trigger": if force { "version_switch" } else { "startup" },
+        "trigger": trigger,
     }))?;
     let mut command = std::process::Command::new(node);
     command.arg(&script).arg(&input).current_dir(&root).stdin(Stdio::null()).stdout(Stdio::null());
@@ -235,6 +256,13 @@ mod tests {
         write_json_atomic(&root.join("compatibility"), &root.join("compatibility/latest.json"), &failed).unwrap();
         assert_eq!(latest_for_selection(&paths, &home, "original", Some("release-a")), Some(failed));
         assert!(latest_for_selection(&paths, &home, "other", Some("release-a")).is_none());
+        let mut target_profile = latest(&paths).unwrap();
+        target_profile.trigger = Some("profile_switch".to_owned());
+        target_profile.last_trigger = Some("profile_switch".to_owned());
+        target_profile.release_id = "release-a".to_owned();
+        write_json_atomic(&root.join("compatibility"), &root.join("compatibility/latest.json"), &target_profile).unwrap();
+        assert_eq!(latest_for_selection(&paths, &home, "other", Some("release-a")), Some(target_profile));
+        assert!(latest_for_selection(&paths, &home, "other", Some("release-b")).is_none());
         fs::remove_dir_all(root).unwrap();
     }
 

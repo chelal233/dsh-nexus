@@ -727,7 +727,14 @@ fn recovery_log_payload(mut bytes: Vec<u8>, limit: usize, truncated: bool) -> (S
         let line = line.trim_start().to_ascii_lowercase();
         line.starts_with("fatal:") || line.starts_with("[fatal]") || line.starts_with("fatal ")
     });
-    let redacted = redact_diagnostics_payload(&bytes).0;
+    // Windows child processes may mix legacy-encoded diagnostics with a UTF-8
+    // Node stack. Preserve the readable stack, still applying line redaction.
+    let mostly_text = !bytes.contains(&0) && bytes.iter().filter(|b| b.is_ascii_graphic() || b.is_ascii_whitespace()).count() * 100 >= bytes.len().saturating_mul(85);
+    let redacted = if std::str::from_utf8(&bytes).is_err() && mostly_text {
+        redact_diagnostics_payload(raw.as_bytes()).0
+    } else {
+        redact_diagnostics_payload(&bytes).0
+    };
     let mut content = String::from_utf8_lossy(&redacted).into_owned();
     if content.len() > limit {
         let mut end = limit;
@@ -1194,13 +1201,14 @@ fn profile_list_response(
         .map(|profile| profile.name.clone())
         .collect();
     let mut response = ProfileListResponse::new(catalog.active_profile, names).with_manifests(manifests);
-    response.disabled_plugins = compatibility::disabled_plugins(state.snapshots.configured_dsh_home()?, &response.active_profile)?;
     response.compatibility = compatibility::latest_for_selection(
         &state.paths,
         state.snapshots.configured_dsh_home()?,
         &response.active_profile,
         state.releases.load()?.current_release.as_deref(),
     );
+    let policy_profile = response.compatibility.as_ref().map(|report| report.source_profile.as_str()).unwrap_or(&response.active_profile);
+    response.disabled_plugins = compatibility::disabled_plugins(state.snapshots.configured_dsh_home()?, policy_profile)?;
     Ok(response)
 }
 
@@ -1223,6 +1231,21 @@ async fn profile_list(State(state): State<AppState>) -> axum::response::Response
 }
 
 async fn profile_control(
+    state: State<AppState>,
+    command: Json<ProfileCommand>,
+) -> axum::response::Response {
+    if command.0.action == ProfileAction::Select {
+        // Selecting a profile now owns a long startup probe. Keep its lifecycle
+        // and update gates until it finishes even if the caller disconnects.
+        return match tokio::spawn(profile_control_inner(state, command)).await {
+            Ok(response) => response,
+            Err(error) => data_error_response(io::Error::other(error.to_string()), "profile_owner_failed"),
+        };
+    }
+    profile_control_inner(state, command).await
+}
+
+async fn profile_control_inner(
     State(state): State<AppState>,
     Json(command): Json<ProfileCommand>,
 ) -> axum::response::Response {
@@ -1290,6 +1313,9 @@ async fn profile_control(
             {
                 return response;
             }
+            if let Err(error) = compatibility::for_profile_selection(&state, profile).await {
+                return data_error_response(error, "profile_compatibility_failed");
+            }
             let catalog = match ProfileCatalog::new(
                 profile,
                 manifests.iter().map(|item| item.name.clone()).collect(),
@@ -1355,7 +1381,12 @@ async fn profile_plugin_isolation(state: AppState, command: ProfileCommand) -> a
     let result = (|| -> io::Result<ProfileListResponse> {
         let home = state.snapshots.configured_dsh_home()?;
         let catalog = state.profiles.load()?;
-        if compatibility::source_profile(home, profile)? != compatibility::source_profile(home, &catalog.active_profile)? {
+        let source = compatibility::source_profile(home, profile)?;
+        let failed_target = compatibility::latest(&state.paths).is_some_and(|report|
+            report.status == "needs_choice" && report.trigger.as_deref() == Some("profile_switch")
+                && report.source_profile == source
+                && state.releases.load().ok().and_then(|catalog| catalog.current_release).as_deref() == Some(report.release_id.as_str()));
+        if source != compatibility::source_profile(home, &catalog.active_profile)? && !failed_target {
             return Err(io::Error::new(io::ErrorKind::InvalidInput,
                 "plugin isolation must belong to the selected profile"));
         }
@@ -4058,6 +4089,16 @@ mod cors_tests {
     }
 
     #[test]
+    fn mixed_windows_log_keeps_stack_and_redacts_credentials() {
+        let mut bytes = vec![0xce, 0xc4, 0xbc, 0xfe, b'\n'];
+        bytes.extend_from_slice(b"Error: task-board ledger is already owned by process 62756\n    at HostTaskLedger.acquireLock (plugin/index.js:1985)\ntoken=do-not-expose-this-secret\n");
+        let (text, _) = recovery_log_payload(bytes, 4096, false);
+        assert!(text.contains("task-board ledger is already owned"));
+        assert!(!text.contains("do-not-expose-this-secret"));
+        assert!(!text.contains("binary diagnostics"));
+    }
+
+    #[test]
     fn recovery_response_redacts_harness_error_and_startup_error_consistently() {
         let secret = "Authorization: Bearer DUMMY-RECOVERY-SECRET";
         let startup_error = redact_recovery_error(Some(secret));
@@ -4331,6 +4372,58 @@ server.listen(0, '127.0.0.1', () => console.log('dsh web: http://127.0.0.1:' + s
         assert_eq!(state.releases.load().unwrap(), before_releases);
         assert_eq!(state.profiles.load().unwrap(), before_profiles);
         assert!(state.checkpoint_restores.load().unwrap().is_none());
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[tokio::test]
+    async fn profile_selection_preflight_failure_does_not_publish_target() {
+        let (state, root) = content_test_state("profile-preflight-failure");
+        let home = state.snapshots.configured_dsh_home().unwrap().clone();
+        write_profile_file(&home.join("profiles/target/package.json"),
+            r#"{"name":"target","dsh":{"profile":{"bundles":["plugin-one","plugin-two"]}}}"#);
+        state.releases.register("profile-runtime", "test", None, None).unwrap();
+        state.releases.promote("profile-runtime").unwrap();
+        let before = state.profiles.load().unwrap();
+        let runtime_before = state.runtime.read().await.profile.clone();
+        let mut config = state.config.load().unwrap();
+        let mut harness = HarnessLaunchSpec::new(root.join("unused-runtime/node.exe"));
+        harness.mode = nexus_protocol::HarnessLaunchMode::Node;
+        harness.args = vec!["{release_root}/apps/cli/lib/bin.js".to_owned()];
+        config.harness = Some(harness);
+        state.config.write(&config).unwrap();
+        let response = super::profile_control(State(state.clone()), Json(nexus_protocol::ProfileCommand {
+            action: nexus_protocol::ProfileAction::Select, profile: Some("target".to_owned()),
+            package: None, target: None,
+        })).await;
+        assert!(!response.status().is_success());
+        let body = axum::body::to_bytes(response.into_body(), 64 * 1024).await.unwrap();
+        assert!(String::from_utf8_lossy(&body).contains("profile_compatibility_failed"));
+        assert_eq!(state.profiles.load().unwrap(), before);
+        assert_eq!(state.runtime.read().await.profile, runtime_before);
+        // A profile-switch report grants choices for that unselected target,
+        // and consecutive choices must preserve the report and current profile.
+        let report = nexus_protocol::CompatibilityReport {
+            checker_version: 1, status: "needs_choice".to_owned(), source_profile: "target".to_owned(),
+            effective_profile: "nexus-target".to_owned(), release_id: "profile-runtime".to_owned(),
+            fingerprint: "fixture".to_owned(), checked_at_unix: 1, trigger: Some("profile_switch".to_owned()),
+            last_trigger: Some("profile_switch".to_owned()), last_used_at_unix: Some(1), cache_reused: false,
+            disabled: Vec::new(), candidates: Vec::new(), error: Some("Choose plugin isolation".to_owned()),
+        };
+        let directory = state.paths.root.join("compatibility");
+        nexus_core::write_json_atomic(&directory, &directory.join("latest.json"), &report).unwrap();
+        for package in ["plugin-one", "plugin-two"] {
+            let response = super::profile_control(State(state.clone()), Json(nexus_protocol::ProfileCommand {
+                action: nexus_protocol::ProfileAction::PluginDisable, profile: Some("target".to_owned()),
+                package: Some(package.to_owned()), target: None,
+            })).await;
+            assert_eq!(response.status(), StatusCode::OK);
+        }
+        assert_eq!(state.profiles.load().unwrap(), before);
+        assert_eq!(super::compatibility::latest(&state.paths), Some(report));
+        let policy: serde_json::Value = serde_json::from_slice(&fs::read(home.join("profiles/.nexus-plugin-isolation/target.json")).unwrap()).unwrap();
+        assert_eq!(policy, serde_json::json!(["plugin-one", "plugin-two"]));
+        let response = super::profile_list_response(&state, before).unwrap();
+        assert_eq!(response.disabled_plugins, vec!["plugin-one", "plugin-two"]);
         fs::remove_dir_all(root).unwrap();
     }
 

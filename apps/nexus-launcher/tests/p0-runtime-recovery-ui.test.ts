@@ -24,7 +24,7 @@ const props = {
 async function loadViews() {
   const vite = await createServer({ root: process.cwd(), appType: "custom", logLevel: "silent", server: { middlewareMode: true } });
   const app = await vite.ssrLoadModule("/src/App.tsx");
-  return { vite, ProfilesView: app.ProfilesView, ProfilePlugins: app.ProfilePlugins, UpdatesView: app.UpdatesView, CheckpointsView: app.CheckpointsView };
+  return { vite, CompatibilitySummary: app.CompatibilitySummary, CompatibilityDialog: app.CompatibilityDialog, ProfilesView: app.ProfilesView, ProfilePlugins: app.ProfilePlugins, UpdatesView: app.UpdatesView, CheckpointsView: app.CheckpointsView };
 }
 
 test("profile hub collapses children; profile plugins show truthful inventory", async () => {
@@ -82,13 +82,13 @@ test("cold confirmation renders exact version, destination, effects, and explici
 });
 
 test("compatibility summary identifies the checked release, projection, and disabled plugin", async () => {
-  const { vite, UpdatesView } = await loadViews();
+  const { vite, CompatibilitySummary } = await loadViews();
   try {
     const snapshot = { ...baseSnapshot, profiles: { compatibility: {
       status: "isolated", source_profile: "desktop", effective_profile: "nexus-projection", release_id: "rc1",
       disabled: [{ package: "third-party-plugin", reason: "missing startup API" }],
     } } };
-    const markup = renderToStaticMarkup(createElement(UpdatesView, { ...props, snapshot }));
+    const markup = renderToStaticMarkup(createElement(CompatibilitySummary, { ...props, snapshot }));
     assert.match(markup, /Startup compatibility check/);
     assert.match(markup, /desktop/);
     assert.match(markup, /nexus-projection/);
@@ -100,7 +100,7 @@ test("compatibility summary identifies the checked release, projection, and disa
 });
 
 test("failed compatibility offers explicit plugin choices and retry without claiming success", async () => {
-  const { vite, UpdatesView } = await loadViews();
+  const { vite, CompatibilitySummary } = await loadViews();
   try {
     const snapshot = { ...baseSnapshot,
       recovery: { harness_stop_required: false, harness: { state: "stopped" } },
@@ -109,7 +109,7 @@ test("failed compatibility offers explicit plugin choices and retry without clai
         error: "Unclassified plugin startup error", disabled: [], candidates: [{ package: "third-party", reason: "Not identified as faulty; optional isolation for troubleshooting" }],
       } },
     };
-    const markup = renderToStaticMarkup(createElement(UpdatesView, { ...props, snapshot }));
+    const markup = renderToStaticMarkup(createElement(CompatibilitySummary, { ...props, snapshot }));
     assert.match(markup, /Choose how to handle plugin errors/);
     assert.match(markup, /type="checkbox"/);
     assert.doesNotMatch(markup, /checked=""/);
@@ -122,13 +122,13 @@ test("failed compatibility offers explicit plugin choices and retry without clai
 });
 
 test("saved isolation is visible and reversible before another check", async () => {
-  const { vite, UpdatesView } = await loadViews();
+  const { vite, CompatibilitySummary } = await loadViews();
   try {
     const snapshot = { ...baseSnapshot,
       recovery: { harness_stop_required: false, harness: { state: "stopped" } },
       profiles: { active_profile: "desktop", disabled_plugins: ["third-party"] },
     };
-    const markup = renderToStaticMarkup(createElement(UpdatesView, { ...props, snapshot }));
+    const markup = renderToStaticMarkup(createElement(CompatibilitySummary, { ...props, snapshot }));
     assert.match(markup, /Saved plugin choices; effective on next check/);
     assert.match(markup, /Restore plugin on next check/);
     assert.match(markup, /third-party/);
@@ -156,10 +156,10 @@ test("checkpoint fixtures show legacy truth and pending retry or abort", async (
 
 
 test("compatibility provenance distinguishes switch checks, startup cache reuse, and old records", async () => {
-  const { vite, UpdatesView } = await loadViews();
+  const { vite, CompatibilitySummary } = await loadViews();
   try {
     const report = { status: "isolated", source_profile: "desktop", release_id: "rc1", checked_at_unix: 1788670000, trigger: "version_switch", last_trigger: "startup", last_used_at_unix: 1788670200, cache_reused: true, disabled: [] };
-    const render = (compatibility: object) => renderToStaticMarkup(createElement(UpdatesView, { ...props, snapshot: { ...baseSnapshot, profiles: { compatibility } } }));
+    const render = (compatibility: object) => renderToStaticMarkup(createElement(CompatibilitySummary, { ...props, snapshot: { ...baseSnapshot, profiles: { compatibility } } }));
     const cached = render(report);
     assert.match(cached, /During version switch/);
     assert.match(cached, /Before startup or restart/);
@@ -183,4 +183,24 @@ test("busy cold switch keeps cancellation enabled while other mutations are disa
     assert.match(markup, /<button(?![^>]*disabled)[^>]*>Cancel<\/button>/);
     assert.match(markup, /<button[^>]*disabled[^>]*>Save update source<\/button>/);
   } finally { await vite.close(); }
+});
+
+
+test("check details live in a dialog and actual startup failure overrides preflight success", async () => {
+ const { vite, CompatibilityDialog, ProfilesView } = await loadViews();
+ try {
+  const snapshot = { ...baseSnapshot, harnessRuntime: { harness: { state: "failed" } }, recovery: { log_tail: [{ stream: "stderr", content: "task-board ledger is already owned", truncated: false }] }, profiles: { compatibility: { status: "passed", trigger: "profile_switch", last_trigger: "profile_switch", source_profile: "desktop", release_id: "rc1" } } };
+  const page = renderToStaticMarkup(createElement(ProfilesView, { ...props, snapshot }));
+  assert.doesNotMatch(page, /Startup compatibility check|task-board ledger/);
+  const dialog = renderToStaticMarkup(createElement(CompatibilityDialog, { ...props, snapshot, pending: false, onClose() {} }));
+  assert.match(dialog, /role="dialog"/);
+  assert.match(dialog, /Harness startup failed/);
+  assert.match(dialog, /task-board ledger/);
+  assert.match(dialog, /During profile switch/);
+  const busy = renderToStaticMarkup(createElement(CompatibilityDialog, { ...props, snapshot, pending: true, onClose() {} }));
+  assert.match(busy, /check continues in the background/);
+  assert.doesNotMatch(busy, /Startup check passed/);
+  const earlyFailure = renderToStaticMarkup(createElement(CompatibilityDialog, { ...props, snapshot: { ...baseSnapshot, startup: { ...startup, harness_startup_error: "Node entry missing" } }, pending: false, onClose() {} }));
+  assert.match(earlyFailure, /Node entry missing/);
+ } finally { await vite.close(); }
 });

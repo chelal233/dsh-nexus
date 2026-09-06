@@ -4,6 +4,7 @@ export type HarnessControlGate = {
 };
 
 export function invalidatesHarnessCredentials(path: string, action: unknown): boolean {
+  if (path === "/v1/profiles" && action === "select") return true;
   if (path === "/v1/releases" && (action === "promote" || action === "rollback")) return true;
   if (path === "/v1/updates" && (action === "switch" || action === "confirm")) return true;
   if (action !== "start" && action !== "stop" && action !== "restart") return false;

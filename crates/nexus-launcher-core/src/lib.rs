@@ -342,7 +342,8 @@ impl AgentClient {
             .base_url
             .join(path)
             .map_err(|error| AgentClientError::InvalidRequest(error.to_string()))?;
-        let compatibility_mutation = method == Method::POST && matches!(path, "/v1/releases" | "/v1/harness");
+        let compatibility_mutation = method == Method::POST && (matches!(path, "/v1/releases" | "/v1/harness")
+            || (path == "/v1/profiles" && body.as_ref().and_then(|bytes| serde_json::from_slice::<Value>(bytes).ok()).is_some_and(|body| body.get("action").and_then(Value::as_str) == Some("select"))));
         let mut request = self.http.request(method, url);
         if compatibility_mutation { request = request.timeout(Duration::from_secs(660)); }
         if let Some(identity) = &self.expected_identity {

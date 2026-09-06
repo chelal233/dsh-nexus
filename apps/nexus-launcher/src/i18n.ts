@@ -13,6 +13,13 @@ export type TranslationParams = Record<string, string | number>;
 export type Translator = (key: string, params?: TranslationParams) => string;
 
 const english: Record<string, string> = {
+  "During profile switch": "During profile switch",
+  "Retry profile switch": "Retry profile switch",
+  "Retry Harness startup": "Retry Harness startup",
+  "Checking plugin compatibility. You can close this dialog; the check continues in the background.": "Checking plugin compatibility. You can close this dialog; the check continues in the background.",
+  "Harness startup failed. The preflight result below does not mean this startup succeeded.": "Harness startup failed. The preflight result below does not mean this startup succeeded.",
+  "No compatibility check result yet.": "No compatibility check result yet.",
+
   "Operation in progress": "Operation in progress",
   "Version or startup operation in progress. Please wait; update progress remains available.": "Version or startup operation in progress. Please wait; update progress remains available.",
   "Version or startup operation in progress. Showing the last confirmed catalogs; Harness access is temporarily unavailable. Update progress continues to refresh.": "Version or startup operation in progress. Showing the last confirmed catalogs; Harness access is temporarily unavailable. Update progress continues to refresh.",
@@ -520,6 +527,13 @@ const english: Record<string, string> = {
 };
 
 const chinese: Record<string, string> = {
+  "During profile switch": "切换配置档时",
+  "Retry profile switch": "重试切换配置档",
+  "Retry Harness startup": "重试启动 Harness",
+  "Checking plugin compatibility. You can close this dialog; the check continues in the background.": "正在检查插件兼容性。可以关闭弹窗，检查会在后台继续。",
+  "Harness startup failed. The preflight result below does not mean this startup succeeded.": "Harness 实际启动失败。下面的预检结果不代表本次启动成功，请查看启动日志。",
+  "No compatibility check result yet.": "尚无兼容性检查结果。",
+
   "Operation in progress": "操作进行中",
   "Version or startup operation in progress. Please wait; update progress remains available.": "版本切换或启动操作正在进行，请稍候；仍可查看更新进度。",
   "Version or startup operation in progress. Showing the last confirmed catalogs; Harness access is temporarily unavailable. Update progress continues to refresh.": "正在切换版本或检查启动兼容性。当前显示最近确认的目录信息，Harness 入口暂不可用；更新进度会继续刷新。",

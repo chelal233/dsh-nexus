@@ -54,6 +54,7 @@ type StartupStatus = {
   data_root_id?: string;
   instance_id?: string;
   message?: string;
+  harness_startup_error?: string;
 };
 
 type Snapshot = {
@@ -925,6 +926,10 @@ function App() {
   const [error, setError] = useState<string | null>(null);
   const [bridgeError, setBridgeError] = useState<string | null>(null);
   const [agentUnavailable, setAgentUnavailable] = useState<string | null>(null);
+  const [checkOpen, setCheckOpen] = useState(false);
+  const [checkPending, setCheckPending] = useState(false);
+  const checkEvent = useRef("");
+  const wasCheckBusy = useRef(false);
   const [notice, setNotice] = useState<string | null>(null);
   const [busyAction, setBusyAction] = useState<string | null>(null);
   const [credentialInvalidationPending, setCredentialInvalidationPending] = useState(false);
@@ -1100,9 +1105,14 @@ function App() {
       setError(t("Launcher controls are disabled until the Agent identity is verified."));
       return false;
     }
+    const compatibilityAction = (path === "/v1/profiles" && body.action === "select") ||
+      (path === "/v1/releases" && ["promote", "rollback"].includes(String(body.action))) ||
+      (path === "/v1/updates" && ["switch", "confirm"].includes(String(body.action))) ||
+      (path === "/v1/harness" && ["start", "restart"].includes(String(body.action)));
     const invalidatesCredentials = invalidatesHarnessCredentials(path, body.action);
     const beginAction = () => {
       setBusyAction(label);
+      if (compatibilityAction) { setCheckOpen(true); setCheckPending(true); }
       setNotice(null);
       if (invalidatesCredentials) {
         credentialInvalidation.current = {
@@ -1148,9 +1158,24 @@ function App() {
         setError(actionError);
       }
       setBusyAction(null);
+      if (compatibilityAction) setCheckPending(false);
     }
     return actionSucceeded;
   }, [refresh, snapshot, t]);
+
+  useEffect(() => {
+    const report = asObject(asObject(snapshot.profiles).compatibility);
+    const runtime = harnessRuntimeValue(snapshot.harnessRuntime);
+    const key = snapshot.startup?.harness_startup_error ? `bootstrap:${snapshot.startup.harness_startup_error}` : currentStartupFailure(snapshot)
+      ? `failure:${stringValue(snapshot.harnessRuntime, "log_session_run_id")}:${numberValue(runtime, "updated_at_unix")}`
+      : Object.keys(report).length ? `check:${stringValue(report, "source_profile")}:${stringValue(report, "release_id")}:${numberValue(report, "last_used_at_unix") ?? numberValue(report, "checked_at_unix")}` : "";
+    if (snapshot.lifecycleBusy && !wasCheckBusy.current) setCheckOpen(true);
+    wasCheckBusy.current = !!snapshot.lifecycleBusy;
+    if (key && key !== checkEvent.current && !snapshot.lifecycleBusy) {
+      checkEvent.current = key;
+      setCheckOpen(true);
+    }
+  }, [snapshot.profiles, snapshot.harnessRuntime, snapshot.lifecycleBusy, snapshot.startup]);
 
   const launcherStatus = asObject(snapshot.status);
   const isRunning = launcherStatus.running === true;
@@ -1218,6 +1243,7 @@ function App() {
         <header className="topbar">
           <div className="breadcrumbs"><span>{t("Nexus Launcher")}</span><span className="crumb-separator">/</span><strong>{t(modules.find((item) => item.id === activeModule)?.label || "Overview")}</strong></div>
           <div className="topbar-actions">
+            <ActionButton onClick={() => setCheckOpen(true)}>{t("Startup compatibility check")}</ActionButton>
             <StatusPill label={connectionLabel} tone={connectionTone} />
             <button className="icon-button" onClick={() => void refresh()} aria-label={t("Refresh launcher status")} title={t("Refresh launcher status")}><ArrowsClockwise size={19} /></button>
           </div>
@@ -1234,6 +1260,7 @@ function App() {
             ? <LoadingState />
             : <section className="page-content">{content}</section>}
 
+        {checkOpen && <CompatibilityDialog snapshot={snapshot} busyAction={busyAction ?? (snapshot.lifecycleBusy ? t("Operation in progress") : null)} runAction={runAction} pending={checkPending || !!snapshot.lifecycleBusy} onClose={() => setCheckOpen(false)} />}
         <footer className="workspace-footer">
           <span><Cpu size={15} />{t("Agent {version}", { version: stringValue(snapshot.health, "api_version") || "v1" })}</span>
           <span><Key size={15} />{t("No credentials leave this device")}</span>
@@ -1381,7 +1408,7 @@ export function HarnessWebPanel({ snapshot, credentialInvalidationPending, busyA
   </Panel>;
 }
 
-function CompatibilitySummary({ snapshot, busyAction, runAction }: Pick<ViewProps, "snapshot" | "busyAction" | "runAction">) {
+export function CompatibilitySummary({ snapshot, busyAction, runAction }: Pick<ViewProps, "snapshot" | "busyAction" | "runAction">) {
   const { locale, t } = useI18n();
   const report = asObject(asObject(snapshot.profiles).compatibility);
   const policy = arrayValue(snapshot.profiles, "disabled_plugins").map(String);
@@ -1391,7 +1418,7 @@ function CompatibilitySummary({ snapshot, busyAction, runAction }: Pick<ViewProp
   useEffect(() => setSelected([]), [reportKey]);
   const hasReport = Object.keys(report).length > 0;
   if (!hasReport && !policy.length) return null;
-  const triggerLabel = (value: string | undefined) => value === "version_switch" ? t("During version switch") : value === "startup" ? t("Before startup or restart") : t("Legacy record: trigger not recorded");
+  const triggerLabel = (value: string | undefined) => value === "version_switch" ? t("During version switch") : value === "profile_switch" ? t("During profile switch") : value === "startup" ? t("Before startup or restart") : t("Legacy record: trigger not recorded");
   const disabled = arrayValue(report, "disabled");
   const needsChoice = stringValue(report, "status") === "needs_choice";
   const candidates = arrayValue(report, "candidates");
@@ -1412,7 +1439,12 @@ function CompatibilitySummary({ snapshot, busyAction, runAction }: Pick<ViewProp
   const installed = arrayValue(snapshot.releases, "releases").some(item => stringValue(item, "id") === target);
   const operation = asObject(asObject(snapshot.updates).operation);
   const retryTag = stringValue(operation, "release_id") === target ? stringValue(operation, "tag") : null;
-  const retry = () => installed
+  const trigger = stringValue(report, "last_trigger") || stringValue(report, "trigger");
+  const retryLabel = trigger === "profile_switch" ? t("Retry profile switch") : trigger === "startup" ? t("Retry Harness startup") : t("Retry version switch");
+  const retry = () => trigger === "profile_switch"
+    ? runAction(retryLabel, "/v1/profiles", { action: "select", profile: source })
+    : trigger === "startup" ? runAction(retryLabel, "/v1/harness", { action: "start" })
+    : installed
     ? runAction(t("Retry version switch"), "/v1/releases", { action: "promote", id: target })
     : runAction(t("Retry version switch"), "/v1/updates", { action: "switch", tag: retryTag, source: stringValue(operation, "source") || "official", mode: stringValue(operation, "mode") || "portable" });
   return <Panel title={t("Startup compatibility check")} icon={<SlidersHorizontal size={18} />}>
@@ -1434,13 +1466,36 @@ function CompatibilitySummary({ snapshot, busyAction, runAction }: Pick<ViewProp
       <div className="button-row">
         <ActionButton disabled={blocked || !candidates.length} onClick={() => setSelected(candidates.map(item => stringValue(item, "package") || ""))}>{t("Select all third-party plugins")}</ActionButton>
         <ActionButton disabled={blocked || !selected.length} onClick={() => void saveChoices()}>{t("Save disabled plugins")}</ActionButton>
-        {(installed || retryTag) && <ActionButton disabled={blocked || selected.length > 0} onClick={() => void retry()}>{t("Retry version switch")}</ActionButton>}
+        {(installed || retryTag || trigger === "profile_switch" || trigger === "startup") && <ActionButton disabled={blocked || selected.length > 0} onClick={() => void retry()}>{retryLabel}</ActionButton>}
       </div>
       <p>{t("Saved choices apply to isolated profiles until restored. The original profile remains intact.")}</p>
       {!installed && !retryTag && <p>{t("After saving, select the upstream version again to retry.")}</p>}
       {blocked && <p>{t("Stop Harness before changing plugin isolation.")}</p>}
     </div>}
   </Panel>;
+}
+
+function currentStartupFailure(snapshot: Snapshot): boolean {
+  const runtime = harnessRuntimeValue(snapshot.harnessRuntime);
+  if (stringValue(runtime, "state") !== "failed") return false;
+  const report = asObject(asObject(snapshot.profiles).compatibility);
+  const failedAt = numberValue(runtime, "updated_at_unix");
+  const checkedAt = numberValue(report, "last_used_at_unix");
+  return failedAt === undefined || checkedAt === undefined || failedAt >= checkedAt;
+}
+
+export function CompatibilityDialog({ snapshot, busyAction, runAction, pending, onClose }: Pick<ViewProps, "snapshot" | "busyAction" | "runAction"> & { pending: boolean; onClose: () => void }) {
+  const { t } = useI18n();
+  const failed = currentStartupFailure(snapshot);
+  const report = asObject(asObject(snapshot.profiles).compatibility);
+  return <Modal title={t("Startup compatibility check")} onClose={onClose}>
+    {snapshot.startup?.harness_startup_error && <p className="form-error" role="alert">{snapshot.startup.harness_startup_error}</p>}
+    {pending ? <p role="status">{t("Checking plugin compatibility. You can close this dialog; the check continues in the background.")}</p> : <>
+      {failed && <div role="alert"><p className="form-error">{t("Harness startup failed. The preflight result below does not mean this startup succeeded.")}</p><RecoveryLogTail snapshot={snapshot} /><ActionButton disabled={busyAction !== null} onClick={() => void runAction(t("Retry Harness startup"), "/v1/harness", { action: "start" })}>{t("Retry Harness startup")}</ActionButton></div>}
+      <CompatibilitySummary snapshot={snapshot} busyAction={busyAction} runAction={runAction} />
+      {!Object.keys(report).length && !failed && <p>{t("No compatibility check result yet.")}</p>}
+    </>}
+  </Modal>;
 }
 
 export function ProfilesView(props: ViewProps) {
@@ -1454,7 +1509,7 @@ export function ProfilesView(props: ViewProps) {
   const recovery = asObject(snapshot.recovery);
   const harness = asObject(recovery.harness);
   const gate = recoveryMutationGate(booleanValue(recovery, "harness_stop_required"), harness.state, busyAction !== null);
-  return <><CompatibilitySummary snapshot={snapshot} busyAction={busyAction} runAction={runAction} /><PageIntro kicker={t("Control / Profiles")} title={t("Profiles")} detail={t("Profiles own checkpoints and the plugin inventory: select a profile, manage its checkpoints, then adjust its plugins. Profile creation and deletion are unavailable in this release.")} /><Panel title={t("Profile catalog")} icon={<SlidersHorizontal size={18} />}>
+  return <><PageIntro kicker={t("Control / Profiles")} title={t("Profiles")} detail={t("Profiles own checkpoints and the plugin inventory: select a profile, manage its checkpoints, then adjust its plugins. Profile creation and deletion are unavailable in this release.")} /><Panel title={t("Profile catalog")} icon={<SlidersHorizontal size={18} />}>
     <div className="button-row">{[
       ["settings", t("Open settings.yaml")],
       ["profile_patch", t("Edit profile patch")],
@@ -1555,7 +1610,7 @@ export function UpdatesView({ snapshot, busyAction, runAction, refresh }: ViewPr
   const confirmation = stringValue(operation, "confirmation") || stringValue(supply, "supply_plan_id");
   const operationMode = stringValue(operation, "mode") || stringValue(supply, "mode") || persistedMode;
   const cleanupPending = booleanValue(operation, "cleanup_pending");
-  return <><CompatibilitySummary snapshot={snapshot} busyAction={busyAction} runAction={runAction} /><PageIntro kicker={t("Releases / Updates")} title={t("Updates")} detail={t("Cold switches are asynchronous and never start Harness automatically.")} />
+  return <><PageIntro kicker={t("Releases / Updates")} title={t("Updates")} detail={t("Cold switches are asynchronous and never start Harness automatically.")} />
     
     
     <Panel title={t("Upstream tags & cold switch")} icon={<CloudArrowUp size={18} />}><div className="status-block"><ActionButton disabled={tagsLoading} onClick={() => void loadTags()}>{tagsLoading ? t("Listing tags") : t("List upstream tags")}</ActionButton>{tagsError ? <span>{tagsError} · <button className="button subtle" onClick={() => void loadTags()}>{t("Refresh")}</button></span> : <span>{tagList ? `${t("Source")}: ${stringValue(tagList, "source")}` : t("No tags loaded")}</span>}<div className="kv-row"><input className="form-input" value={sourceDraft} placeholder="https://github.com/deepseek-ai/deepseek-harness" disabled={busyAction !== null} onChange={(event) => setSourceDraft(event.target.value)} /><ActionButton disabled={busyAction !== null || !sourceDraft.trim() || sourceDraft === currentUpdateSource} onClick={() => void runAction(t("Save update source"), "/v1/config", { action: "set_update", update: { source: sourceDraft.trim(), ref_name: stringValue(update, "ref_name") || "main", git_program: stringValue(update, "git_program") || "git", build_program: stringValue(update, "build_program") || null, build_args: arrayValue(update, "build_args").map(String), verify_program: stringValue(update, "verify_program") || null, verify_args: arrayValue(update, "verify_args").map(String), timeout_secs: numberValue(update, "timeout_secs") } })}>{t("Save update source")}</ActionButton></div>{tags.length > 0 && <select value={selectedTag} onChange={(event) => setSelectedTag(event.target.value)} aria-label={t("Upstream tags")}><option value="">{t("Select a tag")}</option>{tags.map((tag) => <option key={tag} value={tag}>{tag}</option>)}</select>}{selectedTag && <ActionButton tone="primary" disabled={busyAction !== null || tagsLoading || (!!operationId && !coldOperationIsTerminal(operationPhase))} onClick={() => void runAction(t("Switch to tag"), "/v1/updates", { action: "switch", tag: selectedTag, source: persistedSource, mode: persistedMode })}>{releases.some((item) => stringValue(item, "version") === selectedTag) ? t("Switch to tag") : t("Fetch this tag")}</ActionButton>}{selectedTag && <span>{`${t("Selected tag")}: ${selectedTag}`}</span>}</div>{pendingConfirmation && <div className="status-block"><strong>{t("Confirm runtime supply plan")}</strong><SupplyPlanDetails operation={operation} supply={supply} /><p className="form-error"><WarningCircle size={15}/>{operationMode === "system" ? t("System mode may show an installer or elevation prompt and can require restart verification.") : t("Portable mode writes only to the Nexus-owned runtime destination.")}</p><div className="button-row"><ActionButton tone="primary" disabled={!operationId || !confirmation || busyAction !== null} onClick={() => void runAction(t("Confirm cold switch"), "/v1/updates", { action: "confirm", operation_id: operationId, confirmation })}>{t("Confirm exact plan")}</ActionButton><ActionButton tone="danger" disabled={!operationId || (busyAction !== null && !snapshot.lifecycleBusy)} onClick={() => void runAction(t("Cancel cold switch"), "/v1/updates", { action: "cancel", operation_id: operationId })}>{t("Cancel")}</ActionButton></div></div>}
