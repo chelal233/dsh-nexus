@@ -1353,6 +1353,7 @@ async fn profile_control_inner(
                 .into_response()
         }
         ProfileAction::PluginRemove => profile_plugin_remove(state, command).await,
+        ProfileAction::PluginMove => profile_plugin_move(state, command).await,
         ProfileAction::PluginDisable | ProfileAction::PluginEnable => profile_plugin_isolation(state, command).await,
         ProfileAction::OpenPath => profile_open_path(state, command).await,
         ProfileAction::Create => profile_create(state, command).await,
@@ -1524,6 +1525,28 @@ async fn profile_open_path(state: AppState, command: ProfileCommand) -> axum::re
         )),
     )
         .into_response()
+}
+
+async fn profile_plugin_move(state: AppState, command: ProfileCommand) -> axum::response::Response {
+    let (Some(profile), Some(package)) = (command.profile.as_deref(), command.package.as_deref()) else {
+        return data_error_response(io::Error::new(io::ErrorKind::InvalidInput, "profile and package are required"), "plugin_move_invalid");
+    };
+    let lifecycle = state.supervisor.acquire_lifecycle().await;
+    if let Err(response) = ensure_checkpoint_mutation_ready(&state).await { return response; }
+    let _update_gate = match state.updater.try_acquire_gate() {
+        Ok(gate) => gate,
+        Err(error) => return update_error_response(error),
+    };
+    if let Err(response) = ensure_harness_selection_quiescent(&state, &lifecycle,
+        "plugin_move_conflict", "stop Harness before changing plugin load order").await { return response; }
+    let home = match state.snapshots.configured_dsh_home() {
+        Ok(home) => home,
+        Err(error) => return data_error_response(error, "profile_catalog_unavailable"),
+    };
+    match dsh::move_profile_plugin(home, profile, package, command.target.as_deref()) {
+        Ok(inventory) => (StatusCode::OK, Json(inventory)).into_response(),
+        Err(error) => data_error_response(error, "plugin_move_failed"),
+    }
 }
 
 async fn profile_plugin_remove(
@@ -4372,6 +4395,23 @@ server.listen(0, '127.0.0.1', () => console.log('dsh web: http://127.0.0.1:' + s
         assert_eq!(state.releases.load().unwrap(), before_releases);
         assert_eq!(state.profiles.load().unwrap(), before_profiles);
         assert!(state.checkpoint_restores.load().unwrap().is_none());
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[tokio::test]
+    async fn reorder_accepts_a_non_active_ordinary_profile_without_selecting_it() {
+        let (state, root) = content_test_state("reorder-inactive");
+        let home = state.snapshots.configured_dsh_home().unwrap();
+        let path = home.join("profiles/other/package.json");
+        write_profile_file(&path, r#"{"name":"other","dsh":{"profile":{"bundles":["a","b"]}},"dependencies":{"a":"1","b":"1"}}"#);
+        let before = state.profiles.load().unwrap();
+        let response = super::profile_control(State(state.clone()), Json(nexus_protocol::ProfileCommand {
+            action: nexus_protocol::ProfileAction::PluginMove, profile: Some("other".to_owned()),
+            package: Some("b".to_owned()), target: Some("a".to_owned()),
+        })).await;
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(super::dsh::native_profile(home, "other").unwrap().bundles, ["b", "a"]);
+        assert_eq!(state.profiles.load().unwrap(), before);
         fs::remove_dir_all(root).unwrap();
     }
 

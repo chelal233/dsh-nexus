@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import {
+  pluginMoveTarget,
   isLifecycleBusyError,
   lifecycleBusySnapshot,
   coldOperationIsTerminal,
@@ -115,4 +116,19 @@ test("busy responses preserve only same-Agent catalogs and clear runtime credent
   assert.equal(lifecycleBusySnapshot(next, previous, false).profiles, null);
   assert.equal(lifecycleBusySnapshot(next, previous, false).releases, null);
   for (const [path, action] of [["/v1/releases", "promote"], ["/v1/releases", "rollback"], ["/v1/updates", "switch"], ["/v1/updates", "confirm"]]) assert.equal(invalidatesHarnessCredentials(path, action), true);
+});
+
+
+test("dragging chooses insertion before or after rows without moving fixed roots", () => {
+ const order = ["@deepseek-ai/dsh-base", "@deepseek-ai/dsh-web-app", "first", "second", "third"];
+ assert.deepEqual(pluginMoveTarget(order, "first", "second"), { target: "third" });
+ assert.deepEqual(pluginMoveTarget(order, "first", "third"), { target: null });
+ assert.deepEqual(pluginMoveTarget(order, "third", "first"), { target: "first" });
+ assert.equal(pluginMoveTarget(order, "first", "first"), null);
+ assert.equal(pluginMoveTarget(order, "missing", "third"), null);
+ for (const fixed of order.slice(0, 2)) {
+  assert.equal(pluginMoveTarget(order, fixed, "third"), null);
+  assert.equal(pluginMoveTarget(order, "third", fixed), null);
+ }
+ assert.equal(order[2], "first");
 });

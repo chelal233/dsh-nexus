@@ -13,6 +13,19 @@ export type TranslationParams = Record<string, string | number>;
 export type Translator = (key: string, params?: TranslationParams) => string;
 
 const english: Record<string, string> = {
+  "Plugin load order": "Plugin load order",
+  "Load order saved. It takes effect on the next Harness startup.": "Load order saved. It takes effect on the next Harness startup.",
+  "Built-in plugins come from the profile template. Installed plugins are dependency-managed even when included in the load list.": "Built-in plugins come from the profile template. Installed plugins are dependency-managed even when included in the load list.",
+  "Drag plugins to change loading order, or use the arrow buttons. dsh-base and dsh-web-app stay in positions 1 and 2.": "Drag plugins to change loading order, or use the arrow buttons. dsh-base and dsh-web-app stay in positions 1 and 2.",
+  "This is a generated isolation profile. Edit plugin order in source profile {profile}.": "This is a generated isolation profile. Edit plugin order in source profile {profile}.",
+  "Drag to reorder": "Drag to reorder",
+  "Fixed load position": "Fixed load position",
+  "Loading order unavailable": "Loading order unavailable",
+  "Dependency only; not in the load list": "Dependency only; not in the load list",
+  "Move up": "Move up",
+  "Move down": "Move down",
+  "Working": "Working",
+
   "During profile switch": "During profile switch",
   "Retry profile switch": "Retry profile switch",
   "Retry Harness startup": "Retry Harness startup",
@@ -527,6 +540,19 @@ const english: Record<string, string> = {
 };
 
 const chinese: Record<string, string> = {
+  "Plugin load order": "插件加载顺序",
+  "Load order saved. It takes effect on the next Harness startup.": "加载顺序已保存，下次启动 Harness 时生效。",
+  "Built-in plugins come from the profile template. Installed plugins are dependency-managed even when included in the load list.": "内置插件随配置档模板提供。后续安装的插件由依赖清单管理，出现在加载列表中不代表内置。",
+  "Drag plugins to change loading order, or use the arrow buttons. dsh-base and dsh-web-app stay in positions 1 and 2.": "拖动插件或使用上下箭头调整加载顺序。dsh-base 和 dsh-web-app 固定在第 1、2 位。",
+  "This is a generated isolation profile. Edit plugin order in source profile {profile}.": "这是自动生成的隔离配置档，请在源配置档 {profile} 中调整插件顺序。",
+  "Drag to reorder": "拖动调整顺序",
+  "Fixed load position": "固定加载位置",
+  "Loading order unavailable": "当前不可调整加载顺序",
+  "Dependency only; not in the load list": "仅依赖，不参与加载排序",
+  "Move up": "上移",
+  "Move down": "下移",
+  "Working": "处理中",
+
   "During profile switch": "切换配置档时",
   "Retry profile switch": "重试切换配置档",
   "Retry Harness startup": "重试启动 Harness",

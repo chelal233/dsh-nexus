@@ -322,28 +322,84 @@ pub(crate) fn native_profile(dsh_home: &Path, profile: &str) -> io::Result<Nativ
     }
     let mut plugins = Vec::new();
     for bundle in &bundles {
+        let version = versions.remove(bundle);
+        let builtin = fixed_bundle(bundle) || version.is_none();
         plugins.push(ProfilePluginPayload {
             package: bundle.clone(),
-            version: versions.remove(bundle),
-            builtin: true,
-            removable: false,
+            version,
+            builtin,
+            removable: !builtin,
         });
     }
     plugins.extend(
         versions
             .into_iter()
-            .map(|(package, version)| ProfilePluginPayload {
-                package,
-                version: Some(version),
-                builtin: false,
-                removable: true,
+            .map(|(package, version)| {
+                let builtin = fixed_bundle(&package);
+                ProfilePluginPayload { package, version: Some(version), builtin, removable: !builtin }
             }),
     );
     Ok(NativeProfilePayload {
         name: profile.to_owned(),
+        source_profile: generated_source_profile(&profile_dir, profile)?,
         bundles,
         plugins,
     })
+}
+
+const FIXED_BUNDLES: [&str; 2] = ["@deepseek-ai/dsh-base", "@deepseek-ai/dsh-web-app"];
+
+fn fixed_bundle(package: &str) -> bool { FIXED_BUNDLES.contains(&package) }
+
+fn generated_source_profile(directory: &Path, profile: &str) -> io::Result<Option<String>> {
+    let marker = directory.join(".nexus-compatibility.json");
+    let metadata = match fs::symlink_metadata(&marker) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => return Err(error),
+    };
+    if !metadata.is_file() || metadata.file_type().is_symlink() || metadata.len() > 64 * 1024 {
+        return Err(io::Error::new(io::ErrorKind::InvalidData, "Invalid compatibility profile marker"));
+    }
+    let report: nexus_protocol::CompatibilityReport = serde_json::from_slice(&fs::read(marker)?).map_err(io::Error::other)?;
+    validate_profile_name(&report.source_profile)?;
+    if report.effective_profile != profile || report.source_profile == profile
+        || !matches!(report.status.as_str(), "passed" | "isolated") {
+        return Err(io::Error::new(io::ErrorKind::InvalidData, "Compatibility profile marker does not match this profile"));
+    }
+    Ok(Some(report.source_profile))
+}
+
+pub(crate) fn move_profile_plugin(home: &Path, profile: &str, package: &str, target: Option<&str>) -> io::Result<NativeProfilePayload> {
+    let directory = profile_directory(home, profile)?;
+    let manifest = directory.join("package.json");
+    let inventory = native_profile(home, profile)?;
+    let before = fs::read(&manifest)?;
+    if let Some(source) = &inventory.source_profile {
+        return Err(io::Error::new(io::ErrorKind::PermissionDenied,
+            format!("Generated compatibility profiles are read-only; reorder source profile {source}")));
+    }
+    if fixed_bundle(package) || !inventory.bundles.iter().any(|bundle| bundle == package) {
+        return Err(io::Error::new(io::ErrorKind::InvalidInput, "Only non-fixed loaded bundles can be moved"));
+    }
+    if target.is_some_and(|target| fixed_bundle(target) || target == package || !inventory.bundles.iter().any(|bundle| bundle == target)) {
+        return Err(io::Error::new(io::ErrorKind::InvalidInput, "Move target must be another non-fixed loaded bundle"));
+    }
+    let mut ordered: Vec<String> = FIXED_BUNDLES.iter().filter(|fixed| inventory.bundles.iter().any(|bundle| bundle == **fixed))
+        .map(|fixed| (*fixed).to_owned()).collect();
+    ordered.extend(inventory.bundles.iter().filter(|bundle| !fixed_bundle(bundle) && *bundle != package).cloned());
+    let position = target.and_then(|target| ordered.iter().position(|bundle| bundle == target)).unwrap_or(ordered.len());
+    ordered.insert(position, package.to_owned());
+    let mut value: serde_json::Value = serde_json::from_slice(&before).map_err(io::Error::other)?;
+    if value.pointer("/dsh/profile/bundles") != Some(&serde_json::json!(inventory.bundles)) {
+        return Err(io::Error::new(io::ErrorKind::WouldBlock, "Profile bundles changed during reorder; refresh and retry"));
+    }
+    *value.pointer_mut("/dsh/profile/bundles").ok_or_else(|| io::Error::other("Profile bundles disappeared"))? = serde_json::json!(ordered);
+    if fs::read(&manifest)? != before {
+        return Err(io::Error::new(io::ErrorKind::WouldBlock, "Profile manifest changed during reorder; refresh and retry"));
+    }
+    nexus_core::write_json_atomic(&directory, &manifest, &value)?;
+    native_profile(home, profile)
 }
 
 fn valid_package_name(value: &str) -> bool {
@@ -1047,7 +1103,7 @@ mod tests {
         .expect("CLI package fixture writes");
         fs::write(
             profile.join("package.json"),
-            r#"{"dsh":{"profile":{"bundles":["dsh-base","dsh-web-app"]}},"dependencies":{"dsh-extra":"1.2.3","dsh-base":"4.0.0","dsh-web-app":"4.0.0"}}"#,
+            r#"{"dsh":{"profile":{"bundles":["dsh-base","dsh-web-app"]}},"dependencies":{"dsh-extra":"1.2.3"}}"#,
         ).expect("manifest writes");
         let node = root.join(if cfg!(windows) { "node.exe" } else { "node" });
         fs::write(&node, "fixture").expect("node fixture writes");
@@ -1094,6 +1150,59 @@ mod tests {
         fs::write(home.join("profiles"), "invalid directory").expect("invalid fixture writes");
         assert!(native_profiles(&home).is_err());
         fs::remove_dir_all(root).expect("fixture removes");
+    }
+
+    #[test]
+    fn dependency_managed_bundles_are_removable_but_template_and_roots_are_protected() {
+        let (root, _, home, _) = plugin_fixture();
+        let path = home.join("profiles/web/package.json");
+        fs::write(&path, r#"{"dsh":{"profile":{"bundles":["@deepseek-ai/dsh-base","@deepseek-ai/dsh-web-app","template","installed"]}},"dependencies":{"@deepseek-ai/dsh-base":"1","@deepseek-ai/dsh-web-app":"1","installed":"2","extra-dependency":"3"}}"#).unwrap();
+        let inventory = native_profile(&home, "web").unwrap();
+        assert!(inventory.plugins[..3].iter().all(|plugin| plugin.builtin && !plugin.removable));
+        assert!(!inventory.plugins[3].builtin && inventory.plugins[3].removable);
+        assert_eq!(inventory.plugins[3].version.as_deref(), Some("2"));
+        assert_eq!(inventory.plugins[4].package, "extra-dependency");
+        assert!(inventory.plugins[4].removable);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn reorder_preserves_other_json_and_enforces_fixed_roots_and_valid_targets() {
+        let (root, _, home, _) = plugin_fixture();
+        let path = home.join("profiles/web/package.json");
+        let original = serde_json::json!({"name":"keep", "custom":{"a":[1,true]},
+            "dsh":{"profile":{"other":"unchanged","bundles":["b","@deepseek-ai/dsh-web-app","a","@deepseek-ai/dsh-base","template"]}},
+            "dependencies":{"a":"1","b":"2","dependency-only":"3"}});
+        fs::write(&path, serde_json::to_vec(&original).unwrap()).unwrap();
+        let moved = move_profile_plugin(&home, "web", "a", Some("b")).unwrap();
+        assert_eq!(moved.bundles, ["@deepseek-ai/dsh-base", "@deepseek-ai/dsh-web-app", "a", "b", "template"]);
+        let mut expected = original;
+        expected["dsh"]["profile"]["bundles"] = serde_json::json!(moved.bundles);
+        assert_eq!(serde_json::from_slice::<serde_json::Value>(&fs::read(&path).unwrap()).unwrap(), expected);
+        let moved = move_profile_plugin(&home, "web", "a", None).unwrap();
+        assert_eq!(moved.bundles, ["@deepseek-ai/dsh-base", "@deepseek-ai/dsh-web-app", "b", "template", "a"]);
+        let before_invalid = fs::read(&path).unwrap();
+        for (package, target) in [("@deepseek-ai/dsh-base", None), ("@deepseek-ai/dsh-web-app", None),
+            ("a", Some("@deepseek-ai/dsh-base")), ("a", Some("@deepseek-ai/dsh-web-app")),
+            ("dependency-only", None), ("a", Some("dependency-only")), ("a", Some("absent")), ("a", Some("a"))] {
+            assert!(move_profile_plugin(&home, "web", package, target).is_err());
+            assert_eq!(fs::read(&path).unwrap(), before_invalid);
+        }
+        let ordinary = home.join("profiles/nexus-user");
+        fs::create_dir(&ordinary).unwrap();
+        fs::write(ordinary.join("package.json"), &before_invalid).unwrap();
+        assert!(move_profile_plugin(&home, "nexus-user", "a", Some("b")).is_ok());
+        let generated = home.join("profiles/copy");
+        fs::create_dir(&generated).unwrap();
+        fs::write(generated.join("package.json"), &before_invalid).unwrap();
+        fs::write(generated.join(".nexus-compatibility.json"), serde_json::to_vec(&serde_json::json!({
+            "checker_version":1,"status":"passed","source_profile":"web","effective_profile":"copy",
+            "release_id":"test","fingerprint":"fixture","checked_at_unix":1,"disabled":[]
+        })).unwrap()).unwrap();
+        assert_eq!(native_profile(&home, "copy").unwrap().source_profile.as_deref(), Some("web"));
+        assert!(move_profile_plugin(&home, "copy", "a", Some("b")).is_err());
+        assert_eq!(fs::read(generated.join("package.json")).unwrap(), before_invalid);
+        fs::remove_dir_all(root).unwrap();
     }
 
     #[test]

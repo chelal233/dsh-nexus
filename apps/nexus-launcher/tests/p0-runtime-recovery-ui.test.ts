@@ -204,3 +204,23 @@ test("check details live in a dialog and actual startup failure overrides prefli
   assert.match(earlyFailure, /Node entry missing/);
  } finally { await vite.close(); }
 });
+
+
+test("plugin rows expose movable installed bundles, locked roots and read-only projections", async () => {
+ const { vite, ProfilePlugins } = await loadViews();
+ try {
+  const bundles = ["@deepseek-ai/dsh-base", "@deepseek-ai/dsh-web-app", "third-party"];
+  const manifest = { name: "desktop", bundles, plugins: bundles.map((packageName, i) => ({ package: packageName, builtin: i < 2, removable: i === 2 })) };
+  const snapshot = { ...baseSnapshot, recovery: { harness: { state: "stopped" } }, profiles: { active_profile: "desktop", manifests: [manifest] } };
+  const markup = renderToStaticMarkup(createElement(ProfilePlugins, { ...props, snapshot, profile: "desktop" }));
+  assert.equal((markup.match(/draggable="false"/g) || []).length, 2);
+  assert.equal((markup.match(/draggable="true"/g) || []).length, 1);
+  assert.match(markup, /Fixed load position/);
+  assert.match(markup, /Removable/);
+  const generated = renderToStaticMarkup(createElement(ProfilePlugins, { ...props, profile: "desktop", snapshot: { ...snapshot, profiles: { ...snapshot.profiles, manifests: [{ ...manifest, source_profile: "original" }] } } }));
+  assert.match(generated, /source profile original/);
+  assert.doesNotMatch(generated, /draggable="true"/);
+  const running = renderToStaticMarkup(createElement(ProfilePlugins, { ...props, profile: "desktop", snapshot: { ...snapshot, recovery: { harness: { state: "running" } } } }));
+  assert.doesNotMatch(running, /draggable="true"/);
+ } finally { await vite.close(); }
+});

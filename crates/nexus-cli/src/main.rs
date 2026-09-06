@@ -504,6 +504,7 @@ async fn run(options: Options) -> Result<(), String> {
             .map_err(|error| format!("agent is unavailable: {error}"))?,
         Command::Profile(
             ProfileAction::PluginInventory
+            | ProfileAction::PluginMove
             | ProfileAction::PluginRemove
             | ProfileAction::PluginDisable
             | ProfileAction::PluginEnable

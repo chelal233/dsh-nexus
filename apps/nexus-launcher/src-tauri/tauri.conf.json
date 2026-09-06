@@ -20,6 +20,7 @@
         "minWidth": 680,
         "minHeight": 520,
         "resizable": true,
+        "dragDropEnabled": false,
         "visible": true,
         "center": true
       }

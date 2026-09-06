@@ -27,6 +27,8 @@ import {
   X,
 } from "@phosphor-icons/react";
 import {
+  FIXED_PROFILE_PLUGINS,
+  pluginMoveTarget,
   failClosedSnapshot,
   coldOperationIsTerminal,
   createLatestRequest,
@@ -1631,6 +1633,9 @@ export function ProfilePlugins({ snapshot, busyAction, runAction, refresh, profi
   const { t } = useI18n();
   const [pluginBusy, setPluginBusy] = useState(false);
   const [pluginResult, setPluginResult] = useState<JsonObject | null>(null);
+  const draggedPlugin = useRef<string | null>(null);
+  const [dropTarget, setDropTarget] = useState<string | null>(null);
+  const [orderNotice, setOrderNotice] = useState<string | null>(null);
   const [pluginError, setPluginError] = useState<string | null>(null);
   const latestPlugin = useRef(createLatestRequest());
   useEffect(() => () => latestPlugin.current.cancel(), []);
@@ -1640,7 +1645,20 @@ export function ProfilePlugins({ snapshot, busyAction, runAction, refresh, profi
   const manifests = arrayValue(snapshot.profiles, "manifests");
   const activeManifest = manifests.map(asObject).find((item) => stringValue(item, "name") === active) || {};
   const plugins = arrayValue(activeManifest, "plugins");
+  const order = arrayValue(activeManifest, "bundles").map(String);
+  const sourceProfile = stringValue(activeManifest, "source_profile");
   const gate = recoveryMutationGate(booleanValue(recovery, "harness_stop_required"), harness.state, busyAction !== null || pluginBusy);
+  const movePlugin = async (packageName: string, destination: string) => {
+    if (gate.disabled || sourceProfile) return;
+    const move = pluginMoveTarget(order, packageName, destination);
+    if (!move) return;
+    setPluginBusy(true); setPluginError(null); setOrderNotice(null); setPluginResult(null);
+    try {
+      const result = await runAction(t("Plugin load order"), "/v1/profiles", { action: "plugin_move", profile: active, package: packageName, target: move.target });
+      if (result !== false) setOrderNotice(t("Load order saved. It takes effect on the next Harness startup."));
+    } catch (cause) { setPluginError(errorMessage(cause)); }
+    finally { setPluginBusy(false); }
+  };
   const removePlugin = async (packageName: string) => {
     if (!window.confirm(t("Remove {package} from profile {profile}?", { package: packageName, profile: active }))) return;
     const token = latestPlugin.current.begin(); setPluginBusy(true); setPluginError(null); setPluginResult(null);
@@ -1656,8 +1674,33 @@ export function ProfilePlugins({ snapshot, busyAction, runAction, refresh, profi
   };
   return <Panel title={t("Plugin inventory")} icon={<Package size={18} />}>
     {(booleanValue(recovery, "harness_stop_required") || gate.reason === "not_stopped") && <div className="notice degraded"><WarningCircle size={17}/><span>{t("Harness must be stopped before profile, plugin, or rollback changes. Diagnostics remain available.")}</span><ActionButton disabled={busyAction !== null} onClick={() => void runAction(t("Harness stop"), "/v1/harness", { action: "stop" })}>{t("Stop Harness")}</ActionButton></div>}
-    <p className="panel-description">{t("Built-in plugins belong to profile bundles. Only packages marked removable can be removed.")}</p>
-    <DataList items={plugins} emptyTitle={t("No plugins reported")} emptyDetail={t("Select a valid native profile to inspect its inventory.")} render={(item) => { const packageName = stringValue(item, "package") || ""; const builtin = booleanValue(item, "builtin"); const removable = booleanValue(item, "removable"); return <><div><strong>{packageName}</strong><StatusPill label={builtin ? t("Built-in") : removable ? t("Removable") : t("Protected")} tone={removable ? "warn" : "neutral"}/><span>{stringValue(item, "version") || t("Unknown version")}</span></div><span className="row-meta">{removable && <ActionButton tone="danger" disabled={gate.disabled} onClick={() => void removePlugin(packageName)}>{pluginBusy ? t("Removing") : t("Remove")}</ActionButton>}</span></>; }} />
+    <p className="panel-description">{t("Built-in plugins come from the profile template. Installed plugins are dependency-managed even when included in the load list.")}</p>
+    <p className="field-help">{t("Drag plugins to change loading order, or use the arrow buttons. dsh-base and dsh-web-app stay in positions 1 and 2.")}</p>
+    {sourceProfile && <p className="notice">{t("This is a generated isolation profile. Edit plugin order in source profile {profile}.", { profile: sourceProfile })}</p>}
+    {!plugins.length ? <EmptyState title={t("No plugins reported")} detail={t("Select a valid native profile to inspect its inventory.")} /> : <div className="data-list">{plugins.map(item => {
+      const packageName = stringValue(item, "package") || "";
+      const builtin = booleanValue(item, "builtin"), removable = booleanValue(item, "removable");
+      const index = order.indexOf(packageName), fixed = FIXED_PROFILE_PLUGINS.includes(packageName);
+      const movable = index >= 0 && !fixed && !gate.disabled && !sourceProfile;
+      return <div key={packageName} className={`data-row plugin-row${dropTarget === packageName ? " plugin-drop-target" : ""}`} data-plugin={packageName}
+        onDragOver={event => { if (movable && draggedPlugin.current && draggedPlugin.current !== packageName) { event.preventDefault(); event.dataTransfer.dropEffect = "move"; setDropTarget(packageName); } }}
+        onDragLeave={() => setDropTarget(current => current === packageName ? null : current)}
+        onDrop={event => { event.preventDefault(); const source = draggedPlugin.current; draggedPlugin.current = null; setDropTarget(null); if (source && movable) void movePlugin(source, packageName); }}>
+        <div><span className="plugin-drag-handle" draggable={movable} title={movable ? t("Drag to reorder") : fixed ? t("Fixed load position") : t("Loading order unavailable")}
+          onDragStart={event => { if (!movable) { event.preventDefault(); return; } draggedPlugin.current = packageName; event.dataTransfer.effectAllowed = "move"; event.dataTransfer.setData("text/plain", packageName); }}
+          onDragEnd={() => { draggedPlugin.current = null; setDropTarget(null); }} aria-hidden="true">{fixed ? "●" : index >= 0 ? "⠿" : "·"}</span>
+          {index >= 0 && <span className="plugin-position">{index + 1}</span>}<strong>{packageName}</strong>
+          <StatusPill label={builtin ? t("Built-in") : removable ? t("Removable") : t("Protected")} tone={removable ? "warn" : "neutral"}/>
+          {fixed && <StatusPill label={t("Fixed load position")} tone="neutral"/>}
+          {index < 0 && <span>{t("Dependency only; not in the load list")}</span>}
+          <span>{stringValue(item, "version") || t("Unknown version")}</span></div>
+        <span className="row-meta button-row">
+          {index >= 0 && !fixed && <><ActionButton title={t("Move up")} disabled={!movable || index === 0 || FIXED_PROFILE_PLUGINS.includes(order[index - 1])} onClick={() => void movePlugin(packageName, order[index - 1])}>↑</ActionButton><ActionButton title={t("Move down")} disabled={!movable || index === order.length - 1 || FIXED_PROFILE_PLUGINS.includes(order[index + 1])} onClick={() => void movePlugin(packageName, order[index + 1])}>↓</ActionButton></>}
+          {removable && <ActionButton tone="danger" disabled={gate.disabled || !!sourceProfile} onClick={() => void removePlugin(packageName)}>{pluginBusy ? t("Working") : t("Remove")}</ActionButton>}
+        </span>
+      </div>;
+    })}</div>}
+    {orderNotice && <p role="status">{orderNotice}</p>}
     {pluginError && <p className="form-error"><WarningCircle size={15}/>{pluginError} <button className="button subtle" onClick={() => setPluginError(null)}>{t("Dismiss")}</button></p>}
     {pluginResult && <pre className="output-block">{[stringValue(pluginResult, "stdout"), stringValue(pluginResult, "stderr")].filter(Boolean).join("\n") || t("Plugin removed. Inventory refreshed.")}</pre>}
   </Panel>;

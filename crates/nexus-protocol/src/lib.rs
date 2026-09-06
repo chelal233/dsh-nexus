@@ -330,6 +330,7 @@ pub enum ProfileAction {
     PluginRemove,
     PluginDisable,
     PluginEnable,
+    PluginMove,
     Create,
     /// Open a profile-related file or directory with the system handler.
     /// Bounded targets only: `settings` (home settings.yaml), `profile_dir`,
@@ -361,6 +362,8 @@ pub struct ProfilePluginPayload {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct NativeProfilePayload {
     pub name: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_profile: Option<String>,
     pub bundles: Vec<String>,
     pub plugins: Vec<ProfilePluginPayload>,
 }

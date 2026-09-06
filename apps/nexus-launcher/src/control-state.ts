@@ -124,3 +124,13 @@ export function runtimeSettingsGate(
   if (cleanupPending) return { disabled: true, reason: "cleanup_pending" };
   return { disabled: false, reason: null };
 }
+
+
+export const FIXED_PROFILE_PLUGINS = ["@deepseek-ai/dsh-base", "@deepseek-ai/dsh-web-app"];
+
+/** Dropping on a later row moves after it; on an earlier row moves before it. */
+export function pluginMoveTarget(order: string[], source: string, destination: string): { target: string | null } | null {
+  const from = order.indexOf(source), to = order.indexOf(destination);
+  if (from < 0 || to < 0 || from === to || FIXED_PROFILE_PLUGINS.includes(source) || FIXED_PROFILE_PLUGINS.includes(destination)) return null;
+  return { target: from < to ? order[to + 1] ?? null : destination };
+}
