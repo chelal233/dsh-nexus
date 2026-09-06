@@ -509,6 +509,7 @@ async fn run(options: Options) -> Result<(), String> {
             | ProfileAction::PluginDisable
             | ProfileAction::PluginEnable
             | ProfileAction::OpenPath
+            | ProfileAction::OpenTerminal
             | ProfileAction::Create,
             _,
         ) => {

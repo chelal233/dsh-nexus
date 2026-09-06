@@ -380,6 +380,7 @@ impl ColdCoordinator {
             updated_at_unix: Some(now),
             foundation_plan_id: None,
             warning: None,
+            output_tail: None,
             supply_plan: None,
             confirmation: None,
             error: None,
@@ -508,6 +509,12 @@ async fn prepare_inner(state: &AppState, operation_id: &str) -> io::Result<()> {
         return promote_existing(state, operation_id, &operation.tag).await;
     }
     state.releases.ensure_capacity_for_new()?;
+    // Disk preflight: the clone plus pnpm build needs several GiB on the
+    // data-root volume; fail before the clone instead of mid-install.
+    nexus_core::disk::ensure_free_space(
+        &state.paths.downloads_dir,
+        nexus_core::disk::MIN_INSTALL_FREE_BYTES,
+    )?;
     state
         .cold
         .update(operation_id, ColdOperationPhase::Cloning, 10, None)
@@ -611,6 +618,12 @@ async fn build_and_publish(
         .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "cold operation not found"))?;
     let cancellation = state.cold.token(operation_id).await;
     let candidate = PathBuf::from(&operation.candidate);
+    let stop_tail = Arc::new(AtomicBool::new(false));
+    let watcher = tokio::spawn(tail_command_output(
+        state.clone(),
+        operation_id.to_owned(),
+        stop_tail.clone(),
+    ));
     state
         .cold
         .update(operation_id, ColdOperationPhase::Installing, 55, None)
@@ -636,6 +649,8 @@ async fn build_and_publish(
         &cancellation,
     )
     .await?;
+    stop_tail.store(true, Ordering::Release);
+    watcher.abort();
     state
         .cold
         .update(operation_id, ColdOperationPhase::Verifying, 85, None)
@@ -958,10 +973,10 @@ pub(crate) async fn resolved_runtime_config(state: &AppState) -> io::Result<Runt
         }
         let pin = RuntimePin {
             path,
-            ownership: if tool.source.as_deref() == Some("nexus") {
-                RuntimeOwnership::Nexus
-            } else {
-                RuntimeOwnership::System
+            ownership: match tool.source.as_deref() {
+                Some("nexus") => RuntimeOwnership::Nexus,
+                Some("bundled") => RuntimeOwnership::Bundled,
+                _ => RuntimeOwnership::System,
             },
         };
         match tool.name.as_str() {
@@ -2139,4 +2154,69 @@ while ($true) {{ Start-Sleep -Seconds 1 }}"#, child.display())).unwrap();
         assert_eq!(cancelled.phase, ColdOperationPhase::Cancelling);
         let _ = fs::remove_dir_all(root);
     }
+}
+
+
+/// Refresh a bounded command-output tail into the persisted operation while
+/// install and build run, so the UI shows live pnpm output between phase
+/// transitions. Stops when `stop` flips, the operation changes, or the
+/// operation reaches a terminal phase.
+async fn tail_command_output(state: AppState, operation_id: String, stop: Arc<AtomicBool>) {
+    let mut ticker = tokio::time::interval(Duration::from_secs(2));
+    ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+    while !stop.load(Ordering::Acquire) {
+        ticker.tick().await;
+        let Ok(Some(operation)) = state.cold.load() else {
+            return;
+        };
+        if operation.operation_id != operation_id || operation.phase.is_terminal() {
+            return;
+        }
+        let Some(tail) = newest_command_tail(&state.paths.run_dir) else {
+            continue;
+        };
+        let _gate = state.cold.gate.lock().await;
+        let Ok(Some(mut operation)) = state.cold.load() else {
+            return;
+        };
+        if operation.operation_id != operation_id || operation.phase.is_terminal() {
+            return;
+        }
+        operation.output_tail = Some(tail);
+        operation.updated_at_unix = Some(unix_time_seconds());
+        let _ = state.cold.write(&operation);
+    }
+}
+
+/// Read the tail of the most recently written command diagnostic, stripped
+/// of control noise, ready for display.
+fn newest_command_tail(run_dir: &Path) -> Option<String> {
+    let newest = std::fs::read_dir(run_dir)
+        .ok()?
+        .filter_map(|entry| entry.ok().map(|entry| entry.path()))
+        .filter(|path| {
+            path.file_name()
+                .map(|name| {
+                    let name = name.to_string_lossy();
+                    name.starts_with("cold-command-") && name.ends_with(".stderr.tmp")
+                })
+                .unwrap_or(false)
+        })
+        .filter_map(|path| {
+            let modified = std::fs::metadata(&path).ok()?.modified().ok()?;
+            Some((path, modified))
+        })
+        .max_by_key(|(_, modified)| *modified)
+        .map(|(path, _)| path)?;
+    let bytes = std::fs::read(&newest).ok()?;
+    let start = bytes.len().saturating_sub(4096);
+    let tail = &bytes[start..];
+    // Keep readable text only: drop ANSI escapes and control characters, then
+    // bound the tail so the persisted operation stays small.
+    let cleaned: String = String::from_utf8_lossy(tail)
+        .chars()
+        .filter(|ch| !ch.is_control())
+        .collect();
+    let start = cleaned.len().saturating_sub(2000);
+    Some(cleaned[start..].to_owned())
 }

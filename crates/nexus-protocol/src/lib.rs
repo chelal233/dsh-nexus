@@ -337,6 +337,11 @@ pub enum ProfileAction {
     /// `profile_patch` (the profile's cordis.patch.yml), and
     /// `plugin_manifest` (the profile's package.json).
     OpenPath,
+    /// Open an interactive terminal scoped to the selected profile: the
+    /// working directory is the profile directory, `DSH_HOME` and the
+    /// resolved runtime tools are injected, and generated `dsh`/`pnpm`
+    /// shims are prepended to `PATH`.
+    OpenTerminal,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -1129,6 +1134,10 @@ pub struct ColdOperation {
     /// pnpm whose major matches the release requirement.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub warning: Option<String>,
+    /// Bounded tail of the running command output, refreshed while the
+    /// install or build streams its diagnostics.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub output_tail: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub supply_plan: Option<serde_json::Value>,
     #[serde(default, skip_serializing_if = "Option::is_none")]

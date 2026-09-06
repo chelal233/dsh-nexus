@@ -176,6 +176,16 @@ pub async fn run_with_instance_id(
     expected_instance_id: Option<String>,
 ) -> io::Result<()> {
     let paths = config.paths();
+    if let Err(rejection) = nexus_core::disk::validate_volume(&paths.root) {
+        return Err(io::Error::new(
+            io::ErrorKind::Unsupported,
+            format!(
+                "Nexus data root is not usable: {} ({})",
+                rejection.message(),
+                paths.root.display(),
+            ),
+        ));
+    }
     paths.ensure_directories()?;
     let data_root_id = data_root_identity(&paths)?;
     let instance_id = match expected_instance_id {
@@ -1359,7 +1369,7 @@ async fn profile_control_inner(
         ProfileAction::PluginMove => profile_plugin_move(state, command).await,
         ProfileAction::PluginDisable | ProfileAction::PluginEnable => profile_plugin_isolation(state, command).await,
         ProfileAction::OpenPath => profile_open_path(state, command).await,
-        ProfileAction::Create => profile_create(state, command).await,
+        ProfileAction::OpenTerminal => profile_open_terminal(state, command).await,        ProfileAction::Create => profile_create(state, command).await,
     }
 }
 
@@ -1434,6 +1444,194 @@ async fn profile_create(state: AppState, command: ProfileCommand) -> axum::respo
 /// Open a bounded profile-related file or directory with the system
 /// handler. Targets derive only from the DSH home and the active profile;
 /// no caller-supplied path is accepted.
+/// Open an interactive terminal prepared for working with the selected
+/// profile: the shell starts in the profile directory with `DSH_HOME` set,
+/// the resolved runtime tools on `PATH`, and generated `dsh`/`pnpm` shims
+/// pointing at the current release's CLI entry.
+async fn profile_open_terminal(
+    state: AppState,
+    command: ProfileCommand,
+) -> axum::response::Response {
+    let dsh_home = match state.snapshots.configured_dsh_home() {
+        Ok(home) => home.clone(),
+        Err(error) => return data_error_response(error, "dsh_home_unavailable"),
+    };
+    let profiles = match state.profiles.load() {
+        Ok(catalog) => catalog,
+        Err(error) => return data_error_response(error, "profile_catalog_unavailable"),
+    };
+    let profile = command
+        .profile
+        .clone()
+        .unwrap_or_else(|| profiles.active_profile.clone());
+    let profile_dir = dsh_home.join("profiles").join(&profile);
+    if !profile_dir.is_dir() {
+        return data_error_response(
+            io::Error::new(
+                io::ErrorKind::NotFound,
+                format!("profile directory not found: {}", profile_dir.display()),
+            ),
+            "profile_dir_missing",
+        );
+    }
+    let catalog = match state.releases.load() {
+        Ok(catalog) => catalog,
+        Err(error) => return data_error_response(error, "release_catalog_unavailable"),
+    };
+    let Some(release_id) = catalog.current_release else {
+        return data_error_response(
+            io::Error::new(io::ErrorKind::NotFound, "no current release is installed"),
+            "release_none_current",
+        );
+    };
+    let release_root = match state.releases.release_root(&release_id) {
+        Ok(root) => root,
+        Err(error) => return data_error_response(error, "release_unavailable"),
+    };
+    let entry = release_root
+        .join("apps")
+        .join("cli")
+        .join("lib")
+        .join("bin.js");
+    if !entry.is_file() {
+        return data_error_response(
+            io::Error::new(
+                io::ErrorKind::NotFound,
+                format!("release CLI entry is missing: {}", entry.display()),
+            ),
+            "release_entry_missing",
+        );
+    }
+    let runtime = match crate::cold::resolved_runtime_config(&state).await {
+        Ok(runtime) => runtime,
+        Err(error) => return data_error_response(error, "runtime_unavailable"),
+    };
+    let Some(node) = runtime.node.as_ref().map(|pin| pin.path.clone()) else {
+        return data_error_response(
+            io::Error::new(io::ErrorKind::NotFound, "no usable node runtime"),
+            "node_missing",
+        );
+    };
+    let pnpm_script = runtime.pnpm.as_ref().map(|pin| pin.path.clone()).filter(|path| {
+        path.extension()
+            .and_then(|extension| extension.to_str())
+            .is_some_and(|extension| matches!(extension.to_ascii_lowercase().as_str(), "js" | "cjs" | "mjs"))
+    });
+    let pnpm_direct = runtime.pnpm.as_ref().map(|pin| pin.path.clone()).filter(|path| !pnpm_script.as_ref().is_some_and(|script| script == path));
+
+    let run_dir = state.paths.run_dir.clone();
+    let shim_dir = run_dir.join("terminal");
+    let prepared = {
+        let node = node.clone();
+        let entry = entry.clone();
+        let shim_dir = shim_dir.clone();
+        tokio::task::spawn_blocking(move || -> io::Result<()> {
+            std::fs::create_dir_all(&shim_dir)?;
+            std::fs::write(
+                shim_dir.join("dsh.cmd"),
+                format!("@\"{}\" \"{}\" %*\r\n", node.display(), entry.display()),
+            )?;
+            if let Some(script) = &pnpm_script {
+                std::fs::write(
+                    shim_dir.join("pnpm.cmd"),
+                    format!("@\"{}\" \"{}\" %*\r\n", node.display(), script.display()),
+                )?;
+            } else if let Some(direct) = &pnpm_direct {
+                std::fs::write(
+                    shim_dir.join("pnpm.cmd"),
+                    format!("@\"{}\" %*\r\n", direct.display()),
+                )?;
+            }
+            Ok(())
+        })
+        .await
+        .map_err(|error| io::Error::other(error.to_string()))
+        .and_then(|prepared| prepared)
+    };
+    if let Err(error) = prepared {
+        return data_error_response(error, "terminal_preparation_failed");
+    }
+
+    let mut envs = match nexus_core::build_runtime_child_env(
+        &runtime,
+        std::env::var_os("PATH").as_deref(),
+    ) {
+        Ok(envs) => envs,
+        Err(error) => return data_error_response(error, "runtime_env_unavailable"),
+    };
+    for (key, value) in envs.iter_mut() {
+        if key == "PATH" {
+            match std::env::join_paths(
+                std::iter::once(shim_dir.clone()).chain(std::env::split_paths(value)),
+            ) {
+                Ok(combined) => *value = combined,
+                Err(error) => {
+                    return data_error_response(
+                        io::Error::new(io::ErrorKind::InvalidInput, error.to_string()),
+                        "runtime_env_unavailable",
+                    )
+                }
+            }
+        }
+    }
+
+    let escaped_profile_dir = profile_dir.display().to_string().replace('\'', "''");
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        let powershell = std::env::var_os("SystemRoot")
+            .map(|root| {
+                std::path::PathBuf::from(root)
+                    .join("System32")
+                    .join("WindowsPowerShell")
+                    .join("v1.0")
+                    .join("powershell.exe")
+            })
+            .filter(|path| path.is_file())
+            .unwrap_or_else(|| std::path::PathBuf::from("powershell.exe"));
+        let mut command = std::process::Command::new(powershell);
+        command
+            .args(["-NoLogo", "-NoExit", "-Command"])
+            .arg(format!("Set-Location -LiteralPath '{escaped_profile_dir}'"))
+            .current_dir(&profile_dir);
+        for (key, value) in &envs {
+            command.env(key, value);
+        }
+        command.env("DSH_HOME", &dsh_home);
+        // CREATE_NEW_CONSOLE gives the terminal its own window even though
+        // the Agent itself runs headless.
+        command.creation_flags(0x0000_0010);
+        if let Err(error) = command.spawn() {
+            return data_error_response(error, "terminal_spawn_failed");
+        }
+    }
+    #[cfg(not(windows))]
+    {
+        let shell = std::env::var_os("SHELL")
+            .map(std::path::PathBuf::from)
+            .unwrap_or_else(|| PathBuf::from("/bin/bash"));
+        let mut command = std::process::Command::new(shell);
+        command.current_dir(&profile_dir);
+        for (key, value) in &envs {
+            command.env(key, value);
+        }
+        command.env("DSH_HOME", &dsh_home);
+        if let Err(error) = command.spawn() {
+            return data_error_response(error, "terminal_spawn_failed");
+        }
+    }
+    (
+        StatusCode::OK,
+        Json(serde_json::json!({
+            "status": "ok",
+            "profile": profile,
+            "profile_dir": profile_dir.to_string_lossy(),
+            "release_id": release_id,
+        })),
+    )
+        .into_response()
+}
+
 async fn profile_open_path(state: AppState, command: ProfileCommand) -> axum::response::Response {
     let Some(target) = command.target.as_deref() else {
         return data_error_response(

@@ -25,3 +25,19 @@
 !macro NSIS_HOOK_PREUNINSTALL
   !insertmacro NexusStopInstalledAgent
 !macroend
+
+; Uninstall experience: the data root (configuration, release slots, cached
+; runtimes) survives by default; offer an explicit cleanup. Harness user data
+; under the user's .dsh home is never touched.
+!macro NexusAskDataCleanup
+  MessageBox MB_YESNO|MB_ICONQUESTION "Also remove Nexus version slots and cached runtimes on this volume? Your Harness data in the .dsh folder is always kept." IDYES NexusCleanupData
+  Goto NexusCleanupDone
+NexusCleanupData:
+  RMDir /r "$LOCALAPPDATA\Nexus\releases"
+  RMDir /r "$LOCALAPPDATA\Nexus\runtimes"
+NexusCleanupDone:
+!macroend
+
+!macro NSIS_HOOK_POSTUNINSTALL
+  !insertmacro NexusAskDataCleanup
+!macroend

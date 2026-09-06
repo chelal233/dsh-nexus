@@ -26,6 +26,7 @@ use nexus_snapshots::RestoreTicket;
 use serde::{Deserialize, Serialize};
 
 pub mod runtime_requirements;
+pub mod disk;
 
 pub const DEFAULT_AGENT_PORT: u16 = 3090;
 pub const DEFAULT_PROFILE: &str = "web";
