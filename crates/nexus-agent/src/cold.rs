@@ -50,7 +50,9 @@ impl std::fmt::Display for ColdCommandFailure {
 impl std::error::Error for ColdCommandFailure {}
 
 pub(crate) fn command_owner_quiescent(error: &io::Error) -> bool {
-    error.get_ref().and_then(|source| source.downcast_ref::<ColdCommandFailure>())
+    error
+        .get_ref()
+        .and_then(|source| source.downcast_ref::<ColdCommandFailure>())
         .map_or(true, |failure| failure.owner_quiescent)
 }
 
@@ -412,7 +414,9 @@ impl ColdCoordinator {
         {
             let current = self.cancellation.lock().await;
             if let Some((id, token)) = current.as_ref() {
-                if id == operation_id { token.cancel(); }
+                if id == operation_id {
+                    token.cancel();
+                }
             }
         }
         let _gate = self.gate.lock().await;
@@ -551,8 +555,16 @@ async fn prepare_inner(state: &AppState, operation_id: &str) -> io::Result<()> {
         ));
     }
     let runtime = resolved_runtime_config(state).await?;
-    crate::git_worker::clone_candidate(APPROVED_UPSTREAM, &operation.tag, &candidate,
-        &state.paths.run_dir, COMMAND_TIMEOUT, &cancellation, crate::git_worker::selected_external(&runtime)).await?;
+    crate::git_worker::clone_candidate(
+        APPROVED_UPSTREAM,
+        &operation.tag,
+        &candidate,
+        &state.paths.run_dir,
+        COMMAND_TIMEOUT,
+        &cancellation,
+        crate::git_worker::selected_external(&runtime),
+    )
+    .await?;
     let revision =
         candidate_revision(&runtime, &candidate, &state.paths.run_dir, &cancellation).await?;
     record_candidate_revision(state, operation_id, &revision).await?;
@@ -841,9 +853,17 @@ async fn build_and_publish(
         Some(APPROVED_UPSTREAM.to_owned()),
         Some("Nexus cold install".to_owned()),
     )?;
-    crate::compatibility::prepare(&state.paths, state.snapshots.configured_dsh_home()?,
-        &state.profiles.load()?.active_profile, &operation.release_id,
-        &state.releases.release_root(&operation.release_id)?, &harness.program, true, &cancellation).await?;
+    crate::compatibility::prepare(
+        &state.paths,
+        state.snapshots.configured_dsh_home()?,
+        &state.profiles.load()?.active_profile,
+        &operation.release_id,
+        &state.releases.release_root(&operation.release_id)?,
+        &harness.program,
+        true,
+        &cancellation,
+    )
+    .await?;
     ensure_not_cancelled(&cancellation)?;
     state.config.write(&config)?;
     final_operation.phase = ColdOperationPhase::Promoting;
@@ -1055,7 +1075,9 @@ fn runtime_from_plan(plan: &nexus_protocol::RuntimePlanResponse) -> io::Result<R
         ..RuntimeConfig::default()
     };
     for tool in &plan.tools {
-        if tool.name == "git" && tool.state != nexus_protocol::RuntimePlanToolState::Reusable { continue; }
+        if tool.name == "git" && tool.state != nexus_protocol::RuntimePlanToolState::Reusable {
+            continue;
+        }
         let path = tool
             .path
             .as_ref()
@@ -1092,7 +1114,11 @@ async fn run_pnpm(
     let command = resolve_runtime_command(runtime, "pnpm")?.ok_or_else(|| {
         io::Error::new(io::ErrorKind::NotFound, "verified pnpm runtime is missing")
     })?;
-    let args = build_pnpm_args(runtime, args.into_iter().map(OsString::from));
+    let mut args: Vec<OsString> = args.into_iter().map(OsString::from).collect();
+    if args.first().is_some_and(|arg| arg == "install") {
+        args.push("--reporter=append-only".into());
+    }
+    let args = build_pnpm_args(runtime, args);
     run_command(
         "pnpm",
         &command.program,
@@ -1126,22 +1152,42 @@ async fn run_command(
     for (key, value) in build_runtime_child_env(runtime, std::env::var_os("PATH").as_deref())? {
         command.env(key, value);
     }
-    run_owned_command(
+    run_owned_command_diagnostics(
         command,
         phase,
         COMMAND_TIMEOUT,
         diagnostic_dir,
         cancellation,
+        true,
     )
     .await
 }
 
 pub(crate) async fn run_owned_command(
+    command: std::process::Command,
+    phase: &str,
+    duration: Duration,
+    diagnostic_dir: &Path,
+    cancellation: &CancellationToken,
+) -> io::Result<()> {
+    run_owned_command_diagnostics(
+        command,
+        phase,
+        duration,
+        diagnostic_dir,
+        cancellation,
+        false,
+    )
+    .await
+}
+
+async fn run_owned_command_diagnostics(
     mut command: std::process::Command,
     phase: &str,
     duration: Duration,
     diagnostic_dir: &Path,
     cancellation: &CancellationToken,
+    capture_stdout: bool,
 ) -> io::Result<()> {
     fs::create_dir_all(diagnostic_dir)?;
     let diagnostic_path = diagnostic_dir.join(format!(
@@ -1154,23 +1200,51 @@ pub(crate) async fn run_owned_command(
         .write(true)
         .open(&diagnostic_path)?;
     command.stderr(Stdio::from(diagnostic));
+    let stdout_path = if capture_stdout {
+        let path = diagnostic_path.with_extension("stdout.tmp");
+        let file = fs::OpenOptions::new()
+            .create_new(true)
+            .write(true)
+            .open(&path)?;
+        command.stdout(Stdio::from(file));
+        Some(path)
+    } else {
+        None
+    };
     let token = cancellation.clone();
     let phase = phase.to_owned();
     let result = tokio::task::spawn_blocking(move || {
         crate::dsh::run_cold_process(&mut command, duration, || token.is_cancelled())
     })
     .await
-    .map_err(|error| io::Error::other(ColdCommandFailure {
-        message: format!("owned command worker failed: {error}"),
-        owner_quiescent: false,
-    }))?;
-    let diagnostic = read_command_diagnostic(&diagnostic_path);
-    let cleanup = fs::remove_file(&diagnostic_path);
-    let (diagnostic, truncated) = diagnostic.map_err(|error| io::Error::other(ColdCommandFailure {
-        message: format!("owned command diagnostic failed: {error}"),
-        owner_quiescent: result.as_ref().err().map_or(true, crate::dsh::cold_process_owner_quiescent),
-    }))?;
-    let suffix = if diagnostic.is_empty() {
+    .map_err(|error| {
+        io::Error::other(ColdCommandFailure {
+            message: format!("owned command worker failed: {error}"),
+            owner_quiescent: false,
+        })
+    })?;
+    let per_stream_limit = if capture_stdout {
+        COMMAND_DIAGNOSTIC_BYTES / 2
+    } else {
+        COMMAND_DIAGNOSTIC_BYTES
+    };
+    let diagnostic = read_command_diagnostic(&diagnostic_path, per_stream_limit);
+    let stdout = stdout_path
+        .as_ref()
+        .map(|path| read_command_diagnostic(path, per_stream_limit))
+        .transpose();
+    let cleanup = fs::remove_file(&diagnostic_path)
+        .and_then(|_| stdout_path.as_ref().map_or(Ok(()), fs::remove_file));
+    let (diagnostic, truncated) = diagnostic.map_err(|error| {
+        io::Error::other(ColdCommandFailure {
+            message: format!("owned command diagnostic failed: {error}"),
+            owner_quiescent: result
+                .as_ref()
+                .err()
+                .map_or(true, crate::dsh::cold_process_owner_quiescent),
+        })
+    })?;
+    let mut suffix = if diagnostic.is_empty() {
         String::new()
     } else {
         format!(
@@ -1179,6 +1253,22 @@ pub(crate) async fn run_owned_command(
             diagnostic.trim()
         )
     };
+    let stdout = stdout.map_err(|error| {
+        io::Error::other(ColdCommandFailure {
+            message: format!("owned command stdout diagnostic failed: {error}"),
+            owner_quiescent: result
+                .as_ref()
+                .err()
+                .map_or(true, crate::dsh::cold_process_owner_quiescent),
+        })
+    })?;
+    if let Some((stdout, truncated)) = stdout.filter(|(text, _)| !text.is_empty()) {
+        suffix.push_str(&format!(
+            "; stdout{}: {}",
+            if truncated { " (tail truncated)" } else { "" },
+            stdout.trim()
+        ));
+    }
     let command_result = match result {
         Ok(status) if status.success() => Ok(()),
         Ok(status) => Err(io::Error::other(format!(
@@ -1217,20 +1307,19 @@ pub(crate) async fn run_owned_command(
     }
 }
 
-fn read_command_diagnostic(path: &Path) -> io::Result<(String, bool)> {
+fn read_command_diagnostic(path: &Path, maximum: usize) -> io::Result<(String, bool)> {
     use io::{Read, Seek, SeekFrom};
 
     let mut file = fs::File::open(path)?;
     let length = file.metadata()?.len();
-    let truncated = length > COMMAND_DIAGNOSTIC_BYTES as u64;
+    let truncated = length > maximum as u64;
     if truncated {
-        file.seek(SeekFrom::End(-(COMMAND_DIAGNOSTIC_BYTES as i64)))?;
+        file.seek(SeekFrom::End(-(maximum as i64)))?;
     }
-    let mut bytes = Vec::with_capacity(length.min(COMMAND_DIAGNOSTIC_BYTES as u64) as usize);
-    file.take(COMMAND_DIAGNOSTIC_BYTES as u64)
-        .read_to_end(&mut bytes)?;
+    let mut bytes = Vec::with_capacity(length.min(maximum as u64) as usize);
+    file.take(maximum as u64).read_to_end(&mut bytes)?;
     if truncated {
-        if let Some(boundary) = bytes.iter().position(|byte| *byte == b'\n') {
+        if let Some(boundary) = bytes.iter().position(|byte| matches!(*byte, b'\n' | b'\r')) {
             bytes.drain(..=boundary);
         } else {
             bytes.clear();
@@ -1238,7 +1327,16 @@ fn read_command_diagnostic(path: &Path) -> io::Result<(String, bool)> {
     }
     let lossy = String::from_utf8_lossy(&bytes);
     let redacted = redact_diagnostics_payload(lossy.as_bytes()).0;
-    Ok((String::from_utf8_lossy(&redacted).into_owned(), truncated))
+    let mut text = String::from_utf8_lossy(&redacted).into_owned();
+    let expanded = text.len() > maximum;
+    if expanded {
+        let mut boundary = text.len() - maximum;
+        while !text.is_char_boundary(boundary) {
+            boundary += 1;
+        }
+        text.drain(..boundary);
+    }
+    Ok((text, truncated || expanded))
 }
 
 async fn candidate_revision(
@@ -1248,7 +1346,13 @@ async fn candidate_revision(
     cancellation: &CancellationToken,
 ) -> io::Result<String> {
     ensure_not_cancelled(cancellation)?;
-    crate::git_worker::head(candidate, diagnostic_dir, cancellation, crate::git_worker::selected_external(runtime)).await
+    crate::git_worker::head(
+        candidate,
+        diagnostic_dir,
+        cancellation,
+        crate::git_worker::selected_external(runtime),
+    )
+    .await
 }
 fn verify_built_cli(root: &Path) -> io::Result<()> {
     let manifest = fs::read(root.join("apps/cli/package.json"))?;
@@ -1931,6 +2035,54 @@ while ($true) {{ Start-Sleep -Seconds 1 }}"#, child.display())).unwrap();
         assert!(!error.contains("TOPSECRET"));
         assert!(error.len() <= COMMAND_DIAGNOSTIC_BYTES + 256);
         assert_eq!(fs::read_dir(&run_dir).unwrap().count(), 0);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[cfg(windows)]
+    #[tokio::test]
+    async fn dual_diagnostics_are_bounded_redacted_and_preserve_caller_stdout() {
+        let root = std::env::temp_dir().join(format!(
+            "nexus-dual-output-{}",
+            unix_time_nanos_for_update()
+        ));
+        fs::create_dir_all(&root).unwrap();
+        let mut command = std::process::Command::new("cmd.exe");
+        command.args(["/D", "/C", "(for /L %i in (1,1,4000) do @echo padding-padding-padding) & (echo stdout-failure) & (echo Authorization: Bearer SECRETSTDOUT) & (echo stderr-failure 1>&2) & exit /b 7"]);
+        let error = run_owned_command_diagnostics(
+            command,
+            "pnpm",
+            Duration::from_secs(10),
+            &root,
+            &CancellationToken::default(),
+            true,
+        )
+        .await
+        .unwrap_err();
+        assert!(command_owner_quiescent(&error));
+        let error = error.to_string();
+        assert!(error.contains("stdout-failure") && error.contains("stderr-failure"));
+        assert!(!error.contains("SECRETSTDOUT"));
+        assert!(error.contains("[REDACTED]") && error.contains("tail truncated"));
+        assert!(error.len() <= COMMAND_DIAGNOSTIC_BYTES + 256);
+        assert_eq!(fs::read_dir(&root).unwrap().count(), 0);
+
+        let output = root.join("caller-output");
+        let mut command = std::process::Command::new("cmd.exe");
+        command
+            .args(["/D", "/C", "echo machine-readable-output"])
+            .stdout(fs::File::create(&output).unwrap());
+        run_owned_command(
+            command,
+            "git-fixture",
+            Duration::from_secs(5),
+            &root,
+            &CancellationToken::default(),
+        )
+        .await
+        .unwrap();
+        assert!(fs::read_to_string(&output)
+            .unwrap()
+            .contains("machine-readable-output"));
         fs::remove_dir_all(root).unwrap();
     }
 
