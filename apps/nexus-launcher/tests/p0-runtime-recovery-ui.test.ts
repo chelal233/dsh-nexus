@@ -54,30 +54,25 @@ test("profile hub collapses children; profile plugins show truthful inventory", 
   } finally { await vite.close(); }
 });
 
-test("cold confirmation renders exact version, destination, effects, and explicit actions", async () => {
+test("cold operations render stages without a confirmation pause", async () => {
   const { vite, UpdatesView } = await loadViews();
   try {
     const snapshot = {
       ...baseSnapshot,
-      config: { runtime: { source: "official", mode: "system", node: { path: "C:\\node.exe", ownership: "system" } } },
+      config: { runtime: { source: "official", mode: "portable" } },
       updates: { update: { state: "running" }, operation: {
         operation_id: "cold-7", phase: "awaiting_confirmation", tag: "v1.2.3", progress_percent: 25,
-        confirmation: "sha256:plan", supply_plan: {
-          supply_plan_id: "sha256:plan", destination_root: "C:\\Nexus\\runtimes",
-          node: { version: "24.20.0", disposition: "install_system", path: "C:\\Program Files\\nodejs\\node.exe" },
-          pnpm: { version: "11.7.0", disposition: "install_system", path: "C:\\pnpm\\pnpm.exe" },
-        },
       } },
       releases: { releases: [] },
     };
     const markup = renderToStaticMarkup(createElement(UpdatesView, { ...props, snapshot }));
-    assert.match(markup, /24\.20\.0/);
-    assert.match(markup, /C:\\Nexus\\runtimes/);
-    assert.match(markup, /install_system/);
-    assert.match(markup, /Confirm exact plan/);
-    assert.match(markup, /Cancel/);
+    // Supply confirmation is retired: no confirm actions, no supply plan
+    // details, and no bundled-runtime download promises.
+    assert.doesNotMatch(markup, /Confirm exact plan/);
+    assert.doesNotMatch(markup, /supply_plan/);
+    assert.match(markup, /Current stage/);
+    assert.match(markup, /v1\.2\.3/);
     assert.match(markup, /test an isolated profile first/);
-    assert.match(markup, /working profile is not started automatically/);
   } finally { await vite.close(); }
 });
 

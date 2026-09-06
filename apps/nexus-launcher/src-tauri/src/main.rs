@@ -50,6 +50,7 @@ const ALLOWED_ROUTES: &[&str] = &[
     "/v1/updates",
     "/v1/diagnostics",
     "/v1/config",
+    "/v1/maintenance",
     "/v1/lifecycle",
     "/v1/shutdown",
 ];
@@ -441,6 +442,46 @@ fn set_native_locale(_app: AppHandle, _locale: String) -> Result<(), String> {
     Ok(())
 }
 
+#[cfg(desktop)]
+#[tauri::command]
+fn autostart_status(app: AppHandle) -> Result<bool, String> {
+    use tauri_plugin_autostart::ManagerExt;
+    app.autolaunch()
+        .is_enabled()
+        .map_err(|error| error.to_string())
+}
+
+#[cfg(not(desktop))]
+#[tauri::command]
+fn autostart_status(_app: AppHandle) -> Result<bool, String> {
+    Ok(false)
+}
+
+#[cfg(desktop)]
+#[tauri::command]
+fn autostart_set(app: AppHandle, enabled: bool) -> Result<(), String> {
+    use tauri_plugin_autostart::ManagerExt;
+    let autostart = app.autolaunch();
+    let result = if enabled {
+        autostart.enable()
+    } else {
+        autostart.disable()
+    };
+    result.map_err(|error| error.to_string())
+}
+
+#[cfg(not(desktop))]
+#[tauri::command]
+fn autostart_set(_app: AppHandle, _enabled: bool) -> Result<(), String> {
+    Ok(())
+}
+
+#[tauri::command]
+fn agent_log_set(level: String) -> Result<(), String> {
+    nexus_launcher_core::set_agent_log_level(&level);
+    Ok(())
+}
+
 fn main() {
     let builder = tauri::Builder::default()
         // The single-instance plugin must be registered first.
@@ -448,11 +489,18 @@ fn main() {
             show_window(app);
         }))
         .plugin(tauri_plugin_notification::init())
+        .plugin(tauri_plugin_autostart::init(
+            tauri_plugin_autostart::MacosLauncher::LaunchAgent,
+            None,
+        ))
         .invoke_handler(tauri::generate_handler![
             startup_status,
             retry_startup,
             proxy_request,
-            set_native_locale
+            set_native_locale,
+            autostart_status,
+            autostart_set,
+            agent_log_set
         ])
         .setup(|app| {
             let resource_dir = app.path().resource_dir().map_err(|error| {

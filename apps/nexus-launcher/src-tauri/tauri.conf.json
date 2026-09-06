@@ -36,7 +36,7 @@
       "resources/nexus-agent*": "",
       "resources/nexus-launcher*": "",
       "resources/nexusctl*": "",
-      "resources/runtime/**": "runtime/"
+      "resources/runtime/*": "runtime/"
     },
     "category": "Utility",
     "shortDescription": "Native local control plane for Nexus",

@@ -65,6 +65,7 @@ const AGENT_ROUTES: &[&str] = &[
     "/v1/updates",
     "/v1/diagnostics",
     "/v1/config",
+    "/v1/maintenance",
     "/v1/lifecycle",
     "/v1/shutdown",
 ];
@@ -432,7 +433,9 @@ pub fn validate_agent_request(
         | "/v1/recovery" => *method == Method::GET,
         "/v1/runtime/plan" => *method == Method::POST,
         "/v1/harness" | "/v1/profiles" | "/v1/checkpoints" | "/v1/releases" | "/v1/updates"
-        | "/v1/diagnostics" | "/v1/config" => *method == Method::GET || *method == Method::POST,
+        | "/v1/diagnostics" | "/v1/config" | "/v1/maintenance" => {
+            *method == Method::GET || *method == Method::POST
+        }
         "/v1/lifecycle" | "/v1/shutdown" => *method == Method::POST,
         _ => false,
     };
@@ -1206,6 +1209,31 @@ fn platform_agent_name() -> &'static str {
     }
 }
 
+static AGENT_LOG_LEVEL: std::sync::RwLock<Option<&'static str>> = std::sync::RwLock::new(None);
+
+/// Set the log level for subsequently spawned Agent processes. Accepts the
+/// standard level names; anything else clears the override back to the
+/// Agent default ("info"). Applies on the next spawn, not to a live Agent.
+pub fn set_agent_log_level(level: &str) {
+    let parsed = match level {
+        "error" => Some("error"),
+        "warn" => Some("warn"),
+        "info" => Some("info"),
+        "debug" => Some("debug"),
+        "trace" => Some("trace"),
+        _ => None,
+    };
+    *AGENT_LOG_LEVEL
+        .write()
+        .expect("agent log level lock is not poisoned") = parsed;
+}
+
+pub fn agent_log_level() -> Option<&'static str> {
+    *AGENT_LOG_LEVEL
+        .read()
+        .expect("agent log level lock is not poisoned")
+}
+
 fn spawn_agent(
     program: &Path,
     config: &NexusConfig,
@@ -1239,6 +1267,9 @@ fn spawn_agent(
         .stdin(Stdio::null())
         .stdout(Stdio::from(stdout))
         .stderr(Stdio::from(stderr));
+    if let Some(level) = agent_log_level() {
+        command.env("NEXUS_AGENT_LOG", level);
+    }
     configure_agent_process(&mut command);
     command.spawn()
 }

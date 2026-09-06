@@ -1,5 +1,13 @@
 updated: 2026-09-06 by ZCode (运行时工具获取契约反转：内置运行时随包分发，下载链路退役)
 
+## P1 尾巴三件已落地（2026-09-07，ZCode）：自启/重置/帮助
+
+- **P1#16「像个正常软件」**：托盘常驻、关窗最小化到托盘（带通知）、单实例、全局快捷键此前已在（setup_tray + CloseRequested + single-instance + Ctrl+Shift+N）；本轮新增**可选开机自启**——tauri-plugin-autostart 插件（Run 键，用户级），自定义命令 autostart_status/autostart_set，设置页「原生集成」面板开关（浏览器预览中禁用态），i18n 中英
+- **P1#17 一键修复/重置**：新端点 POST /v1/maintenance {action:"reset", scope:"config"|"slots"}——守卫：Harness 已停止（lifecycle guard）+ 无活跃冷操作；reset 前把将替换文件备份到 diagnostics/reset-backup-<unix>/；scope=config 重写 config.json 为默认 + 清 update-state.json；scope=slots 额外删 release-pointers.json（槽位文件留盘，重装/切换可再注册）；.dsh 永不触碰。launcher-core 白名单 + Tauri 镜像路由同步。设置页「修复与重置」面板，两段式确认按钮
+- **P1#18 帮助入口**：设置页「帮助」面板——上游文档链接（deepseek-harness GitHub）、诊断与日志指引（复用诊断页）、Agent 日志级别选择（error..trace）：launcher-core 静态 AGENT_LOG_LEVEL → spawn_agent 注入 NEXUS_AGENT_LOG env → agent main 读取并应用到 tracing EnvFilter（下次 Agent 启动生效，前端 localStorage 持久化 + 启动时 best-effort 回放）；三条常见问题（启动失败/依赖超时/缺工具）
+- **资源映射修正**：tauri.conf resources glob 由 `resources/runtime/**` 改为 `resources/runtime/*`（glob crate 语义 + 构建脚本实际接受）；目录由 Tauri 递归复制
+- **测试**：agent 148/148 单线程；前端 37/37（改写已退役的「cold 确认面板」测试为「冷操作不再有确认暂停」断言）
+
 ## 清理批已落地（2026-09-07，ZCode）：nexus-runtime-supply 整体退役
 
 - **下载链路物理删除**：crates/nexus-runtime-supply 已从 workspace 移除并删除目录（HttpDownloadClient/SourcePolicy/archive/system/portable 下载发布、PublishPortable/InstallSystem/SupplyPlan 全套）；复用判定职责此前已由 foundation 观测层（system/portable/bundled candidates）完全覆盖

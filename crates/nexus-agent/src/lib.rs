@@ -326,6 +326,7 @@ fn build_router(state: AppState) -> Router {
             get(diagnostics_status).post(diagnostics_control),
         )
         .route("/v1/config", get(config_status).post(config_control))
+        .route("/v1/maintenance", post(maintenance_control))
         .route("/v1/lifecycle", post(lifecycle))
         .route("/v1/shutdown", post(shutdown))
         .layer(middleware::from_fn_with_state(
@@ -3309,6 +3310,134 @@ async fn config_status(State(state): State<AppState>) -> axum::response::Respons
         },
         Err(error) => data_error_response(error, "config_unavailable"),
     }
+}
+
+#[derive(Debug, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct MaintenanceRequest {
+    action: String,
+    #[serde(default)]
+    scope: Option<String>,
+}
+
+async fn maintenance_control(
+    State(state): State<AppState>,
+    Json(request): Json<MaintenanceRequest>,
+) -> axum::response::Response {
+    if request.action != "reset" {
+        return api_error_response(
+            StatusCode::BAD_REQUEST,
+            "maintenance_invalid_action",
+            "maintenance action must be \"reset\"",
+        );
+    }
+    let scope = match request.scope.as_deref() {
+        None | Some("config") => "config",
+        Some("slots") => "slots",
+        _ => {
+            return api_error_response(
+                StatusCode::BAD_REQUEST,
+                "maintenance_invalid_scope",
+                "maintenance scope must be \"config\" or \"slots\"",
+            )
+        }
+    };
+    let lifecycle = state.supervisor.acquire_lifecycle().await;
+    if let Err(response) = ensure_harness_stopped(&state, &lifecycle).await {
+        return response;
+    }
+    if state
+        .cold
+        .load()
+        .ok()
+        .flatten()
+        .is_some_and(|operation| !operation.phase.is_terminal())
+    {
+        return api_error_response(
+            StatusCode::CONFLICT,
+            "cold_operation_active",
+            "a cold-install operation is active; cancel or finish it before resetting",
+        );
+    }
+    let paths = state.paths.clone();
+    let owned_scope = scope.to_owned();
+    let result = tokio::task::spawn_blocking(move || {
+        perform_maintenance_reset(&paths, &owned_scope)
+    })
+    .await;
+    match result {
+        Ok(Ok(summary)) => (StatusCode::OK, Json(summary)).into_response(),
+        Ok(Err(error)) => data_error_response(error, "maintenance_reset_failed"),
+        Err(error) => data_error_response(
+            io::Error::other(error.to_string()),
+            "maintenance_reset_failed",
+        ),
+    }
+}
+
+/// Repair path for broken Nexus state: rewrite config.json to defaults and
+/// clear the persisted task journal, optionally also releasing the slot
+/// pointers. Harness user data under DSH_HOME is never touched, installed
+/// slot directories stay on disk, and every replaced file is copied into
+/// diagnostics/reset-backup-<unix> for recovery.
+fn perform_maintenance_reset(
+    paths: &nexus_core::NexusPaths,
+    scope: &str,
+) -> io::Result<serde_json::Value> {
+    use nexus_core::{unix_time_seconds, write_json_atomic, NexusConfigFile};
+    paths.ensure_directories()?;
+    let backup_dir = paths
+        .diagnostics_dir
+        .join(format!("reset-backup-{}", unix_time_seconds()));
+    std::fs::create_dir_all(&backup_dir)?;
+    let mut backed_up: Vec<String> = Vec::new();
+    let mut removed: Vec<String> = Vec::new();
+
+    backup_file(&paths.config_file, &backup_dir, "config.json", &mut backed_up)?;
+    write_json_atomic(
+        &paths.root,
+        &paths.config_file,
+        &NexusConfigFile::default(),
+    )?;
+    if paths.update_state_file.exists() {
+        backup_file(
+            &paths.update_state_file,
+            &backup_dir,
+            "update-state.json",
+            &mut backed_up,
+        )?;
+        std::fs::remove_file(&paths.update_state_file)?;
+        removed.push("update-state.json".to_owned());
+    }
+
+    if scope == "slots" {
+        backup_file(
+            &paths.release_pointers_file,
+            &backup_dir,
+            "release-pointers.json",
+            &mut backed_up,
+        )?;
+        if paths.release_pointers_file.exists() {
+            std::fs::remove_file(&paths.release_pointers_file)?;
+            removed.push("release-pointers.json".to_owned());
+        }
+    }
+
+    Ok(serde_json::json!({
+        "status": "ok",
+        "scope": scope,
+        "backup_dir": backup_dir.to_string_lossy(),
+        "backed_up": backed_up,
+        "removed": removed,
+    }))
+}
+
+fn backup_file(source: &std::path::Path, backup_dir: &std::path::Path, name: &str, backed_up: &mut Vec<String>) -> io::Result<()> {
+    if source.exists() {
+        std::fs::copy(source, backup_dir.join(name))?;
+        backed_up.push(name.to_owned());
+    }
+    Ok(())
 }
 
 async fn config_control(

@@ -20,8 +20,14 @@ fn main() {
         }
     };
 
+    // The launcher injects NEXUS_AGENT_LOG when the user picks a log level;
+    // unknown or absent values keep the default.
+    let level = std::env::var("NEXUS_AGENT_LOG")
+        .ok()
+        .filter(|value| matches!(value.as_str(), "error" | "warn" | "debug" | "trace"))
+        .unwrap_or_else(|| "info".to_owned());
     tracing_subscriber::fmt()
-        .with_env_filter("nexus_agent=info")
+        .with_env_filter(format!("nexus_agent={level}"))
         .init();
 
     let runtime = match tokio::runtime::Builder::new_multi_thread()

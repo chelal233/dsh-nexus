@@ -1962,6 +1962,29 @@ function HarnessDiscoveryPanel({
 function SettingsView({ snapshot, themeMode, setThemeMode, busyAction, runAction }: ViewProps) {
   const { locale, setLocale, t } = useI18n();
   const [notificationsEnabled, setNotificationsEnabled] = useState(notificationsEnabledPreference());
+  const [autostartEnabled, setAutostartEnabled] = useState<boolean | null>(null);
+  const [armedReset, setArmedReset] = useState<string | null>(null);
+  const [logLevel, setLogLevel] = useState<string>(() => window.localStorage.getItem("nexus.launcher.agent-log-level") || "info");
+  useEffect(() => {
+    // Re-apply the persisted level whenever settings open; best-effort in
+    // browser-only previews.
+    void invoke("agent_log_set", { level: logLevel }).catch(() => undefined);
+  }, [logLevel]);
+  useEffect(() => {
+    // Best-effort: the launcher desktop bundle answers; browser-only
+    // development previews stay with an unavailable checkbox.
+    invoke<boolean>("autostart_status")
+      .then((value) => setAutostartEnabled(value === true))
+      .catch(() => setAutostartEnabled(null));
+  }, []);
+  const toggleAutostart = async (enabled: boolean) => {
+    try {
+      await invoke("autostart_set", { enabled });
+      setAutostartEnabled(enabled);
+    } catch {
+      setAutostartEnabled(null);
+    }
+  };
   const config = asObject(snapshot.config);
   const harness = nestedValue(config, "harness");
   const update = nestedValue(config, "update");
@@ -2174,6 +2197,19 @@ function SettingsView({ snapshot, themeMode, setThemeMode, busyAction, runAction
     <PageIntro kicker={t("System / Settings")} title={t("Settings")} detail={t("Configuration remains Agent-owned. This view intentionally exposes metadata, not credentials or raw environment values.")} />
     <div className="grid-two">
 <Panel title={t("Runtime settings")} icon={<Cpu size={18} />}><div className="status-block"><div className="button-row"><ActionButton onClick={() => setRuntimeSetupOpen((open) => !open)}>{runtimeSetupOpen ? t("Hide dependency registry") : t("Change dependency registry")}</ActionButton></div>{runtimeSetupOpen && <div className="form-grid"><label className="form-field"><span className="field-label">{t("Dependency registry")}</span><select className="form-input" value={runtimeSource} onChange={(e) => setRuntimeSource(e.target.value)}><option value="official">{t("Official")}</option><option value="npmmirror">npmmirror</option></select></label></div>}{runtimeSetupOpen && <p className="field-help">{t("Only used when Harness dependencies are downloaded. Nexus never downloads Node, pnpm, or Git.")}</p>}<div className="form-grid">{(["node", "pnpm", "git"] as const).map((name) => <label key={name} className="form-field"><span className="field-label">{name} {t("pin")}</span><input className="form-input" value={pins[name]} placeholder={stringValue(nestedValue(runtime, name), "path") || t("Leave blank for automatic discovery")} onChange={(event) => setPins((current) => ({ ...current, [name]: event.target.value }))} /></label>)}</div><p className="field-help">{t("Manual paths are saved as system pins. Leave blank to resolve automatically: your system tools first, then the ones bundled with Nexus.")}</p><ActionButton disabled={runtimeGate.disabled} onClick={() => void runAction(t("Save runtime settings"), "/v1/config", { action: "set_runtime", runtime: { node: pins.node.trim() ? { path: pins.node.trim(), ownership: "system" } : null, pnpm: pins.pnpm.trim() ? { path: pins.pnpm.trim(), ownership: "system" } : null, git: pins.git.trim() ? { path: pins.git.trim(), ownership: "system" } : null, source: runtimeSource, mode: runtimeMode } })}>{t("Save runtime settings")}</ActionButton>{runtimeGateReason && <p className="field-help" role="status">{runtimeGateReason}</p>}</div><hr className="panel-divider" /><RuntimeStatusPanel agentAvailable={snapshot.startup?.available === true} state={runtimeStatus} onCheck={() => void checkRuntime()} /></Panel>
+      <Panel title={t("Repair & reset")} icon={<Gear size={18} />}><p className="field-help">{t("Reset repairs broken Nexus state. Harness data under .dsh is never touched; installed version slots stay on disk.")}</p><div className="button-row">
+          <ActionButton tone={armedReset === "config" ? "danger" : undefined} disabled={busyAction !== null} onClick={() => { const scope = "config"; if (armedReset === scope) { setArmedReset(null); void runAction(t("Reset Nexus configuration"), "/v1/maintenance", { action: "reset", scope }); } else { setArmedReset(scope); } }}>{armedReset === "config" ? t("Click again to confirm") : t("Reset Nexus configuration")}</ActionButton>
+          <ActionButton tone={armedReset === "slots" ? "danger" : undefined} disabled={busyAction !== null} onClick={() => { const scope = "slots"; if (armedReset === scope) { setArmedReset(null); void runAction(t("Reset configuration and slot registry"), "/v1/maintenance", { action: "reset", scope }); } else { setArmedReset(scope); } }}>{armedReset === "slots" ? t("Click again to confirm") : t("Reset configuration and slot registry")}</ActionButton>
+        </div>{armedReset && <p className="form-error" role="alert">{t("Click the same button again to run the reset. Harness must be stopped.")}</p>}</Panel>
+      <Panel title={t("Help")} icon={<TerminalWindow size={18} />}><div className="integration-list">
+          <div><CheckCircle size={18} /><span>{t("Upstream documentation")}</span><a href="https://github.com/deepseek-ai/deepseek-harness" target="_blank" rel="noreferrer">github.com/deepseek-ai/deepseek-harness</a></div>
+          <div><CheckCircle size={18} /><span>{t("Diagnostics and logs")}</span><span>{t("Runtime logs and diagnostic bundles are collected on the Diagnostics page.")}</span></div>
+          <div><Gear size={18} /><span>{t("Agent log level")}</span><select className="form-input" value={logLevel} onChange={(event) => setLogLevel(event.target.value)}><option value="error">error</option><option value="warn">warn</option><option value="info">info</option><option value="debug">debug</option><option value="trace">trace</option></select></div>
+        </div><p className="field-help">{t("The log level applies the next time the Agent starts.")}</p>
+        <details><summary>{t("Harness fails to start")}</summary><p className="field-help">{t("Open the startup log from the Overview or Diagnostics page. Plugin mismatches are expected across versions; use Recovery to remove the affected plugin or restore a healthy snapshot.")}</p></details>
+        <details><summary>{t("Dependency download is slow or times out")}</summary><p className="field-help">{t("Switch the dependency registry to npmmirror in Settings, then retry the install.")}</p></details>
+        <details><summary>{t("Node, pnpm, or Git is missing")}</summary><p className="field-help">{t("Nexus uses your own tools first, then the ones bundled with it. You can pin exact paths in Runtime settings above.")}</p></details>
+      </Panel>
       <Panel title={t("Appearance")} icon={<Gear size={18} />}>
         <label className="field-label" htmlFor="theme-mode">{t("Theme")}</label>
         <select id="theme-mode" className="theme-select" value={themeMode} onChange={(event) => setThemeMode(event.target.value as ThemeMode)}>
@@ -2213,7 +2249,7 @@ function SettingsView({ snapshot, themeMode, setThemeMode, busyAction, runAction
         {!hasHarnessConfig && !editingHarness && <EmptyState title={t("Harness is not configured")} detail={t("The Agent remains usable as a control plane until an external Harness is configured.")} />}
       </Panel>
      </div>
-     <Panel title={t("Native integration")} icon={<Bell size={18} />}><div className="integration-list"><div><CheckCircle size={18} /><span>{t("Single instance guard")}</span><strong>{t("Enabled")}</strong></div><div><Bell size={18} /><span>{t("Desktop notifications")}</span><label className="form-check"><input type="checkbox" checked={notificationsEnabled} onChange={(event) => { setNotificationsEnabledPreference(event.target.checked); setNotificationsEnabled(event.target.checked); }} /><span>{t("Enabled")}</span></label></div><div><Key size={18} /><span>{t("API transport")}</span><strong>{t("Rust loopback proxy")}</strong></div></div></Panel>
+     <Panel title={t("Native integration")} icon={<Bell size={18} />}><div className="integration-list"><div><CheckCircle size={18} /><span>{t("Single instance guard")}</span><strong>{t("Enabled")}</strong></div><div><Bell size={18} /><span>{t("Desktop notifications")}</span><label className="form-check"><input type="checkbox" checked={notificationsEnabled} onChange={(event) => { setNotificationsEnabledPreference(event.target.checked); setNotificationsEnabled(event.target.checked); }} /><span>{t("Enabled")}</span></label></div><div><Key size={18} /><span>{t("API transport")}</span><strong>{t("Rust loopback proxy")}</strong></div><div><CheckCircle size={18} /><span>{t("Launch on system startup")}</span><label className="form-check"><input type="checkbox" checked={autostartEnabled === true} disabled={autostartEnabled === null} onChange={(event) => void toggleAutostart(event.target.checked)} /><span>{autostartEnabled === null ? t("Unavailable") : autostartEnabled ? t("Enabled") : t("Disabled")}</span></label></div></div></Panel>
   </>;
 }
 
