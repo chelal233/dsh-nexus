@@ -24,7 +24,7 @@ updated: 2026-09-06 by ZCode (运行时工具获取契约反转：内置运行�
 - **P2#19 磁盘预检 ✅**：nexus-core/src/disk.rs——数据根仅接受固定盘 NTFS/ReFS（GetVolumePathNameW+GetDriveTypeW+GetVolumeInformationW），agent 启动即校验（违者拒绝启动）；冷安装前 4GiB 空间预检（GetDiskFreeSpaceExW）
 - **P2#23 卸载体验 ✅（NSIS）**：POSTUNINSTALL 询问是否清理 %LOCALAPPDATA%\Nexus\{releases,runtimes}；.dsh 默认保留。MSI 卸载为静默语义（不询问、不落数据根），已文档化
 - **④ 安装实时进度 ✅（有界尾随）**：ColdOperation.output_tail（≤2000 字符去控制符）由 2 秒节流 tailer 从最新 cold-command-*.stderr.tmp 刷新；UI 冷状态块显示「安装输出」
-- **P2#22 ACL 调研**：进行中（后台代理），结论见下节
+- **P2#22 ACL 沙箱 ✅（调研+实测双证据）**：上游实现=@deepseek-ai/dsh-sandbox-windows-acl（koffi Win32 FFI：GetNamedSecurityInfoW/SetEntriesInAclW/CreateRestrictedToken(WRITE_RESTRICTED)/CreateProcessAsUserW），装配在 sandbox-local（win32 链 windows-acl，runner 前缀=[process.execPath, lib/runner.js]），默认经 cordis.patch.yml 装载 mode=DSH_PERMISSION_MODE??workspace-write、workspaceRoot=process.cwd()。**不依赖 Electron/桌面 env/管理员**（桌面侧只是 Electron 适配器，对 node 是 no-op；owner 隐式 WRITE_DAC 无需提权）。Nexus 无需任何改动：spawn 继承完整环境，结构性前置（koffi 链接、lib/runner.js）由槽位满足。**实测（2026-09-07，真机 alpha.3 槽位+系统 node 24.19）**：read-only 探针 exit 0（koffi 加载+受限进程创建 OK）；workspace-write 探针 exit 0；参数缺失场景 exit 127=fail-closed 契约验证。注意项：module-farm heal 不得破坏 sandbox 包的 node_modules 符号链接（现 heal 只重指官方包链接，未触碰）
 - **【争议保留】P2#21 Nexus 自更新**：无发布通道定义（未定 URL/签名/频率），且与「工具不下载」契约存在张力 → **保留待用户拍板**；候选方案：安装包内检查+引导浏览器下载（最简）。**P2#20 projcache 自愈**：维持用户拍板「等真实案例」
 - **【被阻塞】完整 tauri build 打包验收**：本机 nexus-launcher-app(PID 30604)+agent(19564)+Harness(3080) 持续运行锁定 target/release；用户关闭应用后跑 `pnpm tauri build` 验证 MSI/NSIS 含 runtime/ 与卸载询问即可闭环
 
