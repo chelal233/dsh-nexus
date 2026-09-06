@@ -1419,7 +1419,7 @@ export function GuideView(props: ViewProps) {
 export function MaintenanceView(props: ViewProps) {
   const { t } = useI18n();
   return <><PageIntro kicker={t("Maintenance")} title={t("Maintenance")} detail={t("Inspect errors, collect diagnostics, and recover from startup failures.")} />
-    <Panel title={t("Agent lifecycle")} icon={<Cpu size={18}/>}><ActionButton disabled={props.busyAction !== null} onClick={() => void props.runAction(t("Force restart Agent"), "/v1/agent", { action: "restart" })}>{t("Force restart Agent")}</ActionButton></Panel>
+    <Panel title={t("Agent lifecycle")} icon={<Cpu size={18}/>}><ActionButton tone="primary" disabled={props.busyAction !== null} onClick={() => void props.runAction(t("Force restart Agent"), "/v1/agent", { action: "restart" })}>{t("Force restart Agent")}</ActionButton></Panel>
     <DiagnosticsView {...props} embedded />
   </>;
 }
