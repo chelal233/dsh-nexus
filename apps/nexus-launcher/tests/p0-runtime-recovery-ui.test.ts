@@ -24,7 +24,7 @@ const props = {
 async function loadViews() {
   const vite = await createServer({ root: process.cwd(), appType: "custom", logLevel: "silent", server: { middlewareMode: true } });
   const app = await vite.ssrLoadModule("/src/App.tsx");
-  return { vite, WorkbenchView: app.WorkbenchView, CompatibilitySummary: app.CompatibilitySummary, CompatibilityDialog: app.CompatibilityDialog, ProfilesView: app.ProfilesView, ProfilePlugins: app.ProfilePlugins, UpdatesView: app.UpdatesView, CheckpointsView: app.CheckpointsView };
+  return { vite, GuideView: app.GuideView, CompatibilitySummary: app.CompatibilitySummary, CompatibilityDialog: app.CompatibilityDialog, ProfilesView: app.ProfilesView, ProfilePlugins: app.ProfilePlugins, UpdatesView: app.UpdatesView, CheckpointsView: app.CheckpointsView };
 }
 
 test("profile hub collapses children; profile plugins show truthful inventory", async () => {
@@ -240,11 +240,11 @@ test("update progress keeps stage and terminal errors visible without ownership 
 });
 
 
-test("workbench joins environment, installation and start without enabling an empty setup", async () => {
-  const { vite, WorkbenchView } = await loadViews();
+test("guide joins environment, installation and start without enabling an empty setup", async () => {
+  const { vite, GuideView } = await loadViews();
   try {
     const snapshot = { ...baseSnapshot, harnessRuntime: {state: "detached"}, releases: {releases: []} };
-    const markup = renderToStaticMarkup(createElement(WorkbenchView, { ...props, snapshot }));
+    const markup = renderToStaticMarkup(createElement(GuideView, { ...props, snapshot }));
     assert.ok(markup.indexOf("Runtime environment") < markup.indexOf("Upstream tags &amp; cold switch"));
     assert.ok(markup.indexOf("Upstream tags &amp; cold switch") < markup.indexOf("Start and use"));
     assert.match(markup, /Embedded Git available/);

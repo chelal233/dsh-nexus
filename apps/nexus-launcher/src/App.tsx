@@ -81,7 +81,7 @@ type Snapshot = {
   config: JsonObject | null;
 };
 
-type ModuleId = "workbench" | "profiles" | "maintenance";
+type ModuleId = "workbench" | "guide" | "profiles" | "maintenance" | "settings";
 
 type ThemeMode = "system" | "light" | "dark";
 type HarnessLaunchMode = "direct" | "node";
@@ -94,8 +94,10 @@ type ModuleDefinition = {
 
 const modules: ModuleDefinition[] = [
   { id: "workbench", label: "Workbench", icon: House },
+  { id: "guide", label: "Setup guide", icon: RocketLaunch },
   { id: "profiles", label: "Profiles and plugins", icon: SlidersHorizontal },
-  { id: "maintenance", label: "Maintenance", icon: Gear },
+  { id: "maintenance", label: "Maintenance", icon: Pulse },
+  { id: "settings", label: "Settings", icon: Gear },
 ];
 
 const emptySnapshot: Snapshot = {
@@ -600,11 +602,45 @@ function discoverySourceLabel(source: string, t: Translator): string {
   }
 }
 
+const isBrowserPreview =
+  typeof window === "undefined" || !("__TAURI_INTERNALS__" in window);
+
+/// Browser-only preview: synthesize the startup status from the proxied
+/// Agent health endpoint, since the native auto-start command is unavailable.
+async function commandStartupStatus(): Promise<StartupStatus> {
+  if (!isBrowserPreview) {
+    return invoke<StartupStatus>("startup_status");
+  }
+  const health = await fetch("/agent/v1/health").then(
+    (response) => response.json() as Promise<JsonObject>,
+  );
+  const alive = health?.status === "ok";
+  return {
+    available: alive,
+    running: alive,
+    api_base: "/agent",
+    data_root: health?.data_root,
+    data_root_id: health?.data_root_id,
+    instance_id: health?.instance_id,
+  } as StartupStatus;
+}
+
 async function proxyRequest<T = JsonObject>(
   path: string,
   method = "GET",
   body?: JsonObject,
 ): Promise<T> {
+  // Browser-only development preview: `pnpm dev` serves the same UI without
+  // the Tauri bridge, so requests go through the /agent dev proxy instead.
+  const isTauri = typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
+  if (!isTauri) {
+    const response = await fetch(`/agent${path}`, {
+      method,
+      headers: body === undefined ? undefined : { "content-type": "application/json" },
+      body: body === undefined ? undefined : JSON.stringify(body),
+    });
+    return (await response.json()) as T;
+  }
   return invoke<T>("proxy_request", {
     method,
     path,
@@ -691,7 +727,10 @@ export function runtimeStatusFromResponse(value: unknown): RuntimeStatusPayload 
     const sourceValue = optionalRuntimeString(item, "source");
     const path = optionalRuntimeString(item, "path");
     const reason = optionalRuntimeString(item, "reason");
-    const source = sourceValue === "system" || sourceValue === "nexus" ? sourceValue : undefined;
+    const source =
+      sourceValue === "system" || sourceValue === "nexus" || sourceValue === "bundled"
+        ? sourceValue
+        : undefined;
     if (sourceValue !== undefined && source === undefined) {
       throw new Error("Runtime status response is invalid.");
     }
@@ -985,7 +1024,7 @@ function App() {
           setLoading(true);
           setError(null);
           try {
-            const startup = await invoke<StartupStatus>("startup_status");
+            const startup = await commandStartupStatus();
             const next: Snapshot = {
               ...emptySnapshot,
               startup,
@@ -1090,7 +1129,9 @@ function App() {
 
   const retryStartup = useCallback(async () => {
     try {
-      await invoke("retry_startup");
+      if (!isBrowserPreview) {
+        await invoke("retry_startup");
+      }
     } catch (cause) {
       setBridgeError(errorMessage(cause));
     }
@@ -1228,11 +1269,13 @@ function App() {
   }, [snapshot.harnessRuntime, t]);
 
   const content = useMemo(() => {
-    const common = { snapshot, busyAction: busyAction ?? (snapshot.lifecycleBusy ? t("Operation in progress") : null), credentialInvalidationPending, runAction, refresh, themeMode, setThemeMode, openSettings: () => setActiveModule("maintenance") };
+    const common = { snapshot, busyAction: busyAction ?? (snapshot.lifecycleBusy ? t("Operation in progress") : null), credentialInvalidationPending, runAction, refresh, themeMode, setThemeMode, openSettings: () => setActiveModule("settings") };
     switch (activeModule) {
+      case "guide": return <GuideView {...common} />;
       case "profiles": return <ProfilesView {...common} />;
       case "maintenance": return <MaintenanceView {...common} />;
-      default: return <WorkbenchView {...common} />;
+      case "settings": return <SettingsView {...common} />;
+      default: return <OverviewView {...common} />;
     }
   }, [activeModule, busyAction, credentialInvalidationPending, refresh, runAction, snapshot, t, themeMode]);
 
@@ -1308,7 +1351,10 @@ type HarnessPanelProps = Pick<ViewProps, "snapshot" | "busyAction" | "runAction"
 type HarnessAuthPanelProps = HarnessPanelProps & Pick<ViewProps, "credentialInvalidationPending">;
 type HarnessWebPanelProps = Pick<ViewProps, "snapshot" | "credentialInvalidationPending" | "busyAction" | "runAction">;
 
-export function WorkbenchView(props: ViewProps) {
+/// Guided setup: the one-stop flow as a wizard. Steps check themselves from
+/// live state and advance automatically; starting Harness stays an explicit
+/// button press (no implicit start, per contract).
+export function GuideView(props: ViewProps) {
   const { t } = useI18n();
   const { snapshot, busyAction, runAction } = props;
   const [environment, setEnvironment] = useState<RuntimeStatusPayload | null>(null);
@@ -1333,15 +1379,23 @@ export function WorkbenchView(props: ViewProps) {
   const operation = asObject(asObject(snapshot.updates).operation);
   const operationPhase = stringValue(operation, "phase");
   const installing = !!operationPhase && !coldOperationIsTerminal(operationPhase);
-  useEffect(() => { void check(); return () => request.current.cancel(); }, [check, current, operationPhase === "succeeded"]);
+  const startupAvailable = snapshot.startup?.available === true;
   const tools = environment?.tools || [];
+  const envReady = !installing && ["node", "pnpm"].every(name => tools.some(tool => tool.name === name && tool.available));
+  useEffect(() => {
+    // Re-run automatically whenever the Agent becomes available, a version
+    // install finishes, or the tool set can have changed.
+    if (startupAvailable) { void check(); }
+    return () => request.current.cancel();
+  }, [check, current, startupAvailable, operationPhase === "succeeded", envReady]);
   const ready = ["node", "pnpm"].every(name => tools.some(tool => tool.name === name && tool.available));
-  const locked = !snapshot.startup?.available || runtimeSettingsGate(phase, numberValue(harness, "pid"), stringValue(asObject(asObject(snapshot.updates).update), "state"), operationPhase, booleanValue(operation, "cleanup_pending"), busyAction !== null).disabled;
-  return <><PageIntro kicker={t("Workbench")} title={t(current ? "Manage your Harness" : "Set up your Harness")} detail={t("Check the environment, choose a version, then start Harness. Everything stays on this page.")} />
+  const locked = !startupAvailable || runtimeSettingsGate(phase, numberValue(harness, "pid"), stringValue(asObject(asObject(snapshot.updates).update), "state"), operationPhase, booleanValue(operation, "cleanup_pending"), busyAction !== null).disabled;
+  const versionStepDone = !!current && !installing;
+  return <><PageIntro kicker={t("Setup guide")} title={t(current ? "Harness is ready" : "Set up Harness automatically")} detail={t("Environment checks run automatically; install a version, then press Start once. Starting Harness always needs your explicit click.")} />
     <div className="setup-journey" aria-label={t("Setup progress")}>
-      <div><span>1 · {t("Runtime environment")}</span><strong>{t(checking ? "Checking" : ready ? "Runtime detected" : "Check requirements")}</strong></div>
-      <div><span>2 · {t("Harness version")}</span><strong>{operationPhase && operationPhase !== "succeeded" ? localizedRuntimeState(operationPhase, t) : current ? t("Version selected") : t("Choose a version")}</strong></div>
-      <div><span>3 · Harness</span><strong>{localizedRuntimeState(phase, t)}</strong></div>
+      <div className={envReady ? "step-done" : ""}><span>1 · {t("Runtime environment")}</span><strong>{t(checking ? "Checking" : envReady ? "Environment ready" : ready ? "Runtime detected" : startupAvailable ? "Check requirements" : "Waiting for Agent")}</strong></div>
+      <div className={versionStepDone ? "step-done" : ""}><span>2 · {t("Harness version")}</span><strong>{operationPhase && operationPhase !== "succeeded" ? localizedRuntimeState(operationPhase, t) : current ? t("Version installed") : t("Choose a version")}</strong></div>
+      <div className={phase === "running" ? "step-done" : ""}><span>3 · {t("Start Harness")}</span><strong>{localizedRuntimeState(phase, t)}</strong></div>
     </div>
     <details className="setup-sections" open={!current || installing || operationPhase === "failed"}><summary>{t("Environment and versions")}</summary>
     <Panel title={t("Runtime environment")} icon={<Cpu size={18}/>}>
@@ -1364,10 +1418,9 @@ export function WorkbenchView(props: ViewProps) {
 
 export function MaintenanceView(props: ViewProps) {
   const { t } = useI18n();
-  return <><PageIntro kicker={t("Maintenance")} title={t("Maintenance")} detail={t("Inspect errors and diagnostics, or adjust advanced settings.")} />
+  return <><PageIntro kicker={t("Maintenance")} title={t("Maintenance")} detail={t("Inspect errors, collect diagnostics, and recover from startup failures.")} />
     <Panel title={t("Agent lifecycle")} icon={<Cpu size={18}/>}><ActionButton disabled={props.busyAction !== null} onClick={() => void props.runAction(t("Force restart Agent"), "/v1/agent", { action: "restart" })}>{t("Force restart Agent")}</ActionButton></Panel>
     <DiagnosticsView {...props} embedded />
-    <details className="advanced-settings"><summary>{t("Advanced settings")}</summary><SettingsView {...props}/></details>
   </>;
 }
 
@@ -1390,7 +1443,7 @@ export function OverviewView({ snapshot, busyAction, credentialInvalidationPendi
   const [failLogOpen, setFailLogOpen] = useState(false);
   return (
     <>
-      <div className="page-heading"><div><span className="kicker">{t("Runtime / Overview")}</span><h1>{t("Local control plane")}</h1><p>{t("Observe and operate the independent Agent and its immutable Harness runtime.")}</p></div><StatusPill label={agentRunning ? t("Running") : t("Standby")} tone={agentRunning ? "good" : "warn"} /></div>
+      <div className="page-heading"><div><span className="kicker">{t("Workbench")}</span><h1>{t("Workbench")}</h1><p>{t("Service status at a glance: Agent, Harness, active profile, and the Harness web UI.")}</p></div><StatusPill label={agentRunning ? t("Running") : t("Standby")} tone={agentRunning ? "good" : "warn"} /></div>
       {(() => {
         const harnessState = stringValue(harness, "state");
         const controlGate = harnessControlGate(harnessState, numberValue(harness, "pid"), busyAction !== null, snapshot.startup?.available === true);
@@ -1604,7 +1657,7 @@ export function ProfilesView(props: ViewProps) {
   const recovery = asObject(snapshot.recovery);
   const harness = asObject(recovery.harness);
   const gate = recoveryMutationGate(booleanValue(recovery, "harness_stop_required"), harness.state, busyAction !== null);
-  return <><PageIntro kicker={t("Control / Profiles")} title={t("Profiles")} detail={t("Profiles own checkpoints and the plugin inventory: select a profile, manage its checkpoints, then adjust its plugins. Profile creation and deletion are unavailable in this release.")} /><Panel title={t("Profile catalog")} icon={<SlidersHorizontal size={18} />}>
+  return <><PageIntro kicker={t("Control / Profiles")} title={t("Profiles")} detail={t("Profiles own checkpoints and the plugin inventory: select a profile, manage its checkpoints, then adjust its plugins. Profile deletion is unavailable in this release.")} /><Panel title={t("Profile catalog")} icon={<SlidersHorizontal size={18} />}>
     <div className="button-row">{[
       ["settings", t("Open settings.yaml")],
       ["profile_patch", t("Edit profile patch")],

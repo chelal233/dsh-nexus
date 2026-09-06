@@ -8,6 +8,25 @@ updated: 2026-09-06 by ZCode (运行时工具获取契约反转：内置运行�
 - **资源映射修正**：tauri.conf resources glob 由 `resources/runtime/**` 改为 `resources/runtime/*`（glob crate 语义 + 构建脚本实际接受）；目录由 Tauri 递归复制
 - **测试**：agent 148/148 单线程；前端 37/37（改写已退役的「cold 确认面板」测试为「冷操作不再有确认暂停」断言）
 
+## 导航重构 + GUI 全面测试（2026-09-07，ZCode）：引导/工作台/设置三页定型
+
+### 重构内容（用户拍板落地）
+- **左侧导航 3→5 项**：工作台 / **引导(新)** / 配置与插件 / 维护 / **设置(新)**
+- **工作台 = 标准状态视图**：复用既有 OverviewView（Agent 生命周期/Harness/当前配置档/检查点四卡片 + 强制重启/启动按钮 + 认证元数据 + 打开 Harness Web 面板），标题改为「工作台」
+- **引导 = 全自动向导**：原工作台的一站式流程整体迁入 GuideView——三步骤条从真实状态自动推进（1 环境就绪 → 2 版本已安装 → 3 启动），环境检测在 Agent 就绪/安装完成/工具变化时自动重跑；**启动 Harness 保持显式点击**（遵守「无隐式启动」契约，向导文案已明示）
+- **设置 = 归集页**：SettingsView 从维护页的嵌入块提升为独立导航页（运行时 pins/依赖源/外观/原生集成/修复重置/帮助全在）；维护页回归纯诊断（Agent 生命周期+诊断包+恢复+日志尾部）。业务区内联微调设置保留（引导页的依赖安装源 = 与设置页同时出现的样例）
+- **浏览器开发预览通道（新增，永久收益）**：proxyRequest/startup_status 增加 `__TAURI_INTERNALS__` 缺失时的回退（/agent 同源 fetch），vite dev 加 /agent 代理 → 浏览器直接对真实 agent 调试 UI；生产 Tauri 路径不变
+
+### GUI 测试（web-gui-tester，隔离环境：临时数据根+临时 DSH_HOME 的 agent :31777 + vite 代理 + IAB）
+- **发现并修复 3 个真实缺陷**：
+  1. **runtime source 白名单漏 "bundled"**（blocker 级 UI bug）：类型加了但 runtimeStatusFromResponse 解析白名单没加 → 内置 pnpm 一上报即「Runtime status response is invalid.」红条、环境检测瘫痪 → 白名单补齐，实测 pnpm·11.7.0·内置 正确显示
+  2. **配置档页导语英文**：zh 表缺该 key（文案还过时说创建不可用，实际创建已实现）→ en/zh 双表补齐并修正文案
+  3. **环境检测不随 Agent 就绪自动重跑**：effect 依赖缺 startup.available → 引导页现在自动检测
+- **判定非缺陷**：fullPage 截图出现界面重复 = IAB 拼接伪影（DOM 仅 1 壳），产品无问题
+- **交互记录**：轮询重渲染会使 Playwright 定位点击超时（改 CUA 坐标点击），属测试工具适配非产品缺陷
+- 回归：tsc+vite build 过；37/37 tests（workbench 测试同步更名 guide）
+- 截图证据：target/gui-test 下（工作台/引导/配置与插件/维护/设置 五页 + 修复前后对比），ZCode 会话 artifacts 目录有原始文件
+
 ## 红蓝对抗评审与修复（2026-09-07，ZCode）：15 项发现，13 项已修，2 项留档
 
 评审方式：蓝队（正确性/回归）+ 红队（安全/对抗/供应链）两个独立代理并行扫 `504fb70..HEAD` 全部增量，ZCode 作者复核合并。
