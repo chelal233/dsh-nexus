@@ -146,6 +146,16 @@ impl NexusConfig {
     }
 }
 
+/// Root of the bundled runtimes shipped inside the Nexus installation
+/// (`<exe dir>/runtime`); `None` when the executable path is unavailable.
+/// Development builds have no such directory, so no bundled candidates are
+/// observed there.
+pub fn bundled_runtime_dir() -> Option<PathBuf> {
+    let exe = std::env::current_exe().ok()?;
+    let root = exe.parent()?.join("runtime");
+    root.is_absolute().then_some(root)
+}
+
 /// All Nexus-owned state is kept outside the Harness data directory.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct NexusPaths {

@@ -165,6 +165,7 @@ fn runtime_plan(root: &Path, reusable_pnpm: bool) -> RuntimePlanResponse {
         path: Some(root.join("system-node.exe").to_string_lossy().into_owned()),
         ownership: Some(RuntimeOwnership::System),
         reason: None,
+        warning: None,
     }];
     tools.push(RuntimePlanTool {
         name: "pnpm".to_owned(),
@@ -178,6 +179,7 @@ fn runtime_plan(root: &Path, reusable_pnpm: bool) -> RuntimePlanResponse {
         path: reusable_pnpm.then(|| root.join("system-pnpm.cmd").to_string_lossy().into_owned()),
         ownership: reusable_pnpm.then_some(RuntimeOwnership::System),
         reason: (!reusable_pnpm).then(|| "not_found".to_owned()),
+        warning: None,
     });
     RuntimePlanResponse {
         api_version: API_VERSION.to_owned(),

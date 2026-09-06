@@ -11,6 +11,10 @@ use nexus_protocol::{
     RuntimePlanToolState, RuntimeRequirements, RuntimeSource, RuntimeToolStatus, API_VERSION,
 };
 
+/// Accepted deviation between the release's exact pnpm requirement and the
+/// bundled pnpm's version when both share the same major.
+pub(crate) const WARNING_BUNDLED_PNPM_MAJOR_SKEW: &str = "bundled_pnpm_major_skew";
+
 pub(crate) fn assemble_runtime_plan(
     release_id: String,
     source: RuntimeSource,
@@ -46,6 +50,8 @@ pub(crate) fn assemble_runtime_plan(
             "pnpm" => vec![requirements.package_manager.spec.clone()],
             _ => unreachable!(),
         };
+        let bundled = observed.source.as_deref() == Some("bundled");
+        let mut warning = None;
         let compatible = match (name, observed.version.as_deref()) {
             ("git", Some(_)) => true,
             ("node", Some(version)) => {
@@ -63,10 +69,24 @@ pub(crate) fn assemble_runtime_plan(
                     })?
             }
             ("pnpm", Some(version)) => {
-                nexus_core::runtime_requirements::package_manager_version_matches(
-                    &requirements.package_manager.version,
-                    version,
-                )?
+                let required = requirements.package_manager.version.clone();
+                if nexus_core::runtime_requirements::package_manager_version_matches(
+                    &required, version,
+                )? {
+                    true
+                } else if bundled
+                    && nexus_core::runtime_requirements::package_manager_same_major(
+                        &required, version,
+                    )?
+                {
+                    // Bundled pnpm policy: same major is accepted with a
+                    // visible warning; the bundled copy is refreshed with
+                    // each Nexus release.
+                    warning = Some(WARNING_BUNDLED_PNPM_MAJOR_SKEW.to_owned());
+                    true
+                } else {
+                    false
+                }
             }
             _ => false,
         };
@@ -88,6 +108,7 @@ pub(crate) fn assemble_runtime_plan(
                 .or_else(|| match observed.source.as_deref() {
                     Some("system") => Some(RuntimeOwnership::System),
                     Some("nexus") => Some(RuntimeOwnership::Nexus),
+                    Some("bundled") => Some(RuntimeOwnership::Bundled),
                     _ => None,
                 });
         let reason = match state {
@@ -102,17 +123,22 @@ pub(crate) fn assemble_runtime_plan(
             RuntimePlanToolState::Reusable if pinned.is_some() => RuntimePlanActionKind::UsePinned,
             RuntimePlanToolState::Reusable => RuntimePlanActionKind::UseExisting,
             _ if name == "git" => RuntimePlanActionKind::UseExisting,
-            _ if mode == RuntimeInstallMode::Portable => RuntimePlanActionKind::ProvisionPortable,
-            _ => RuntimePlanActionKind::InstallSystem,
+            // Runtime provisioning by download is retired: node and pnpm come
+            // from a pin, the system, or the bundled copy. Without any of
+            // those the plan asks the user to configure paths explicitly.
+            _ => RuntimePlanActionKind::ConfigureExternal,
         };
         let action_reason = if name == "git" && state != RuntimePlanToolState::Reusable {
             "nexus_embedded_git_only_external_cli_unavailable".to_owned()
         } else { match action {
             RuntimePlanActionKind::UsePinned => "configured_pin_verified".to_owned(),
+            RuntimePlanActionKind::UseExisting if warning.is_some() => {
+                "compatible_bundled_pnpm_major_skew".to_owned()
+            }
             RuntimePlanActionKind::UseExisting => "compatible_existing_runtime".to_owned(),
             RuntimePlanActionKind::ConfigureExternal => reason
                 .clone()
-                .unwrap_or_else(|| "git_requires_external_install".to_owned()),
+                .unwrap_or_else(|| "runtime_unresolvable_specify_paths".to_owned()),
             RuntimePlanActionKind::ProvisionPortable | RuntimePlanActionKind::InstallSystem => {
                 reason
                     .clone()
@@ -127,6 +153,7 @@ pub(crate) fn assemble_runtime_plan(
             path: observed.path,
             ownership,
             reason,
+            warning,
         });
         suggested_actions.push(RuntimePlanAction {
             tool: name.to_owned(),
@@ -341,7 +368,7 @@ mod tests {
         assert_eq!(empty.suggested_actions.iter().find(|action| action.tool == "git").unwrap().action,
             RuntimePlanActionKind::UseExisting);
         assert!(empty.suggested_actions.iter().filter(|action| action.tool != "git")
-            .all(|action| action.action == RuntimePlanActionKind::ProvisionPortable));
+            .all(|action| action.action == RuntimePlanActionKind::ConfigureExternal));
         assert_eq!(empty.requirements, first.requirements);
         assert!(first.plan_id.starts_with("runtime-plan-v1:"));
         assert_eq!(first.tools[0].state, RuntimePlanToolState::Missing);
@@ -351,6 +378,80 @@ mod tests {
             first.suggested_actions[2].action,
             RuntimePlanActionKind::UsePinned
         );
+    }
+
+    #[test]
+    fn bundled_pnpm_same_major_is_reusable_with_warning_and_skew_action_reason() {
+        let requirements = RuntimeRequirements {
+            node: vec![RuntimeNodeRequirement {
+                manifest: "package.json".to_owned(),
+                range: ">=20.0.0".to_owned(),
+            }],
+            package_manager: RuntimePackageManagerRequirement {
+                manifest: "package.json".to_owned(),
+                spec: "pnpm@11.7.0".to_owned(),
+                name: "pnpm".to_owned(),
+                version: "11.7.0".to_owned(),
+            },
+        };
+        let observed = RuntimeListResponse::new(vec![RuntimeToolStatus {
+            name: "pnpm".to_owned(),
+            available: true,
+            version: Some("11.9.4".to_owned()),
+            source: Some("bundled".to_owned()),
+            path: Some("C:\\install\\runtime\\pnpm\\pnpm.cjs".to_owned()),
+            reason: None,
+        }]);
+        let plan = assemble_runtime_plan(
+            "release-a".to_owned(),
+            RuntimeSource::Official,
+            RuntimeInstallMode::Portable,
+            requirements.clone(),
+            observed,
+            None,
+        )
+        .expect("plan assembles");
+        let pnpm = plan.tools.iter().find(|tool| tool.name == "pnpm").unwrap();
+        assert_eq!(pnpm.state, RuntimePlanToolState::Reusable);
+        assert_eq!(pnpm.ownership, Some(RuntimeOwnership::Bundled));
+        assert_eq!(
+            pnpm.warning.as_deref(),
+            Some(super::WARNING_BUNDLED_PNPM_MAJOR_SKEW)
+        );
+        let action = plan
+            .suggested_actions
+            .iter()
+            .find(|action| action.tool == "pnpm")
+            .unwrap();
+        assert_eq!(action.action, RuntimePlanActionKind::UseExisting);
+        assert_eq!(action.reason, "compatible_bundled_pnpm_major_skew");
+
+        let cross_major = RuntimeListResponse::new(vec![RuntimeToolStatus {
+            name: "pnpm".to_owned(),
+            available: true,
+            version: Some("12.0.0".to_owned()),
+            source: Some("bundled".to_owned()),
+            path: Some("C:\\install\\runtime\\pnpm\\pnpm.cjs".to_owned()),
+            reason: None,
+        }]);
+        let plan = assemble_runtime_plan(
+            "release-a".to_owned(),
+            RuntimeSource::Official,
+            RuntimeInstallMode::Portable,
+            requirements,
+            cross_major,
+            None,
+        )
+        .expect("plan assembles");
+        let pnpm = plan.tools.iter().find(|tool| tool.name == "pnpm").unwrap();
+        assert_eq!(pnpm.state, RuntimePlanToolState::Incompatible);
+        assert_eq!(pnpm.warning, None);
+        let action = plan
+            .suggested_actions
+            .iter()
+            .find(|action| action.tool == "pnpm")
+            .unwrap();
+        assert_eq!(action.action, RuntimePlanActionKind::ConfigureExternal);
     }
 
     #[tokio::test]

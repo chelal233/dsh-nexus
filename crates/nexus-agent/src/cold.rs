@@ -19,7 +19,8 @@ use nexus_core::{
 };
 use nexus_protocol::{
     ColdOperation, ColdOperationPhase, HarnessLaunchMode, RuntimeInstallMode, RuntimeOwnership,
-    RuntimePlanActionKind, RuntimePlanRequest, RuntimeSource, UpdateRuntimeInfo, UpdateState,
+    RuntimePlanActionKind, RuntimePlanRequest, RuntimePlanToolState, RuntimeSource,
+    UpdateRuntimeInfo, UpdateState,
 };
 use nexus_runtime_supply::{
     CancellationToken, CommandProcessRunner, HostPlatform, HttpDownloadClient, RuntimeSupplier,
@@ -583,6 +584,33 @@ async fn prepare_inner(state: &AppState, operation_id: &str) -> io::Result<()> {
         record_foundation_plan(state, operation_id, &plan.plan_id).await?;
         let runtime = runtime_from_plan(&plan)?;
         return build_and_publish(state, operation_id, runtime).await;
+    }
+    if plan
+        .suggested_actions
+        .iter()
+        .any(|action| action.action == RuntimePlanActionKind::ConfigureExternal)
+    {
+        // Runtime provisioning by download is retired; an unresolvable tool
+        // is a user-actionable failure, not a supply request.
+        let details = plan
+            .tools
+            .iter()
+            .filter(|tool| tool.name != "git" && tool.state != RuntimePlanToolState::Reusable)
+            .map(|tool| {
+                format!(
+                    "{}: {}",
+                    tool.name,
+                    tool.reason.as_deref().unwrap_or("unavailable")
+                )
+            })
+            .collect::<Vec<_>>()
+            .join("; ");
+        return Err(io::Error::new(
+            io::ErrorKind::NotFound,
+            format!(
+                "no usable node/pnpm runtime ({details}); select paths in settings or reinstall Nexus to use its bundled runtime"
+            ),
+        ));
     }
     let downloader = HttpDownloadClient::new().map_err(supply_error)?;
     let planner = RuntimeSupplyPlanner::new(

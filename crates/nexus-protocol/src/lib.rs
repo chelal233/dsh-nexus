@@ -835,6 +835,10 @@ impl RuntimeListResponse {
 pub enum RuntimeOwnership {
     System,
     Nexus,
+    /// Runtime shipped inside the Nexus installation directory and upgraded
+    /// with Nexus itself. Selected when no user pin and no system-wide tool
+    /// satisfies the release requirements.
+    Bundled,
 }
 
 /// Distribution source selected for a future runtime provisioning action.
@@ -918,6 +922,11 @@ pub struct RuntimePlanTool {
     pub ownership: Option<RuntimeOwnership>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reason: Option<String>,
+    /// Non-fatal deviation accepted for reuse, for example a bundled pnpm
+    /// whose major matches the release requirement while the exact version
+    /// does not.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub warning: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]

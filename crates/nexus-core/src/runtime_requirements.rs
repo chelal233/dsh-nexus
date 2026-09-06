@@ -167,6 +167,16 @@ pub fn package_manager_version_matches(
     Ok(parse_version(required_version)? == parse_version(observed_version)?)
 }
 
+/// Relaxed compatibility for the bundled pnpm: the release requirement pins
+/// an exact version, but a bundled pnpm with the same major is accepted with
+/// a visible warning instead of failing the whole plan.
+pub fn package_manager_same_major(
+    required_version: &str,
+    observed_version: &str,
+) -> io::Result<bool> {
+    Ok(parse_version(required_version)?.major == parse_version(observed_version)?.major)
+}
+
 fn read_package_manifest(root: &Path, relative: &str) -> io::Result<PackageManifest> {
     let path = fs::canonicalize(root.join(relative)).map_err(|error| {
         io::Error::new(
@@ -399,8 +409,17 @@ mod tests {
     use std::{fs, path::PathBuf};
 
     use super::{
-        load_runtime_requirements, node_version_satisfies, package_manager_version_matches,
+        load_runtime_requirements, node_version_satisfies, package_manager_same_major,
+        package_manager_version_matches,
     };
+
+    #[test]
+    fn bundled_pnpm_same_major_accepts_minor_skew_and_rejects_cross_major() {
+        assert!(package_manager_same_major("11.7.0", "11.9.4").expect("versions parse"));
+        assert!(!package_manager_version_matches("11.7.0", "11.9.4").expect("versions parse"));
+        assert!(!package_manager_same_major("11.7.0", "12.0.0").expect("versions parse"));
+        assert!(package_manager_same_major("11.7.0", "11.7.0").expect("versions parse"));
+    }
 
     #[test]
     fn supported_node_ranges_cover_boundaries_and_disjunctions() {

@@ -519,7 +519,7 @@ fn canonical_configured_path(
         return Err(REASON_CONFIGURED_PATH_MISSING);
     }
     match ownership {
-        RuntimeOwnership::System => {
+        RuntimeOwnership::System | RuntimeOwnership::Bundled => {
             let path = fs::canonicalize(path).map_err(|_| REASON_CONFIGURED_PATH_MISSING)?;
             if is_remote_path(&path) {
                 Err(REASON_CONFIGURED_PATH_UNSAFE)
@@ -544,6 +544,7 @@ fn runtime_source(ownership: RuntimeOwnership) -> &'static str {
     match ownership {
         RuntimeOwnership::System => "system",
         RuntimeOwnership::Nexus => "nexus",
+        RuntimeOwnership::Bundled => "bundled",
     }
 }
 
@@ -658,7 +659,129 @@ async fn observe_tool_until(
         }
     }
 
+    // Bundled runtimes ship inside the Nexus installation and are the last
+    // automatic tier before the plan reports the tool as unresolvable. Git
+    // is absent here: its fallback is the embedded libgit2 worker.
+    if name != "git" {
+        let bundled = if Instant::now() < deadline {
+            let bundled_name = name.to_owned();
+            let bundled_root = nexus_core::bundled_runtime_dir();
+            config
+                .blocking_fs
+                .run(deadline, move || {
+                    bundled_candidates(&bundled_name, bundled_root.as_deref(), deadline)
+                })
+                .await
+                .unwrap_or_default()
+        } else {
+            Vec::new()
+        };
+        for (path, node_prefix) in bundled {
+            if Instant::now() >= deadline {
+                record_failure(
+                    &mut first_failure,
+                    "bundled",
+                    &path,
+                    REASON_PROBE_BUDGET_EXCEEDED,
+                );
+                break;
+            }
+            let probe = match node_prefix.as_deref() {
+                Some(node) => {
+                    probe_bundled_script(name, &path, node, &config, deadline, budget).await
+                }
+                None => probe_path(name, &path, &config, deadline, budget).await,
+            };
+            match probe {
+                Ok(version) => return available_status(name, version, "bundled", &path),
+                Err(reason) => record_failure(&mut first_failure, "bundled", &path, reason),
+            }
+        }
+    }
+
     unavailable_status(name, first_failure)
+}
+
+/// Bundled layout: `<runtime>/node/node.exe` (official distribution root)
+/// and `<runtime>/pnpm/pnpm.cjs` (standalone entry executed by the bundled
+/// Node, never through Corepack).
+fn bundled_candidates(
+    name: &str,
+    root: Option<&Path>,
+    deadline: Instant,
+) -> Vec<(PathBuf, Option<PathBuf>)> {
+    let Some(root) = root else {
+        return Vec::new();
+    };
+    if !root.is_absolute() || is_remote_path(root) || Instant::now() >= deadline {
+        return Vec::new();
+    }
+    let node_root = root.join("node");
+    let node_executable = if cfg!(windows) { "node.exe" } else { "node" };
+    match name {
+        "node" => canonical_file(&node_root.join(node_executable))
+            .map(|path| vec![(path, None)])
+            .unwrap_or_default(),
+        "pnpm" => {
+            let node = canonical_file(&node_root.join(node_executable));
+            let entry = root.join("pnpm").join("pnpm.cjs");
+            canonical_file(&entry)
+                .map(|path| vec![(path, node)])
+                .unwrap_or_default()
+        }
+        _ => Vec::new(),
+    }
+}
+
+async fn probe_bundled_script(
+    name: &str,
+    entry: &Path,
+    node: &Path,
+    config: &ProbeConfig,
+    deadline: Instant,
+    budget: ProbeBudget,
+) -> Result<String, &'static str> {
+    let candidate = entry.to_owned();
+    let node_path = node.to_owned();
+    let probe_cwd = config.probe_cwd.clone();
+    let blocking_hooks = config.blocking_hooks.clone();
+    let command = config
+        .blocking_fs
+        .run(deadline, move || {
+            if Instant::now() >= cleanup_start(deadline, budget.cleanup) {
+                return Err(REASON_PROBE_BUDGET_EXCEEDED);
+            }
+            blocking_hooks.notify(BlockingStage::ProbeCandidate, &candidate);
+            prepare_bundled_script_probe_command(&candidate, &node_path, probe_cwd.as_deref())
+        })
+        .await
+        .ok_or(REASON_PROBE_BUDGET_EXCEEDED)??;
+    run_prepared_version_probe(name, command, config, deadline, budget).await
+}
+
+fn prepare_bundled_script_probe_command(
+    entry: &Path,
+    node: &Path,
+    probe_cwd: Option<&Path>,
+) -> Result<Command, &'static str> {
+    let probe_cwd = probe_cwd
+        .filter(|path| is_safe_probe_cwd(path))
+        .ok_or(REASON_PROBE_CWD_UNAVAILABLE)?;
+    let node_path = canonical_file(node).ok_or(REASON_CONFIGURED_PATH_MISSING)?;
+    let mut command = Command::new(node_path);
+    // Node's script loader cannot handle Win32 verbatim prefixes; pass the
+    // ordinary spelling at this process boundary, mirroring the production
+    // launcher's node_script_argument behavior.
+    command.arg(display_path(entry));
+    command.arg("--version");
+    command
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .current_dir(probe_cwd)
+        .kill_on_drop(true);
+    apply_probe_environment(&mut command);
+    Ok(command)
 }
 
 fn budget_exceeded_status(name: &str) -> RuntimeToolStatus {
@@ -1565,6 +1688,33 @@ mod tests {
         } else {
             write_probe_fixture(directory, name, "#!/bin/sh\nexit 0\n")
         }
+    }
+
+    #[test]
+    fn bundled_candidates_follow_the_shipped_layout() {
+        let root = fixture_root("bundled-candidates");
+        let runtime = root.join("install/runtime");
+        let deadline = Instant::now() + Duration::from_secs(5);
+
+        assert!(bundled_candidates("node", Some(&runtime), deadline).is_empty());
+        assert!(bundled_candidates("pnpm", Some(&runtime), deadline).is_empty());
+        assert!(bundled_candidates("node", None, deadline).is_empty());
+
+        let node = write_version_fixture(&runtime.join("node"), "node", "v24.1.0");
+        let node = fs::canonicalize(node).expect("bundled node canonicalizes");
+        let pnpm_entry = runtime.join("pnpm").join("pnpm.cjs");
+        fs::create_dir_all(runtime.join("pnpm")).expect("bundled pnpm dir creates");
+        fs::write(&pnpm_entry, "// standalone pnpm entry").expect("bundled pnpm entry writes");
+        let pnpm_entry = fs::canonicalize(pnpm_entry).expect("bundled pnpm canonicalizes");
+
+        assert_eq!(
+            bundled_candidates("node", Some(&runtime), deadline),
+            vec![(node.clone(), None)]
+        );
+        assert_eq!(
+            bundled_candidates("pnpm", Some(&runtime), deadline),
+            vec![(pnpm_entry, Some(node))]
+        );
     }
 
     fn write_nonzero_fixture(directory: &Path, name: &str) -> PathBuf {

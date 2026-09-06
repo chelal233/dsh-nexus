@@ -1,6 +1,34 @@
-updated: 2026-09-05 by Codex (P0 快照内容引擎已接入 Agent，恢复事务/健康快照/依赖物化的本地合成回归通过)
+updated: 2026-09-06 by ZCode (运行时工具获取契约反转：内置运行时随包分发，下载链路退役)
 
 # dsh-nexus 项目状态与需求基线
+
+## 内置运行时批次①已落地（2026-09-06，ZCode）：bundled 观测档 + 下载链路停用
+
+- **解析顺序生效**：pin → system → nexus（遗留 runtimes/ 缓存只复用不下载）→ **bundled（新，安装目录 `<exe dir>/runtime`）** → `ConfigureExternal`（无可用品时计划动作，替代原 ProvisionPortable/InstallSystem 的发射；旧枚举值保留线兼容但不再产出）
+- **bundled 布局契约**：`<exe dir>/runtime/node/node.exe`（官方 zip 根布局）+ `<exe dir>/runtime/pnpm/pnpm.cjs`（standalone 入口，经 bundled node 直启，**不经过 corepack**）。git 无 bundled 档——git 兜底=内嵌 libgit2 worker（既有）
+- **探测实现**（crates/nexus-agent/src/runtime.rs）：`bundled_candidates` 枚举（node 直探 `--version`；pnpm 由 bundled node 前缀执行 `pnpm.cjs --version`，与生产 node_script_argument 同一 verbatim 边界语义）；观测 source 字符串 `"bundled"`；`canonical_configured_path` Bundled 归类 System（canonicalize+拒远程盘）
+- **协议**（crates/nexus-protocol）：`RuntimeOwnership::Bundled`（serde "bundled"）；`RuntimePlanTool.warning` 可选字段（`bundled_pnpm_major_skew`）
+- **pnpm 策略 A 落地**（runtime_plan.rs）：exact 匹配优先；bundled 且同 major → Reusable + `warning=bundled_pnpm_major_skew` + 动作理由 `compatible_bundled_pnpm_major_skew`；跨 major → Incompatible → `ConfigureExternal`。核心新函数 `package_manager_same_major`（runtime_requirements.rs）
+- **cold 收尾**（cold.rs）：计划含 ConfigureExternal → 直接 settle 失败，错误信息列出各工具 reason 并引导「设置中指定路径或重装 Nexus 使用内置运行时」；supply 下载分支保留但已不可达（先停用后删除）
+- **传播零改动**：`runtime_from_plan` 把 plan 工具 path+ownership 转 pin，bundled 自动随 pins/env/command 单一漏斗进入 install/build/start/物化
+- **验证**：cargo check --offline workspace 干净；core+protocol 48、agent 单线程 148/148、supply 测试过；doc-tests 过。并行全量下 `timeout_ends_owned_descendant_before_returning`/`timed_out_probe_reports_a_reaped_child` 偶发失败为**既有互杀抖动**（原始 main 504fb70 复现，单线程全绿），与本次无关
+- **待做（批次②）**：WiX/构建脚本把 node zip + pnpm.cjs 实际打进安装目录 runtime/；批次③ UI 来源显示「内置」+ 偏斜警告 + 收起下载设置；批次④ registry 镜像回退与依赖安装实时进度；清理批物理删除下载代码
+
+
+## 运行时契约反转（2026-09-06 用户拍板）：内置 node/pnpm/corepack，下载链路退役
+
+**产品契约**：解决小白用户干净机器装好 Nexus 却因缺环境/网络断点跑不起来的问题。工具获取从「系统→下载」双轨改为「用户自带 → 内置」双轨：
+
+- **解析顺序（node/pnpm/git 三工具同一链，各自独立）**：① 用户显式指定路径（pin，最高优先；多版本共存时用户自己挑，UI 已有「手动指定运行时路径」输入框 + `set_runtime` pin 通道承载）→ ② 系统发现可用（满足该上游 release 的版本要求才算可用）→ ③ Nexus 内置（安装目录随包分发）→ ④ 都不满足 → 如实报错引导指定路径，**没有第四步下载**
+- **pnpm/node/corepack 都随 Nexus 分发，不独立操作**；git 内置回退已存在（bc00e15），三者统一为同一契约
+- **pnpm 精确版本偏斜策略（用户选 A）**：内置 pnpm 版本跟随「打包时当前上游 packageManager 要求」（首发 11.7.0），每次 Nexus 发新版刷新；运行时遇不匹配 → 同一 major 内放行 + 界面可见警告，跨 major 如实失败并引导用户指定自己的 pnpm 路径。后续若需多版本随包，直接往安装包里塞（现在不需要）
+- **Node 无偏斜问题**（上游只有 engines 范围要求）：内置打包时点的一个 LTS，随 Nexus 发版刷新
+- **WebView2（2026-09-06 定）**：不随包离线安装器；维持 Tauri WiX 默认在线引导器（缺失时安装阶段自动装）+ 应用启动检测缺失给指引兜底。理由：Win11 必有；Win10 多数有（Windows Update 推送）；LTSC/Server/ghost 系统可能没有，由引导器覆盖
+- **存放位置**：内置运行时放**安装目录**（随 Nexus 换装整体升级）；下载的兼容性运行时概念取消，数据根 `runtimes/` 仅保留历史物
+- **既有代码影响**：`nexus-runtime-supply` 的下载/发布机器（PublishPortable、InstallSystem、Node zip/npm tarball 校验下载）整体死代码——**先停用后删除**（先在计划解析停用 + UI 收起入口，物理删除放清理批）。设置页「工具下载源 official/npmmirror」作废；**pnpm registry 镜像设置保留**（管上游依赖安装走哪个 registry，与工具下载是两回事，是首装超时的解药之一）。首装引导工作台「安装运行时」阶段消失
+- **不变红线**：不改系统 PATH、全绝对路径调用、能复用不下载原则（现在进一步=永不下载工具）；解析变化发生在 pins/env/command 单一漏斗，冷安装/启动/快照物化/终端自动跟随
+- **实施批次**：① supply 侧 ReuseBundled 档 + 停用下载 → ② WiX 打包 node/pnpm/corepack → ③ UI 来源展示与下载设置收起 → ④ registry 镜像回退 + 首装依赖安装实时进度 → 清理批删死代码。待办基线 P0-4 中「按需下载/便携与系统安装模式」的描述自本节起被本契约取代
+
 
 ## P0 缺陷修复第二轮：占位符双路径（2026-09-05）
 
