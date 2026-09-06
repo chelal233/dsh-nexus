@@ -2,7 +2,7 @@
 use std::{ffi::OsString, fs, io, path::{Path, PathBuf}, process::{Command, Stdio}, time::{Duration, Instant}};
 use git2::{AutotagOption, Direction, FetchOptions, Repository};
 use nexus_core::{validate_update_ref, validate_update_source, write_json_atomic};
-use nexus_runtime_supply::CancellationToken;
+use nexus_core::CancellationToken;
 use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Serialize, Deserialize)]

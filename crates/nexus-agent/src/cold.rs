@@ -15,16 +15,12 @@ use std::{
 use nexus_core::{
     build_pnpm_args, build_runtime_child_env, redact_diagnostics_payload, resolve_runtime_command,
     unix_time_nanos_for_update, unix_time_seconds, validate_update_ref, write_json_atomic,
-    HarnessLaunchSpec, NexusPaths, RuntimeConfig, RuntimePin,
+    CancellationToken, HarnessLaunchSpec, NexusPaths, RuntimeConfig, RuntimePin,
 };
 use nexus_protocol::{
     ColdOperation, ColdOperationPhase, HarnessLaunchMode, RuntimeInstallMode, RuntimeOwnership,
     RuntimePlanActionKind, RuntimePlanRequest, RuntimePlanToolState, RuntimeSource,
     UpdateRuntimeInfo, UpdateState,
-};
-use nexus_runtime_supply::{
-    CancellationToken, CommandProcessRunner, HostPlatform, HttpDownloadClient, RuntimeSupplier,
-    RuntimeSupplyPlanner, SupplyPlan,
 };
 use tokio::sync::Mutex;
 
@@ -479,39 +475,6 @@ impl ColdCoordinator {
         self.write(&operation)?;
         Ok(operation)
     }
-
-    pub(crate) async fn claim_confirmation(
-        &self,
-        operation_id: &str,
-        confirmation: &str,
-    ) -> io::Result<ColdOperation> {
-        let _gate = self.gate.lock().await;
-        let mut operation = self
-            .load()?
-            .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "cold operation not found"))?;
-        if operation.operation_id != operation_id
-            || operation.phase != ColdOperationPhase::AwaitingConfirmation
-            || operation.confirmation.as_deref() != Some(confirmation)
-        {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidInput,
-                "stale or mismatched cold-install confirmation",
-            ));
-        }
-        if self.owner_active.load(Ordering::Acquire) {
-            return Err(io::Error::new(
-                io::ErrorKind::ResourceBusy,
-                "cold owner is still finishing",
-            ));
-        }
-        operation.phase = ColdOperationPhase::Supplying;
-        operation.owner_quiescent = false;
-        operation.progress_percent = 40;
-        operation.updated_at_unix = Some(unix_time_seconds());
-        self.write(&operation)?;
-        self.owner_active.store(true, Ordering::Release);
-        Ok(operation)
-    }
 }
 
 pub(crate) async fn prepare(state: AppState, operation_id: String) {
@@ -629,117 +592,12 @@ async fn prepare_inner(state: &AppState, operation_id: &str) -> io::Result<()> {
             ),
         ));
     }
-    let downloader = HttpDownloadClient::new().map_err(supply_error)?;
-    let planner = RuntimeSupplyPlanner::new(
-        &downloader,
-        operation.source,
-        HostPlatform::current_windows().map_err(supply_error)?,
-        state.paths.runtimes_dir.clone(),
-        corepack_root(),
-    )
-    .map_err(supply_error)?;
-    let supply = planner
-        .plan(&plan, &cancellation)
-        .await
-        .map_err(supply_error)?;
-    let _gate = state.cold.gate.lock().await;
-    let mut current = state
-        .cold
-        .load()?
-        .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "cold operation not found"))?;
-    if current.operation_id != operation_id {
-        return Err(io::Error::new(
-            io::ErrorKind::InvalidInput,
-            "cold operation changed",
-        ));
-    }
-    ensure_not_cancelled(&cancellation)?;
-    current.phase = ColdOperationPhase::AwaitingConfirmation;
-    current.progress_percent = 35;
-    current.updated_at_unix = Some(unix_time_seconds());
-    current.foundation_plan_id = Some(plan.plan_id);
-    current.confirmation = Some(supply.supply_plan_id.clone());
-    current.supply_plan = Some(serde_json::to_value(supply).map_err(io::Error::other)?);
-    current.owner_quiescent = true;
-    state.cold.write(&current)
-}
-
-pub(crate) async fn confirm(state: AppState, operation_id: String, confirmation: String) {
-    if let Err(error) = confirm_inner(&state, &operation_id, &confirmation).await {
-        let _ = settle_failure(&state, &operation_id, error).await;
-    }
-    if state.cold.load().ok().flatten().is_some_and(|operation| {
-        operation.operation_id == operation_id
-            && operation.owner_quiescent
-            && (operation.phase.is_terminal()
-                || operation.phase == ColdOperationPhase::AwaitingConfirmation)
-    }) {
-        state.cold.owner_active.store(false, Ordering::Release);
-    }
-}
-
-async fn confirm_inner(state: &AppState, operation_id: &str, confirmation: &str) -> io::Result<()> {
-    let operation = state
-        .cold
-        .load()?
-        .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "cold operation not found"))?;
-    if operation.operation_id != operation_id
-        || operation.phase != ColdOperationPhase::Supplying
-        || operation.confirmation.as_deref() != Some(confirmation)
-    {
-        return Err(io::Error::new(
-            io::ErrorKind::InvalidInput,
-            "stale or mismatched cold-install confirmation",
-        ));
-    }
-    let candidate = PathBuf::from(&operation.candidate);
-    let runtime = resolved_runtime_config(state).await?;
-    let revision = candidate_revision(
-        &runtime,
-        &candidate,
-        &state.paths.run_dir,
-        &state.cold.token(operation_id).await,
-    )
-    .await?;
-    if operation.candidate_revision.as_deref() != Some(&revision) {
-        return Err(io::Error::new(
-            io::ErrorKind::InvalidInput,
-            "cold candidate revision changed while awaiting confirmation",
-        ));
-    }
-    let fresh = plan_candidate(state, &operation, &candidate).await?;
-    if operation.foundation_plan_id.as_deref() != Some(&fresh.plan_id) {
-        return Err(io::Error::new(
-            io::ErrorKind::InvalidInput,
-            "runtime plan or configuration changed while awaiting confirmation",
-        ));
-    }
-    let supply: SupplyPlan =
-        serde_json::from_value(operation.supply_plan.clone().ok_or_else(|| {
-            io::Error::new(
-                io::ErrorKind::InvalidData,
-                "server-owned supply plan is missing",
-            )
-        })?)
-        .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
-    let cancellation = state.cold.token(operation_id).await;
-    let downloader = HttpDownloadClient::new().map_err(supply_error)?;
-    let supplier = RuntimeSupplier::new(
-        &downloader,
-        &CommandProcessRunner,
-        HostPlatform::current_windows().map_err(supply_error)?,
-        state.paths.runtimes_dir.clone(),
-        corepack_root(),
-    )
-    .map_err(supply_error)?;
-    let mut outcome = supplier
-        .execute_confirmed(&fresh, &supply, confirmation, &cancellation)
-        .await
-        .map_err(supply_error)?;
-    // Optional external Git remains available to upstream tools. Nexus uses
-    // its owned embedded worker for clone and revision checks.
-    outcome.runtime.git = runtime.git;
-    build_and_publish(state, operation_id, outcome.runtime).await
+    // assemble_runtime_plan emits only UsePinned/UseExisting/ConfigureExternal;
+    // retired provisioning actions would mean a protocol regression.
+    Err(io::Error::new(
+        io::ErrorKind::InvalidData,
+        "runtime plan produced a retired provisioning action",
+    ))
 }
 
 async fn build_and_publish(
@@ -1465,18 +1323,6 @@ fn release_id_for_tag(tag: &str, suffix: u128) -> String {
     format!("harness-{}-{}", clean.trim_matches('-'), suffix)
 }
 
-fn corepack_root() -> Option<PathBuf> {
-    std::env::var_os("COREPACK_HOME")
-        .map(PathBuf::from)
-        .filter(|path| path.is_absolute())
-        .or_else(|| {
-            std::env::var_os("LOCALAPPDATA")
-                .map(PathBuf::from)
-                .map(|path| path.join("node/corepack"))
-                .filter(|path| path.is_absolute())
-        })
-}
-
 fn ensure_not_cancelled(token: &CancellationToken) -> io::Result<()> {
     if token.is_cancelled() {
         Err(io::Error::new(
@@ -1486,10 +1332,6 @@ fn ensure_not_cancelled(token: &CancellationToken) -> io::Result<()> {
     } else {
         Ok(())
     }
-}
-
-fn supply_error(error: impl ToString) -> io::Error {
-    io::Error::other(error.to_string())
 }
 
 async fn settle_failure(
@@ -2268,7 +2110,7 @@ while ($true) {{ Start-Sleep -Seconds 1 }}"#, child.display())).unwrap();
     }
 
     #[tokio::test]
-    async fn stale_confirmation_and_cancel_are_terminal() {
+    async fn duplicate_begin_and_unknown_cancel_are_rejected() {
         let root =
             std::env::temp_dir().join(format!("nexus-cold-state-{}", unix_time_nanos_for_update()));
         let coordinator = ColdCoordinator::new(NexusPaths::from_root(root.clone()));
@@ -2292,23 +2134,6 @@ while ($true) {{ Start-Sleep -Seconds 1 }}"#, child.display())).unwrap();
                 .kind(),
             io::ErrorKind::ResourceBusy
         );
-        let mut waiting = coordinator.load().unwrap().unwrap();
-        waiting.phase = ColdOperationPhase::AwaitingConfirmation;
-        waiting.confirmation = Some("sha256:test".to_owned());
-        coordinator.write(&waiting).unwrap();
-        coordinator.owner_active.store(false, Ordering::Release);
-        assert!(coordinator
-            .claim_confirmation(&operation.operation_id, "sha256:stale")
-            .await
-            .is_err());
-        coordinator
-            .claim_confirmation(&operation.operation_id, "sha256:test")
-            .await
-            .expect("exact confirmation is claimed once");
-        assert!(coordinator
-            .claim_confirmation(&operation.operation_id, "sha256:test")
-            .await
-            .is_err());
         assert!(coordinator.cancel("stale").await.is_err());
         let cancelled = coordinator.cancel(&operation.operation_id).await.unwrap();
         assert_eq!(cancelled.phase, ColdOperationPhase::Cancelling);

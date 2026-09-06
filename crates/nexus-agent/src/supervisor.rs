@@ -741,7 +741,7 @@ impl HarnessSupervisor {
                     }
                     let home = crate::dsh::resolve_dsh_home().map_err(HarnessSupervisorError::Configuration)?;
                     compatible_profile = crate::compatibility::prepare(&self.paths, &home, profile, id, root,
-                        &spec.program, false, &nexus_runtime_supply::CancellationToken::default()).await
+                        &spec.program, false, &nexus_core::CancellationToken::default()).await
                         .map_err(HarnessSupervisorError::Configuration)?.map(|report| report.effective_profile);
                 }
             }

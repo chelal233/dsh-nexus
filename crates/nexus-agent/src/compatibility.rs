@@ -2,7 +2,7 @@
 use std::{fs, io, path::Path, process::Stdio, time::Duration};
 use nexus_core::{validate_profile_name, write_json_atomic, NexusPaths};
 use nexus_protocol::{CompatibilityReport, HarnessLaunchMode};
-use nexus_runtime_supply::CancellationToken;
+use nexus_core::CancellationToken;
 
 pub(crate) fn latest(paths: &NexusPaths) -> Option<CompatibilityReport> {
     let bytes = fs::read(paths.root.join("compatibility/latest.json")).ok()?;

@@ -2965,7 +2965,7 @@ async fn release_control_inner(
             {
                 return response;
             }
-            if let Err(error) = compatibility::for_release(&state, id, true, &nexus_runtime_supply::CancellationToken::default()).await {
+            if let Err(error) = compatibility::for_release(&state, id, true, &nexus_core::CancellationToken::default()).await {
                 return data_error_response(error, "profile_compatibility_failed");
             }
             let catalog = match state.releases.promote(id) {
@@ -3035,7 +3035,7 @@ async fn release_control_inner(
                 Err(error) => return data_error_response(error, "release_rollback_failed"),
             };
             if let Some(id) = previous.as_deref() {
-                if let Err(error) = compatibility::for_release(&state, id, true, &nexus_runtime_supply::CancellationToken::default()).await {
+                if let Err(error) = compatibility::for_release(&state, id, true, &nexus_core::CancellationToken::default()).await {
                     return data_error_response(error, "profile_compatibility_failed");
                 }
             }
@@ -3167,39 +3167,14 @@ async fn update_control(
                     "confirmation is required",
                 );
             };
-            let operation = match state
-                .cold
-                .claim_confirmation(&operation_id, &confirmation)
-                .await
-            {
-                Ok(operation) => operation,
-                Err(error) if error.kind() == io::ErrorKind::InvalidInput => {
-                    return api_error_response(
-                        StatusCode::CONFLICT,
-                        "cold_confirmation_stale",
-                        "cold-install confirmation is stale or mismatched",
-                    )
-                }
-                Err(error) => return data_error_response(error, "cold_operation_unavailable"),
-            };
-            let owner_state = state.clone();
-            tokio::spawn(async move {
-                cold::confirm(owner_state, operation_id, confirmation).await;
-            });
-            (
-                StatusCode::ACCEPTED,
-                Json(
-                    UpdateResponse::new(
-                        state
-                            .updater
-                            .status()
-                            .unwrap_or_else(|_| nexus_protocol::UpdateRuntimeInfo::idle()),
-                        None,
-                    )
-                    .with_operation(operation),
-                ),
+            // Supply confirmation is retired: installs run without a pause,
+            // so the endpoint rejects every confirmation.
+            let _ = (operation_id, confirmation);
+            api_error_response(
+                StatusCode::CONFLICT,
+                "cold_confirmation_stale",
+                "cold supply confirmation is retired; runtime provisioning by download was removed",
             )
-                .into_response()
         }
         UpdateAction::Cancel => {
             let Some(operation_id) = command.operation_id else {

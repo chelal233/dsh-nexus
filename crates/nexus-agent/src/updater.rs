@@ -468,7 +468,7 @@ impl UpdateExecutor {
         let clone_directory = self.paths.run_dir.clone();
         let clone = tokio::spawn(async move {
             crate::git_worker::clone_candidate(&clone_spec.source, &clone_spec.ref_name, &clone_candidate,
-                &clone_directory, clone_spec.timeout(), &nexus_runtime_supply::CancellationToken::default(),
+                &clone_directory, clone_spec.timeout(), &nexus_core::CancellationToken::default(),
                 Some(crate::git_worker::ExternalGit { program: clone_spec.git_program.clone(), prefix: Vec::new() })).await
         });
         #[cfg(test)]

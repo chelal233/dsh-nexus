@@ -7,7 +7,10 @@ use std::{
     fs, io,
     net::{IpAddr, Ipv4Addr, SocketAddr},
     path::{Path, PathBuf},
-    sync::{Arc, Mutex},
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc, Mutex,
+    },
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
@@ -154,6 +157,20 @@ pub fn bundled_runtime_dir() -> Option<PathBuf> {
     let exe = std::env::current_exe().ok()?;
     let root = exe.parent()?.join("runtime");
     root.is_absolute().then_some(root)
+}
+
+/// Cooperative cancellation flag shared across command owners.
+#[derive(Debug, Clone, Default)]
+pub struct CancellationToken(Arc<AtomicBool>);
+
+impl CancellationToken {
+    pub fn cancel(&self) {
+        self.0.store(true, Ordering::Release);
+    }
+
+    pub fn is_cancelled(&self) -> bool {
+        self.0.load(Ordering::Acquire)
+    }
 }
 
 /// All Nexus-owned state is kept outside the Harness data directory.

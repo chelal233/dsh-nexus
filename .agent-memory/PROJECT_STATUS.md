@@ -1,5 +1,14 @@
 updated: 2026-09-06 by ZCode (运行时工具获取契约反转：内置运行时随包分发，下载链路退役)
 
+## 清理批已落地（2026-09-07，ZCode）：nexus-runtime-supply 整体退役
+
+- **下载链路物理删除**：crates/nexus-runtime-supply 已从 workspace 移除并删除目录（HttpDownloadClient/SourcePolicy/archive/system/portable 下载发布、PublishPortable/InstallSystem/SupplyPlan 全套）；复用判定职责此前已由 foundation 观测层（system/portable/bundled candidates）完全覆盖
+- **CancellationToken 迁移**：唯一被多模块复用的类型迁入 nexus-core（Arc<AtomicBool>，同语义），compatibility/git_worker/supervisor/updater/lib/cold 改用 nexus_core::CancellationToken
+- **cold 流程简化**：plan 后仅两条路——全复用→build_and_publish；含 ConfigureExternal→可行动失败（尾部防御性错误=「计划产生已退役的供给动作」）；claim_confirmation 方法、confirm/confirm_inner 死函数删除；/v1/updates confirm 端点保留但恒定 409 `cold_confirmation_stale`（线兼容，报文说明已退役）；ColdOperation 的 supply_plan/confirmation 字段与 Supplying/AwaitingConfirmation 枚举值保留（旧文件序列化兼容，不再写入）；启动恢复对历史 AwaitingConfirmation 文件的处理原样保留
+- **前端**：SupplyPlanDetails 组件与 pendingConfirmation 确认面板删除（该阶段不再存在）；Switch 动作 payload 仍带 source/mode（后端兼容）
+- **验证**：workspace `cargo check --all-targets` 0 error；单线程全量 lib 测试 agent 148 / core 36 / protocol 13 / launcher-core 13 / snapshots 17 全绿；前端 tsc+vite build 通过
+- **内置档真机 E2E（全量自测证据）**：隔离数据根 + junction 挂载 resources/runtime + debug agent → GET /v1/runtime：git=system、node=system v24.19.0（系统满足 >=24 优先于内置——系统优先语义实测正确）、pnpm=**bundled** 11.7.0（corepack shim 拒绝后回退，bundled node 前缀探测成功）
+
 # dsh-nexus 项目状态与需求基线
 
 ## 内置运行时批次①已落地（2026-09-06，ZCode）：bundled 观测档 + 下载链路停用
