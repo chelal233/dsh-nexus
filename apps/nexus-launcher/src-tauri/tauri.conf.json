@@ -41,6 +41,13 @@
     "shortDescription": "Native local control plane for Nexus",
     "longDescription": "A native operator shell for the independent Nexus Agent and immutable Harness runtime.",
     "windows": {
+      "nsis": {
+        "installerHooks": "installers/shutdown.nsh"
+      },
+      "wix": {
+        "fragmentPaths": ["installers/shutdown.wxs"],
+        "componentGroupRefs": ["NexusInstallerShutdown"]
+      },
       "webviewInstallMode": {
         "type": "embedBootstrapper"
       }

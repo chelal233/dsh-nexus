@@ -45,6 +45,8 @@ use serde_json::{json, Value};
 use sha2::Sha256;
 use tokio::{net::TcpListener, sync::Mutex, time::sleep};
 
+mod installer_shutdown;
+
 fn unavailable_harness_ui_info(_paths: &NexusPaths, message: String) -> HarnessUiInfo {
     nexus_launcher_core::unavailable_harness_ui_info(message)
 }
@@ -222,6 +224,13 @@ struct LaunchRecord {
 
 #[tokio::main]
 async fn main() {
+    if env::args_os().nth(1).as_deref() == Some(std::ffi::OsStr::new("installer-stop")) {
+        if let Err(message) = installer_shutdown::run(env::args_os().skip(2).collect()) {
+            eprintln!("nexus-launcher installer-stop: {message}");
+            process::exit(1);
+        }
+        return;
+    }
     let options = match parse_args() {
         Ok(Some(options)) => options,
         Ok(None) => return,
