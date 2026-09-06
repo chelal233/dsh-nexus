@@ -139,10 +139,11 @@ pub(crate) fn assemble_runtime_plan(
             RuntimePlanActionKind::ConfigureExternal => reason
                 .clone()
                 .unwrap_or_else(|| "runtime_unresolvable_specify_paths".to_owned()),
+            // assemble_runtime_plan never constructs provisioning actions
+            // (downloads are retired); the arm only keeps the match
+            // exhaustive over the wire enum.
             RuntimePlanActionKind::ProvisionPortable | RuntimePlanActionKind::InstallSystem => {
-                reason
-                    .clone()
-                    .unwrap_or_else(|| "runtime_provisioning_required".to_owned())
+                unreachable!("runtime provisioning actions are retired")
             }
         }};
         tools.push(RuntimePlanTool {

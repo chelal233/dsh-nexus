@@ -150,9 +150,6 @@ async function stageNode() {
   const target = path.join(nodeDir, "node.exe");
   await rm(target, { force: true });
   await copyFile(destination, target);
-  if ((await sha256(target)) !== (pinnedNodeSha || expected)) {
-    throw new Error("staged node.exe fails its checksum after copy");
-  }
 
   const probe = spawn(target, ["--version"], { stdio: ["ignore", "pipe", "ignore"] });
   const version = await new Promise((resolve, reject) => {

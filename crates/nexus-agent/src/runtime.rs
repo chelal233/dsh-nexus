@@ -613,26 +613,16 @@ async fn observe_tool_until(
     // Git is guided toward a user-managed installation. Nexus-owned portable
     // runtimes are intentionally limited to Node and pnpm in this phase.
     if name != "git" {
-        if Instant::now() >= deadline {
-            record_failure(
-                &mut first_failure,
-                "nexus",
-                &config.portable_root,
-                REASON_PROBE_BUDGET_EXCEEDED,
-            );
-        }
-        let portable = if Instant::now() < deadline {
-            let portable_config = config.clone();
-            let portable_name = name.to_owned();
-            config
-                .blocking_fs
-                .run(deadline, move || {
-                    portable_candidates(&portable_name, &portable_config, deadline)
-                })
-                .await
-        } else {
-            None
-        };
+        // BlockingFs::run returns None once the deadline has passed, so the
+        // empty result falls through to the same budget-exceeded failure.
+        let portable_config = config.clone();
+        let portable_name = name.to_owned();
+        let portable = config
+            .blocking_fs
+            .run(deadline, move || {
+                portable_candidates(&portable_name, &portable_config, deadline)
+            })
+            .await;
         let Some(portable) = portable else {
             record_failure(
                 &mut first_failure,
@@ -663,19 +653,15 @@ async fn observe_tool_until(
     // automatic tier before the plan reports the tool as unresolvable. Git
     // is absent here: its fallback is the embedded libgit2 worker.
     if name != "git" {
-        let bundled = if Instant::now() < deadline {
-            let bundled_name = name.to_owned();
-            let bundled_root = nexus_core::bundled_runtime_dir();
-            config
-                .blocking_fs
-                .run(deadline, move || {
-                    bundled_candidates(&bundled_name, bundled_root.as_deref(), deadline)
-                })
-                .await
-                .unwrap_or_default()
-        } else {
-            Vec::new()
-        };
+        let bundled_name = name.to_owned();
+        let bundled_root = nexus_core::bundled_runtime_dir();
+        let bundled = config
+            .blocking_fs
+            .run(deadline, move || {
+                bundled_candidates(&bundled_name, bundled_root.as_deref(), deadline)
+            })
+            .await
+            .unwrap_or_default();
         for (path, node_prefix) in bundled {
             if Instant::now() >= deadline {
                 record_failure(
@@ -710,10 +696,12 @@ fn bundled_candidates(
     root: Option<&Path>,
     deadline: Instant,
 ) -> Vec<(PathBuf, Option<PathBuf>)> {
+    // The root comes from bundled_runtime_dir, which guarantees an absolute
+    // path; deadline enforcement happens in the BlockingFs::run wrapper.
     let Some(root) = root else {
         return Vec::new();
     };
-    if !root.is_absolute() || is_remote_path(root) || Instant::now() >= deadline {
+    if Instant::now() >= deadline {
         return Vec::new();
     }
     let node_root = root.join("node");
@@ -772,8 +760,9 @@ fn prepare_bundled_script_probe_command(
     let probe_cwd = probe_cwd
         .filter(|path| is_safe_probe_cwd(path))
         .ok_or(REASON_PROBE_CWD_UNAVAILABLE)?;
-    let node_path = canonical_file(node).ok_or(REASON_CONFIGURED_PATH_MISSING)?;
-    let mut command = Command::new(node_path);
+    // The node path was already canonicalized by bundled_candidates in this
+    // probe round; re-validating it here would only duplicate that work.
+    let mut command = Command::new(node);
     // Node's script loader cannot handle Win32 verbatim prefixes; pass the
     // ordinary spelling at this process boundary, mirroring the production
     // launcher's node_script_argument behavior.

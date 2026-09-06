@@ -1029,7 +1029,7 @@ fn runtime_from_plan(plan: &nexus_protocol::RuntimePlanResponse) -> io::Result<R
             _ => {}
         }
     }
-    runtime.validate_for_paths_dummy()?;
+    runtime.validate()?;
     Ok(runtime)
 }
 
@@ -1595,15 +1595,6 @@ fn remove_directory_entry(path: &Path) -> io::Result<()> {
     }
 }
 
-trait RuntimeConfigValidationExt {
-    fn validate_for_paths_dummy(&self) -> io::Result<()>;
-}
-impl RuntimeConfigValidationExt for RuntimeConfig {
-    fn validate_for_paths_dummy(&self) -> io::Result<()> {
-        self.validate()
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2153,26 +2144,23 @@ while ($true) {{ Start-Sleep -Seconds 1 }}"#, child.display())).unwrap();
 /// Stops the output-tail watcher on every exit path of the install/build
 /// phase, including the `?` error returns, so the watcher never outlives the
 /// operation it serves.
+/// Aborts the output-tail watcher on every exit path of the install/build
+/// phase, including the `?` error returns, so the watcher never outlives the
+/// operation it serves.
 struct TailWatcherStop {
-    stop: Arc<AtomicBool>,
     handle: tokio::task::JoinHandle<()>,
 }
 
 impl TailWatcherStop {
     fn spawn(state: AppState, operation_id: String) -> Self {
-        let stop = Arc::new(AtomicBool::new(false));
-        let handle = tokio::spawn(tail_command_output(
-            state,
-            operation_id,
-            stop.clone(),
-        ));
-        Self { stop, handle }
+        Self {
+            handle: tokio::spawn(tail_command_output(state, operation_id)),
+        }
     }
 }
 
 impl Drop for TailWatcherStop {
     fn drop(&mut self) {
-        self.stop.store(true, Ordering::Release);
         self.handle.abort();
     }
 }
@@ -2181,10 +2169,10 @@ impl Drop for TailWatcherStop {
 /// install and build run, so the UI shows live pnpm output between phase
 /// transitions. Stops when `stop` flips, the operation changes, or the
 /// operation reaches a terminal phase.
-async fn tail_command_output(state: AppState, operation_id: String, stop: Arc<AtomicBool>) {
+async fn tail_command_output(state: AppState, operation_id: String) {
     let mut ticker = tokio::time::interval(Duration::from_secs(2));
     ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
-    while !stop.load(Ordering::Acquire) {
+    loop {
         ticker.tick().await;
         let Ok(Some(operation)) = state.cold.load() else {
             return;

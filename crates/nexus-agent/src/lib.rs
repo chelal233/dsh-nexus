@@ -1575,12 +1575,16 @@ async fn profile_open_terminal(
             "node_missing",
         );
     };
-    let pnpm_script = runtime.pnpm.as_ref().map(|pin| pin.path.clone()).filter(|path| {
+    // A Node-script pnpm (.js/.cjs/.mjs) needs the pinned Node in front of
+    // it; any other pnpm form runs directly.
+    let pnpm_pin = runtime.pnpm.as_ref().map(|pin| pin.path.clone());
+    let pnpm_is_script = pnpm_pin.as_ref().is_some_and(|path| {
         path.extension()
             .and_then(|extension| extension.to_str())
             .is_some_and(|extension| matches!(extension.to_ascii_lowercase().as_str(), "js" | "cjs" | "mjs"))
     });
-    let pnpm_direct = runtime.pnpm.as_ref().map(|pin| pin.path.clone()).filter(|path| !pnpm_script.as_ref().is_some_and(|script| script == path));
+    let pnpm_script = pnpm_is_script.then(|| pnpm_pin.clone()).flatten();
+    let pnpm_direct = (!pnpm_is_script).then(|| pnpm_pin.clone()).flatten();
 
     let run_dir = state.paths.run_dir.clone();
     let shim_dir = run_dir.join("terminal");
@@ -1638,10 +1642,11 @@ async fn profile_open_terminal(
         }
     }
 
-    let escaped_profile_dir = profile_dir.display().to_string().replace('\'', "''");
     #[cfg(windows)]
     {
         use std::os::windows::process::CommandExt;
+        // PowerShell single-quote literal: '' escapes an embedded quote.
+        let escaped_profile_dir = profile_dir.display().to_string().replace('\'', "''");
         let powershell = std::env::var_os("SystemRoot")
             .map(|root| {
                 std::path::PathBuf::from(root)

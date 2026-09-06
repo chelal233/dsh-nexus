@@ -632,8 +632,7 @@ async function proxyRequest<T = JsonObject>(
 ): Promise<T> {
   // Browser-only development preview: `pnpm dev` serves the same UI without
   // the Tauri bridge, so requests go through the /agent dev proxy instead.
-  const isTauri = typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
-  if (!isTauri) {
+  if (isBrowserPreview) {
     const response = await fetch(`/agent${path}`, {
       method,
       headers: body === undefined ? undefined : { "content-type": "application/json" },
@@ -1363,8 +1362,7 @@ export function GuideView(props: ViewProps) {
   const request = useRef(createLatestRequest());
   const runtime = asObject(asObject(snapshot.config).runtime);
   const [source, setSource] = useState(stringValue(runtime, "source") || "official");
-  const [mode, setMode] = useState(stringValue(runtime, "mode") || "portable");
-  useEffect(() => { setSource(stringValue(runtime, "source") || "official"); setMode(stringValue(runtime, "mode") || "portable"); }, [runtime.source, runtime.mode]);
+  useEffect(() => { setSource(stringValue(runtime, "source") || "official"); }, [runtime.source]);
   const check = useCallback(async () => {
     if (!snapshot.startup?.available) return;
     const token = request.current.begin(); setChecking(true); setEnvironmentError(null);
@@ -1381,14 +1379,14 @@ export function GuideView(props: ViewProps) {
   const installing = !!operationPhase && !coldOperationIsTerminal(operationPhase);
   const startupAvailable = snapshot.startup?.available === true;
   const tools = environment?.tools || [];
-  const envReady = !installing && ["node", "pnpm"].every(name => tools.some(tool => tool.name === name && tool.available));
+  const ready = ["node", "pnpm"].every(name => tools.some(tool => tool.name === name && tool.available));
+  const envReady = !installing && ready;
   useEffect(() => {
     // Re-run automatically whenever the Agent becomes available, a version
     // install finishes, or the tool set can have changed.
     if (startupAvailable) { void check(); }
     return () => request.current.cancel();
   }, [check, current, startupAvailable, operationPhase === "succeeded", envReady]);
-  const ready = ["node", "pnpm"].every(name => tools.some(tool => tool.name === name && tool.available));
   const locked = !startupAvailable || runtimeSettingsGate(phase, numberValue(harness, "pid"), stringValue(asObject(asObject(snapshot.updates).update), "state"), operationPhase, booleanValue(operation, "cleanup_pending"), busyAction !== null).disabled;
   const versionStepDone = !!current && !installing;
   return <><PageIntro kicker={t("Setup guide")} title={t(current ? "Harness is ready" : "Set up Harness automatically")} detail={t("Environment checks run automatically; install a version, then press Start once. Starting Harness always needs your explicit click.")} />
@@ -1405,7 +1403,7 @@ export function GuideView(props: ViewProps) {
       <details><summary>{t("Dependency registry")}</summary><div className="form-grid">
         <label className="form-field">{t("Dependency registry")}<select value={source} disabled={locked} onChange={event => setSource(event.target.value)}><option value="official">{t("Official")}</option><option value="npmmirror">npmmirror</option></select></label>
         <p className="field-help">{t("Only used when Harness dependencies are downloaded. Nexus never downloads Node, pnpm, or Git.")}</p>
-        <ActionButton disabled={locked} onClick={() => void runAction(t("Save runtime settings"), "/v1/config", { action: "set_runtime", runtime: { ...runtime, source, mode } })}>{t("Save")}</ActionButton>
+        <ActionButton disabled={locked} onClick={() => void runAction(t("Save runtime settings"), "/v1/config", { action: "set_runtime", runtime: { ...runtime, source } })}>{t("Save")}</ActionButton>
       </div></details>
     </Panel>
     <UpdatesView {...props} embedded />
@@ -2241,10 +2239,8 @@ function SettingsView({ snapshot, themeMode, setThemeMode, busyAction, runAction
   const runtimeGateReason = runtimeGate.reason === "harness_not_stopped" ? t("Harness must be positively stopped before saving runtime settings.") : runtimeGate.reason === "update_active" ? t("Wait for the update to become idle before saving runtime settings.") : runtimeGate.reason === "cold_active" ? t("Wait for the cold switch to finish before saving runtime settings.") : runtimeGate.reason === "cleanup_pending" ? t("Retry cold cleanup before saving runtime settings.") : null;
   const runtime = nestedValue(config, "runtime");
   const [runtimeSource, setRuntimeSource] = useState(stringValue(runtime, "source") || "official");
-  const [runtimeMode, setRuntimeMode] = useState(stringValue(runtime, "mode") || "portable");
   useEffect(() => {
     setRuntimeSource(stringValue(runtime, "source") || "official");
-    setRuntimeMode(stringValue(runtime, "mode") || "portable");
     const nodePath = stringValue(nestedValue(runtime, "node"), "path") || "";
     const pnpmPath = stringValue(nestedValue(runtime, "pnpm"), "path") || "";
     const gitPath = stringValue(nestedValue(runtime, "git"), "path") || "";
@@ -2253,7 +2249,7 @@ function SettingsView({ snapshot, themeMode, setThemeMode, busyAction, runAction
   return <>
     <PageIntro kicker={t("System / Settings")} title={t("Settings")} detail={t("Configuration remains Agent-owned. This view intentionally exposes metadata, not credentials or raw environment values.")} />
     <div className="grid-two">
-<Panel title={t("Runtime settings")} icon={<Cpu size={18} />}><div className="status-block"><div className="button-row"><ActionButton onClick={() => setRuntimeSetupOpen((open) => !open)}>{runtimeSetupOpen ? t("Hide dependency registry") : t("Change dependency registry")}</ActionButton></div>{runtimeSetupOpen && <div className="form-grid"><label className="form-field"><span className="field-label">{t("Dependency registry")}</span><select className="form-input" value={runtimeSource} onChange={(e) => setRuntimeSource(e.target.value)}><option value="official">{t("Official")}</option><option value="npmmirror">npmmirror</option></select></label></div>}{runtimeSetupOpen && <p className="field-help">{t("Only used when Harness dependencies are downloaded. Nexus never downloads Node, pnpm, or Git.")}</p>}<div className="form-grid">{(["node", "pnpm", "git"] as const).map((name) => <label key={name} className="form-field"><span className="field-label">{name} {t("pin")}</span><input className="form-input" value={pins[name]} placeholder={stringValue(nestedValue(runtime, name), "path") || t("Leave blank for automatic discovery")} onChange={(event) => setPins((current) => ({ ...current, [name]: event.target.value }))} /></label>)}</div><p className="field-help">{t("Manual paths are saved as system pins. Leave blank to resolve automatically: your system tools first, then the ones bundled with Nexus.")}</p><ActionButton disabled={runtimeGate.disabled} onClick={() => void runAction(t("Save runtime settings"), "/v1/config", { action: "set_runtime", runtime: { node: pins.node.trim() ? { path: pins.node.trim(), ownership: "system" } : null, pnpm: pins.pnpm.trim() ? { path: pins.pnpm.trim(), ownership: "system" } : null, git: pins.git.trim() ? { path: pins.git.trim(), ownership: "system" } : null, source: runtimeSource, mode: runtimeMode } })}>{t("Save runtime settings")}</ActionButton>{runtimeGateReason && <p className="field-help" role="status">{runtimeGateReason}</p>}</div><hr className="panel-divider" /><RuntimeStatusPanel agentAvailable={snapshot.startup?.available === true} state={runtimeStatus} onCheck={() => void checkRuntime()} /></Panel>
+<Panel title={t("Runtime settings")} icon={<Cpu size={18} />}><div className="status-block"><div className="button-row"><ActionButton onClick={() => setRuntimeSetupOpen((open) => !open)}>{runtimeSetupOpen ? t("Hide dependency registry") : t("Change dependency registry")}</ActionButton></div>{runtimeSetupOpen && <div className="form-grid"><label className="form-field"><span className="field-label">{t("Dependency registry")}</span><select className="form-input" value={runtimeSource} onChange={(e) => setRuntimeSource(e.target.value)}><option value="official">{t("Official")}</option><option value="npmmirror">npmmirror</option></select></label></div>}{runtimeSetupOpen && <p className="field-help">{t("Only used when Harness dependencies are downloaded. Nexus never downloads Node, pnpm, or Git.")}</p>}<div className="form-grid">{(["node", "pnpm", "git"] as const).map((name) => <label key={name} className="form-field"><span className="field-label">{name} {t("pin")}</span><input className="form-input" value={pins[name]} placeholder={stringValue(nestedValue(runtime, name), "path") || t("Leave blank for automatic discovery")} onChange={(event) => setPins((current) => ({ ...current, [name]: event.target.value }))} /></label>)}</div><p className="field-help">{t("Manual paths are saved as system pins. Leave blank to resolve automatically: your system tools first, then the ones bundled with Nexus.")}</p><ActionButton disabled={runtimeGate.disabled} onClick={() => void runAction(t("Save runtime settings"), "/v1/config", { action: "set_runtime", runtime: { node: pins.node.trim() ? { path: pins.node.trim(), ownership: "system" } : null, pnpm: pins.pnpm.trim() ? { path: pins.pnpm.trim(), ownership: "system" } : null, git: pins.git.trim() ? { path: pins.git.trim(), ownership: "system" } : null, source: runtimeSource, mode: stringValue(runtime, "mode") || "portable" } })}>{t("Save runtime settings")}</ActionButton>{runtimeGateReason && <p className="field-help" role="status">{runtimeGateReason}</p>}</div><hr className="panel-divider" /><RuntimeStatusPanel agentAvailable={snapshot.startup?.available === true} state={runtimeStatus} onCheck={() => void checkRuntime()} /></Panel>
       <Panel title={t("Repair & reset")} icon={<Gear size={18} />}><p className="field-help">{t("Reset repairs broken Nexus state. Harness data under .dsh is never touched; installed version slots stay on disk.")}</p><div className="button-row">
           <ActionButton tone={armedReset === "config" ? "danger" : undefined} disabled={busyAction !== null} onClick={() => { const scope = "config"; if (armedReset === scope) { setArmedReset(null); void runAction(t("Reset Nexus configuration"), "/v1/maintenance", { action: "reset", scope }); } else { setArmedReset(scope); } }}>{armedReset === "config" ? t("Click again to confirm") : t("Reset Nexus configuration")}</ActionButton>
           <ActionButton tone={armedReset === "slots" ? "danger" : undefined} disabled={busyAction !== null} onClick={() => { const scope = "slots"; if (armedReset === scope) { setArmedReset(null); void runAction(t("Reset configuration and slot registry"), "/v1/maintenance", { action: "reset", scope }); } else { setArmedReset(scope); } }}>{armedReset === "slots" ? t("Click again to confirm") : t("Reset configuration and slot registry")}</ActionButton>

@@ -8,6 +8,23 @@ updated: 2026-09-06 by ZCode (运行时工具获取契约反转：内置运行�
 - **资源映射修正**：tauri.conf resources glob 由 `resources/runtime/**` 改为 `resources/runtime/*`（glob crate 语义 + 构建脚本实际接受）；目录由 Tauri 递归复制
 - **测试**：agent 148/148 单线程；前端 37/37（改写已退役的「cold 确认面板」测试为「冷操作不再有确认暂停」断言）
 
+## 简化重构批（2026-09-07，ZCode）：删除冗余防御与死代码 + 关键注释
+
+评审方式：专项代理按「永假/永真检查、重复校验、死代码、无意义防御、近重复可合并」五类扫描本会话改动区（安全/契约项明确豁免），产出 12 项发现；采纳 9 项高置信项，2 项留档（probe_cwd 三处 newtype 化重构、runtime_from_plan 绝对性错误改 panic——后者会把优雅失败变任务崩溃，语义存疑），1 项复核后保留（prepare-runtime fast-path 哈希校验保留理由：防跨构建投毒，删的是另一处纯复制后自检）。
+
+### 已落地
+- **runtime.rs**：portable/bundled 两层探测删除外层 deadline 预判（BlockingFs::run 过期本就返回 None）；bundled_candidates 删除永假的 is_absolute/remote 前置过滤（bundled_runtime_dir 已保证）；prepare_bundled_script_probe_command 不再对同轮已 canonicalize 的 node 路径二次 canonical_file
+- **runtime_plan.rs**：action_reason 的 ProvisionPortable/InstallSystem 分支改 unreachable!（本函数从不构造该动作），保持 wire 枚举穷尽性
+- **lib.rs**：pnpm_script/pnpm_direct 的字符串相等互补过滤改写为显式布尔分支；escaped_profile_dir 移入唯一消费的 windows 块
+- **cold.rs**：删除 RuntimeConfigValidationExt 无意义封装 trait（直接调 validate()）；TailWatcherStop 删除平行冗余的 AtomicBool 停止标志（Drop 内 abort 即终止）
+- **App.tsx**：删除 GuideView/SettingsView 两处影子 `mode` state（下拉已移除，配置值经 spread 原样透传）；envReady/ready 谓词去重；proxyRequest 复用模块级 isBrowserPreview（删第二份环境判断）
+- **prepare-runtime.mjs**：删除复制后整体重哈希（下载/缓存校验 + fast-path 校验保留）
+
+### 回归
+- cargo check workspace 0 error；单线程全量 agent 149 / core 38 / protocol 13 / launcher-core 13 / snapshots 17 全绿
+- 前端 tsc+vite build 过；37/37 tests
+- 注：IAB 面板失焦时真实输入点击不生效（工具环境限制），行为回归以单测覆盖为准；引导页/工作台此前已截图验证
+
 ## GUI 样式体系验收与优化（2026-09-07，ZCode）：红蓝设计评审合并落地
 
 评审方式：五页现状截图（工作台/引导/配置与插件/维护/设置）交两个独立设计代理评审——A=视觉层级/信息架构、B=组件一致性/交互可供性——合并为一份 CSS 改动集（两方方案高度互补、零冲突），直接实施并浏览器逐页验证。
