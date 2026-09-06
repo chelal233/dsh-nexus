@@ -4,7 +4,7 @@ use std::{fmt, fs, io, path::Path, process::Stdio, sync::Arc, time::Duration};
 
 use nexus_core::{
     load_update_spec, unix_time_nanos_for_update, unix_time_seconds, validate_release_id,
-    validate_release_version, validate_update_ref, validate_update_source, ConfigStore, NexusPaths,
+    validate_release_version, validate_update_ref, ConfigStore, NexusPaths,
     ReleaseCatalog, ReleaseStore, UpdateSpec, UpdateStateStore,
 };
 use nexus_protocol::{ReleaseManifest, UpdateResponse, UpdateRuntimeInfo, UpdateState};
@@ -68,6 +68,7 @@ pub struct UpdateExecutor {
     releases: ReleaseStore,
     state: UpdateStateStore,
     gate: Arc<Mutex<()>>,
+    cleanup_unconfirmed: Arc<std::sync::atomic::AtomicBool>,
     #[cfg(test)]
     command_gate: Arc<Mutex<Option<UpdateCommandGate>>>,
     #[cfg(test)]
@@ -89,6 +90,7 @@ impl UpdateExecutor {
             paths,
             releases,
             gate: Arc::new(Mutex::new(())),
+            cleanup_unconfirmed: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             #[cfg(test)]
             command_gate: Arc::new(Mutex::new(None)),
             #[cfg(test)]
@@ -111,9 +113,31 @@ impl UpdateExecutor {
     }
 
     pub(crate) fn try_acquire_gate(&self) -> Result<OwnedMutexGuard<()>, UpdateExecutorError> {
-        Arc::clone(&self.gate)
+        let guard = Arc::clone(&self.gate)
             .try_lock_owned()
-            .map_err(|_| UpdateExecutorError::AlreadyRunning)
+            .map_err(|_| UpdateExecutorError::AlreadyRunning)?;
+        if self.cleanup_unconfirmed.load(std::sync::atomic::Ordering::Acquire) {
+            return Err(UpdateExecutorError::AlreadyRunning);
+        }
+        Ok(guard)
+    }
+
+    fn cleanup_failed_candidate(&self, candidate: &Path, error: &UpdateExecutorError) {
+        let quiescent = match error {
+            UpdateExecutorError::Configuration(source) => crate::cold::command_owner_quiescent(source),
+            _ => true,
+        };
+        self.cleanup_candidate(candidate, quiescent);
+    }
+
+    fn cleanup_candidate(&self, candidate: &Path, owner_quiescent: bool) {
+        if !owner_quiescent {
+            // Preserve a possibly active checkout and refuse further mutations
+            // in this Agent lifetime when process teardown could not be proven.
+            self.cleanup_unconfirmed.store(true, std::sync::atomic::Ordering::Release);
+            return;
+        }
+        let _ = crate::cold::remove_owned_directory(&self.paths.downloads_dir, candidate);
     }
 
     #[cfg(test)]
@@ -220,7 +244,7 @@ impl UpdateExecutor {
             .install_inner(&spec, &candidate, &release_id, &version)
             .await
         {
-            let _ = fs::remove_dir_all(&candidate);
+            self.cleanup_failed_candidate(&candidate, &error);
             return Err(self.record_switch_failure(
                 Some(release_id),
                 Some(started_at),
@@ -403,7 +427,7 @@ impl UpdateExecutor {
                 Ok(UpdateResponse::new(finished, Some(release)))
             }
             Err(error) => {
-                let _ = fs::remove_dir_all(&candidate);
+                self.cleanup_failed_candidate(&candidate, &error);
                 let failed = UpdateRuntimeInfo {
                     state: UpdateState::Failed,
                     release_id: Some(release_id),
@@ -439,29 +463,21 @@ impl UpdateExecutor {
                 "update candidate directory already exists",
             )));
         }
-        let clone_args = vec![
-            "clone".to_owned(),
-            "--no-tags".to_owned(),
-            "--depth".to_owned(),
-            "1".to_owned(),
-            "--branch".to_owned(),
-            spec.ref_name.clone(),
-            spec.source.clone(),
-            candidate.to_string_lossy().into_owned(),
-        ];
-        run_logged_command(
-            &self.paths,
-            "git-clone",
-            release_id,
-            &spec.git_program,
-            &clone_args,
-            None,
-            spec.timeout(),
-            #[cfg(test)]
-            &self.command_gate,
-        )
-        .await?;
-
+        let clone_spec = spec.clone();
+        let clone_candidate = candidate.to_owned();
+        let clone_directory = self.paths.run_dir.clone();
+        let clone = tokio::spawn(async move {
+            crate::git_worker::clone_candidate(&clone_spec.source, &clone_spec.ref_name, &clone_candidate,
+                &clone_directory, clone_spec.timeout(), &nexus_runtime_supply::CancellationToken::default(),
+                Some(crate::git_worker::ExternalGit { program: clone_spec.git_program.clone(), prefix: Vec::new() })).await
+        });
+        #[cfg(test)]
+        if let Some(gate) = self.command_gate.lock().await.take() {
+            let _ = gate.reached.send(());
+            let _ = gate.release.await;
+        }
+        clone.await.map_err(|error| UpdateExecutorError::Configuration(io::Error::other(error)))?
+            .map_err(UpdateExecutorError::Configuration)?;
         if let Some(program) = spec.build_program.as_deref() {
             let args = spec.render_args(&spec.build_args, candidate, release_id);
             run_logged_command(
@@ -641,53 +657,6 @@ pub fn parse_ls_remote_tags(stdout: &str) -> Vec<String> {
     tags
 }
 
-/// Enumerate upstream tags with one bounded `git ls-remote --tags` call.
-/// The update source itself is validated before the process is spawned.
-pub async fn list_remote_tags(
-    source: &str,
-    git_program: &Path,
-    command_timeout: Duration,
-) -> Result<Vec<String>, UpdateExecutorError> {
-    const PHASE: &str = "tags";
-    validate_update_source(source).map_err(|source| UpdateExecutorError::Configuration(source))?;
-    let mut command = Command::new(git_program);
-    command
-        .args(["ls-remote", "--tags", source])
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::null())
-        .kill_on_drop(true);
-    let child = command
-        .spawn()
-        .map_err(|source| UpdateExecutorError::Spawn { phase: PHASE, source })?;
-    // Dropping the timed-out future drops the child; kill_on_drop then
-    // terminates the process, so no explicit kill is needed here.
-    let wait = timeout(command_timeout, child.wait_with_output()).await;
-    let output = match wait {
-        Ok(Ok(output)) if output.status.success() => output,
-        Ok(Ok(output)) => {
-            return Err(UpdateExecutorError::Failed {
-                phase: PHASE,
-                code: output.status.code(),
-            });
-        }
-        Ok(Err(source)) => {
-            return Err(UpdateExecutorError::Process {
-                phase: PHASE,
-                source,
-            });
-        }
-        Err(_) => {
-            return Err(UpdateExecutorError::TimedOut {
-                phase: PHASE,
-                timeout: command_timeout,
-            });
-        }
-    };
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    Ok(parse_ls_remote_tags(&stdout))
-}
-
 #[cfg(test)]
 mod tests {
     use super::{parse_ls_remote_tags, resolve_release_id, resolve_release_version, UpdateExecutor, UpdateExecutorError};
@@ -714,7 +683,7 @@ def	refs/tags/v0.9.0^{}
         #[cfg(windows)]
         {
             let program = root.join("fake-git.cmd");
-            fs::write(&program, "@echo off\r\nmkdir \"%~8\"\r\nexit /b 0\r\n")
+            fs::write(&program, "@echo off\r\nshift\r\nshift\r\nmkdir \"%~8\"\r\nexit /b 0\r\n")
                 .expect("fake git command writes");
             program
         }
@@ -723,7 +692,7 @@ def	refs/tags/v0.9.0^{}
             use std::os::unix::fs::PermissionsExt;
 
             let program = root.join("fake-git.sh");
-            fs::write(&program, "#!/bin/sh\nmkdir -p \"$8\"\n").expect("fake git command writes");
+            fs::write(&program, "#!/bin/sh\nshift 2\nmkdir -p \"$8\"\n").expect("fake git command writes");
             let mut permissions = fs::metadata(&program)
                 .expect("fake git metadata reads")
                 .permissions();
@@ -794,6 +763,25 @@ def	refs/tags/v0.9.0^{}
             Err(UpdateExecutorError::AlreadyRunning)
         ));
         let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn unconfirmed_process_cleanup_preserves_checkout_and_blocks_updates() {
+        let root = std::env::temp_dir().join(format!("nexus-update-cleanup-{}", nexus_core::unix_time_nanos_for_update()));
+        let paths = NexusPaths::from_root(root.clone());
+        paths.ensure_directories().unwrap();
+        let candidate = paths.downloads_dir.join("owned-candidate");
+        fs::create_dir(&candidate).unwrap();
+        fs::write(candidate.join("keep.txt"), "active").unwrap();
+        let executor = UpdateExecutor::new(paths.clone(), ReleaseStore::new(paths.clone()));
+        executor.cleanup_candidate(&candidate, false);
+        assert_eq!(fs::read_to_string(candidate.join("keep.txt")).unwrap(), "active");
+        assert!(matches!(executor.try_acquire_gate(), Err(UpdateExecutorError::AlreadyRunning)));
+        assert!(matches!(executor.clone().try_acquire_gate(), Err(UpdateExecutorError::AlreadyRunning)));
+        let fresh = UpdateExecutor::new(paths.clone(), ReleaseStore::new(paths));
+        fresh.cleanup_candidate(&candidate, true);
+        assert!(!candidate.exists());
+        fs::remove_dir_all(root).unwrap();
     }
 
     #[tokio::test]

@@ -551,31 +551,8 @@ async fn prepare_inner(state: &AppState, operation_id: &str) -> io::Result<()> {
         ));
     }
     let runtime = resolved_runtime_config(state).await?;
-    let git = resolve_runtime_command(&runtime, "git")?.ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "Git is required for cold install; install Git or configure an absolute Git runtime pin"))?;
-    let args = [
-        "-c",
-        "core.longpaths=true",
-        "clone",
-        "--no-tags",
-        "--depth",
-        "1",
-        "--branch",
-        &operation.tag,
-        APPROVED_UPSTREAM,
-        &operation.candidate,
-    ];
-    run_command(
-        "git-clone",
-        &git.program,
-        git.prefix_args
-            .into_iter()
-            .chain(args.into_iter().map(OsString::from)),
-        None,
-        &runtime,
-        &state.paths.run_dir,
-        &cancellation,
-    )
-    .await?;
+    crate::git_worker::clone_candidate(APPROVED_UPSTREAM, &operation.tag, &candidate,
+        &state.paths.run_dir, COMMAND_TIMEOUT, &cancellation, crate::git_worker::selected_external(&runtime)).await?;
     let revision =
         candidate_revision(&runtime, &candidate, &state.paths.run_dir, &cancellation).await?;
     record_candidate_revision(state, operation_id, &revision).await?;
@@ -585,16 +562,6 @@ async fn prepare_inner(state: &AppState, operation_id: &str) -> io::Result<()> {
         .update(operation_id, ColdOperationPhase::Planning, 25, None)
         .await?;
     let plan = plan_candidate(state, &operation, &candidate).await?;
-    if plan
-        .suggested_actions
-        .iter()
-        .any(|action| action.action == RuntimePlanActionKind::ConfigureExternal)
-    {
-        return Err(io::Error::new(
-            io::ErrorKind::NotFound,
-            "Git became unavailable; Nexus does not install Git automatically",
-        ));
-    }
     if plan.suggested_actions.iter().all(|action| {
         matches!(
             action.action,
@@ -712,8 +679,8 @@ async fn confirm_inner(state: &AppState, operation_id: &str, confirmation: &str)
         .execute_confirmed(&fresh, &supply, confirmation, &cancellation)
         .await
         .map_err(supply_error)?;
-    // Supply owns Node/pnpm only; retain the Git pin verified above for the
-    // post-build revision check and the persisted runtime configuration.
+    // Optional external Git remains available to upstream tools. Nexus uses
+    // its owned embedded worker for clone and revision checks.
     outcome.runtime.git = runtime.git;
     build_and_publish(state, operation_id, outcome.runtime).await
 }
@@ -1049,7 +1016,7 @@ async fn plan_candidate(
     .await
 }
 
-async fn resolved_runtime_config(state: &AppState) -> io::Result<RuntimeConfig> {
+pub(crate) async fn resolved_runtime_config(state: &AppState) -> io::Result<RuntimeConfig> {
     let configured = state.config.load()?.runtime.unwrap_or_default();
     let request = crate::runtime::RuntimeRequestContext::production();
     let observed =
@@ -1088,6 +1055,7 @@ fn runtime_from_plan(plan: &nexus_protocol::RuntimePlanResponse) -> io::Result<R
         ..RuntimeConfig::default()
     };
     for tool in &plan.tools {
+        if tool.name == "git" && tool.state != nexus_protocol::RuntimePlanToolState::Reusable { continue; }
         let path = tool
             .path
             .as_ref()
@@ -1280,61 +1248,8 @@ async fn candidate_revision(
     cancellation: &CancellationToken,
 ) -> io::Result<String> {
     ensure_not_cancelled(cancellation)?;
-    let git = resolve_runtime_command(runtime, "git")?.ok_or_else(|| {
-        io::Error::new(io::ErrorKind::NotFound, "verified Git runtime is missing")
-    })?;
-    let output_path = std::env::temp_dir().join(format!(
-        "nexus-cold-revision-{}",
-        unix_time_nanos_for_update()
-    ));
-    let output_file = fs::OpenOptions::new()
-        .create_new(true)
-        .write(true)
-        .open(&output_path)?;
-    let mut command = std::process::Command::new(&git.program);
-    command
-        .args(git.prefix_args)
-        .args(["rev-parse", "--verify", "HEAD"])
-        .current_dir(candidate)
-        .stdin(Stdio::null())
-        .stderr(Stdio::null())
-        .stdout(output_file);
-    for (key, value) in build_runtime_child_env(runtime, std::env::var_os("PATH").as_deref())? {
-        command.env(key, value);
-    }
-    let result = run_owned_command(
-        command,
-        "git revision probe",
-        Duration::from_secs(30),
-        diagnostic_dir,
-        cancellation,
-    )
-    .await;
-    let bytes = if result.is_ok() && fs::metadata(&output_path)?.len() <= 128 {
-        fs::read(&output_path)
-    } else {
-        Err(io::Error::new(
-            io::ErrorKind::InvalidData,
-            "candidate Git revision is unavailable",
-        ))
-    };
-    let _ = fs::remove_file(&output_path);
-    result?;
-    let revision = String::from_utf8(bytes?)
-        .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?
-        .trim()
-        .to_ascii_lowercase();
-    if (revision.len() != 40 && revision.len() != 64)
-        || !revision.bytes().all(|byte| byte.is_ascii_hexdigit())
-    {
-        return Err(io::Error::new(
-            io::ErrorKind::InvalidData,
-            "candidate Git revision is invalid",
-        ));
-    }
-    Ok(revision)
+    crate::git_worker::head(candidate, diagnostic_dir, cancellation, crate::git_worker::selected_external(runtime)).await
 }
-
 fn verify_built_cli(root: &Path) -> io::Result<()> {
     let manifest = fs::read(root.join("apps/cli/package.json"))?;
     if manifest.len() > 1024 * 1024 {

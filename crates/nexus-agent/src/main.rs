@@ -3,6 +3,13 @@ use std::{env, path::PathBuf, process};
 use nexus_core::NexusConfig;
 
 fn main() {
+    if env::args_os().nth(1).as_deref() == Some(std::ffi::OsStr::new("--git-worker")) {
+        let result = env::args_os().nth(2).map(PathBuf::from)
+            .ok_or_else(|| std::io::Error::other("Git worker request is required"))
+            .and_then(|path| nexus_agent::git_worker::execute_request(&path));
+        if let Err(error) = result { eprintln!("{error}"); process::exit(1); }
+        return;
+    }
     let (config, instance_id) = match parse_args() {
         Ok(Some(options)) => options,
         Ok(None) => return,

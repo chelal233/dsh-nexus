@@ -15,6 +15,18 @@ export function isLifecycleBusyError(message: string): boolean {
   return /(?:^|: )NEXUS_LIFECYCLE_BUSY:/.test(message);
 }
 
+export function isMissingHarnessError(message: string): boolean {
+  return /harness_not_configured|Harness is not configured|no verified DSH release is selected|no current release (?:is )?selected/i.test(message);
+}
+
+export function needsHarnessInstall(config: Record<string, unknown> | null, releases: Record<string, unknown> | null): boolean {
+  if (!config || !releases || !Array.isArray(releases.releases)) return false;
+  const document = (config.config ?? config) as Record<string, unknown>;
+  if (config.harness_env_override === true || document.harness_env_override === true) return false;
+  const harness = document.harness as Record<string, unknown> | undefined;
+  return !harness?.program && releases.releases.length === 0;
+}
+
 /** Keep only non-credential catalog data from the same verified Agent. */
 export function lifecycleBusySnapshot<T extends {
   profiles: unknown; releases: unknown; state: unknown;

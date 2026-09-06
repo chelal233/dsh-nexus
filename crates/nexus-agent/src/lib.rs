@@ -61,6 +61,8 @@ use tokio::{
 };
 
 mod cold;
+#[doc(hidden)]
+pub mod git_worker;
 mod compatibility;
 mod dsh;
 mod runtime;
@@ -2871,7 +2873,14 @@ async fn release_tags(State(state): State<AppState>) -> axum::response::Response
         Err(error) => return data_error_response(error, "update_spec_unavailable"),
     };
     let command_timeout = std::time::Duration::from_secs(spec.timeout_secs.unwrap_or(120));
-    match updater::list_remote_tags(&spec.source, &spec.git_program, command_timeout).await {
+    let runtime = match cold::resolved_runtime_config(&state).await {
+        Ok(runtime) => runtime,
+        Err(error) => return data_error_response(error, "runtime_selection_failed"),
+    };
+    let external = git_worker::selected_external(&runtime).or_else(|| Some(git_worker::ExternalGit {
+        program: spec.git_program.clone(), prefix: Vec::new(),
+    }));
+    match git_worker::list_tags(&spec.source, &state.paths.run_dir, command_timeout, external).await {
         Ok(tags) => (
             StatusCode::OK,
             Json(TagListResponse::new(spec.source.clone(), tags)),

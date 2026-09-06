@@ -13,6 +13,8 @@ export type TranslationParams = Record<string, string | number>;
 export type Translator = (key: string, params?: TranslationParams) => string;
 
 const english: Record<string, string> = {
+  "Nexus prefers system Git and falls back to embedded Git when unavailable or unsuccessful. Embedded Git does not provide a git command for plugins.": "Nexus prefers system Git and falls back to embedded Git when unavailable or unsuccessful. Embedded Git does not provide a git command for plugins.",
+  "No local Harness is installed. Select a version here to install it.": "No local Harness is installed. Select a version here to install it.",
   "Plugin load order": "Plugin load order",
   "Load order saved. It takes effect on the next Harness startup.": "Load order saved. It takes effect on the next Harness startup.",
   "Built-in plugins come from the profile template. Installed plugins are dependency-managed even when included in the load list.": "Built-in plugins come from the profile template. Installed plugins are dependency-managed even when included in the load list.",
@@ -544,6 +546,8 @@ const english: Record<string, string> = {
 };
 
 const chinese: Record<string, string> = {
+  "Nexus prefers system Git and falls back to embedded Git when unavailable or unsuccessful. Embedded Git does not provide a git command for plugins.": "Nexus 优先使用系统 Git，不可用或执行失败时使用内置 Git。内置实现不向插件提供 git 命令行。",
+  "No local Harness is installed. Select a version here to install it.": "尚未安装本地 Harness，请在此选择版本并安装。",
   "Plugin load order": "插件加载顺序",
   "Load order saved. It takes effect on the next Harness startup.": "加载顺序已保存，下次启动 Harness 时生效。",
   "Built-in plugins come from the profile template. Installed plugins are dependency-managed even when included in the load list.": "内置插件随配置档模板提供。后续安装的插件由依赖清单管理，出现在加载列表中不代表内置。",

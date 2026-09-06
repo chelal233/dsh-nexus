@@ -2,6 +2,8 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import {
+  needsHarnessInstall,
+  isMissingHarnessError,
   pluginMoveTarget,
   isLifecycleBusyError,
   lifecycleBusySnapshot,
@@ -14,6 +16,17 @@ import {
   recoveryMutationGate,
   runtimeSettingsGate,
 } from "../src/control-state.ts";
+
+test("missing Harness redirects only confirmed empty setups and specific errors", () => {
+  assert.equal(needsHarnessInstall({ harness: null }, { releases: [] }), true);
+  assert.equal(needsHarnessInstall({ harness: { program: "custom.exe" } }, { releases: [] }), false);
+  assert.equal(needsHarnessInstall(null, { releases: [] }), false);
+  assert.equal(needsHarnessInstall({ harness_env_override: true }, { releases: [] }), false);
+  assert.equal(needsHarnessInstall({}, { releases: [{}] }), false);
+  assert.equal(isMissingHarnessError("Harness is not configured; set harness.program"), true);
+  assert.equal(isMissingHarnessError("no verified DSH release is selected"), true);
+  assert.equal(isMissingHarnessError("plugin failed to load"), false);
+});
 
 test("an unattached running Harness disables all lifecycle controls", () => {
   assert.deepEqual(harnessControlGate("running", undefined, false, true), {

@@ -101,11 +101,13 @@ pub(crate) fn assemble_runtime_plan(
         let action = match state {
             RuntimePlanToolState::Reusable if pinned.is_some() => RuntimePlanActionKind::UsePinned,
             RuntimePlanToolState::Reusable => RuntimePlanActionKind::UseExisting,
-            _ if name == "git" => RuntimePlanActionKind::ConfigureExternal,
+            _ if name == "git" => RuntimePlanActionKind::UseExisting,
             _ if mode == RuntimeInstallMode::Portable => RuntimePlanActionKind::ProvisionPortable,
             _ => RuntimePlanActionKind::InstallSystem,
         };
-        let action_reason = match action {
+        let action_reason = if name == "git" && state != RuntimePlanToolState::Reusable {
+            "nexus_embedded_git_only_external_cli_unavailable".to_owned()
+        } else { match action {
             RuntimePlanActionKind::UsePinned => "configured_pin_verified".to_owned(),
             RuntimePlanActionKind::UseExisting => "compatible_existing_runtime".to_owned(),
             RuntimePlanActionKind::ConfigureExternal => reason
@@ -116,7 +118,7 @@ pub(crate) fn assemble_runtime_plan(
                     .clone()
                     .unwrap_or_else(|| "runtime_provisioning_required".to_owned())
             }
-        };
+        }};
         tools.push(RuntimePlanTool {
             name: name.to_owned(),
             requirements: requirements_for_tool,
@@ -409,6 +411,9 @@ mod tests {
             .tools
             .iter()
             .all(|tool| tool.state == RuntimePlanToolState::Missing));
+        let git = plan.suggested_actions.iter().find(|tool| tool.tool == "git").unwrap();
+        assert_eq!(git.action, RuntimePlanActionKind::UseExisting);
+        assert_eq!(git.reason, "nexus_embedded_git_only_external_cli_unavailable");
         let error = plan_registered_release(
             &releases,
             &config,

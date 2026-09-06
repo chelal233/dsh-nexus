@@ -11,7 +11,7 @@ export function verifyStaticRuntime(binaryPaths) {
   if (!installation) throw new Error("Visual Studio C++ tools were not found for import verification");
   const version = readFileSync(path.join(installation, "VC/Auxiliary/Build/Microsoft.VCToolsVersion.default.txt"), "utf8").trim();
   const dumpbin = path.join(installation, "VC/Tools/MSVC", version, "bin/Hostx64/x64/dumpbin.exe");
-  const systemImports = new Set(["kernel32.dll", "ntdll.dll", "ws2_32.dll", "bcrypt.dll", "bcryptprimitives.dll", "advapi32.dll", "userenv.dll"]);
+  const systemImports = new Set(["kernel32.dll", "ntdll.dll", "ws2_32.dll", "bcrypt.dll", "bcryptprimitives.dll", "advapi32.dll", "userenv.dll", "winhttp.dll", "rpcrt4.dll", "ole32.dll", "crypt32.dll"]);
   for (const binary of binaryPaths) {
     const output = execFileSync(dumpbin, ["/DEPENDENTS", binary], { encoding: "utf8", windowsHide: true });
     const imports = [...new Set([...output.matchAll(/^\s+([\w.-]+\.dll)\s*$/gmi)].map(match => match[1].toLowerCase()))];
