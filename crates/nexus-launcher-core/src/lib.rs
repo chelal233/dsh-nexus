@@ -11,7 +11,10 @@ use std::{
     io::{self, Write},
     path::{Path, PathBuf},
     process::Stdio,
-    sync::{Arc, Mutex},
+    sync::{
+        atomic::{AtomicU16, Ordering},
+        Arc, Mutex,
+    },
     time::Duration,
 };
 
@@ -520,7 +523,8 @@ pub struct AgentRuntime {
     config: NexusConfig,
     paths: NexusPaths,
     data_root_id: String,
-    client: AgentClient,
+    base_client: AgentClient,
+    effective_port: Arc<AtomicU16>,
     program: Option<PathBuf>,
     resolved_program: Arc<Mutex<Option<PathBuf>>>,
     resource_dir: Option<PathBuf>,
@@ -536,7 +540,7 @@ impl fmt::Debug for AgentRuntime {
             .field("config", &self.config)
             .field("paths", &self.paths)
             .field("data_root_id", &self.data_root_id)
-            .field("client", &self.client)
+            .field("client", &self.client())
             .field("program", &self.program)
             .field("resolved_program", &self.resolved_program())
             .finish_non_exhaustive()
@@ -569,11 +573,13 @@ impl AgentRuntime {
         if let Some(resource_dir) = resource_dir.as_deref() {
             validate_resource_dir(resource_dir)?;
         }
+        let effective_port = Arc::new(AtomicU16::new(config.port));
         Ok(Self {
             config,
             paths,
             data_root_id,
-            client,
+            base_client: client,
+            effective_port,
             resolved_program: Arc::new(Mutex::new(program.clone())),
             program,
             resource_dir,
@@ -584,7 +590,16 @@ impl AgentRuntime {
     }
 
     pub fn client(&self) -> AgentClient {
-        self.client.clone()
+        let port = self.effective_port.load(Ordering::Acquire);
+        if port == self.config.port {
+            return self.base_client.clone();
+        }
+        AgentClient::from_reqwest(port, self.base_client.http.clone())
+            .expect("effective port is validated before adoption")
+    }
+
+    fn adopt_discovered_port(&self, port: u16) {
+        self.effective_port.store(port, Ordering::Release);
     }
 
     pub fn config(&self) -> &NexusConfig {
@@ -637,36 +652,37 @@ impl AgentRuntime {
         }
     }
 
-    /// Probe the configured port; on a transport failure fall back to the
-    /// discovery record (`run/agent.json`) so an Agent that bound an
-    /// OS-assigned port is still found. The identity check below rejects a
-    /// record left over from a different data root.
-    fn client_for_discovery(&self) -> Option<AgentClient> {
-        let record = self
-            .paths
-            .read_agent_discovery()
-            .ok()
-            .flatten()
-            .filter(|record| {
-                record.data_root_id == self.data_root_id && record.port != self.config.port
-            })?;
-        AgentClient::from_reqwest(record.port, reqwest::Client::new()).ok()
-    }
-
     pub async fn probe(&self) -> Result<HealthResponse, AgentRuntimeError> {
-        let health = match self.client.get_json::<HealthResponse>("/v1/health").await {
+        let mut discovered = None;
+        let health = match self.client().get_json::<HealthResponse>("/v1/health").await {
             Ok(health) => health,
-            Err(AgentClientError::Transport(_)) => match self.client_for_discovery() {
-                Some(discovery_client) => discovery_client
-                    .get_json::<HealthResponse>("/v1/health")
-                    .await
-                    .map_err(AgentRuntimeError::Client)?,
-                None => {
+            Err(AgentClientError::Transport(_)) => {
+                let Some(record) = self
+                    .paths
+                    .read_agent_discovery()
+                    .ok()
+                    .flatten()
+                    .filter(|record| record.data_root_id == self.data_root_id)
+                else {
                     return Err(AgentRuntimeError::Client(AgentClientError::Transport(
                         "no Agent on the configured port and no discovery record".to_owned(),
-                    )))
+                    )));
+                };
+                let candidate =
+                    AgentClient::from_reqwest(record.port, self.base_client.http.clone())
+                        .map_err(AgentRuntimeError::Client)?;
+                let health = candidate
+                    .get_json::<HealthResponse>("/v1/health")
+                    .await
+                    .map_err(AgentRuntimeError::Client)?;
+                if health.instance_id != record.instance_id {
+                    return Err(AgentRuntimeError::NotReady(
+                        "discovery record belongs to a different Agent instance".to_owned(),
+                    ));
                 }
-            },
+                discovered = Some(record.port);
+                health
+            }
             Err(error) => return Err(AgentRuntimeError::Client(error)),
         };
         if health.api_version != nexus_protocol::API_VERSION
@@ -688,6 +704,9 @@ impl AgentRuntime {
                 "health status is {:?}",
                 health.status
             )));
+        }
+        if let Some(port) = discovered {
+            self.adopt_discovered_port(port);
         }
         Ok(health)
     }
@@ -722,7 +741,7 @@ impl AgentRuntime {
                 return Ok(AgentStartResult {
                     health,
                     started: false,
-                    port: self.config.port,
+                    port: self.effective_port.load(Ordering::Acquire),
                     pid: self.child_pid(),
                     program: self.resolved_program(),
                 });
@@ -739,7 +758,7 @@ impl AgentRuntime {
             return Ok(AgentStartResult {
                 health,
                 started: false,
-                port: self.config.port,
+                port: self.effective_port.load(Ordering::Acquire),
                 pid: self.child_pid(),
                 program: self.resolved_program(),
             });
@@ -755,7 +774,7 @@ impl AgentRuntime {
             return Ok(AgentStartResult {
                 health,
                 started: false,
-                port: self.config.port,
+                port: self.effective_port.load(Ordering::Acquire),
                 pid: self.child_pid(),
                 program: self.resolved_program(),
             });
@@ -765,7 +784,7 @@ impl AgentRuntime {
             return Ok(AgentStartResult {
                 health,
                 started: true,
-                port: self.config.port,
+                port: self.effective_port.load(Ordering::Acquire),
                 pid: self.child_pid(),
                 program: self.resolved_program(),
             });
@@ -781,7 +800,7 @@ impl AgentRuntime {
             return Ok(AgentStartResult {
                 health,
                 started: false,
-                port: self.config.port,
+                port: self.effective_port.load(Ordering::Acquire),
                 pid: self.child_pid(),
                 program: self.resolved_program(),
             });
@@ -816,7 +835,7 @@ impl AgentRuntime {
             Ok(health) => Ok(AgentStartResult {
                 health,
                 started: true,
-                port: self.config.port,
+                port: self.effective_port.load(Ordering::Acquire),
                 pid: Some(pid),
                 program: Some(program),
             }),
@@ -889,7 +908,7 @@ impl AgentRuntime {
             Err(error) => return Err(error),
         };
         let identity = AgentIdentity::from(&health);
-        let client = self.client.clone().with_expected_identity(identity);
+        let client = self.client().with_expected_identity(identity);
         let _: LifecycleAccepted = client.post_empty("/v1/shutdown").await?;
         let timeout_secs = wait_secs.clamp(1, 300);
         let deadline = Instant::now() + Duration::from_secs(timeout_secs);
@@ -909,7 +928,7 @@ impl AgentRuntime {
             let poll_window = remaining.min(Duration::from_secs(1));
             match timeout(
                 poll_window,
-                self.client.get_json::<HealthResponse>("/v1/health"),
+                self.client().get_json::<HealthResponse>("/v1/health"),
             )
             .await
             {
@@ -1002,7 +1021,7 @@ impl AgentRuntime {
     }
 
     fn base_url_string(&self) -> String {
-        self.client
+        self.client()
             .base_url()
             .to_string()
             .trim_end_matches('/')
@@ -1340,6 +1359,226 @@ mod tests {
             .await
             .expect("health request reads");
         write_json_response(&mut socket, "200 OK", &health).await;
+    }
+
+    #[tokio::test]
+    async fn discovered_port_routes_config_and_start_and_follows_rediscovery() {
+        let root = env::temp_dir().join(format!(
+            "nexus-port-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let unused = TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0))
+            .await
+            .unwrap();
+        let configured = unused.local_addr().unwrap().port();
+        drop(unused);
+        let runtime = AgentRuntime::new(
+            NexusConfig {
+                data_dir: Some(root.clone()),
+                port: configured,
+            },
+            None,
+        )
+        .unwrap();
+        let shared = runtime.clone();
+        for generation in 0..2 {
+            let listener = TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0))
+                .await
+                .unwrap();
+            let listener = if listener.local_addr().unwrap().port() == configured {
+                TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0))
+                    .await
+                    .unwrap()
+            } else {
+                listener
+            };
+            let port = listener.local_addr().unwrap().port();
+            let instance = format!("instance-{generation}");
+            runtime
+                .paths
+                .publish_agent_discovery(&nexus_core::AgentDiscoveryRecord {
+                    port,
+                    instance_id: instance.clone(),
+                    data_root_id: runtime.data_root_id.clone(),
+                    pid: std::process::id(),
+                    updated_at_unix: 0,
+                })
+                .unwrap();
+            let health = HealthResponse::healthy(runtime.data_root_id.clone(), instance);
+            let server = tokio::spawn(async move {
+                for route in [
+                    "GET /v1/health ",
+                    "GET /v1/health ",
+                    "GET /v1/config ",
+                    "POST /v1/harness ",
+                ] {
+                    let (mut socket, _) = listener.accept().await.unwrap();
+                    let mut request = [0; 4096];
+                    let len = socket.read(&mut request).await.unwrap();
+                    assert!(String::from_utf8_lossy(&request[..len]).starts_with(route));
+                    if route.contains("health") {
+                        write_json_response(&mut socket, "200 OK", &health).await;
+                    } else {
+                        write_json_response(&mut socket, "200 OK", &serde_json::json!({"ok":true}))
+                            .await;
+                    }
+                }
+            });
+            runtime.probe().await.unwrap();
+            assert_eq!(runtime.start(1).await.unwrap().port, port);
+            assert_eq!(shared.client().base_url().port(), Some(port));
+            shared
+                .client()
+                .get_json::<serde_json::Value>("/v1/config")
+                .await
+                .unwrap();
+            shared
+                .client()
+                .post_json::<_, serde_json::Value>(
+                    "/v1/harness",
+                    &serde_json::json!({"action":"start"}),
+                )
+                .await
+                .unwrap();
+            server.await.unwrap();
+        }
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[tokio::test]
+    async fn invalid_discovery_health_does_not_change_client() {
+        let root = env::temp_dir().join(format!(
+            "nexus-port-invalid-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let unused = TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0))
+            .await
+            .unwrap();
+        let configured = unused.local_addr().unwrap().port();
+        drop(unused);
+        let runtime = AgentRuntime::new(
+            NexusConfig {
+                data_dir: Some(root.clone()),
+                port: configured,
+            },
+            None,
+        )
+        .unwrap();
+        for invalid in ["root", "instance", "service", "api_version"] {
+            let listener = TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0))
+                .await
+                .unwrap();
+            let listener = if listener.local_addr().unwrap().port() == configured {
+                TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0))
+                    .await
+                    .unwrap()
+            } else {
+                listener
+            };
+            runtime
+                .paths
+                .publish_agent_discovery(&nexus_core::AgentDiscoveryRecord {
+                    port: listener.local_addr().unwrap().port(),
+                    instance_id: "instance".to_owned(),
+                    data_root_id: runtime.data_root_id.clone(),
+                    pid: std::process::id(),
+                    updated_at_unix: 0,
+                })
+                .unwrap();
+            let mut health =
+                HealthResponse::healthy(runtime.data_root_id.clone(), "instance".to_owned());
+            match invalid {
+                "root" => health.data_root_id = "other".to_owned(),
+                "instance" => health.instance_id = "other".to_owned(),
+                "service" => health.service = "other".to_owned(),
+                _ => health.api_version = "invalid".to_owned(),
+            }
+            let server = tokio::spawn(serve_health_once(listener, health));
+            assert!(runtime.probe().await.is_err());
+            assert_eq!(runtime.client().base_url().port(), Some(configured));
+            server.await.unwrap();
+        }
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[tokio::test]
+    #[ignore = "requires NEXUS_TEST_AGENT_BINARY pointing to a built Agent"]
+    async fn real_agent_dynamic_port_config_and_shutdown() {
+        let binary =
+            PathBuf::from(env::var_os("NEXUS_TEST_AGENT_BINARY").expect("built Agent path"));
+        let root = env::temp_dir().join(format!(
+            "nexus-real-port-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let unused = TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0))
+            .await
+            .unwrap();
+        let configured = unused.local_addr().unwrap().port();
+        drop(unused);
+        let runtime = AgentRuntime::new(
+            NexusConfig {
+                data_dir: Some(root.clone()),
+                port: configured,
+            },
+            Some(binary.clone()),
+        )
+        .unwrap();
+        for generation in 0..2 {
+            let mut command = Command::new(&binary);
+            command
+                .args(["--port", "0", "--data-dir"])
+                .arg(&root)
+                .arg("--instance-id")
+                .arg(format!("real-instance-{generation}"))
+                .env_remove("NEXUS_HARNESS_PROGRAM")
+                .env_remove("NEXUS_HARNESS_ARGS")
+                .stdin(Stdio::null())
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .kill_on_drop(true);
+            configure_agent_process(&mut command);
+            let mut child = command.spawn().unwrap();
+            let deadline = Instant::now() + Duration::from_secs(20);
+            loop {
+                if runtime.probe().await.is_ok() {
+                    break;
+                }
+                assert!(Instant::now() < deadline, "Agent did not become ready");
+                assert!(
+                    child.try_wait().unwrap().is_none(),
+                    "Agent exited before readiness"
+                );
+                sleep(Duration::from_millis(100)).await;
+            }
+            let record = runtime.paths.read_agent_discovery().unwrap().unwrap();
+            let started = runtime.start(2).await.unwrap();
+            assert!(!started.started);
+            assert_eq!(started.port, record.port);
+            let client = runtime
+                .client()
+                .with_expected_identity(AgentIdentity::from(&started.health));
+            let config: serde_json::Value = client.get_json("/v1/config").await.unwrap();
+            assert!(config.is_object());
+            runtime.stop(10).await.unwrap();
+            assert!(timeout(Duration::from_secs(10), child.wait())
+                .await
+                .unwrap()
+                .unwrap()
+                .success());
+        }
+        fs::remove_dir_all(root).unwrap();
     }
 
     #[test]
