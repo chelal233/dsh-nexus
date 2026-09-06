@@ -33,6 +33,30 @@ const pnpmVersion = process.env.NEXUS_BUNDLED_PNPM_VERSION || "11.7.0";
 const nodeMirror = (process.env.NEXUS_NODE_DIST_MIRROR || "https://nodejs.org/dist").replace(/\/$/, "");
 const npmRegistry = (process.env.NEXUS_NPM_REGISTRY || "https://registry.npmjs.org").replace(/\/$/, "");
 
+// Out-of-band trust anchors for the default pinned versions. When the
+// requested version matches a pinned entry, the downloaded artifact must
+// match this hash (fetched independently of the mirror) - a compromised
+// mirror cannot serve a modified binary that still passes. Overrides via the
+// NEXUS_BUNDLED_*_VERSION env vars fall back to same-source checksums with
+// an explicit downgrade warning; bump the pins together with the version
+// defaults when upstream requirements change.
+const PINNED_NODE_SHA256 = {
+  "24.20.0": "5c976096e04e5c2c1f091938926234cc9fbebfe9787ddd149351b3b0ecc707b5",
+};
+const PINNED_PNPM_INTEGRITY = {
+  "11.7.0": "sha512-GcyFLBIMcSV2DyRD7mvgyltA+fUFmN4aCaHxd1A+AQ5Xwjx3ZG4B52HeWb+HT7IqM5jDOrlpH8E+uUa28PTWIA==",
+};
+const officialNodeMirror = nodeMirror === "https://nodejs.org/dist";
+const officialNpmRegistry = npmRegistry === "https://registry.npmjs.org";
+const pinnedNodeSha = PINNED_NODE_SHA256[nodeVersion];
+const pinnedPnpmIntegrity = PINNED_PNPM_INTEGRITY[pnpmVersion];
+if (!officialNodeMirror && !pinnedNodeSha) {
+  console.warn(`[prepare-runtime] WARNING: non-official node mirror with no pinned checksum for ${nodeVersion}; verification is same-source only.`);
+}
+if (!officialNpmRegistry && !pinnedPnpmIntegrity) {
+  console.warn(`[prepare-runtime] WARNING: non-official npm registry with no pinned integrity for pnpm ${pnpmVersion}; verification is same-source only.`);
+}
+
 function sha256(file) {
   return new Promise((resolve, reject) => {
     const hash = createHash("sha256");
@@ -118,10 +142,17 @@ async function stageNode() {
     throw new Error(`SHASUMS256.txt for v${nodeVersion} has no win-x64/node.exe entry`);
   }
   const expected = line.trim().split(/\s+/)[0];
-  await cachedDownload(`${nodeMirror}/v${nodeVersion}/win-x64/node.exe`, destination, expected);
+  if (pinnedNodeSha && expected !== pinnedNodeSha) {
+    throw new Error(`SHASUMS256 for v${nodeVersion} does not match the pinned checksum; refusing the mirror payload`);
+  }
+  const enforced = pinnedNodeSha || expected;
+  await cachedDownload(`${nodeMirror}/v${nodeVersion}/win-x64/node.exe`, destination, enforced);
   const target = path.join(nodeDir, "node.exe");
   await rm(target, { force: true });
   await copyFile(destination, target);
+  if ((await sha256(target)) !== (pinnedNodeSha || expected)) {
+    throw new Error("staged node.exe fails its checksum after copy");
+  }
 
   const probe = spawn(target, ["--version"], { stdio: ["ignore", "pipe", "ignore"] });
   const version = await new Promise((resolve, reject) => {
@@ -154,6 +185,9 @@ async function stagePnpm() {
   const [algorithm, expectedDigest] = integrity.split("-", 2);
   if (algorithm !== "sha512" || !expectedDigest) {
     throw new Error(`pnpm ${pnpmVersion} has no sha512 dist.integrity`);
+  }
+  if (pinnedPnpmIntegrity && integrity !== pinnedPnpmIntegrity) {
+    throw new Error(`registry integrity for pnpm ${pnpmVersion} does not match the pinned value; refusing the registry payload`);
   }
   const tarball = path.join(cacheRoot, `pnpm-${pnpmVersion}.tgz`);
   const tarballExists = await access(tarball).then(
@@ -197,7 +231,15 @@ async function isUpToDate(manifestFile) {
     if (manifest.node?.version !== `v${nodeVersion}` || manifest.pnpm?.version !== pnpmVersion) {
       return false;
     }
-    await access(path.join(resourceRuntime, "node", "node.exe"));
+    // The staged binary must still match the out-of-band anchor (pinned) or
+    // at least the checksum recorded at staging time; a corrupted or
+    // tampered resources/runtime falls through to a fresh verified staging.
+    const stagedSha = await sha256(path.join(resourceRuntime, "node", "node.exe"));
+    if (pinnedNodeSha) {
+      if (stagedSha !== pinnedNodeSha) return false;
+    } else if (manifest.node?.sha256 && stagedSha !== manifest.node.sha256) {
+      return false;
+    }
     await access(path.join(resourceRuntime, "pnpm", "bin", "pnpm.cjs"));
     return true;
   } catch {

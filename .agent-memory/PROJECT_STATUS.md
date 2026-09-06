@@ -8,6 +8,28 @@ updated: 2026-09-06 by ZCode (运行时工具获取契约反转：内置运行�
 - **资源映射修正**：tauri.conf resources glob 由 `resources/runtime/**` 改为 `resources/runtime/*`（glob crate 语义 + 构建脚本实际接受）；目录由 Tauri 递归复制
 - **测试**：agent 148/148 单线程；前端 37/37（改写已退役的「cold 确认面板」测试为「冷操作不再有确认暂停」断言）
 
+## 红蓝对抗评审与修复（2026-09-07，ZCode）：15 项发现，13 项已修，2 项留档
+
+评审方式：蓝队（正确性/回归）+ 红队（安全/对抗/供应链）两个独立代理并行扫 `504fb70..HEAD` 全部增量，ZCode 作者复核合并。
+
+### 已修复（本轮提交）
+1. **[blocker] 打包资源映射失效**：`resources/runtime/*` glob 会跳过目录（tauri-utils 对 glob 项拍平+跳目录），安装包里 node/pnpm 全部缺失、bundled 档整体失效 → 改字面量目录映射 `"resources/runtime": "runtime/"`（递归保留结构）
+2. **[high] 供应链同源校验**：node.exe 的 SHA256 与工件取自同一镜像（TOFU）；被删的 supply crate 原有 GPG 验证链未平移 → 默认版本哈希常量锁定进仓库（PINNED_NODE_SHA256/PINNED_PNPM_INTEGRITY），命中即强制带外校验（镜像仅作 CDN，密钥不同即拒绝）；fast-path（isUpToDate）从「仅存在性检查」升级为重校验 staged node.exe 哈希；非官方源且无 pin 时显式降级告警
+3. **[major] 配置重置绕锁写**：perform_maintenance_reset 直接 write_json_atomic 覆写 config.json，绕过 CONFIG_WRITE_GATE，并发 set_runtime 会丢失更新 → 拆为 backup（纯复制）→ `state.config.write(default)`（持锁）→ clear（日志/指针）三段
+4. **[medium] DNS rebinding 加固**：identity 中间件对「双头缺失」放行、无 Host 校验，恶意网页可重绑 127.0.0.1 触达全部路由（含新 maintenance/terminal）→ 新增 `enforce_loopback_host` 中间件（Host 非 127.0.0.1/localhost/[::1] 一律 403；缺失头放行兼容 HTTP/1.0 与测试），附单测
+5. **[medium] profile 名零校验**：open_terminal/open_path 的 profile 直接 join 路径（绝对路径整体替换 + `..` 穿越 + `%` 破坏 cmd shim）→ 两 handler 入口统一调 `validate_profile_name`
+6. **[minor×5]**：tail 读取改 seek 限界 4KiB（原全量读入，嘈杂构建可致内存膨胀）+ 移入 spawn_blocking；watcher 停止改 TailWatcherStop Drop guard（失败早退路径不再泄漏）；bundled pnpm 缺 bundled node 时不再产生误导性候选；备份目录改纳秒时间戳（同秒二次重置覆盖首份原始备份）；agent 日志级别白名单与 launcher 侧对齐（补 info）
+7. **[low×3]**：output_tail 过 redact_diagnostics_payload（机密行不再明文进 cold-operation.json/UI）；非 Windows 终端分支改为诚实 Unsupported 错误（原 spawn 无 pty 静默无效）；disk 卷解析失败新增 VolumeRejection::Volume 携带 OS 错误（原误报 code 0）；NSIS 文案明示「仅默认数据位置、自定义 NEXUS_DATA_DIR 不清理」
+
+### 留档待拍板（业务歧义）
+- **供应链终极强度**：当前方案=默认版本哈希常量锁定 + 非官方源告警。若要发行级强度（版本随上游更新而变化时的自动验证），需决定是否恢复 GPG 验证 SHASUMS256.txt.asc 的完整链（构建依赖 gpg/keyring 管理）
+- **Agent API 鉴权纵深**：Host 校验已挡 rebinding 主路径；更强方案（非 GET 强制代理身份头）会改变 CLI/浏览器裸用契约，未做
+- 日志级别持久化（localStorage → config.json 协议扩展）、自定义数据根的卸载探测（注册表登记）：均为增强项，非缺陷
+
+### 回归证据（修复后）
+- workspace `cargo check --all-targets` 0 error 0 warning；单线程全量 agent 149 / core 38 / protocol 13 / launcher-core 13 / snapshots 17 全绿（host guard 新增 1 测试）
+- 前端 tsc + vite build 通过、37/37 tests
+
 ## 托管模式推进（2026-09-07，ZCode）：P1 尾部+P2 大部完成
 
 ### 本轮提交（main 分支，自上而下）

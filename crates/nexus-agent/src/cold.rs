@@ -618,12 +618,7 @@ async fn build_and_publish(
         .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "cold operation not found"))?;
     let cancellation = state.cold.token(operation_id).await;
     let candidate = PathBuf::from(&operation.candidate);
-    let stop_tail = Arc::new(AtomicBool::new(false));
-    let watcher = tokio::spawn(tail_command_output(
-        state.clone(),
-        operation_id.to_owned(),
-        stop_tail.clone(),
-    ));
+    let _tail_watcher_guard = TailWatcherStop::spawn(state.clone(), operation_id.to_owned());
     state
         .cold
         .update(operation_id, ColdOperationPhase::Installing, 55, None)
@@ -649,8 +644,6 @@ async fn build_and_publish(
         &cancellation,
     )
     .await?;
-    stop_tail.store(true, Ordering::Release);
-    watcher.abort();
     state
         .cold
         .update(operation_id, ColdOperationPhase::Verifying, 85, None)
@@ -2157,6 +2150,33 @@ while ($true) {{ Start-Sleep -Seconds 1 }}"#, child.display())).unwrap();
 }
 
 
+/// Stops the output-tail watcher on every exit path of the install/build
+/// phase, including the `?` error returns, so the watcher never outlives the
+/// operation it serves.
+struct TailWatcherStop {
+    stop: Arc<AtomicBool>,
+    handle: tokio::task::JoinHandle<()>,
+}
+
+impl TailWatcherStop {
+    fn spawn(state: AppState, operation_id: String) -> Self {
+        let stop = Arc::new(AtomicBool::new(false));
+        let handle = tokio::spawn(tail_command_output(
+            state,
+            operation_id,
+            stop.clone(),
+        ));
+        Self { stop, handle }
+    }
+}
+
+impl Drop for TailWatcherStop {
+    fn drop(&mut self) {
+        self.stop.store(true, Ordering::Release);
+        self.handle.abort();
+    }
+}
+
 /// Refresh a bounded command-output tail into the persisted operation while
 /// install and build run, so the UI shows live pnpm output between phase
 /// transitions. Stops when `stop` flips, the operation changes, or the
@@ -2172,7 +2192,12 @@ async fn tail_command_output(state: AppState, operation_id: String, stop: Arc<At
         if operation.operation_id != operation_id || operation.phase.is_terminal() {
             return;
         }
-        let Some(tail) = newest_command_tail(&state.paths.run_dir) else {
+        let run_dir = state.paths.run_dir.clone();
+        let tail = match tokio::task::spawn_blocking(move || newest_command_tail(&run_dir)).await {
+            Ok(Some(tail)) => Some(tail),
+            _ => None,
+        };
+        let Some(tail) = tail else {
             continue;
         };
         let _gate = state.cold.gate.lock().await;
@@ -2189,8 +2214,12 @@ async fn tail_command_output(state: AppState, operation_id: String, stop: Arc<At
 }
 
 /// Read the tail of the most recently written command diagnostic, stripped
-/// of control noise, ready for display.
+/// of control noise, ready for display. The read is bounded by seeking near
+/// the end of the file: a noisy build can write hundreds of megabytes, and
+/// this must never buffer the whole thing.
 fn newest_command_tail(run_dir: &Path) -> Option<String> {
+    use std::io::{Read, Seek, SeekFrom};
+    const TAIL_BYTES: u64 = 4096;
     let newest = std::fs::read_dir(run_dir)
         .ok()?
         .filter_map(|entry| entry.ok().map(|entry| entry.path()))
@@ -2208,12 +2237,16 @@ fn newest_command_tail(run_dir: &Path) -> Option<String> {
         })
         .max_by_key(|(_, modified)| *modified)
         .map(|(path, _)| path)?;
-    let bytes = std::fs::read(&newest).ok()?;
-    let start = bytes.len().saturating_sub(4096);
-    let tail = &bytes[start..];
-    // Keep readable text only: drop ANSI escapes and control characters, then
-    // bound the tail so the persisted operation stays small.
-    let cleaned: String = String::from_utf8_lossy(tail)
+    let mut file = std::fs::File::open(&newest).ok()?;
+    let len = file.metadata().ok()?.len();
+    let start = len.saturating_sub(TAIL_BYTES);
+    file.seek(SeekFrom::Start(start)).ok()?;
+    let mut bytes = Vec::with_capacity((len - start).min(TAIL_BYTES) as usize);
+    file.take(TAIL_BYTES).read_to_end(&mut bytes).ok()?;
+    // Redact secret-bearing lines exactly like the completed diagnostics,
+    // then keep readable text only and bound the persisted size.
+    let (redacted, _) = nexus_core::redact_diagnostics_payload(&bytes);
+    let cleaned: String = String::from_utf8_lossy(&redacted)
         .chars()
         .filter(|ch| !ch.is_control())
         .collect();

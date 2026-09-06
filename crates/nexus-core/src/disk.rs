@@ -20,6 +20,9 @@ pub enum VolumeRejection {
     /// A filesystem other than NTFS/ReFS (for example FAT32/exFAT), which
     /// does not provide the junction and atomicity guarantees Nexus needs.
     Filesystem(String),
+    /// The volume for the path could not be resolved at all (unreachable
+    /// path, missing volume, OS error).
+    Volume(String),
 }
 
 impl VolumeRejection {
@@ -38,6 +41,9 @@ impl VolumeRejection {
                 format!(
                     "the volume uses {name}; only NTFS and ReFS are supported"
                 )
+            }
+            VolumeRejection::Volume(detail) => {
+                format!("the volume for this path could not be resolved: {detail}")
             }
         }
     }
@@ -95,7 +101,8 @@ mod imp {
         use windows_sys::Win32::Storage::FileSystem::{
             GetDriveTypeW, GetVolumeInformationW,
         };
-        let root = volume_root_for(path).map_err(|_| VolumeRejection::UnsupportedDrive(0))?;
+        let root = volume_root_for(path)
+            .map_err(|error| VolumeRejection::Volume(error.to_string()))?;
         let root_wide = wide(&root);
         let drive_type = unsafe { GetDriveTypeW(root_wide.as_ptr()) };
         let mut filesystem = [0u16; 64];

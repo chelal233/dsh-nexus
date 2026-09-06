@@ -344,7 +344,67 @@ fn build_router(state: AppState) -> Router {
             enforce_proxy_identity,
         ))
         .layer(middleware::from_fn(local_console_cors))
+        .layer(middleware::from_fn(enforce_loopback_host))
         .with_state(state)
+}
+
+/// Reject requests whose Host header names anything but the loopback
+/// interface. The Agent binds to 127.0.0.1 only, but a DNS-rebinding page
+/// can still reach that address from a browser; such requests arrive with
+/// the attacker's hostname in Host and are refused here. A missing Host
+/// header (HTTP/1.0-style clients and in-process test requests) is allowed.
+async fn enforce_loopback_host(
+    request: Request,
+    next: Next,
+) -> Response {
+    let ok = match request.headers().get(axum::http::header::HOST) {
+        None => true,
+        Some(value) => value
+            .to_str()
+            .map(host_header_is_loopback)
+            .unwrap_or(false),
+    };
+    if !ok {
+        return (StatusCode::FORBIDDEN, "loopback host required").into_response();
+    }
+    next.run(request).await
+}
+
+fn host_header_is_loopback(host: &str) -> bool {
+    let host_only = if let Some(bracketed) = host.strip_prefix('[') {
+        match bracketed.split_once(']') {
+            Some((inner, _)) => inner,
+            None => bracketed,
+        }
+    } else if host.matches(':').count() > 1 {
+        host
+    } else {
+        host.split(':').next().unwrap_or(host)
+    };
+    matches!(
+        host_only.to_ascii_lowercase().as_str(),
+        "127.0.0.1" | "localhost" | "::1"
+    )
+}
+
+#[cfg(test)]
+mod host_guard_tests {
+    use super::host_header_is_loopback;
+
+    #[test]
+    fn loopback_hosts_accept_and_rebinds_reject() {
+        assert!(host_header_is_loopback("127.0.0.1:3090"));
+        assert!(host_header_is_loopback("127.0.0.1"));
+        assert!(host_header_is_loopback("localhost"));
+        assert!(host_header_is_loopback("localhost:8080"));
+        assert!(host_header_is_loopback("LOCALHOST"));
+        assert!(host_header_is_loopback("[::1]:3090"));
+        assert!(host_header_is_loopback("::1"));
+        assert!(!host_header_is_loopback("evil.example"));
+        assert!(!host_header_is_loopback("evil.example:80"));
+        assert!(!host_header_is_loopback("192.168.1.10:3090"));
+        assert!(!host_header_is_loopback("[fe80::1]:3090"));
+    }
 }
 
 async fn recover_checkpoint_restore_startup(
@@ -1369,7 +1429,8 @@ async fn profile_control_inner(
         ProfileAction::PluginMove => profile_plugin_move(state, command).await,
         ProfileAction::PluginDisable | ProfileAction::PluginEnable => profile_plugin_isolation(state, command).await,
         ProfileAction::OpenPath => profile_open_path(state, command).await,
-        ProfileAction::OpenTerminal => profile_open_terminal(state, command).await,        ProfileAction::Create => profile_create(state, command).await,
+        ProfileAction::OpenTerminal => profile_open_terminal(state, command).await,
+        ProfileAction::Create => profile_create(state, command).await,
     }
 }
 
@@ -1441,9 +1502,6 @@ async fn profile_create(state: AppState, command: ProfileCommand) -> axum::respo
     }
 }
 
-/// Open a bounded profile-related file or directory with the system
-/// handler. Targets derive only from the DSH home and the active profile;
-/// no caller-supplied path is accepted.
 /// Open an interactive terminal prepared for working with the selected
 /// profile: the shell starts in the profile directory with `DSH_HOME` set,
 /// the resolved runtime tools on `PATH`, and generated `dsh`/`pnpm` shims
@@ -1464,6 +1522,11 @@ async fn profile_open_terminal(
         .profile
         .clone()
         .unwrap_or_else(|| profiles.active_profile.clone());
+    // The name becomes a path segment and lands in generated cmd shims;
+    // only the validated character set is accepted.
+    if let Err(error) = nexus_core::validate_profile_name(&profile) {
+        return data_error_response(error, "profile_invalid");
+    }
     let profile_dir = dsh_home.join("profiles").join(&profile);
     if !profile_dir.is_dir() {
         return data_error_response(
@@ -1610,15 +1673,17 @@ async fn profile_open_terminal(
         let shell = std::env::var_os("SHELL")
             .map(std::path::PathBuf::from)
             .unwrap_or_else(|| PathBuf::from("/bin/bash"));
-        let mut command = std::process::Command::new(shell);
-        command.current_dir(&profile_dir);
-        for (key, value) in &envs {
-            command.env(key, value);
-        }
-        command.env("DSH_HOME", &dsh_home);
-        if let Err(error) = command.spawn() {
-            return data_error_response(error, "terminal_spawn_failed");
-        }
+        let _ = (&shell, &profile_dir, &envs, &dsh_home);
+        // Windows is the only shipped platform in this release; opening a
+        // visible terminal elsewhere needs a platform terminal emulator, and
+        // spawning an invisible shell would silently do nothing.
+        return data_error_response(
+            io::Error::new(
+                io::ErrorKind::Unsupported,
+                "DSH terminal is Windows-only in this release",
+            ),
+            "terminal_unsupported",
+        );
     }
     (
         StatusCode::OK,
@@ -1632,6 +1697,9 @@ async fn profile_open_terminal(
         .into_response()
 }
 
+/// Open a bounded profile-related file or directory with the system handler.
+/// Targets derive only from the DSH home and the validated profile name; no
+/// caller-supplied path is accepted.
 async fn profile_open_path(state: AppState, command: ProfileCommand) -> axum::response::Response {
     let Some(target) = command.target.as_deref() else {
         return data_error_response(
@@ -1651,6 +1719,11 @@ async fn profile_open_path(state: AppState, command: ProfileCommand) -> axum::re
         .profile
         .clone()
         .unwrap_or_else(|| profiles.active_profile.clone());
+    // The name becomes a path segment under the profiles root; reject
+    // traversal and other unsafe characters up front.
+    if let Err(error) = nexus_core::validate_profile_name(&profile) {
+        return data_error_response(error, "profile_invalid");
+    }
     let profile_dir = dsh_home.join("profiles").join(&profile);
     if !profile_dir.is_dir() {
         return data_error_response(
@@ -3559,44 +3632,77 @@ async fn maintenance_control(
     }
     let paths = state.paths.clone();
     let owned_scope = scope.to_owned();
-    let result = tokio::task::spawn_blocking(move || {
-        perform_maintenance_reset(&paths, &owned_scope)
-    })
-    .await;
-    match result {
-        Ok(Ok(summary)) => (StatusCode::OK, Json(summary)).into_response(),
-        Ok(Err(error)) => data_error_response(error, "maintenance_reset_failed"),
-        Err(error) => data_error_response(
-            io::Error::other(error.to_string()),
-            "maintenance_reset_failed",
-        ),
+    // Backup first (pure copies), then the default rewrite through the
+    // shared ConfigStore gate, then journal/pointer removal.
+    let backup = {
+        let paths = paths.clone();
+        let scope = owned_scope.clone();
+        tokio::task::spawn_blocking(move || backup_reset_targets(&paths, &scope)).await
+    };
+    let (backup_dir, backed_up) = match backup {
+        Ok(Ok(values)) => values,
+        Ok(Err(error)) => return data_error_response(error, "maintenance_reset_failed"),
+        Err(error) => {
+            return data_error_response(
+                io::Error::other(error.to_string()),
+                "maintenance_reset_failed",
+            )
+        }
+    };
+    if let Err(error) = state.config.write(&nexus_core::NexusConfigFile::default()) {
+        return data_error_response(error, "maintenance_reset_failed");
     }
+    let removed = {
+        let paths = paths.clone();
+        let scope = owned_scope.clone();
+        tokio::task::spawn_blocking(move || clear_reset_targets(&paths, &scope)).await
+    };
+    let removed = match removed {
+        Ok(Ok(values)) => values,
+        Ok(Err(error)) => return data_error_response(error, "maintenance_reset_failed"),
+        Err(error) => {
+            return data_error_response(
+                io::Error::other(error.to_string()),
+                "maintenance_reset_failed",
+            )
+        }
+    };
+    // Post-check: a cold operation started between the guard and now makes
+    // this reset racing with an install; surface it instead of staying quiet.
+    let cold_started = state
+        .cold
+        .load()
+        .ok()
+        .flatten()
+        .is_some_and(|operation| !operation.phase.is_terminal());
+    (
+        StatusCode::OK,
+        Json(serde_json::json!({
+            "status": if cold_started { "ok_with_warning" } else { "ok" },
+            "scope": owned_scope,
+            "backup_dir": backup_dir.to_string_lossy(),
+            "backed_up": backed_up,
+            "removed": removed,
+            "warning": cold_started.then_some("a cold-install operation started during the reset"),
+        })),
+    )
+        .into_response()
 }
 
-/// Repair path for broken Nexus state: rewrite config.json to defaults and
-/// clear the persisted task journal, optionally also releasing the slot
-/// pointers. Harness user data under DSH_HOME is never touched, installed
-/// slot directories stay on disk, and every replaced file is copied into
-/// diagnostics/reset-backup-<unix> for recovery.
-fn perform_maintenance_reset(
+/// Copy every file the reset will replace or remove into the diagnostics
+/// backup directory (named with nanosecond precision so two resets can never
+/// share a directory and overwrite each other's originals).
+fn backup_reset_targets(
     paths: &nexus_core::NexusPaths,
     scope: &str,
-) -> io::Result<serde_json::Value> {
-    use nexus_core::{unix_time_seconds, write_json_atomic, NexusConfigFile};
+) -> io::Result<(std::path::PathBuf, Vec<String>)> {
     paths.ensure_directories()?;
     let backup_dir = paths
         .diagnostics_dir
-        .join(format!("reset-backup-{}", unix_time_seconds()));
+        .join(format!("reset-backup-{}", nexus_core::unix_time_nanos_for_update()));
     std::fs::create_dir_all(&backup_dir)?;
     let mut backed_up: Vec<String> = Vec::new();
-    let mut removed: Vec<String> = Vec::new();
-
     backup_file(&paths.config_file, &backup_dir, "config.json", &mut backed_up)?;
-    write_json_atomic(
-        &paths.root,
-        &paths.config_file,
-        &NexusConfigFile::default(),
-    )?;
     if paths.update_state_file.exists() {
         backup_file(
             &paths.update_state_file,
@@ -3604,10 +3710,7 @@ fn perform_maintenance_reset(
             "update-state.json",
             &mut backed_up,
         )?;
-        std::fs::remove_file(&paths.update_state_file)?;
-        removed.push("update-state.json".to_owned());
     }
-
     if scope == "slots" {
         backup_file(
             &paths.release_pointers_file,
@@ -3615,19 +3718,23 @@ fn perform_maintenance_reset(
             "release-pointers.json",
             &mut backed_up,
         )?;
-        if paths.release_pointers_file.exists() {
-            std::fs::remove_file(&paths.release_pointers_file)?;
-            removed.push("release-pointers.json".to_owned());
-        }
     }
+    Ok((backup_dir, backed_up))
+}
 
-    Ok(serde_json::json!({
-        "status": "ok",
-        "scope": scope,
-        "backup_dir": backup_dir.to_string_lossy(),
-        "backed_up": backed_up,
-        "removed": removed,
-    }))
+/// Remove the reset targets after the backup and the locked default rewrite
+/// completed. Slot directories on disk are never touched.
+fn clear_reset_targets(paths: &nexus_core::NexusPaths, scope: &str) -> io::Result<Vec<String>> {
+    let mut removed: Vec<String> = Vec::new();
+    if paths.update_state_file.exists() {
+        std::fs::remove_file(&paths.update_state_file)?;
+        removed.push("update-state.json".to_owned());
+    }
+    if scope == "slots" && paths.release_pointers_file.exists() {
+        std::fs::remove_file(&paths.release_pointers_file)?;
+        removed.push("release-pointers.json".to_owned());
+    }
+    Ok(removed)
 }
 
 fn backup_file(source: &std::path::Path, backup_dir: &std::path::Path, name: &str, backed_up: &mut Vec<String>) -> io::Result<()> {

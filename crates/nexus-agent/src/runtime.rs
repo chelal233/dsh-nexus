@@ -723,10 +723,15 @@ fn bundled_candidates(
             .map(|path| vec![(path, None)])
             .unwrap_or_default(),
         "pnpm" => {
-            let node = canonical_file(&node_root.join(node_executable));
+            // The bundled pnpm is a Node script; without the bundled Node it
+            // cannot run, so report it missing instead of a confusing
+            // direct-execution probe failure.
+            let Some(node) = canonical_file(&node_root.join(node_executable)) else {
+                return Vec::new();
+            };
             let entry = root.join("pnpm").join("bin").join("pnpm.cjs");
             canonical_file(&entry)
-                .map(|path| vec![(path, node)])
+                .map(|path| vec![(path, Some(node))])
                 .unwrap_or_default()
         }
         _ => Vec::new(),

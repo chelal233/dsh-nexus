@@ -24,7 +24,12 @@ fn main() {
     // unknown or absent values keep the default.
     let level = std::env::var("NEXUS_AGENT_LOG")
         .ok()
-        .filter(|value| matches!(value.as_str(), "error" | "warn" | "debug" | "trace"))
+        .filter(|value| {
+            matches!(
+                value.as_str(),
+                "error" | "warn" | "info" | "debug" | "trace"
+            )
+        })
         .unwrap_or_else(|| "info".to_owned());
     tracing_subscriber::fmt()
         .with_env_filter(format!("nexus_agent={level}"))
