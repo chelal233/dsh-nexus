@@ -8,6 +8,32 @@ updated: 2026-09-06 by ZCode (运行时工具获取契约反转：内置运行�
 - **资源映射修正**：tauri.conf resources glob 由 `resources/runtime/**` 改为 `resources/runtime/*`（glob crate 语义 + 构建脚本实际接受）；目录由 Tauri 递归复制
 - **测试**：agent 148/148 单线程；前端 37/37（改写已退役的「cold 确认面板」测试为「冷操作不再有确认暂停」断言）
 
+## 托管模式推进（2026-09-07，ZCode）：P1 尾部+P2 大部完成
+
+### 本轮提交（main 分支，自上而下）
+- `4189d21` feat: DSH 终端 + 磁盘预检 + 安装实时输出 + 卸载清理
+- `c769a7a` feat: 开机自启 + 配置重置 + 帮助面板
+- `8fa1c15` refactor: nexus-runtime-supply 退役 + 确认流下线
+- `15ad6e7` / `7302645` feat: 内置运行时（bundled 档 + 打包 + UI）
+
+### P1/P2 对账（基线=本文「待办基线」节）
+- **P1#10 DSH 终端 ✅**：ProfileAction::OpenTerminal——DSH_HOME + 解析后运行时注入 env、shim 目录（dsh.cmd/pnpm.cmd 指向 current release 的 apps/cli/lib/bin.js 与 pnpm 入口）前置到 PATH、PowerShell -NoExit CREATE_NEW_CONSOLE 于配置档目录打开；守卫=配置档存在+有 current release+CLI 入口存在+node 可用（错误码 profile_dir_missing/release_none_current/release_entry_missing/node_missing）
+- **P1#16 基本素养 ✅**：托盘/关窗最小化/单实例/全局快捷键既有；本轮补 tauri-plugin-autostart 开机自启开关（设置页「原生集成」）
+- **P1#17 修复/重置 ✅**：POST /v1/maintenance（scope=config|slots；备份到 diagnostics/reset-backup-<unix>/；.dsh 永不触碰；守卫=Harness 停止+无活跃冷操作）
+- **P1#18 帮助入口 ✅**：帮助面板（上游文档链接/诊断指引/常见问题×3/Agent 日志级别：NEXUS_AGENT_LOG env 经 spawn 注入，下次启动生效）
+- **P2#19 磁盘预检 ✅**：nexus-core/src/disk.rs——数据根仅接受固定盘 NTFS/ReFS（GetVolumePathNameW+GetDriveTypeW+GetVolumeInformationW），agent 启动即校验（违者拒绝启动）；冷安装前 4GiB 空间预检（GetDiskFreeSpaceExW）
+- **P2#23 卸载体验 ✅（NSIS）**：POSTUNINSTALL 询问是否清理 %LOCALAPPDATA%\Nexus\{releases,runtimes}；.dsh 默认保留。MSI 卸载为静默语义（不询问、不落数据根），已文档化
+- **④ 安装实时进度 ✅（有界尾随）**：ColdOperation.output_tail（≤2000 字符去控制符）由 2 秒节流 tailer 从最新 cold-command-*.stderr.tmp 刷新；UI 冷状态块显示「安装输出」
+- **P2#22 ACL 调研**：进行中（后台代理），结论见下节
+- **【争议保留】P2#21 Nexus 自更新**：无发布通道定义（未定 URL/签名/频率），且与「工具不下载」契约存在张力 → **保留待用户拍板**；候选方案：安装包内检查+引导浏览器下载（最简）。**P2#20 projcache 自愈**：维持用户拍板「等真实案例」
+- **【被阻塞】完整 tauri build 打包验收**：本机 nexus-launcher-app(PID 30604)+agent(19564)+Harness(3080) 持续运行锁定 target/release；用户关闭应用后跑 `pnpm tauri build` 验证 MSI/NSIS 含 runtime/ 与卸载询问即可闭环
+
+### 全量自测证据（2026-09-07）
+- 后端单线程全量：agent 148 / core 38（含 disk 2）/ protocol 13 / launcher-core 13 / snapshots 17，全绿
+- 前端：tsc + vite build 过；37/37 tests（含改写后的「冷操作无确认暂停」断言）
+- 真机 E2E：隔离数据根+junction 挂 resources/runtime+debug agent → /v1/runtime 返回 git=system、node=system v24.19.0（系统优先于内置实测正确）、pnpm=bundled 11.7.0（corepack shim 拒绝后回退内置）
+- workspace `cargo check --all-targets` 0 error 0 新 warning
+
 ## 清理批已落地（2026-09-07，ZCode）：nexus-runtime-supply 整体退役
 
 - **下载链路物理删除**：crates/nexus-runtime-supply 已从 workspace 移除并删除目录（HttpDownloadClient/SourcePolicy/archive/system/portable 下载发布、PublishPortable/InstallSystem/SupplyPlan 全套）；复用判定职责此前已由 foundation 观测层（system/portable/bundled candidates）完全覆盖
