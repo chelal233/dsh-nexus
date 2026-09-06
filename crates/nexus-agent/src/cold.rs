@@ -383,6 +383,7 @@ impl ColdCoordinator {
             started_at_unix: now,
             updated_at_unix: Some(now),
             foundation_plan_id: None,
+            warning: None,
             supply_plan: None,
             confirmation: None,
             error: None,
@@ -581,7 +582,23 @@ async fn prepare_inner(state: &AppState, operation_id: &str) -> io::Result<()> {
             RuntimePlanActionKind::UsePinned | RuntimePlanActionKind::UseExisting
         )
     }) {
-        record_foundation_plan(state, operation_id, &plan.plan_id).await?;
+        let warnings = plan
+            .tools
+            .iter()
+            .filter_map(|tool| {
+                tool.warning
+                    .as_deref()
+                    .map(|warning| format!("{}: {}", tool.name, warning))
+            })
+            .collect::<Vec<_>>()
+            .join("; ");
+        record_foundation_plan(
+            state,
+            operation_id,
+            &plan.plan_id,
+            (!warnings.is_empty()).then_some(warnings),
+        )
+        .await?;
         let runtime = runtime_from_plan(&plan)?;
         return build_and_publish(state, operation_id, runtime).await;
     }
@@ -747,7 +764,8 @@ async fn build_and_publish(
         &state.paths.run_dir,
         &cancellation,
     )
-    .await?;
+    .await
+    .map_err(|error| dependency_registry_hint(error, runtime.source))?;
     state
         .cold
         .update(operation_id, ColdOperationPhase::Building, 72, None)
@@ -1008,6 +1026,7 @@ async fn record_foundation_plan(
     state: &AppState,
     operation_id: &str,
     plan_id: &str,
+    warning: Option<String>,
 ) -> io::Result<()> {
     let _gate = state.cold.gate.lock().await;
     let mut operation = state
@@ -1021,6 +1040,7 @@ async fn record_foundation_plan(
         ));
     }
     operation.foundation_plan_id = Some(plan_id.to_owned());
+    operation.warning = warning;
     operation.updated_at_unix = Some(unix_time_seconds());
     state.cold.write(&operation)
 }
@@ -1094,6 +1114,21 @@ pub(crate) async fn resolved_runtime_config(state: &AppState) -> io::Result<Runt
         }
     }
     Ok(runtime)
+}
+
+/// The first install on a clean machine fetches every upstream dependency.
+/// When that fetch fails on the official registry, point the user at the
+/// mirror option instead of leaving a bare network error.
+fn dependency_registry_hint(error: io::Error, source: RuntimeSource) -> io::Error {
+    if source == RuntimeSource::Official {
+        return io::Error::new(
+            error.kind(),
+            format!(
+                "{error}; if this failed to fetch packages or timed out, switch the dependency registry to npmmirror in Settings and retry"
+            ),
+        );
+    }
+    error
 }
 
 fn runtime_from_plan(plan: &nexus_protocol::RuntimePlanResponse) -> io::Result<RuntimeConfig> {

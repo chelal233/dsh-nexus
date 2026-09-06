@@ -253,6 +253,9 @@ function localizeBackendError(message: string, t: Translator): string {
   if (normalized.includes("snapshot_release_not_installed")) {
     return t("This snapshot's Harness version is not installed. Cold-switch to that tag first, then restore.");
   }
+  if (normalized.includes("switch the dependency registry to npmmirror")) {
+    return t("Upstream dependency installation failed, usually a network issue. Switch the dependency registry to npmmirror in Settings, then retry.");
+  }
   if (normalized.includes("eisdir")) {
     return t("A directory was used where a file was expected, usually a leftover from a crashed run. Restore a healthy snapshot to rebuild the profile.");
   }
@@ -611,7 +614,7 @@ async function proxyRequest<T = JsonObject>(
 
 const runtimeToolNames = ["git", "node", "pnpm"] as const;
 type RuntimeToolName = typeof runtimeToolNames[number];
-type RuntimeToolSource = "system" | "nexus";
+type RuntimeToolSource = "system" | "nexus" | "bundled";
 
 export type RuntimeToolStatus = {
   name: RuntimeToolName;
@@ -743,7 +746,7 @@ function runtimeToolLabel(name: RuntimeToolName, t: Translator): string {
 }
 
 function runtimeToolSourceLabel(source: RuntimeToolSource, t: Translator): string {
-  return source === "system" ? t("System source") : t("Nexus source");
+  return source === "system" ? t("System source") : source === "bundled" ? t("Bundled") : t("Nexus source");
 }
 
 function runtimeToolReason(reason: string | undefined, t: Translator): string {
@@ -1342,12 +1345,12 @@ export function WorkbenchView(props: ViewProps) {
     </div>
     <details className="setup-sections" open={!current || installing || operationPhase === "failed"}><summary>{t("Environment and versions")}</summary>
     <Panel title={t("Runtime environment")} icon={<Cpu size={18}/>}>
-      <div className="button-row">{(["node", "pnpm", "git"] as const).map(name => { const tool = tools.find(item => item.name === name); return <span key={name}>{runtimeToolLabel(name, t)} · {name === "git" ? t(tool?.available ? "System Git with embedded fallback" : "Embedded Git available") : tool?.available ? tool.version : t(environment ? "Will be prepared for the selected version" : "Not checked")}</span>; })}<ActionButton disabled={checking || !snapshot.startup?.available} onClick={() => void check()}>{t("Check environment")}</ActionButton></div>
-      <p className="field-help">{t("Node and pnpm are required. After you choose a version, Nexus checks its exact requirements and installs missing runtimes in the same flow.")}</p>
+      <div className="button-row">{(["node", "pnpm", "git"] as const).map(name => { const tool = tools.find(item => item.name === name); return <span key={name}>{runtimeToolLabel(name, t)} · {name === "git" ? t(tool?.available ? "System Git with embedded fallback" : "Embedded Git available") : tool?.available ? `${tool.version}${tool.source ? ` · ${runtimeToolSourceLabel(tool.source, t)}` : ""}` : t(environment ? "Not available" : "Not checked")}</span>; })}<ActionButton disabled={checking || !snapshot.startup?.available} onClick={() => void check()}>{t("Check environment")}</ActionButton></div>
+      <p className="field-help">{t("Node and pnpm are required. Nexus prefers your own tools, then the ones shipped with Nexus; each version's exact requirements are checked against them.")}</p>
       {environmentError && <p className="form-error" role="alert">{environmentError}</p>}
-      <details><summary>{t("Download preferences")}</summary><div className="form-grid">
-        <label className="form-field">{t("Source")}<select value={source} disabled={locked} onChange={event => setSource(event.target.value)}><option value="official">{t("Official")}</option><option value="npmmirror">npmmirror</option></select></label>
-        <label className="form-field">{t("Install mode")}<select value={mode} disabled={locked} onChange={event => setMode(event.target.value)}><option value="portable">{t("Portable")}</option><option value="system">{t("System install")}</option></select></label>
+      <details><summary>{t("Dependency registry")}</summary><div className="form-grid">
+        <label className="form-field">{t("Dependency registry")}<select value={source} disabled={locked} onChange={event => setSource(event.target.value)}><option value="official">{t("Official")}</option><option value="npmmirror">npmmirror</option></select></label>
+        <p className="field-help">{t("Only used when Harness dependencies are downloaded. Nexus never downloads Node, pnpm, or Git.")}</p>
         <ActionButton disabled={locked} onClick={() => void runAction(t("Save runtime settings"), "/v1/config", { action: "set_runtime", runtime: { ...runtime, source, mode } })}>{t("Save")}</ActionButton>
       </div></details>
     </Panel>
@@ -1714,6 +1717,7 @@ export function UpdatesView({ snapshot, busyAction, runAction, refresh, embedded
       {(stringValue(operation, "tag") || stringValue(update, "release_id")) && <span>{stringValue(operation, "tag") || stringValue(update, "release_id")}</span>}
       {unpublishedSuccess && <p className="form-error" role="alert">{t("The task reports completion, but its version slot is unavailable. Refresh to verify installation before starting Harness.")}</p>}
       {operationId && <progress aria-label={t("Update progress")} max="100" value={numberValue(operation, "progress_percent") || 0}>{numberValue(operation, "progress_percent") || 0}%</progress>}
+      {stringValue(operation, "warning")?.includes("bundled_pnpm_major_skew") && <p className="field-help"><WarningCircle size={15}/>{t("Using the bundled pnpm: it differs from the release's exact pnpm pin, but the major version matches.")}</p>}
       {(stringValue(operation, "error") || (!operationId && stringValue(update, "error"))) && <p className="form-error" role="alert"><WarningCircle size={15}/>{stringValue(operation, "error") || stringValue(update, "error")}</p>}
       {stringValue(operation, "cleanup_error") && <p className="form-error" role="alert"><WarningCircle size={15}/>{t("Cleanup error")}: {stringValue(operation, "cleanup_error")}</p>}
       {cleanupPending && <p className="notice degraded">{t("Cleanup is incomplete. Retry cleanup before starting another update.")}</p>}
@@ -2178,7 +2182,7 @@ function SettingsView({ snapshot, themeMode, setThemeMode, busyAction, runAction
   return <>
     <PageIntro kicker={t("System / Settings")} title={t("Settings")} detail={t("Configuration remains Agent-owned. This view intentionally exposes metadata, not credentials or raw environment values.")} />
     <div className="grid-two">
-<Panel title={t("Runtime settings")} icon={<Cpu size={18} />}><div className="status-block"><div className="button-row"><ActionButton onClick={() => setRuntimeSetupOpen((open) => !open)}>{runtimeSetupOpen ? t("Hide source and install mode") : t("Change runtime source or install mode")}</ActionButton></div>{runtimeSetupOpen && <div className="form-grid"><label className="form-field"><span className="field-label">{t("Source")}</span><select className="form-input" value={runtimeSource} onChange={(e) => setRuntimeSource(e.target.value)}><option value="official">{t("Official")}</option><option value="npmmirror">npmmirror</option></select></label><label className="form-field"><span className="field-label">{t("Install mode")}</span><select className="form-input" value={runtimeMode} onChange={(e) => setRuntimeMode(e.target.value)}><option value="portable">{t("Portable")}</option><option value="system">{t("System install")}</option></select></label></div>}{runtimeSetupOpen && <p className="field-help">{t("These settings only matter when runtimes must be installed or replaced.")}</p>}<div className="form-grid">{(["node", "pnpm", "git"] as const).map((name) => <label key={name} className="form-field"><span className="field-label">{name} {t("pin")}</span><input className="form-input" value={pins[name]} placeholder={stringValue(nestedValue(runtime, name), "path") || t("Leave blank for automatic discovery")} onChange={(event) => setPins((current) => ({ ...current, [name]: event.target.value }))} /></label>)}</div><p className="field-help">{t("Manual paths are saved as system pins. Leave blank to let Nexus resolve automatically.")}</p><ActionButton disabled={runtimeGate.disabled} onClick={() => void runAction(t("Save runtime settings"), "/v1/config", { action: "set_runtime", runtime: { node: pins.node.trim() ? { path: pins.node.trim(), ownership: "system" } : null, pnpm: pins.pnpm.trim() ? { path: pins.pnpm.trim(), ownership: "system" } : null, git: pins.git.trim() ? { path: pins.git.trim(), ownership: "system" } : null, source: runtimeSource, mode: runtimeMode } })}>{t("Save runtime settings")}</ActionButton>{runtimeGateReason && <p className="field-help" role="status">{runtimeGateReason}</p>}</div><hr className="panel-divider" /><RuntimeStatusPanel agentAvailable={snapshot.startup?.available === true} state={runtimeStatus} onCheck={() => void checkRuntime()} /></Panel>
+<Panel title={t("Runtime settings")} icon={<Cpu size={18} />}><div className="status-block"><div className="button-row"><ActionButton onClick={() => setRuntimeSetupOpen((open) => !open)}>{runtimeSetupOpen ? t("Hide dependency registry") : t("Change dependency registry")}</ActionButton></div>{runtimeSetupOpen && <div className="form-grid"><label className="form-field"><span className="field-label">{t("Dependency registry")}</span><select className="form-input" value={runtimeSource} onChange={(e) => setRuntimeSource(e.target.value)}><option value="official">{t("Official")}</option><option value="npmmirror">npmmirror</option></select></label></div>}{runtimeSetupOpen && <p className="field-help">{t("Only used when Harness dependencies are downloaded. Nexus never downloads Node, pnpm, or Git.")}</p>}<div className="form-grid">{(["node", "pnpm", "git"] as const).map((name) => <label key={name} className="form-field"><span className="field-label">{name} {t("pin")}</span><input className="form-input" value={pins[name]} placeholder={stringValue(nestedValue(runtime, name), "path") || t("Leave blank for automatic discovery")} onChange={(event) => setPins((current) => ({ ...current, [name]: event.target.value }))} /></label>)}</div><p className="field-help">{t("Manual paths are saved as system pins. Leave blank to resolve automatically: your system tools first, then the ones bundled with Nexus.")}</p><ActionButton disabled={runtimeGate.disabled} onClick={() => void runAction(t("Save runtime settings"), "/v1/config", { action: "set_runtime", runtime: { node: pins.node.trim() ? { path: pins.node.trim(), ownership: "system" } : null, pnpm: pins.pnpm.trim() ? { path: pins.pnpm.trim(), ownership: "system" } : null, git: pins.git.trim() ? { path: pins.git.trim(), ownership: "system" } : null, source: runtimeSource, mode: runtimeMode } })}>{t("Save runtime settings")}</ActionButton>{runtimeGateReason && <p className="field-help" role="status">{runtimeGateReason}</p>}</div><hr className="panel-divider" /><RuntimeStatusPanel agentAvailable={snapshot.startup?.available === true} state={runtimeStatus} onCheck={() => void checkRuntime()} /></Panel>
       <Panel title={t("Appearance")} icon={<Gear size={18} />}>
         <label className="field-label" htmlFor="theme-mode">{t("Theme")}</label>
         <select id="theme-mode" className="theme-select" value={themeMode} onChange={(event) => setThemeMode(event.target.value as ThemeMode)}>

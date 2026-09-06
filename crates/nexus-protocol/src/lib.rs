@@ -1125,6 +1125,10 @@ pub struct ColdOperation {
     pub updated_at_unix: Option<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub foundation_plan_id: Option<String>,
+    /// Accepted plan deviation surfaced to the user, for example a bundled
+    /// pnpm whose major matches the release requirement.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub warning: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub supply_plan: Option<serde_json::Value>,
     #[serde(default, skip_serializing_if = "Option::is_none")]

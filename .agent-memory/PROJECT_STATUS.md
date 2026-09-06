@@ -14,6 +14,16 @@ updated: 2026-09-06 by ZCode (运行时工具获取契约反转：内置运行�
 - **验证**：cargo check --offline workspace 干净；core+protocol 48、agent 单线程 148/148、supply 测试过；doc-tests 过。并行全量下 `timeout_ends_owned_descendant_before_returning`/`timed_out_probe_reports_a_reaped_child` 偶发失败为**既有互杀抖动**（原始 main 504fb70 复现，单线程全绿），与本次无关
 - **待做（批次②）**：WiX/构建脚本把 node zip + pnpm.cjs 实际打进安装目录 runtime/；批次③ UI 来源显示「内置」+ 偏斜警告 + 收起下载设置；批次④ registry 镜像回退与依赖安装实时进度；清理批物理删除下载代码
 
+## 内置运行时批次②③④已落地（2026-09-06，ZCode，提交于 15ad6e7 之后）
+
+- **批次② 打包**（apps/nexus-launcher/src-tauri/scripts/prepare-runtime.mjs，新）：构建时取 node v24.20.0 官方 win-x64 node.exe（SHASUMS256 校验）+ pnpm 11.7.0 完整 npm 包树（registry dist.integrity sha512 校验），布局=`resources/runtime/node/node.exe` + `resources/runtime/pnpm/`（入口 `pnpm/bin/pnpm.cjs`，bin shims→dist/pnpm.mjs 相对引用自洽；pnpm 11 要求 Node ≥22.13，bundled 24.20 满足）。冒烟实测：bundled node 直跑 bundled pnpm 输出 11.7.0 ✓。幂等（manifest 比对，命中跳网络）；缓存于 target/bundled-runtime-cache/。镜像变量 NEXUS_NODE_DIST_MIRROR / NEXUS_NPM_REGISTRY（受限网络用 npmmirror）。tauri.conf resources 增 `"resources/runtime/**": "runtime/"` → 安装目录 runtime/（正是 bundled_runtime_dir 观测位）；beforeBuildCommand 接入 prepare:runtime；WebView2 维持 embedBootstrapper（用户拍板不随包离线安装器）
+- **批次③ UI**（App.tsx/i18n.ts）：工作台工具行显示版本+来源徽标（系统来源/Nexus 来源/内置，复用 runtimeToolSourceLabel，类型加 bundled）；缺失文案「按所选版本补齐」→「不可用」；「下载偏好」→「依赖安装源」单选（official/npmmirror，仅管依赖下载 registry），安装模式下拉移除（mode 值保留透传）；设置页同语义改造 + pin 帮助文案更新为「系统优先其次内置」；冷切换进度块新增策略 A 警告行（`warning` 含 bundled_pnpm_major_skew 时显示人话说明，中英）
+- **策略 A 警告通道**：ColdOperation 新增持久化 `warning` 字段（protocol）；cold 快路径把 plan 工具 warning 拼入并经 record_foundation_plan 落盘；前端展示后安装完成随终态块消失
+- **批次④（半）**：install 失败且 source=official 时错误追加「切换依赖安装源到 npmmirror」指引（dependency_registry_hint），前端 localizeBackendError 加签名 → 人话+行动指引（中英）
+- **验证**：cargo check --workspace --all-targets 0 error；agent 单线程 148/148（cold 12/12）、core 36、protocol 13、supply 19；前端 tsc+vite build 过、37 tests pass、typecheck 过。**注意**：i18n 有既有同 key 双表结构，新增词条已成对添加
+- **遗留验收**：完整 `tauri build` 打包验收**暂被阻塞**——本机有一个正在运行的 nexus-launcher-app（src-tauri/target/release，PID 30604，其 agent 19564、Harness 占 3080），锁定 target/release 二进制导致 cargo 重链接 os error 32；**不得杀用户活实例**。应用关闭后重跑 `pnpm tauri build` 验证 MSI/NSIS 含 runtime/ 即闭环
+- **仍待做**：安装期 pnpm 输出实时流式进度（现仅诊断包留档+阶段百分比）；清理批物理删除下载死代码（runtime-supply 的 PublishPortable/InstallSystem 路径与测试、HttpDownloadClient、SourcePolicy）
+
 
 ## 运行时契约反转（2026-09-06 用户拍板）：内置 node/pnpm/corepack，下载链路退役
 

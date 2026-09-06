@@ -8,6 +8,7 @@
     "test": "node --experimental-strip-types --test tests/*.test.ts",
     "build": "tsc --noEmit && vite build",
     "prepare:agent": "node src-tauri/scripts/prepare-agent.mjs",
+    "prepare:runtime": "node src-tauri/scripts/prepare-runtime.mjs",
     "typecheck": "tsc --noEmit",
     "tauri": "tauri",
     "tauri:dev": "tauri dev",

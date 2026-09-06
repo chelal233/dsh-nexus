@@ -703,8 +703,8 @@ async fn observe_tool_until(
 }
 
 /// Bundled layout: `<runtime>/node/node.exe` (official distribution root)
-/// and `<runtime>/pnpm/pnpm.cjs` (standalone entry executed by the bundled
-/// Node, never through Corepack).
+/// and the full pnpm package tree at `<runtime>/pnpm/` whose entry run by
+/// the bundled Node is `<runtime>/pnpm/bin/pnpm.cjs` — never via Corepack.
 fn bundled_candidates(
     name: &str,
     root: Option<&Path>,
@@ -724,7 +724,7 @@ fn bundled_candidates(
             .unwrap_or_default(),
         "pnpm" => {
             let node = canonical_file(&node_root.join(node_executable));
-            let entry = root.join("pnpm").join("pnpm.cjs");
+            let entry = root.join("pnpm").join("bin").join("pnpm.cjs");
             canonical_file(&entry)
                 .map(|path| vec![(path, node)])
                 .unwrap_or_default()
@@ -1702,8 +1702,8 @@ mod tests {
 
         let node = write_version_fixture(&runtime.join("node"), "node", "v24.1.0");
         let node = fs::canonicalize(node).expect("bundled node canonicalizes");
-        let pnpm_entry = runtime.join("pnpm").join("pnpm.cjs");
-        fs::create_dir_all(runtime.join("pnpm")).expect("bundled pnpm dir creates");
+        let pnpm_entry = runtime.join("pnpm").join("bin").join("pnpm.cjs");
+        fs::create_dir_all(runtime.join("pnpm").join("bin")).expect("bundled pnpm dir creates");
         fs::write(&pnpm_entry, "// standalone pnpm entry").expect("bundled pnpm entry writes");
         let pnpm_entry = fs::canonicalize(pnpm_entry).expect("bundled pnpm canonicalizes");
 

@@ -6,7 +6,7 @@
   "build": {
     "beforeDevCommand": "pnpm dev",
     "devUrl": "http://localhost:1420",
-    "beforeBuildCommand": "pnpm prepare:agent && pnpm build",
+    "beforeBuildCommand": "pnpm prepare:agent && pnpm prepare:runtime && pnpm build",
     "frontendDist": "../dist"
   },
   "app": {
@@ -35,7 +35,8 @@
     "resources": {
       "resources/nexus-agent*": "",
       "resources/nexus-launcher*": "",
-      "resources/nexusctl*": ""
+      "resources/nexusctl*": "",
+      "resources/runtime/**": "runtime/"
     },
     "category": "Utility",
     "shortDescription": "Native local control plane for Nexus",
