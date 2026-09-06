@@ -1220,6 +1220,7 @@ impl UpdateResponse {
 pub enum DiagnosticsAction {
     Status,
     Collect,
+    OpenPath,
 }
 
 impl Default for DiagnosticsAction {
@@ -1231,6 +1232,10 @@ impl Default for DiagnosticsAction {
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
 pub struct DiagnosticsCommand {
     pub action: DiagnosticsAction,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bundle: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub file: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub note: Option<String>,
 }
@@ -1805,6 +1810,7 @@ mod tests {
         let command = DiagnosticsCommand {
             action: DiagnosticsAction::Collect,
             note: Some("before update".to_owned()),
+            ..Default::default()
         };
         let command_json = serde_json::to_value(command).expect("diagnostics command serializes");
         assert_eq!(command_json["action"], "collect");

@@ -1720,11 +1720,27 @@ function RecoveryDiagnostics({ snapshot, busyAction, runAction, refresh }: Pick<
   return <><Panel title={t("Startup recovery status")} icon={<Pulse size={18} />}><dl className="detail-list"><div><dt>{t("Harness state")}</dt><dd>{localizedRuntimeState(stringValue(asObject(recovery.harness), "state"), t)}</dd></div><div><dt>{t("Startup error")}</dt><dd>{stringValue(recovery, "startup_error") || t("None reported")}</dd></div><div><dt>{t("Fatal prefix observed")}</dt><dd>{booleanValue(recovery, "fatal_prefix_observed") ? t("Yes, advisory only") : t("No")}</dd></div></dl>{errors.map((item) => <p className="form-error" key={item}>{item}</p>)}<div className="button-row"><ActionButton disabled={busyAction !== null} onClick={() => void refresh()}>{t("Refresh")}</ActionButton><ActionButton disabled={busyAction !== null || snapshot.startup?.available !== true} onClick={() => void runAction(t("Diagnostic collection"), "/v1/diagnostics", { action: "collect", note: t("Manual recovery collection") })}>{t("Collect diagnostics")}</ActionButton></div></Panel><RecoveryLogTail snapshot={snapshot} /></>;
 }
 
-function DiagnosticsView({ snapshot, busyAction, runAction, refresh }: ViewProps) {
+export function DiagnosticsView({ snapshot, busyAction, runAction, refresh }: ViewProps) {
   const { locale, t } = useI18n();
   const items = arrayValue(snapshot.diagnostics, "bundles");
   const controlsDisabled = busyAction !== null || snapshot.startup?.available !== true;
-  return <><PageIntro kicker={t("Observability / Diagnostics")} title={t("Diagnostics")} detail={t("Bundles are bounded, redacted, and limited to Nexus-owned metadata and text logs.")} /><Panel title={t("Diagnostic bundles")} icon={<TerminalWindow size={18} />}><div className="panel-toolbar"><span className="toolbar-count">{t("{count} bundles", { count: items.length })}</span><ActionButton tone="primary" disabled={controlsDisabled} onClick={() => void runAction(t("Diagnostic collection"), "/v1/diagnostics", { action: "collect", note: t("Native launcher collection") })}><TerminalWindow size={16} />{t("Collect diagnostics")}</ActionButton></div><DataList items={items} emptyTitle={t("No diagnostic bundles")} emptyDetail={t("Collect a bounded bundle when a runtime issue needs review.")} render={(item) => <><div><strong>{stringValue(item, "id") || t("Bundle")}</strong><span>{t("{count} files", { count: arrayValue(item, "files").length })}</span></div><span className="row-meta">{formatTimestamp(numberValue(item, "created_at_unix"), t("Not available"), locale)}</span></>} /></Panel><RecoveryDiagnostics snapshot={snapshot} busyAction={busyAction} runAction={runAction} refresh={refresh} /></>;
+  const open = (bundle: string, file?: string) => void runAction(t(file ? "Open file" : "Open file location"), "/v1/diagnostics", { action: "open_path", bundle, ...(file ? { file } : {}) });
+  return <><PageIntro kicker={t("Observability / Diagnostics")} title={t("Diagnostics")} detail={t("Bundles are bounded, redacted, and limited to Nexus-owned metadata and text logs.")} />
+    <Panel title={t("Diagnostic bundles")} icon={<TerminalWindow size={18} />}>
+      <div className="panel-toolbar"><span className="toolbar-count">{t("{count} bundles", { count: items.length })}</span><ActionButton tone="primary" disabled={controlsDisabled} onClick={() => void runAction(t("Diagnostic collection"), "/v1/diagnostics", { action: "collect", note: t("Native launcher collection") })}><TerminalWindow size={16} />{t("Collect diagnostics")}</ActionButton></div>
+      {!items.length ? <EmptyState title={t("No diagnostic bundles")} detail={t("Collect a bounded bundle when a runtime issue needs review.")} /> : items.map(item => {
+        const bundle = asObject(item), id = stringValue(bundle, "id") || "";
+        return <details key={id} className="diagnostic-bundle">
+          <summary>{id} · {t("{count} files", { count: arrayValue(bundle, "files").length })} · {formatTimestamp(numberValue(bundle, "created_at_unix"), t("Not available"), locale)}</summary>
+          <p className="field-help">{stringValue(bundle, "directory")}</p>
+          <div className="button-row"><ActionButton disabled={controlsDisabled || !id} onClick={() => open(id)}>{t("Open file location")}</ActionButton><ActionButton disabled={controlsDisabled || !id} onClick={() => open(id, "diagnostics.json")}>{t("Open bundle manifest")}</ActionButton></div>
+          <DataList items={arrayValue(bundle, "files")} emptyTitle={t("No files collected")} emptyDetail={t("Open bundle manifest")} render={file => {
+            const name = stringValue(file, "name") || "";
+            return <><div><strong>{name}</strong><span>{numberValue(file, "bytes")} B</span></div><ActionButton disabled={controlsDisabled || !id || !name} onClick={() => open(id, name)}>{t("Open file")}</ActionButton></>;
+          }} />
+        </details>;
+      })}
+    </Panel><RecoveryDiagnostics snapshot={snapshot} busyAction={busyAction} runAction={runAction} refresh={refresh} /></>;
 }
 
 function HarnessDiscoveryPanel({

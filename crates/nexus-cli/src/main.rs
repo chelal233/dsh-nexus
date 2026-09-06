@@ -611,6 +611,7 @@ async fn run(options: Options) -> Result<(), String> {
             .json(&DiagnosticsCommand {
                 action: *action,
                 note: note.clone(),
+                ..Default::default()
             })
             .send()
             .await

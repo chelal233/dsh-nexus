@@ -3275,6 +3275,31 @@ async fn diagnostics_control(
 ) -> axum::response::Response {
     match command.action {
         DiagnosticsAction::Status => diagnostics_status(State(state)).await,
+        DiagnosticsAction::OpenPath => {
+            let result = command.bundle.as_deref()
+                .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "bundle is required"))
+                .and_then(|id| state.diagnostics.open_path(id, command.file.as_deref()))
+                .and_then(|path| {
+                    #[cfg(windows)]
+                    let mut opener = {
+                        use std::os::windows::process::CommandExt;
+                        // Always view collected text in an editor, never execute a log by extension.
+                        let mut opener = std::process::Command::new(if command.file.is_some() { "notepad.exe" } else { "explorer.exe" });
+                        opener.creation_flags(0x0800_0000);
+                        opener
+                    };
+                    #[cfg(target_os = "macos")]
+                    let mut opener = std::process::Command::new("open");
+                    #[cfg(all(unix, not(target_os = "macos")))]
+                    let mut opener = std::process::Command::new("xdg-open");
+                    opener.arg(&path).spawn()?;
+                    Ok(path)
+                });
+            match result {
+                Ok(path) => (StatusCode::OK, Json(serde_json::json!({ "api_version": "v1", "path": path }))).into_response(),
+                Err(error) => data_error_response(error, "diagnostics_open_failed"),
+            }
+        }
         DiagnosticsAction::Collect => {
             let _lifecycle = state.supervisor.acquire_lifecycle().await;
             if let Err(response) = ensure_checkpoint_mutation_ready(&state).await {

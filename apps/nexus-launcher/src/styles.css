@@ -258,3 +258,6 @@ dd { overflow: hidden; margin: 5px 0 0; color: var(--text); font-size: 12px; fon
 .plugin-drag-handle[draggable="false"] { cursor: default; opacity: .5; }
 .plugin-drop-target { outline: 2px solid var(--accent); outline-offset: -2px; border-radius: 6px; }
 .plugin-position { font-variant-numeric: tabular-nums; min-width: 18px; }
+.diagnostic-bundle { padding: 14px 0; border-bottom: 1px solid var(--border); }
+.diagnostic-bundle summary { cursor: pointer; font-weight: 600; overflow-wrap: anywhere; }
+.diagnostic-bundle .field-help { overflow-wrap: anywhere; }

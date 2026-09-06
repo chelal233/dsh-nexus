@@ -2827,6 +2827,32 @@ impl DiagnosticsStore {
         Ok(bundle)
     }
 
+    /// Resolve only existing catalogued diagnostics, never a caller-supplied path.
+    pub fn open_path(&self, id: &str, file: Option<&str>) -> io::Result<PathBuf> {
+        validate_release_id(id)?;
+        let bundle = self.list()?.into_iter().find(|bundle| bundle.id == id)
+            .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "diagnostic bundle not found"))?;
+        let directory = self.paths.diagnostics_dir.join(id);
+        let path = match file {
+            None => directory.clone(),
+            Some("diagnostics.json") => directory.join("diagnostics.json"),
+            Some(name) => {
+                if name.contains(['\\', ':']) || !bundle.files.iter().any(|item| item.name == name) {
+                    return Err(invalid_data("file is not in this diagnostic bundle"));
+                }
+                directory.join("files").join(name)
+            }
+        };
+        let root = fs::canonicalize(&self.paths.diagnostics_dir)?;
+        let resolved_dir = fs::canonicalize(&directory)?;
+        let resolved = fs::canonicalize(&path)?;
+        if !resolved_dir.starts_with(&root) || resolved_dir == root || !resolved.starts_with(&resolved_dir)
+            || (file.is_some() && !resolved.is_file()) || (file.is_none() && !resolved.is_dir()) {
+            return Err(invalid_data("diagnostic path is outside its bundle or has an invalid type"));
+        }
+        Ok(path)
+    }
+
     fn lock_gate(&self) -> io::Result<std::sync::MutexGuard<'_, ()>> {
         self.write_gate
             .lock()
@@ -3951,6 +3977,14 @@ mod tests {
             .collect(Some("after failed start".to_owned()))
             .expect("diagnostics collect");
         assert!(bundle.id.starts_with("diag-"));
+        assert!(store.open_path(&bundle.id, None).unwrap().is_dir());
+        assert!(store.open_path(&bundle.id, Some("diagnostics.json")).unwrap().is_file());
+        assert!(store.open_path(&bundle.id, Some("logs/harness.stdout.log")).unwrap().is_file());
+        for name in ["../diagnostics.json", "logs\\harness.stdout.log", "C:/Windows/notepad.exe", "missing.txt"] {
+            assert!(store.open_path(&bundle.id, Some(name)).is_err());
+        }
+        assert!(store.open_path("../escape", None).is_err());
+        assert!(store.open_path("diag-missing", None).is_err());
         let log = bundle
             .files
             .iter()
