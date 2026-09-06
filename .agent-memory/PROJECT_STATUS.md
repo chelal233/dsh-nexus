@@ -163,6 +163,14 @@ ActionButton 全局补 `type="button"`：此前所有 ActionButton 在 `<form>` 
 - **已知状态机 bug（测试中发现，待修）**：显式 stop 后状态发布为 failed（应为 stopped）——stop 终止子进程的退出码 1 被监控任务抢先发布；以及 /v1/harness/ui 的状态源与 /v1/harness 不一致导致认证面板显示陈旧 Failed
 - 根治项仍待拍板：切换版本成功后自动物化配置档依赖（可预防此类半迁移）
 
+## 接管边界确认（2026-09-06，用户确认）
+
+- 用户开放"接管与 desktop 同类的机制"，边界=**不得修改上游代码**
+- **Nexus 侧 heal（heal_module_farm）合规复查通过**：只维护 `~/.dsh/profiles/node_modules` 链接农场（上游 boot 自己也动态维护的运行时目录，设计上预期外部维护者），junction 指向即将启动的槽位；不碰槽位内容、不 patch vendor/loader、不改 app-boot
+- 边界内清单（desktop 先例）：链接农场 junction 维护、.dsh-module-fallback 管理、配置档目录创建（initProfile 语义）、调用上游导出函数
+- 边界外清单：修改槽位文件、fork/patch loader 解析、改 app-boot 源码
+- 待解技术问题不变：run 46 显示农场已重指 rc.1 但插件导出错误依旧——需插桩一次启动，确认插件实际解析路径被什么遮蔽
+
 ## P0 最终决策（2026-09-06，用户拍板）：插件不维护、切换保持原样
 
 - **产品契约（用户原话级）**：Nexus 只替用户完成其无法自行完成的修复（无法启动/恢复模式之类的修复），**不帮助用户维护插件**——否则每次上游发版都得核对用户插件配置，不可持续
