@@ -965,10 +965,6 @@ async fn execute_harness_action(
         .unwrap_or_else(|| DEFAULT_PROFILE.to_owned());
     match action {
         HarnessAction::Start => {
-            // Repoint the profile module link farm at the running slot before
-            // spawn: a crashed boot from a different slot can leave stale
-            // official-package links that break plugin resolution.
-            heal_module_farm_best_effort(&state);
             state
                 .supervisor
                 .start_with_profile_locked(&profile, &lifecycle)
@@ -1761,26 +1757,6 @@ async fn checkpoint_snapshot_read(
 /// than a checkpoint: synthesize a checkpoint that references the snapshot so
 /// the standard two-phase restore and materialization apply unchanged. The
 /// snapshot's harness version must still be an installed release slot.
-/// Best-effort module farm heal before Harness start. Never blocks a launch.
-fn heal_module_farm_best_effort(state: &AppState) {
-    let result = (|| -> io::Result<()> {
-        let catalog = state.releases.load()?;
-        let Some(current) = catalog.current_release.clone() else {
-            return Ok(());
-        };
-        let slot_root = state.releases.release_root(&current)?;
-        let dsh_home = state.snapshots.configured_dsh_home()?;
-        let repaired = ReleaseStore::heal_module_farm(&dsh_home, &slot_root)?;
-        if repaired > 0 {
-            tracing::info!("module farm: repointed {repaired} package links to the current slot");
-        }
-        Ok(())
-    })();
-    if let Err(error) = result {
-        tracing::warn!("module farm heal skipped: {error}");
-    }
-}
-
 async fn checkpoint_from_snapshot(
     state: &AppState,
     snapshot_id: &str,
@@ -3203,6 +3179,7 @@ async fn config_control(
                 return response;
             }
             let preserve = command.preserve_harness_readiness_url;
+            let releases = state.releases.clone();
             transact_config_response(&state, move |document| {
                 let mut payload = payload;
                 if preserve {
@@ -3223,7 +3200,9 @@ async fn config_control(
                         ));
                     }
                 }
-                document.harness = Some(HarnessLaunchSpec::from_payload(payload)?);
+                let mut spec = HarnessLaunchSpec::from_payload(payload)?;
+                supervisor::normalize_managed_launch(&mut spec, &releases)?;
+                document.harness = Some(spec);
                 Ok(())
             })
         }

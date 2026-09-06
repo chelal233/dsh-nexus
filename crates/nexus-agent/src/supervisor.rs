@@ -14,7 +14,7 @@ use nexus_core::{
     ReleaseStore, RuntimeMetadataStore, DEFAULT_PROFILE,
 };
 use nexus_launcher_core::{read_harness_ui_info_with_observer, HarnessLogObserver};
-use nexus_protocol::{HarnessRuntimeInfo, HarnessState};
+use nexus_protocol::{HarnessLaunchMode, HarnessRuntimeInfo, HarnessState};
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
     net::TcpStream,
@@ -29,6 +29,57 @@ pub const DEFAULT_READINESS_TIMEOUT_SECS: u64 = 30;
 const MONITOR_INTERVAL: Duration = Duration::from_millis(100);
 const READINESS_ATTEMPT_TIMEOUT: Duration = Duration::from_secs(1);
 const UNATTACHED_RECOVERY_CAP: Duration = Duration::from_secs(1);
+
+/// Registered slot paths are selections, not pins to an old installation.
+/// Keep custom commands outside the release store unchanged. Only executable,
+/// Node entry and cwd are paths here; never rewrite arbitrary user arguments.
+pub(crate) fn normalize_managed_launch(
+    spec: &mut HarnessLaunchSpec,
+    releases: &ReleaseStore,
+) -> io::Result<()> {
+    let catalog = releases.load()?;
+    if catalog.current_release.is_none() {
+        return Ok(());
+    }
+    let roots = catalog.releases.iter().map(|release| {
+        releases.release_root(&release.id).and_then(fs::canonicalize)
+    }).collect::<io::Result<Vec<_>>>()?;
+    let normalize = |path: &Path| -> Option<PathBuf> {
+        let input = if path.is_relative() {
+            spec.working_dir.as_deref().unwrap_or(Path::new(".")).join(path)
+        } else {
+            path.to_owned()
+        };
+        let resolved = fs::canonicalize(input).ok()?;
+        roots.iter().find_map(|root| {
+            resolved.strip_prefix(root).ok().map(|suffix| {
+                Path::new("{release_root}").join(suffix)
+            })
+        })
+    };
+    let entry = if spec.mode == HarnessLaunchMode::Node {
+        spec.args.first().map(Path::new)
+    } else {
+        Some(spec.program.as_path())
+    };
+    let Some(entry) = entry else { return Ok(()); };
+    let normalized_entry = normalize(entry);
+    if normalized_entry.is_none() && !entry.to_string_lossy().contains("{release_root}") {
+        return Ok(());
+    }
+    let normalized_cwd = spec.working_dir.as_deref().and_then(normalize);
+    if let Some(entry) = normalized_entry {
+        if spec.mode == HarnessLaunchMode::Node {
+            spec.args[0] = entry.to_string_lossy().into_owned();
+        } else {
+            spec.program = entry;
+        }
+    }
+    if let Some(cwd) = normalized_cwd {
+        spec.working_dir = Some(cwd);
+    }
+    Ok(())
+}
 
 pub(crate) struct HarnessLifecycleGuard {
     _guard: OwnedMutexGuard<()>,
@@ -646,10 +697,12 @@ impl HarnessSupervisor {
     ) -> Result<HarnessRuntimeInfo, HarnessSupervisorError> {
         validate_profile_name(profile)
             .map_err(|error| HarnessSupervisorError::InvalidProfile(error.to_string()))?;
-        let spec = load_harness_launch_spec(&self.paths)
+        let mut spec = load_harness_launch_spec(&self.paths)
             .map_err(HarnessSupervisorError::Configuration)?
             .filter(|spec| !spec.program.as_os_str().is_empty())
             .ok_or(HarnessSupervisorError::NotConfigured)?;
+        normalize_managed_launch(&mut spec, &self.releases)
+            .map_err(HarnessSupervisorError::Configuration)?;
         let readiness = readiness_config(&spec)?;
         let release_catalog = self
             .releases
@@ -712,6 +765,24 @@ impl HarnessSupervisor {
                         }
                     }
                     Err(error) => return Err(HarnessSupervisorError::Process(error)),
+                }
+            }
+            // Start and Restart both arrive here, after the existing process
+            // check. Do not mutate a live instance's shared module fallback.
+            let managed_entry = if spec.mode == HarnessLaunchMode::Node {
+                arguments.first().map(Path::new)
+            } else {
+                Some(program.as_path())
+            };
+            if let (Some(root), Some(entry)) = (release_root.as_deref(), managed_entry) {
+                let managed = fs::canonicalize(entry).ok().zip(fs::canonicalize(root).ok())
+                    .is_some_and(|(entry, root)| entry.starts_with(root));
+                if managed {
+                    let home = crate::dsh::resolve_dsh_home()
+                        .map_err(HarnessSupervisorError::Configuration)?;
+                    let repaired = ReleaseStore::heal_module_farm(&home, root)
+                        .map_err(HarnessSupervisorError::Configuration)?;
+                    tracing::info!(repaired, release = ?release_id, "prepared Harness module farm");
                 }
             }
             let generation = inner.generation.wrapping_add(1).max(1);
@@ -2842,6 +2913,45 @@ mod tests {
         running_runtime_without_pid, HarnessPersistGate, HarnessSupervisor, HarnessSupervisorError,
         ReadinessConfig, ReadinessOwner, ReadinessTarget, RecoveryState, StartPersistGate,
     };
+
+    #[test]
+    fn managed_launch_rebinds_stale_slot_but_preserves_external_commands_and_arguments() {
+        let root = std::env::temp_dir().join(format!(
+            "nexus-managed-launch-{}-{}", std::process::id(), unix_time_nanos_for_update()
+        ));
+        let paths = NexusPaths::from_root(root.clone());
+        let releases = nexus_core::ReleaseStore::new(paths);
+        releases.register("slot-a", "a", None, None).unwrap();
+        releases.register("slot-b", "b", None, None).unwrap();
+        releases.promote("slot-b").unwrap();
+        let old = releases.release_root("slot-a").unwrap();
+        let entry = old.join("bin.js");
+        fs::write(&entry, "").unwrap();
+        let external = root.join("external.js");
+        fs::write(&external, "").unwrap();
+        let mut spec = HarnessLaunchSpec::new(PathBuf::from("node"));
+        spec.mode = nexus_protocol::HarnessLaunchMode::Node;
+        spec.args = vec![entry.to_string_lossy().into_owned(), entry.to_string_lossy().into_owned()];
+        spec.working_dir = Some(old);
+        super::normalize_managed_launch(&mut spec, &releases).unwrap();
+        assert_eq!(PathBuf::from(&spec.args[0]), PathBuf::from("{release_root}").join("bin.js"));
+        assert_eq!(spec.args[1], entry.to_string_lossy());
+        assert_eq!(spec.working_dir, Some(PathBuf::from("{release_root}")));
+        let normalized = spec.clone();
+        super::normalize_managed_launch(&mut spec, &releases).unwrap();
+        assert_eq!(spec, normalized);
+        spec.args[0] = external.to_string_lossy().into_owned();
+        super::normalize_managed_launch(&mut spec, &releases).unwrap();
+        assert_eq!(spec.args[0], external.to_string_lossy());
+        spec.working_dir = Some(releases.release_root("slot-a").unwrap());
+        let external_spec = spec.clone();
+        super::normalize_managed_launch(&mut spec, &releases).unwrap();
+        assert_eq!(spec, external_spec, "external entry keeps its explicit cwd");
+        spec.args[0] = "bin.js".to_owned();
+        super::normalize_managed_launch(&mut spec, &releases).unwrap();
+        assert_eq!(PathBuf::from(&spec.args[0]), PathBuf::from("{release_root}").join("bin.js"));
+        fs::remove_dir_all(root).unwrap();
+    }
 
     fn immediate_nonzero_marker_command(marker: &std::path::Path) -> (PathBuf, Vec<String>) {
         if cfg!(windows) {

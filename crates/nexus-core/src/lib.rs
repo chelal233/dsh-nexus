@@ -1568,11 +1568,12 @@ impl ReleaseStore {
 /// pointing at the running slot's own workspace packages. The Harness boot
 /// maintains the same farm itself, but a crashed boot can leave links from a
 /// previous slot behind; repointing before spawn makes plugin resolution
-/// deterministic for the selected release. Best-effort: failures are logged
-/// through the returned count of repaired links and never block a launch.
+/// deterministic for the selected release. Returns repaired links or an error;
+/// real directories and indirect farm parents are never replaced.
 pub fn heal_module_farm(dsh_home: &Path, slot_root: &Path) -> io::Result<usize> {
     let farm = dsh_home.join("profiles").join("node_modules");
-    fs::create_dir_all(&farm)?;
+    Self::ensure_module_directory(&dsh_home.join("profiles"))?;
+    Self::ensure_module_directory(&farm)?;
     let mut repaired = 0;
     let mut roots: Vec<PathBuf> = Vec::new();
     for first in ["vendor", "packages"] {
@@ -1616,56 +1617,113 @@ pub fn heal_module_farm(dsh_home: &Path, slot_root: &Path) -> io::Result<usize> 
         let Some(name) = value.get("name").and_then(|item| item.as_str()) else {
             continue;
         };
-        if name.is_empty() {
-            continue;
-        }
+        Self::validate_module_name(name)?;
         let link = farm.join(name.replace('/', std::path::MAIN_SEPARATOR_STR));
         if let Some(parent) = link.parent() {
-            fs::create_dir_all(parent)?;
+            Self::ensure_module_directory(parent)?;
+        }
+        let canonical_package = fs::canonicalize(package_dir)?;
+        if !canonical_package.starts_with(fs::canonicalize(slot_root)?) {
+            return Err(io::Error::other("module target escapes release slot"));
+        }
+        if let Ok(metadata) = fs::symlink_metadata(&link) {
+            if !Self::is_module_link(&metadata) {
+                return Err(io::Error::other(format!("refusing to replace real module path: {}", link.display())));
+            }
         }
         if Self::same_directory(&link, package_dir) {
             continue;
         }
-        if link.exists() || fs::symlink_metadata(&link).is_ok() {
-            // A junction or real directory from a previous installation:
-            // move it aside instead of deleting user data blindly.
-            let aside = farm.join(format!(
-                "{name}.stale-{}",
-                unix_time_seconds()
-            ));
-            fs::rename(&link, aside)?;
-        }
-        match Self::create_dir_junction(&link, package_dir) {
-            Ok(()) => repaired += 1,
-            Err(error) => {
-                return Err(io::Error::other(format!(
-                    "failed to link module {} to {}: {error}",
-                    name,
-                    package_dir.display()
-                )));
-            }
-        }
+        Self::replace_module_link(&link, &canonical_package)?;
+        repaired += 1;
     }
     Ok(repaired)
 }
 
 fn same_directory(link: &Path, target: &Path) -> bool {
-    fs::read_link(link)
-        .map(|target| target == *target)
-        .unwrap_or_else(|_| {
-            fs::canonicalize(link).map(|resolved| resolved == *target).unwrap_or(false)
-        })
+    match (fs::canonicalize(link), fs::canonicalize(target)) {
+        (Ok(actual), Ok(expected)) => actual == expected,
+        _ => false,
+    }
+}
+
+fn validate_module_name(name: &str) -> io::Result<()> {
+    let valid_part = |part: &str| {
+        !part.is_empty() && part != "." && part != ".."
+            && !part.ends_with('.')
+            && part.bytes().all(|c| c.is_ascii_alphanumeric() || b"-_.".contains(&c))
+    };
+    let valid = if let Some(scoped) = name.strip_prefix('@') {
+        scoped.split_once('/').is_some_and(|(scope, package)| valid_part(scope) && valid_part(package))
+    } else {
+        valid_part(name)
+    };
+    if valid { Ok(()) } else { Err(io::Error::new(io::ErrorKind::InvalidData, "invalid module package name")) }
+}
+
+fn is_module_link(metadata: &fs::Metadata) -> bool {
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::MetadataExt;
+        metadata.file_attributes() & 0x400 != 0
+    }
+    #[cfg(not(windows))]
+    { metadata.file_type().is_symlink() }
+}
+
+fn ensure_module_directory(path: &Path) -> io::Result<()> {
+    match fs::symlink_metadata(path) {
+        Ok(metadata) if metadata.is_dir() && !Self::is_module_link(&metadata) => Ok(()),
+        Ok(_) => Err(io::Error::other(format!("module farm parent is not a real directory: {}", path.display()))),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => fs::create_dir(path),
+        Err(error) => Err(error),
+    }
+}
+
+fn replace_module_link(link: &Path, target: &Path) -> io::Result<()> {
+    // Prepare first, so a junction-creation failure leaves the old link intact.
+    let nonce = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH)
+        .map_err(io::Error::other)?.as_nanos();
+    let temporary = link.with_file_name(format!(".nexus-module-{}-{nonce}.new", std::process::id()));
+    let backup = temporary.with_extension("old");
+    Self::create_dir_junction(&temporary, target)?;
+    let had_link = fs::symlink_metadata(link).is_ok();
+    if had_link {
+        if let Err(error) = fs::rename(link, &backup) {
+            let _ = Self::remove_module_link(&temporary);
+            return Err(error);
+        }
+    }
+    if let Err(error) = fs::rename(&temporary, link) {
+        let rollback = if had_link { fs::rename(&backup, link) } else { Ok(()) };
+        let _ = Self::remove_module_link(&temporary);
+        return Err(io::Error::other(format!("module link replacement failed: {error}; rollback: {rollback:?}")));
+    }
+    if had_link { Self::remove_module_link(&backup)?; }
+    Ok(())
+}
+
+fn remove_module_link(path: &Path) -> io::Result<()> {
+    #[cfg(windows)]
+    { fs::remove_dir(path) }
+    #[cfg(not(windows))]
+    { fs::remove_file(path) }
 }
 
 #[cfg(windows)]
 fn create_dir_junction(link: &Path, target: &Path) -> io::Result<()> {
+    use std::os::windows::process::CommandExt;
+    // cmd builtins interpret forward slashes as switches, unlike Rust paths.
+    let link = link.to_string_lossy().replace('/', "\\");
+    let target = target.to_string_lossy().replace('/', "\\");
     let output = std::process::Command::new("cmd")
+        .creation_flags(0x08000000) // CREATE_NO_WINDOW: no console per package.
         .args([
             "/C",
             "mklink",
             "/J",
-            &link.to_string_lossy(),
-            &target.to_string_lossy(),
+            &link,
+            &target,
         ])
         .stdin(std::process::Stdio::null())
         .output()?;
@@ -4116,6 +4174,69 @@ mod tests {
             std::process::id(),
             super::unix_time_seconds()
         ))
+    }
+
+    #[test]
+    fn module_farm_retargets_real_links_and_preserves_user_directories() {
+        let root = unique_test_root("module-farm-retarget");
+        let home = root.join("home");
+        fs::create_dir_all(&home).unwrap();
+        let a = root.join("a");
+        let b = root.join("b");
+        for slot in [&a, &b] {
+            let package = slot.join("packages/example");
+            fs::create_dir_all(&package).unwrap();
+            fs::write(package.join("package.json"), r#"{"name":"@dsh/example"}"#).unwrap();
+        }
+        let link = home.join("profiles/node_modules/@dsh/example");
+        assert_eq!(ReleaseStore::heal_module_farm(&home, &a).unwrap(), 1);
+        assert!(ReleaseStore::same_directory(&link, &a.join("packages/example")));
+        assert_eq!(ReleaseStore::heal_module_farm(&home, &b).unwrap(), 1);
+        assert!(ReleaseStore::same_directory(&link, &b.join("packages/example")));
+        assert_eq!(ReleaseStore::heal_module_farm(&home, &b).unwrap(), 0);
+        assert_eq!(ReleaseStore::heal_module_farm(&home, &a).unwrap(), 1);
+        assert!(ReleaseStore::same_directory(&link, &a.join("packages/example")));
+        ReleaseStore::remove_module_link(&link).unwrap();
+        fs::create_dir(&link).unwrap();
+        fs::write(link.join("user.txt"), "preserve").unwrap();
+        assert!(ReleaseStore::heal_module_farm(&home, &b).is_err());
+        assert_eq!(fs::read_to_string(link.join("user.txt")).unwrap(), "preserve");
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn module_farm_rejects_escaped_names_and_linked_parents() {
+        for name in ["../escape", "@scope/../../escape", "C:/escape", "a\\b", "/absolute", "@scope/", ".", ".."] {
+            assert!(ReleaseStore::validate_module_name(name).is_err(), "{name}");
+        }
+        let root = unique_test_root("module-farm-parent");
+        let home = root.join("home");
+        let outside = root.join("outside");
+        let slot = root.join("slot");
+        fs::create_dir_all(home.join("profiles/node_modules")).unwrap();
+        fs::create_dir_all(&outside).unwrap();
+        fs::create_dir_all(slot.join("packages/example")).unwrap();
+        fs::write(slot.join("packages/example/package.json"), r#"{"name":"@dsh/example"}"#).unwrap();
+        let scope = home.join("profiles/node_modules/@dsh");
+        ReleaseStore::create_dir_junction(&scope, &outside).unwrap();
+        assert!(ReleaseStore::heal_module_farm(&home, &slot).is_err());
+        assert_eq!(fs::read_dir(&outside).unwrap().count(), 0);
+        ReleaseStore::remove_module_link(&scope).unwrap();
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn module_farm_failed_preparation_preserves_existing_link() {
+        let root = unique_test_root("module-farm-failure");
+        let target = root.join("target");
+        fs::create_dir_all(&target).unwrap();
+        let link = root.join("link");
+        ReleaseStore::create_dir_junction(&link, &target).unwrap();
+        // Embedded NUL is rejected by the OS before link creation on every platform.
+        assert!(ReleaseStore::replace_module_link(&link, Path::new("bad\0target")).is_err());
+        assert!(ReleaseStore::same_directory(&link, &target));
+        ReleaseStore::remove_module_link(&link).unwrap();
+        fs::remove_dir_all(root).unwrap();
     }
 }
 
