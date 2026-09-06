@@ -163,6 +163,15 @@ ActionButton 全局补 `type="button"`：此前所有 ActionButton 在 `<form>` 
 - **已知状态机 bug（测试中发现，待修）**：显式 stop 后状态发布为 failed（应为 stopped）——stop 终止子进程的退出码 1 被监控任务抢先发布；以及 /v1/harness/ui 的状态源与 /v1/harness 不一致导致认证面板显示陈旧 Failed
 - 根治项仍待拍板：切换版本成功后自动物化配置档依赖（可预防此类半迁移）
 
+## 决策反转确认（2026-09-06，用户拍板）：Nexus 托管模块农场
+
+- **推翻"P0 最终决策"中的保持原样路线**，正式走 **Nexus 托管模块农场**：Nexus 拥有 `~/.dsh/profiles/node_modules` 的管理权，每次启动 Harness 前（以及 switch/restore 时）将农场链接重指到**即将运行的槽位**的 workspace 包
+- **理由（小白视角）**：保持原样路线下，跨版本切换后陈旧农场链接会让**新旧两个版本都起不来**（alpha.1 农场污染 rc.1 启动，实测整夜修复）——对小白等于版本切换是不可逆自爆。托管路线下机器永不锁死：不兼容的插件可见失败，恢复模式兜底
+- **边界不变**：不修改上游代码；农场是上游 boot 自己也动态维护的运行时目录，desktop 亦有同类先例（dsh-plugin-desktop 维护自己的投影链接）
+- **已实现部分**：heal_module_farm（提交 362a63c）——spawn 前重指 38 个链接到运行槽位，已验证生效
+- **活跃调查项（run 46 反常）**：heal 重指后插件导出错误依旧，启动后实测农场 junction 仍指 alpha.1 槽位。假设：harness 启动时的 pnpm 物化器（dsh.js/cold.rs 的物化路径）在 Nexus heal 之后重建/重指了 junction（pnpm 工作区状态或 lockfile 残留 alpha.1 引用）。下一轮：1) 启动后立即检查 junction 目标与物化器执行顺序；2) 读物化器代码确定 profiles/node_modules 的写入方与版本来源；3) 修复 = 物化器重指 Nexus heal 的目标，或 heal 移到物化器之后
+- 边界重申：不修改上游代码；此前"P1 移除官方依赖供给管理"的记录作废，该机制以"Nexus 托管农场"形态回归
+
 ## 接管边界确认（2026-09-06，用户确认）
 
 - 用户开放"接管与 desktop 同类的机制"，边界=**不得修改上游代码**
