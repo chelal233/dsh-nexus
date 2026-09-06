@@ -342,7 +342,9 @@ impl AgentClient {
             .base_url
             .join(path)
             .map_err(|error| AgentClientError::InvalidRequest(error.to_string()))?;
+        let compatibility_mutation = method == Method::POST && matches!(path, "/v1/releases" | "/v1/harness");
         let mut request = self.http.request(method, url);
+        if compatibility_mutation { request = request.timeout(Duration::from_secs(660)); }
         if let Some(identity) = &self.expected_identity {
             request = request
                 .header(AGENT_DATA_ROOT_HEADER, &identity.data_root_id)

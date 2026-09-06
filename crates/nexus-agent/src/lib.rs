@@ -61,6 +61,7 @@ use tokio::{
 };
 
 mod cold;
+mod compatibility;
 mod dsh;
 mod runtime;
 mod runtime_plan;
@@ -914,9 +915,24 @@ fn harness_ui_process_is_presentable(
 }
 
 async fn harness_control(
+    state: State<AppState>,
+    command: Json<HarnessCommand>,
+) -> axum::response::Response {
+    if command.0.action == HarnessAction::Status {
+        return harness_control_inner(state, command).await;
+    }
+    // A disconnected caller must not release the lifecycle gate while the
+    // blocking compatibility process still owns a probe and its files.
+    match tokio::spawn(harness_control_inner(state, command)).await {
+        Ok(response) => response,
+        Err(error) => data_error_response(io::Error::other(error.to_string()), "harness_owner_failed"),
+    }
+}
+
+async fn harness_control_inner(
     State(state): State<AppState>,
     Json(command): Json<HarnessCommand>,
-) -> impl IntoResponse {
+) -> axum::response::Response {
     if command.action != HarnessAction::Status {
         if let Err(response) = ensure_checkpoint_mutation_ready(&state).await {
             return response;
@@ -1167,7 +1183,14 @@ fn profile_list_response(
         .iter()
         .map(|profile| profile.name.clone())
         .collect();
-    Ok(ProfileListResponse::new(catalog.active_profile, names).with_manifests(manifests))
+    let mut response = ProfileListResponse::new(catalog.active_profile, names).with_manifests(manifests);
+    response.compatibility = compatibility::latest_for_selection(
+        &state.paths,
+        state.snapshots.configured_dsh_home()?,
+        &response.active_profile,
+        state.releases.load()?.current_release.as_deref(),
+    );
+    Ok(response)
 }
 
 async fn profile_list(State(state): State<AppState>) -> axum::response::Response {
@@ -2757,7 +2780,18 @@ async fn release_tags(State(state): State<AppState>) -> axum::response::Response
     }
 }
 
-async fn release_control(
+async fn release_control(state: State<AppState>, command: Json<ReleaseCommand>) -> axum::response::Response {
+    // Keep ownership of a potentially long compatibility check when a caller
+    // disconnects. Publication and process cleanup still settle under the locks.
+    if matches!(command.0.action, ReleaseAction::Promote | ReleaseAction::Rollback) {
+        match tokio::spawn(release_control_inner(state, command)).await {
+            Ok(response) => response,
+            Err(error) => data_error_response(io::Error::other(error.to_string()), "release_owner_failed"),
+        }
+    } else { release_control_inner(state, command).await }
+}
+
+async fn release_control_inner(
     State(state): State<AppState>,
     Json(command): Json<ReleaseCommand>,
 ) -> axum::response::Response {
@@ -2821,6 +2855,9 @@ async fn release_control(
             {
                 return response;
             }
+            if let Err(error) = compatibility::for_release(&state, id, true, &nexus_runtime_supply::CancellationToken::default()).await {
+                return data_error_response(error, "profile_compatibility_failed");
+            }
             let catalog = match state.releases.promote(id) {
                 Ok(catalog) => catalog,
                 Err(error) => return data_error_response(error, "release_promote_failed"),
@@ -2882,6 +2919,15 @@ async fn release_control(
             .await
             {
                 return response;
+            }
+            let previous = match state.releases.load() {
+                Ok(catalog) => catalog.last_known_good,
+                Err(error) => return data_error_response(error, "release_rollback_failed"),
+            };
+            if let Some(id) = previous.as_deref() {
+                if let Err(error) = compatibility::for_release(&state, id, true, &nexus_runtime_supply::CancellationToken::default()).await {
+                    return data_error_response(error, "profile_compatibility_failed");
+                }
             }
             let catalog = match state.releases.rollback() {
                 Ok(catalog) => catalog,
@@ -4113,6 +4159,37 @@ mod checkpoint_tests {
                 instance_id: format!("content-{label}"),                crash_capture_run: Arc::new(Mutex::new(None)),            },
             root,
         )
+    }
+
+    #[tokio::test]
+    async fn compatibility_preflight_failure_preserves_release_selection() {
+        let (state, root) = content_test_state("compatibility-preflight");
+        state.releases.register("compat-old", "old", None, None).unwrap();
+        state.releases.register("compat-target", "target", None, None).unwrap();
+        state.releases.promote("compat-old").unwrap();
+        let before = state.releases.load().unwrap();
+        let mut config = state.config.load().unwrap();
+        let mut harness = HarnessLaunchSpec::new(root.join("unused-runtime/node.exe"));
+        harness.mode = nexus_protocol::HarnessLaunchMode::Node;
+        harness.args = vec!["{release_root}/apps/cli/lib/bin.js".to_owned()];
+        config.harness = Some(harness);
+        state.config.write(&config).unwrap();
+        fs::create_dir_all(state.paths.root.join("compatibility")).unwrap();
+        let latest = state.paths.root.join("compatibility/latest.json");
+        fs::write(&latest, b"previous successful report").unwrap();
+        // The synthetic target deliberately lacks the supported CLI entry.
+        // Preflight must reject it before any process launch or promotion.
+        let response = release_control(State(state.clone()), Json(ReleaseCommand {
+            action: ReleaseAction::Promote,
+            id: Some("compat-target".to_owned()),
+            version: None, source: None, note: None,
+        })).await;
+        assert!(!response.status().is_success());
+        let body = axum::body::to_bytes(response.into_body(), 64 * 1024).await.unwrap();
+        assert!(String::from_utf8_lossy(&body).contains("profile_compatibility_failed"));
+        assert_eq!(state.releases.load().unwrap(), before);
+        assert!(!latest.exists(), "a failed recheck must invalidate the previous success");
+        fs::remove_dir_all(root).unwrap();
     }
 
     #[tokio::test]

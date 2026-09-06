@@ -49,6 +49,11 @@ impl std::fmt::Display for ColdCommandFailure {
 
 impl std::error::Error for ColdCommandFailure {}
 
+pub(crate) fn command_owner_quiescent(error: &io::Error) -> bool {
+    error.get_ref().and_then(|source| source.downcast_ref::<ColdCommandFailure>())
+        .map_or(true, |failure| failure.owner_quiescent)
+}
+
 #[derive(serde::Serialize, serde::Deserialize)]
 struct PublicationIntent {
     committed: bool,
@@ -402,6 +407,14 @@ impl ColdCoordinator {
     }
 
     pub(crate) async fn cancel(&self, operation_id: &str) -> io::Result<ColdOperation> {
+        // Signal the owned probe before waiting for the publication gate.
+        // The tuple prevents a stale request from cancelling a newer owner.
+        {
+            let current = self.cancellation.lock().await;
+            if let Some((id, token)) = current.as_ref() {
+                if id == operation_id { token.cancel(); }
+            }
+        }
         let _gate = self.gate.lock().await;
         let mut operation = self
             .load()?
@@ -861,6 +874,10 @@ async fn build_and_publish(
         Some(APPROVED_UPSTREAM.to_owned()),
         Some("Nexus cold install".to_owned()),
     )?;
+    crate::compatibility::prepare(&state.paths, state.snapshots.configured_dsh_home()?,
+        &state.profiles.load()?.active_profile, &operation.release_id,
+        &state.releases.release_root(&operation.release_id)?, &harness.program, true, &cancellation).await?;
+    ensure_not_cancelled(&cancellation)?;
     state.config.write(&config)?;
     final_operation.phase = ColdOperationPhase::Promoting;
     final_operation.progress_percent = 96;
@@ -948,6 +965,8 @@ async fn promote_existing(state: &AppState, operation_id: &str, tag: &str) -> io
         .filter(|item| item.version == tag)
         .max_by_key(|item| item.installed_at_unix)
         .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "installed tag disappeared"))?;
+    crate::compatibility::for_release(state, &release.id, true, &cancellation).await?;
+    ensure_not_cancelled(&cancellation)?;
     final_operation.release_id = release.id.clone();
     let mut intent =
         state
@@ -1149,7 +1168,7 @@ async fn run_command(
     .await
 }
 
-async fn run_owned_command(
+pub(crate) async fn run_owned_command(
     mut command: std::process::Command,
     phase: &str,
     duration: Duration,
@@ -1173,10 +1192,16 @@ async fn run_owned_command(
         crate::dsh::run_cold_process(&mut command, duration, || token.is_cancelled())
     })
     .await
-    .map_err(io::Error::other)?;
+    .map_err(|error| io::Error::other(ColdCommandFailure {
+        message: format!("owned command worker failed: {error}"),
+        owner_quiescent: false,
+    }))?;
     let diagnostic = read_command_diagnostic(&diagnostic_path);
     let cleanup = fs::remove_file(&diagnostic_path);
-    let (diagnostic, truncated) = diagnostic?;
+    let (diagnostic, truncated) = diagnostic.map_err(|error| io::Error::other(ColdCommandFailure {
+        message: format!("owned command diagnostic failed: {error}"),
+        owner_quiescent: result.as_ref().err().map_or(true, crate::dsh::cold_process_owner_quiescent),
+    }))?;
     let suffix = if diagnostic.is_empty() {
         String::new()
     } else {
@@ -1488,7 +1513,7 @@ async fn settle_failure(
     Ok(())
 }
 
-fn remove_owned_directory(parent: &Path, target: &Path) -> io::Result<()> {
+pub(crate) fn remove_owned_directory(parent: &Path, target: &Path) -> io::Result<()> {
     let parent = fs::canonicalize(parent)?;
     let Some(target_parent) = target.parent() else {
         return Err(io::Error::new(

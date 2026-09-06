@@ -73,7 +73,26 @@ test("cold confirmation renders exact version, destination, effects, and explici
     assert.match(markup, /install_system/);
     assert.match(markup, /Confirm exact plan/);
     assert.match(markup, /Cancel/);
-    assert.match(markup, /never start Harness automatically/);
+    assert.match(markup, /test an isolated profile first/);
+    assert.match(markup, /working profile is not started automatically/);
+  } finally { await vite.close(); }
+});
+
+test("compatibility summary identifies the checked release, projection, and disabled plugin", async () => {
+  const { vite, UpdatesView } = await loadViews();
+  try {
+    const snapshot = { ...baseSnapshot, profiles: { compatibility: {
+      status: "isolated", source_profile: "desktop", effective_profile: "nexus-projection", release_id: "rc1",
+      disabled: [{ package: "third-party-plugin", reason: "missing startup API" }],
+    } } };
+    const markup = renderToStaticMarkup(createElement(UpdatesView, { ...props, snapshot }));
+    assert.match(markup, /Startup compatibility check/);
+    assert.match(markup, /desktop/);
+    assert.match(markup, /nexus-projection/);
+    assert.match(markup, /rc1/);
+    assert.match(markup, /third-party-plugin/);
+    assert.match(markup, /missing startup API/);
+    assert.match(markup, /not every runtime feature/);
   } finally { await vite.close(); }
 });
 

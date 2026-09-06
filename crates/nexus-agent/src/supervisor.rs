@@ -713,6 +713,35 @@ impl HarnessSupervisor {
             .map(|id| self.releases.release_root(id))
             .transpose()
             .map_err(HarnessSupervisorError::Configuration)?;
+        // The lifecycle owner remains held while the isolated check runs, but
+        // never hold `inner` across the child-process probe.
+        let mut compatible_profile = None;
+        if spec.mode == HarnessLaunchMode::Node {
+            if let (Some(id), Some(root)) = (release_id, release_root.as_deref()) {
+                let entry = spec.render_args_for_context(profile, release_id, release_root.as_deref())
+                    .map_err(HarnessSupervisorError::Configuration)?;
+                let managed = entry.first().and_then(|entry| fs::canonicalize(entry).ok())
+                    .zip(fs::canonicalize(root.join("apps/cli/lib/bin.js")).ok())
+                    .is_some_and(|(entry, expected)| entry == expected);
+                if managed {
+                    let status = self.status().await;
+                    if matches!(status.state, HarnessState::Starting | HarnessState::Running) {
+                        return Err(HarnessSupervisorError::AlreadyRunning);
+                    }
+                    {
+                        let inner = self.inner.lock().await;
+                        if inner.child.is_some() || inner.recovery.is_some() || inner.stop_pending || inner.log_session.launch_pending {
+                            return Err(HarnessSupervisorError::AlreadyRunning);
+                        }
+                    }
+                    let home = crate::dsh::resolve_dsh_home().map_err(HarnessSupervisorError::Configuration)?;
+                    compatible_profile = crate::compatibility::prepare(&self.paths, &home, profile, id, root,
+                        &spec.program, false, &nexus_runtime_supply::CancellationToken::default()).await
+                        .map_err(HarnessSupervisorError::Configuration)?.map(|report| report.effective_profile);
+                }
+            }
+        }
+        let profile = compatible_profile.as_deref().unwrap_or(profile);
         let program = spec
             .render_path_for_context(&spec.program, profile, release_id, release_root.as_deref())
             .map_err(HarnessSupervisorError::Configuration)?;

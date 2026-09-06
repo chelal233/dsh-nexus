@@ -13,6 +13,13 @@ export type TranslationParams = Record<string, string | number>;
 export type Translator = (key: string, params?: TranslationParams) => string;
 
 const english: Record<string, string> = {
+  "Startup compatibility check": "Startup compatibility check",
+  "Source profile": "Source profile",
+  "Effective isolated profile": "Effective isolated profile",
+  "Started with isolated plugins": "Started with isolated plugins",
+  "Startup check passed": "Startup check passed",
+  "Checks plugin loading and initialization, not every runtime feature. Original profile and data remain unchanged.": "Checks plugin loading and initialization, not every runtime feature. Original profile and data remain unchanged.",
+
   "NEXUS": "NEXUS",
   "LOCAL CONTROL": "LOCAL CONTROL",
   "Nexus Launcher": "Nexus Launcher",
@@ -444,7 +451,7 @@ const english: Record<string, string> = {
   "No bounded file content was returned.": "No bounded file content was returned.",
   "Redacted fields": "Redacted fields",
   "Content truncated by the Agent response limit.": "Content truncated by the Agent response limit.",
-  "Cold switches are asynchronous and never start Harness automatically.": "Cold switches are asynchronous and never start Harness automatically.",
+  "Cold switches are asynchronous and never start Harness automatically.": "Cold switches test an isolated profile first; the working profile is not started automatically.",
   "Runtime settings": "Runtime settings",
   "Official": "Official",
   "Install mode": "Install mode",
@@ -487,6 +494,13 @@ const english: Record<string, string> = {
 };
 
 const chinese: Record<string, string> = {
+  "Startup compatibility check": "启动兼容性自检",
+  "Source profile": "原配置档",
+  "Effective isolated profile": "实际隔离配置档",
+  "Started with isolated plugins": "隔离不兼容插件后启动检查通过",
+  "Startup check passed": "启动兼容性检查通过",
+  "Checks plugin loading and initialization, not every runtime feature. Original profile and data remain unchanged.": "检查插件加载和初始化，不代表所有运行功能均兼容。原配置档和数据保持不变。",
+
   "Harness configuration saved": "Harness 配置已保存",
   "Harness configuration cleared": "Harness 配置已清除",
   "English": "English",
@@ -919,7 +933,7 @@ const chinese: Record<string, string> = {
   "No bounded file content was returned.": "未返回有限文件内容。",
   "Redacted fields": "已脱敏字段",
   "Content truncated by the Agent response limit.": "内容因 Agent 响应大小限制而截断。",
-  "Cold switches are asynchronous and never start Harness automatically.": "冷切换异步执行，且绝不会自动启动 Harness。",
+  "Cold switches are asynchronous and never start Harness automatically.": "冷切换会试启动隔离副本进行兼容性自检；切换完成后不自动启动工作配置档。",
   "Runtime settings": "运行时设置",
   "Official": "官方",
   "Install mode": "安装模式",

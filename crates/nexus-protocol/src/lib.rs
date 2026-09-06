@@ -364,12 +364,32 @@ pub struct NativeProfilePayload {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct CompatibilityDisabledPlugin {
+    pub package: String,
+    pub reason: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct CompatibilityReport {
+    pub checker_version: u32,
+    pub status: String,
+    pub source_profile: String,
+    pub effective_profile: String,
+    pub release_id: String,
+    pub fingerprint: String,
+    pub checked_at_unix: u64,
+    pub disabled: Vec<CompatibilityDisabledPlugin>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ProfileListResponse {
     pub api_version: String,
     pub active_profile: String,
     pub profiles: Vec<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub manifests: Vec<NativeProfilePayload>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub compatibility: Option<CompatibilityReport>,
 }
 
 pub type ProfileStatusResponse = ProfileListResponse;
@@ -381,6 +401,7 @@ impl ProfileListResponse {
             active_profile: active_profile.into(),
             profiles,
             manifests: Vec::new(),
+            compatibility: None,
         }
     }
 
