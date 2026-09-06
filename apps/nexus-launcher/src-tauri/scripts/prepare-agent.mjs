@@ -2,6 +2,7 @@ import { access, copyFile, mkdir, rm } from "node:fs/promises";
 import path from "node:path";
 import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
+import { verifyStaticRuntime } from "./verify-static-runtime.mjs";
 
 // This is a local, reproducible staging step for the three Nexus binaries. It
 // never downloads, edits, or starts Harness source or data.
@@ -53,6 +54,7 @@ for (const binaryName of binaryNames) {
 }
 
 await mkdir(resourceDirectory, { recursive: true });
+verifyStaticRuntime(binaryNames.map(name => path.join(releaseDirectory, name)));
 // Remove only exact generated names for the three staged binaries. The
 // resource directory is owned by this staging step; no Harness path is ever
 // traversed.
