@@ -620,6 +620,75 @@ impl ProfileStore {
         Ok(catalog)
     }
 
+    /// Create a new profile: add the name to the Nexus catalog and
+    /// initialize the Harness profile directory from the shipped `web`
+    /// template (manifest with the two base bundles, an empty user patch
+    /// layer, and the pnpm settings out-of-tree plugins need). An existing
+    /// catalog name or on-disk directory fails closed. Metadata only; it
+    /// never starts or restarts Harness.
+    pub fn create(&self, name: &str, dsh_home: &Path) -> io::Result<ProfileCatalog> {
+        validate_profile_name(name)?;
+        let _guard = self.lock_gate()?;
+        let mut catalog = self.load_unlocked()?;
+        if catalog.profiles.iter().any(|item| item == name) || catalog.active_profile == name {
+            return Err(io::Error::new(
+                io::ErrorKind::AlreadyExists,
+                format!("profile {name} already exists"),
+            ));
+        }
+        let profile_dir = dsh_home.join("profiles").join(name);
+        if profile_dir.exists() {
+            return Err(io::Error::new(
+                io::ErrorKind::AlreadyExists,
+                format!(
+                    "profile directory already exists on disk: {}",
+                    profile_dir.display()
+                ),
+            ));
+        }
+        let staging = dsh_home.join("profiles").join(format!(
+            ".{name}.creating-{}",
+            unix_time_nanos()
+        ));
+        fs::create_dir_all(&staging)?;
+        let publish = |result: io::Result<()>| -> io::Result<()> {
+            if let Err(error) = result {
+                let _ = fs::remove_dir_all(&staging);
+                return Err(error);
+            }
+            Ok(())
+        };
+        let manifest = serde_json::json!({
+            "name": format!("dsh-profile-{name}"),
+            "private": true,
+            "dependencies": {},
+            "dsh": {
+                "profile": {
+                    "bundles": ["@deepseek-ai/dsh-base", "@deepseek-ai/dsh-web-app"],
+                    "patchReload": "live",
+                },
+            },
+        });
+        publish(write_json_atomic(
+            &staging,
+            &staging.join("package.json"),
+            &manifest,
+        ))?;
+        publish(fs::write(
+            staging.join("cordis.patch.yml"),
+            PROFILE_PATCH_TEMPLATE,
+        ))?;
+        publish(fs::write(
+            staging.join("pnpm-workspace.yaml"),
+            PROFILE_PNPM_WORKSPACE,
+        ))?;
+        fs::rename(&staging, &profile_dir)?;
+        catalog.profiles.push(name.to_owned());
+        catalog.normalize()?;
+        write_json_atomic(&self.paths.root, &self.paths.profiles_file, &catalog)?;
+        Ok(catalog)
+    }
+
     fn load_unlocked(&self) -> io::Result<ProfileCatalog> {
         let Some(mut catalog) = self.read_unlocked()? else {
             let catalog = ProfileCatalog::default();
@@ -822,6 +891,19 @@ impl CheckpointStore {
             .map_err(|_| io::Error::other("checkpoint store lock is poisoned"))
     }
 }
+
+/// Shipped `web` profile template content (upstream app-boot PROFILE_TEMPLATES).
+pub const PROFILE_PATCH_TEMPLATE: &str = r#"# Your patch layer for this dsh profile, applied after every bundle layer:
+# a top-level YAML array of loader patch entries (id-targeted config
+# overrides, disables, and insert lists; `!!js` expressions allowed).
+[]
+"#;
+pub const PROFILE_PNPM_WORKSPACE: &str = r#"packages:
+  - .
+
+nodeLinker: hoisted
+autoInstallPeers: false
+"#;
 
 pub const MAX_CHECKPOINT_ID_LEN: usize = 64;
 
@@ -3186,6 +3268,37 @@ mod tests {
         assert!(!root.join(".dsh").exists());
 
         let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn profile_store_creates_profile_with_template_files() {
+        let root = unique_test_root("profiles-create");
+        let paths = NexusPaths::from_root(root.clone());
+        let dsh_home = root.join("dsh-home");
+        fs::create_dir_all(&dsh_home).unwrap();
+        let store = ProfileStore::new(paths.clone());
+
+        let catalog = store.create("team-x", &dsh_home).expect("profile created");
+        assert!(catalog.profiles.iter().any(|item| item == "team-x"));
+
+        let dir = dsh_home.join("profiles").join("team-x");
+        assert!(dir.join("package.json").exists());
+        assert!(dir.join("cordis.patch.yml").exists());
+        assert!(dir.join("pnpm-workspace.yaml").exists());
+        let manifest: serde_json::Value = serde_json::from_str(
+            &fs::read_to_string(dir.join("package.json")).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(
+            manifest["dsh"]["profile"]["bundles"][0],
+            "@deepseek-ai/dsh-base"
+        );
+        assert_eq!(manifest["name"], "dsh-profile-team-x");
+
+        let duplicate = store
+            .create("team-x", &dsh_home)
+            .expect_err("duplicate must fail");
+        assert_eq!(duplicate.kind(), std::io::ErrorKind::AlreadyExists);
     }
 
     #[test]

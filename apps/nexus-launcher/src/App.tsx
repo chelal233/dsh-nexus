@@ -1359,6 +1359,7 @@ export function ProfilesView(props: ViewProps) {
   const { snapshot, busyAction, runAction } = props;
   const active = stringValue(snapshot.profiles, "active_profile");
   const [expandedProfiles, setExpandedProfiles] = useState<string[]>([]);
+  const [newProfileName, setNewProfileName] = useState("");
   const toggleProfile = (name: string) => setExpandedProfiles((current) => current.includes(name) ? current.filter((item) => item !== name) : [...current, name]);
   const manifests = arrayValue(snapshot.profiles, "manifests");
   const recovery = asObject(snapshot.recovery);
@@ -1366,7 +1367,7 @@ export function ProfilesView(props: ViewProps) {
   const gate = recoveryMutationGate(booleanValue(recovery, "harness_stop_required"), harness.state, busyAction !== null);
   return <><PageIntro kicker={t("Control / Profiles")} title={t("Profiles")} detail={t("Profiles own checkpoints and the plugin inventory: select a profile, manage its checkpoints, then adjust its plugins. Profile creation and deletion are unavailable in this release.")} /><Panel title={t("Profile catalog")} icon={<SlidersHorizontal size={18} />}>
     {gate.reason === "stop_required" || gate.reason === "not_stopped" ? <p className="form-error"><WarningCircle size={15} />{t("Stop Harness before switching profiles or removing plugins.")}</p> : null}
-    <div className="button-row">{[
+    <div className="button-row"><input className="form-input" value={newProfileName} placeholder={t("New profile name")} disabled={busyAction !== null} onChange={(event) => setNewProfileName(event.target.value)} /><ActionButton tone="primary" disabled={busyAction !== null || !newProfileName.trim()} onClick={() => void runAction(t("Create profile"), "/v1/profiles", { action: "create", profile: newProfileName.trim() }).then(() => setNewProfileName(""))}>{t("Create profile")}</ActionButton>{[
       ["settings", t("Open settings.yaml")],
       ["profile_patch", t("Edit profile patch")],
       ["plugin_manifest", t("Edit plugin manifest")],

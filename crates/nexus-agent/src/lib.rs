@@ -1298,6 +1298,35 @@ async fn profile_control(
         }
         ProfileAction::PluginRemove => profile_plugin_remove(state, command).await,
         ProfileAction::OpenPath => profile_open_path(state, command).await,
+        ProfileAction::Create => profile_create(state, command).await,
+    }
+}
+
+/// Create a new profile from the shipped `web` template. Metadata only:
+/// the new profile is never selected and Harness is never restarted.
+async fn profile_create(state: AppState, command: ProfileCommand) -> axum::response::Response {
+    let Some(name) = command.profile.as_deref() else {
+        return data_error_response(
+            io::Error::new(io::ErrorKind::InvalidInput, "profile name is required"),
+            "profile_name_required",
+        );
+    };
+    let dsh_home = match state.snapshots.configured_dsh_home() {
+        Ok(home) => home.clone(),
+        Err(error) => return data_error_response(error, "dsh_home_unavailable"),
+    };
+    match state.profiles.create(name, &dsh_home) {
+        Ok(catalog) => {
+            let response = ProfileListResponse::new(
+                catalog.active_profile.clone(),
+                catalog.profiles.clone(),
+            );
+            (StatusCode::CREATED, Json(response)).into_response()
+        }
+        Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {
+            data_error_response(error, "profile_already_exists")
+        }
+        Err(error) => data_error_response(error, "profile_create_failed"),
     }
 }
 

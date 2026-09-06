@@ -328,6 +328,7 @@ pub enum ProfileAction {
     Select,
     PluginInventory,
     PluginRemove,
+    Create,
     /// Open a profile-related file or directory with the system handler.
     /// Bounded targets only: `settings` (home settings.yaml), `profile_dir`,
     /// `profile_patch` (the profile's cordis.patch.yml), and
