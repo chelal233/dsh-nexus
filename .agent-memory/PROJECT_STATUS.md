@@ -63,6 +63,10 @@ ActionButton 全局补 `type="button"`：此前所有 ActionButton 在 `<form>` 
 
 - **桌面通知完成**（feat: desktop notifications for harness failures with settings toggle）：插件权限（capabilities notification:default）、src/notifications.ts（权限申请+偏好 localStorage+best-effort 发送）、Harness 崩溃 transition 通知（per-run 去重）、设置页启用开关（默认开）。设置页静态"Available through Tauri"行替换为真实开关
 
+## P1 进展（2026-09-06，自动化第十八轮）
+
+- **Profile 新建完成**（feat: create profiles from the shipped web template）：ProfileAction::Create + ProfileStore::create（core）——校验名称 → staging 目录写三件套（package.json 模板 dsh-profile-<name>/base+web-app bundles/live patch、cordis.patch.yml、pnpm-workspace.yaml）→ 原子 rename 发布 → catalog 登记；已存在目录/名称 fail closed。Agent `profile_create` 端点（dsh home 不可用时明确报错）。UI 配置档页「新建 Profile」名称输入+按钮。core 回归测试（模板文件断言+重复失败）。nexusctl 字段/分支补齐
+
 ## P1 进展（2026-09-06，自动化第十七轮）
 
 - 崩溃自动留证的测试干扰已修（4cd0249）：cfg(not(test)) 跳过自动捕获；清理 unused 警告。130 测试全绿。工作协议补充：新增 AppState 字段必须同步全部测试构造器（本次 5 处）；带副作用的异步行为（诊断/快照写盘）在测试构建统一关闭
