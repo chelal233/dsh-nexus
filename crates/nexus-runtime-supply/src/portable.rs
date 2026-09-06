@@ -1037,7 +1037,7 @@ fn pnpm_cache_root(cache_root: &Path, version: &str) -> PathBuf {
     cache_root.join("pnpm").join(version)
 }
 
-fn owned_cache_matches(
+pub(crate) fn owned_cache_matches(
     root: &Path,
     tool: &str,
     version: &str,
@@ -1063,7 +1063,7 @@ fn owned_cache_matches(
     }
     let entry = safe_relative(&manifest.entry)?;
     let entry_path = root.join(entry);
-    Ok(hash_regular_bounded(&entry_path, MAX_RUNTIME_ENTRY_BYTES)
+    Ok(hash_regular_bounded(&entry_path, runtime_entry_limit(tool)?)
         .is_ok_and(|digest| digest == manifest.entry_sha256))
 }
 
@@ -1103,7 +1103,7 @@ pub(crate) fn write_cache_manifest(
         tool: tool.to_owned(),
         version: version.to_owned(),
         entry: entry.to_owned(),
-        entry_sha256: hash_regular_bounded(&entry_path, MAX_RUNTIME_ENTRY_BYTES)?,
+        entry_sha256: hash_regular_bounded(&entry_path, runtime_entry_limit(tool)?)?,
         artifacts: artifacts.to_vec(),
     };
     let bytes = serde_json::to_vec_pretty(&manifest)
@@ -1268,14 +1268,29 @@ fn read_regular_bounded(path: &Path, maximum: u64) -> Result<Vec<u8>> {
     Ok(bytes)
 }
 
+fn runtime_entry_limit(tool: &str) -> Result<u64> {
+    match tool {
+        "node" => Ok(ArchiveLimits::default().max_entry_bytes),
+        "pnpm" => Ok(MAX_RUNTIME_ENTRY_BYTES),
+        _ => Err(SupplyError::InvalidPlan(format!("unknown runtime cache tool: {tool}"))),
+    }
+}
+
 fn hash_regular_bounded(path: &Path, maximum: u64) -> Result<String> {
     reject_reparse(path)?;
     let mut file = File::open(path)?;
     let metadata = file.metadata()?;
-    if !metadata.is_file() || metadata.len() > maximum {
-        return Err(SupplyError::Integrity(
-            "runtime entry is not a bounded regular file".to_owned(),
-        ));
+    if !metadata.is_file() {
+        return Err(SupplyError::Integrity(format!(
+            "runtime entry is not a regular file: {} (size={}, limit={maximum})",
+            path.display(), metadata.len(),
+        )));
+    }
+    if metadata.len() > maximum {
+        return Err(SupplyError::Integrity(format!(
+            "runtime entry exceeds its size limit: {} (size={}, limit={maximum})",
+            path.display(), metadata.len(),
+        )));
     }
     let mut digest = Sha256::new();
     let mut buffer = [0_u8; 64 * 1024];
@@ -1287,9 +1302,10 @@ fn hash_regular_bounded(path: &Path, maximum: u64) -> Result<String> {
         }
         total += count as u64;
         if total > maximum {
-            return Err(SupplyError::Integrity(
-                "runtime entry exceeds its size limit".to_owned(),
-            ));
+            return Err(SupplyError::Integrity(format!(
+                "runtime entry exceeds its size limit: {} (size={total}, limit={maximum})",
+                path.display(),
+            )));
         }
         digest.update(&buffer[..count]);
     }

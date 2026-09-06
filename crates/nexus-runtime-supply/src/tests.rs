@@ -20,7 +20,7 @@ use zip::{write::SimpleFileOptions, ZipWriter};
 use crate::{
     archive::ArchiveLimits,
     extract_node_zip, extract_pnpm_tarball,
-    portable::{create_staging, publish_directory, write_cache_manifest},
+    portable::{create_staging, owned_cache_matches, publish_directory, write_cache_manifest},
     source::{fetch_bytes, sha256_hex, verify_pnpm_metadata, DownloadKind, DownloadReceipt},
     system::{classify_system_install, ProcessOutcome, SystemInstallResult},
     ArtifactIdentity, ArtifactKind, CancellationToken, DownloadClient, HostArch, HostOs,
@@ -682,6 +682,35 @@ async fn stale_marker_from_a_crashed_supplier_does_not_block_windows_lock_recove
         .await
         .unwrap();
     assert!(!cache.join(".runtime-supply.lock").exists());
+}
+
+#[test]
+fn runtime_cache_entry_limits_follow_tool_and_revalidate_large_node() {
+    let temp = TempDir::new().unwrap();
+    let node = temp.path().join("node.exe");
+    let entry = fs::File::create(&node).unwrap();
+    let pnpm_limit = 64 * 1024 * 1024;
+    // Extending the file avoids allocating a large fixture buffer and allows
+    // sparse allocation on filesystems that support it.
+    entry.set_len(pnpm_limit + 1).unwrap();
+    write_cache_manifest(temp.path(), "node", "24.0.0", "node.exe", &[]).unwrap();
+    assert!(owned_cache_matches(temp.path(), "node", "24.0.0", &[]).unwrap());
+
+    let pnpm_error = write_cache_manifest(temp.path(), "pnpm", "11.0.0", "node.exe", &[])
+        .unwrap_err().to_string();
+    assert!(pnpm_error.contains("exceeds its size limit"));
+    assert!(pnpm_error.contains("size=67108865, limit=67108864"));
+    assert!(pnpm_error.contains("node.exe"));
+
+    let node_limit = ArchiveLimits::default().max_entry_bytes;
+    assert_eq!(node_limit, 512 * 1024 * 1024);
+    entry.set_len(node_limit + 1).unwrap();
+    assert!(!owned_cache_matches(temp.path(), "node", "24.0.0", &[]).unwrap());
+    let node_error = write_cache_manifest(temp.path(), "node", "24.0.0", "node.exe", &[])
+        .unwrap_err().to_string();
+    assert!(node_error.contains("exceeds its size limit"));
+    assert!(node_error.contains("size=536870913, limit=536870912"));
+    entry.set_len(0).unwrap();
 }
 
 #[cfg(windows)]
