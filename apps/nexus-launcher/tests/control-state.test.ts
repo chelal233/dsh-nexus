@@ -2,6 +2,8 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import {
+  createFailureNoticeTracker,
+  actionNoticeKey,
   needsHarnessInstall,
   isMissingHarnessError,
   pluginMoveTarget,
@@ -144,4 +146,28 @@ test("dragging chooses insertion before or after rows without moving fixed roots
   assert.equal(pluginMoveTarget(order, "third", fixed), null);
  }
  assert.equal(order[2], "first");
+});
+
+
+test("compatibility failures notify once, excluding historical and successful refreshes", () => {
+  const tracker = createFailureNoticeTracker();
+  assert.equal(tracker.observe(["old-check", "old-bootstrap"]), false);
+  assert.equal(tracker.observe([]), false);
+  assert.equal(tracker.observe(["old-check"]), false);
+  assert.equal(tracker.observe(["old-bootstrap", "new-check"]), true);
+  assert.equal(tracker.observe(["new-check"]), false);
+  assert.equal(tracker.observe([]), false);
+  assert.equal(tracker.observe(["new-check"]), false);
+  assert.equal(tracker.observe(["new-startup"]), true);
+  assert.equal(tracker.observe(["new-startup"]), false);
+});
+
+
+test("asynchronous install acceptance never announces completion", () => {
+  for (const action of ["switch", "confirm"]) {
+    assert.match(actionNoticeKey("/v1/updates", action), /request accepted/);
+    assert.notEqual(actionNoticeKey("/v1/updates", action), "complete");
+  }
+  assert.match(actionNoticeKey("/v1/updates", "cancel"), /Waiting for cleanup/);
+  assert.equal(actionNoticeKey("/v1/profiles", "select"), "complete");
 });

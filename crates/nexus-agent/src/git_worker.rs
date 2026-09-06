@@ -93,6 +93,11 @@ fn read_bounded(path: &Path, limit: u64) -> io::Result<Vec<u8>> {
     Ok(bytes)
 }
 fn git_error(error: git2::Error) -> io::Error { io::Error::other(format!("embedded Git: {}", error.message())) }
+fn automatic_proxy() -> git2::ProxyOptions<'static> {
+    let mut proxy = git2::ProxyOptions::new();
+    proxy.auto();
+    proxy
+}
 fn validate_source(source: &str) -> io::Result<()> {
     validate_update_source(source)?;
     if !source.starts_with("https://") { return Err(io::Error::other("Embedded Git requires an HTTPS upstream")); }
@@ -119,8 +124,8 @@ fn tags(source: &str, directory: &Path) -> io::Result<Vec<String>> {
     let directory = repository.path().to_owned();
     let result = (|| {
         let mut remote = repository.remote_anonymous(source).map_err(git_error)?;
-        remote.connect(Direction::Fetch).map_err(git_error)?;
-        let mut tags: Vec<String> = remote.list().map_err(git_error)?.iter()
+        let connection = remote.connect_auth(Direction::Fetch, None, Some(automatic_proxy())).map_err(git_error)?;
+        let mut tags: Vec<String> = connection.list().map_err(git_error)?.iter()
             .filter_map(|head| head.name().strip_prefix("refs/tags/"))
             .filter(|tag| !tag.ends_with("^{}") && validate_update_ref(tag).is_ok())
             .map(str::to_owned).collect();
@@ -138,18 +143,19 @@ fn clone_ref(source: &str, reference: &str, candidate: &Path) -> io::Result<Stri
     let repository = Repository::init(candidate).map_err(git_error)?;
     repository.config().map_err(git_error)?.set_bool("core.longpaths", true).map_err(git_error)?;
     let mut remote = repository.remote("origin", source).map_err(git_error)?;
-    remote.connect(Direction::Fetch).map_err(git_error)?;
+    let connection = remote.connect_auth(Direction::Fetch, None, Some(automatic_proxy())).map_err(git_error)?;
     let tag = format!("refs/tags/{reference}");
     let branch = format!("refs/heads/{reference}");
-    let selected = if remote.list().map_err(git_error)?.iter().any(|head| head.name() == tag) { tag }
-        else if remote.list().map_err(git_error)?.iter().any(|head| head.name() == branch) { branch }
+    let selected = if connection.list().map_err(git_error)?.iter().any(|head| head.name() == tag) { tag }
+        else if connection.list().map_err(git_error)?.iter().any(|head| head.name() == branch) { branch }
         else { return Err(io::Error::new(io::ErrorKind::NotFound, "Requested Git ref is not advertised")); };
-    remote.disconnect().map_err(git_error)?;
+    drop(connection);
     let mut fetch = FetchOptions::new();
     // Production workers accept HTTPS only; local fixture transport does not
     // implement shallow fetch in libgit2.
     if source.starts_with("https://") { fetch.depth(1); }
     fetch.download_tags(AutotagOption::None);
+    fetch.proxy_options(automatic_proxy());
     remote.fetch(&[format!("+{selected}:{selected}")], Some(&mut fetch), None).map_err(git_error)?;
     let commit = repository.find_reference(&selected).map_err(git_error)?.peel_to_commit().map_err(git_error)?;
     repository.set_head_detached(commit.id()).map_err(git_error)?;
@@ -231,6 +237,43 @@ mod tests {
     fn root(label: &str) -> PathBuf {
         let root = std::env::temp_dir().join(format!("nexus-git-{label}-{}", nexus_core::unix_time_nanos_for_update()));
         fs::create_dir_all(&root).unwrap(); root
+    }
+    #[test]
+    fn automatic_proxy_uses_repository_proxy_without_external_git() {
+        use std::io::{Read, Write};
+        let root = root("proxy");
+        let repository = Repository::init_bare(root.join("repo")).unwrap();
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        listener.set_nonblocking(true).unwrap();
+        let address = listener.local_addr().unwrap();
+        repository.config().unwrap().set_str("http.proxy", &format!("http://{address}")).unwrap();
+        let server = std::thread::spawn(move || {
+            let deadline = Instant::now() + Duration::from_secs(3);
+            loop {
+                match listener.accept() {
+                    Ok((mut stream, _)) => {
+                        stream.set_read_timeout(Some(Duration::from_secs(2))).unwrap();
+                        let mut bytes = [0; 1024];
+                        let length = stream.read(&mut bytes).unwrap();
+                        let _ = stream.write_all(b"HTTP/1.1 502 Bad Gateway\r\nContent-Length: 0\r\nConnection: close\r\n\r\n");
+                        return String::from_utf8_lossy(&bytes[..length]).into_owned();
+                    }
+                    Err(error) if error.kind() == io::ErrorKind::WouldBlock && Instant::now() < deadline =>
+                        std::thread::sleep(Duration::from_millis(10)),
+                    Err(error) => panic!("proxy did not receive the request: {error}"),
+                }
+            }
+        });
+        // WinHTTP implicitly bypasses proxies for loopback destination hosts.
+        // The reserved invalid host is resolved by the local rejecting proxy.
+        let mut remote = repository.remote_anonymous("https://nexus-proxy-fixture.invalid/repository").unwrap();
+        let error = match remote.connect_auth(Direction::Fetch, None, Some(automatic_proxy())) {
+            Ok(_) => panic!("proxy must reject connection"),
+            Err(error) => error,
+        };
+        assert!(server.join().expect(&format!("transport error: {error}")).starts_with("CONNECT nexus-proxy-fixture.invalid:443 "));
+        drop(remote); drop(repository);
+        fs::remove_dir_all(root).unwrap();
     }
     #[test]
     fn embedded_lists_refs_and_checks_out_requested_tag_and_head() {

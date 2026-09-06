@@ -24,7 +24,7 @@ const props = {
 async function loadViews() {
   const vite = await createServer({ root: process.cwd(), appType: "custom", logLevel: "silent", server: { middlewareMode: true } });
   const app = await vite.ssrLoadModule("/src/App.tsx");
-  return { vite, CompatibilitySummary: app.CompatibilitySummary, CompatibilityDialog: app.CompatibilityDialog, ProfilesView: app.ProfilesView, ProfilePlugins: app.ProfilePlugins, UpdatesView: app.UpdatesView, CheckpointsView: app.CheckpointsView };
+  return { vite, WorkbenchView: app.WorkbenchView, CompatibilitySummary: app.CompatibilitySummary, CompatibilityDialog: app.CompatibilityDialog, ProfilesView: app.ProfilesView, ProfilePlugins: app.ProfilePlugins, UpdatesView: app.UpdatesView, CheckpointsView: app.CheckpointsView };
 }
 
 test("profile hub collapses children; profile plugins show truthful inventory", async () => {
@@ -241,5 +241,36 @@ test("update progress keeps stage and terminal errors visible without ownership 
     const completed = render({ operation_id: "cold-private-id", phase: "succeeded", progress_percent: 100 });
     assert.match(completed, /Current stage/);
     assert.doesNotMatch(completed, /older failure/);
+  } finally { await vite.close(); }
+});
+
+
+test("workbench joins environment, installation and start without enabling an empty setup", async () => {
+  const { vite, WorkbenchView } = await loadViews();
+  try {
+    const snapshot = { ...baseSnapshot, harnessRuntime: {state: "detached"}, releases: {releases: []} };
+    const markup = renderToStaticMarkup(createElement(WorkbenchView, { ...props, snapshot }));
+    assert.ok(markup.indexOf("Runtime environment") < markup.indexOf("Upstream tags &amp; cold switch"));
+    assert.ok(markup.indexOf("Upstream tags &amp; cold switch") < markup.indexOf("Start and use"));
+    assert.match(markup, /Embedded Git available/);
+    assert.match(markup, /Install a version above before starting Harness/);
+    assert.match(markup, /disabled=""[^>]*>[^]*?Start<\/button>/);
+    assert.doesNotMatch(markup, /role="dialog"/);
+  } finally { await vite.close(); }
+});
+
+test("a stale legacy success does not hide a running or failed cold operation", async () => {
+  const { vite, UpdatesView } = await loadViews();
+  try {
+    const snapshot = { ...baseSnapshot, updates: { update: {state: "succeeded"}, operation: {operation_id: "new", phase: "cloning", tag: "v-next"} } };
+    const active = renderToStaticMarkup(createElement(UpdatesView, {...props, snapshot}));
+    assert.match(active, /Cloning/);
+    assert.doesNotMatch(active, /Current stage: Succeeded/);
+    snapshot.updates.operation = {...snapshot.updates.operation, phase: "failed", error: "download failed"} as any;
+    assert.match(renderToStaticMarkup(createElement(UpdatesView, {...props, snapshot})), /download failed/);
+    snapshot.updates.operation = {...snapshot.updates.operation, phase: "succeeded", release_id: "missing"} as any;
+    const missing = renderToStaticMarkup(createElement(UpdatesView, {...props, snapshot}));
+    assert.match(missing, /Verifying installed version/);
+    assert.match(missing, /version slot is unavailable/);
   } finally { await vite.close(); }
 });

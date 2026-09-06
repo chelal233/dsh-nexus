@@ -261,3 +261,13 @@ dd { overflow: hidden; margin: 5px 0 0; color: var(--text); font-size: 12px; fon
 .diagnostic-bundle { padding: 14px 0; border-bottom: 1px solid var(--border); }
 .diagnostic-bundle summary { cursor: pointer; font-weight: 600; overflow-wrap: anywhere; }
 .diagnostic-bundle .field-help { overflow-wrap: anywhere; }
+.setup-journey { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; margin-bottom: 24px; }
+.setup-journey > div { border-left: 3px solid var(--accent, #168478); padding: 8px 16px; }
+.setup-journey span, .setup-journey strong { display: block; }
+.setup-journey span { font-size: 13px; margin-bottom: 6px; }
+.advanced-settings { margin: 16px 0; }
+.setup-sections { margin-bottom: 20px; }
+.setup-sections > .panel + .panel { margin-top: 16px; }
+.page-content > .panel + .panel { margin-top: 16px; }
+details > summary { cursor: pointer; padding: 12px 0; font-weight: 600; }
+@media (max-width: 680px) { .setup-journey { grid-template-columns: 1fr; gap: 8px; } }

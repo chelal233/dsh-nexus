@@ -94,8 +94,30 @@ export function createLatestRequest(): LatestRequest {
   };
 }
 
+/** Seed from history, then notify once per failure even across busy/empty refreshes. */
+export function createFailureNoticeTracker() {
+  let initialized = false;
+  const seen = new Set<string>();
+  return {
+    observe(keys: string[]): boolean {
+      const fresh = initialized && keys.some(key => !seen.has(key));
+      keys.forEach(key => seen.add(key));
+      initialized = true;
+      return fresh;
+    },
+  };
+}
+
 export function coldOperationIsTerminal(phase: unknown): boolean {
   return phase === "succeeded" || phase === "cancelled" || phase === "failed";
+}
+
+export function actionNoticeKey(path: string, action: unknown): string {
+  if (path === "/v1/updates" && (action === "switch" || action === "confirm")) {
+    return "Installation request accepted. Follow the current stage below to confirm completion.";
+  }
+  if (path === "/v1/updates" && action === "cancel") return "Cancellation requested. Waiting for cleanup to finish.";
+  return "complete";
 }
 
 export function recoveryMutationGate(

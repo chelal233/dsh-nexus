@@ -332,6 +332,17 @@ mod tests {
         .expect("plan reassembles");
 
         assert_eq!(first, second);
+        let empty = assemble_runtime_plan(
+            "first-install".to_owned(), RuntimeSource::Official,
+            RuntimeInstallMode::Portable, first.requirements.clone(),
+            RuntimeListResponse::new(Vec::new()), None,
+        ).expect("an empty machine still produces a runtime supply plan");
+        assert!(empty.tools.iter().all(|tool| tool.state == RuntimePlanToolState::Missing));
+        assert_eq!(empty.suggested_actions.iter().find(|action| action.tool == "git").unwrap().action,
+            RuntimePlanActionKind::UseExisting);
+        assert!(empty.suggested_actions.iter().filter(|action| action.tool != "git")
+            .all(|action| action.action == RuntimePlanActionKind::ProvisionPortable));
+        assert_eq!(empty.requirements, first.requirements);
         assert!(first.plan_id.starts_with("runtime-plan-v1:"));
         assert_eq!(first.tools[0].state, RuntimePlanToolState::Missing);
         assert_eq!(first.tools[1].state, RuntimePlanToolState::Incompatible);
