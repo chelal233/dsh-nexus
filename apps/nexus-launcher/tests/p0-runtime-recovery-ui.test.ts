@@ -224,3 +224,22 @@ test("plugin rows expose movable installed bundles, locked roots and read-only p
   assert.doesNotMatch(running, /draggable="true"/);
  } finally { await vite.close(); }
 });
+
+
+test("update progress keeps stage and terminal errors visible without ownership internals", async () => {
+  const { vite, UpdatesView } = await loadViews();
+  try {
+    const render = (operation: object) => renderToStaticMarkup(createElement(UpdatesView, { ...props, snapshot: { ...baseSnapshot, updates: { update: { state: "idle", error: "older failure" }, operation } } }));
+    const running = render({ operation_id: "cold-private-id", tag: "v1", phase: "cloning", progress_percent: 10, owner_quiescent: false });
+    assert.match(running, /Current stage/);
+    assert.match(running, /v1/);
+    assert.doesNotMatch(running, /Owner quiescent|No update error reported|cold-private-id|older failure/);
+    const failed = render({ operation_id: "cold-private-id", phase: "failed", error: "Clone connection failed", cleanup_pending: true });
+    assert.match(failed, /role="alert"/);
+    assert.match(failed, /Clone connection failed/);
+    assert.match(failed, /Retry cleanup/);
+    const completed = render({ operation_id: "cold-private-id", phase: "succeeded", progress_percent: 100 });
+    assert.match(completed, /Current stage/);
+    assert.doesNotMatch(completed, /older failure/);
+  } finally { await vite.close(); }
+});

@@ -13,6 +13,9 @@ export type TranslationParams = Record<string, string | number>;
 export type Translator = (key: string, params?: TranslationParams) => string;
 
 const english: Record<string, string> = {
+  "Cleanup is incomplete. Retry cleanup before starting another update.": "Cleanup is incomplete. Retry cleanup before starting another update.",
+  "Update progress": "Update progress",
+  "Current stage": "Current stage",
   "Nexus prefers system Git and falls back to embedded Git when unavailable or unsuccessful. Embedded Git does not provide a git command for plugins.": "Nexus prefers system Git and falls back to embedded Git when unavailable or unsuccessful. Embedded Git does not provide a git command for plugins.",
   "No local Harness is installed. Select a version here to install it.": "No local Harness is installed. Select a version here to install it.",
   "Plugin load order": "Plugin load order",
@@ -546,6 +549,9 @@ const english: Record<string, string> = {
 };
 
 const chinese: Record<string, string> = {
+  "Cleanup is incomplete. Retry cleanup before starting another update.": "清理尚未完成，请先重试清理，再开始下一次更新。",
+  "Update progress": "更新进度",
+  "Current stage": "当前阶段",
   "Nexus prefers system Git and falls back to embedded Git when unavailable or unsuccessful. Embedded Git does not provide a git command for plugins.": "Nexus 优先使用系统 Git，不可用或执行失败时使用内置 Git。内置实现不向插件提供 git 命令行。",
   "No local Harness is installed. Select a version here to install it.": "尚未安装本地 Harness，请在此选择版本并安装。",
   "Plugin load order": "插件加载顺序",
