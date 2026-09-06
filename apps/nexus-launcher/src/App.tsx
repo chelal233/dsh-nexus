@@ -1169,13 +1169,13 @@ function App() {
     const key = snapshot.startup?.harness_startup_error ? `bootstrap:${snapshot.startup.harness_startup_error}` : currentStartupFailure(snapshot)
       ? `failure:${stringValue(snapshot.harnessRuntime, "log_session_run_id")}:${numberValue(runtime, "updated_at_unix")}`
       : Object.keys(report).length ? `check:${stringValue(report, "source_profile")}:${stringValue(report, "release_id")}:${numberValue(report, "last_used_at_unix") ?? numberValue(report, "checked_at_unix")}` : "";
-    if (snapshot.lifecycleBusy && !wasCheckBusy.current) setCheckOpen(true);
+    if (snapshot.lifecycleBusy && !wasCheckBusy.current && busyAction === null) setCheckOpen(true);
     wasCheckBusy.current = !!snapshot.lifecycleBusy;
     if (key && key !== checkEvent.current && !snapshot.lifecycleBusy) {
       checkEvent.current = key;
       setCheckOpen(true);
     }
-  }, [snapshot.profiles, snapshot.harnessRuntime, snapshot.lifecycleBusy, snapshot.startup]);
+  }, [snapshot.profiles, snapshot.harnessRuntime, snapshot.lifecycleBusy, snapshot.startup, busyAction]);
 
   const launcherStatus = asObject(snapshot.status);
   const isRunning = launcherStatus.running === true;
