@@ -380,6 +380,14 @@ pub struct CompatibilityReport {
     pub release_id: String,
     pub fingerprint: String,
     pub checked_at_unix: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub trigger: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_trigger: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_used_at_unix: Option<u64>,
+    #[serde(default)]
+    pub cache_reused: bool,
     pub disabled: Vec<CompatibilityDisabledPlugin>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,

@@ -2,6 +2,8 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import {
+  isLifecycleBusyError,
+  lifecycleBusySnapshot,
   coldOperationIsTerminal,
   createLatestRequest,
   failClosedSnapshot,
@@ -96,4 +98,21 @@ test("cold terminal phases and recovery stopped gate are fail closed", () => {
   assert.deepEqual(recoveryMutationGate(true, "stopped", false), { disabled: true, reason: "stop_required" });
   assert.deepEqual(recoveryMutationGate(false, "running", false), { disabled: true, reason: "not_stopped" });
   assert.deepEqual(recoveryMutationGate(false, "failed", true), { disabled: true, reason: "busy" });
+});
+
+
+test("busy responses preserve only same-Agent catalogs and clear runtime credentials", () => {
+  assert.equal(isLifecycleBusyError("Agent returned HTTP 409: NEXUS_LIFECYCLE_BUSY: switching"), true);
+  assert.equal(isLifecycleBusyError("Agent returned HTTP 409: conflict"), false);
+  assert.equal(isLifecycleBusyError("error sending request"), false);
+  const previous = { profiles: { name: "desktop" }, releases: { id: "rc1" }, state: {}, harnessRuntime: {}, harnessUi: { url: "old-token" }, recovery: {}, updates: {} };
+  const next = { ...previous, profiles: null, releases: null, updates: { progress: 50 } };
+  const result = lifecycleBusySnapshot(next, previous, true);
+  assert.equal(result.profiles, previous.profiles);
+  assert.equal(result.releases, previous.releases);
+  assert.equal(result.updates, next.updates);
+  for (const key of ["state", "harnessRuntime", "harnessUi", "recovery"] as const) assert.equal(result[key], null);
+  assert.equal(lifecycleBusySnapshot(next, previous, false).profiles, null);
+  assert.equal(lifecycleBusySnapshot(next, previous, false).releases, null);
+  for (const [path, action] of [["/v1/releases", "promote"], ["/v1/releases", "rollback"], ["/v1/updates", "switch"], ["/v1/updates", "confirm"]]) assert.equal(invalidatesHarnessCredentials(path, action), true);
 });

@@ -61,13 +61,48 @@ test('isolates in a copy, reuses checked cache, and restores plugins on another 
   } finally { f.close(); }
 });
 
+test('cache reports preserve actual check provenance without rewriting its marker',async()=>{
+  const f=fixture();
+  try {
+    f.write(['good']);
+    const checked=await check({...f.options,force:true,trigger:'version_switch'});
+    assert.equal(checked.trigger,'version_switch');
+    assert.equal(checked.cache_reused,false);
+    const marker=path.join(f.home,'profiles',checked.effective_profile,'.nexus-compatibility.json');
+    const markerBefore=fs.readFileSync(marker,'utf8');
+    const reused=await check({...f.options,trigger:'startup'});
+    assert.equal(reused.cache_reused,true);
+    assert.equal(reused.checked_at_unix,checked.checked_at_unix);
+    assert.equal(reused.trigger,'version_switch');
+    assert.equal(reused.last_trigger,'startup');
+    assert.ok(reused.last_used_at_unix>=checked.checked_at_unix);
+    assert.equal(fs.readFileSync(marker,'utf8'),markerBefore);
+    const legacy=JSON.parse(markerBefore);
+    delete legacy.trigger;
+    delete legacy.last_trigger;
+    delete legacy.last_used_at_unix;
+    delete legacy.cache_reused;
+    fs.writeFileSync(marker,JSON.stringify(legacy));
+    const legacyBefore=fs.readFileSync(marker,'utf8');
+    const unknown=await check({...f.options,trigger:'startup'});
+    assert.equal(unknown.trigger,null);
+    assert.equal(unknown.last_trigger,'startup');
+    assert.equal(unknown.cache_reused,true);
+    assert.equal(unknown.checked_at_unix,checked.checked_at_unix);
+    assert.equal(fs.readFileSync(marker,'utf8'),legacyBefore);
+  } finally { f.close(); }
+});
+
 test('unknown errors fail closed without publishing a profile',async()=>{
   const f=fixture();
   try {
     f.write(['unknown']);
-    await assert.rejects(check(f.options),/user decision/);
+    await assert.rejects(check({...f.options,trigger:'version_switch'}),/user decision/);
     const report=JSON.parse(fs.readFileSync(f.options.output));
     assert.equal(report.status,'needs_choice');
+    assert.equal(report.trigger,'version_switch');
+    assert.equal(report.last_trigger,'version_switch');
+    assert.equal(report.cache_reused,false);
     assert.deepEqual(report.candidates.map(x=>x.package),['unknown']);
     assert.deepEqual(fs.readdirSync(f.home+'/profiles').filter(x=>x.startsWith('nexus-')),[]);
     assert.deepEqual(fs.readdirSync(f.options.work),[]);

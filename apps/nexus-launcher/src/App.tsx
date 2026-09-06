@@ -34,6 +34,8 @@ import {
   invalidatesHarnessCredentials,
   launcherContentMode,
   recoveryMutationGate,
+  isLifecycleBusyError,
+  lifecycleBusySnapshot,
   runtimeSettingsGate,
 } from "./control-state";
 import { useI18n, type Locale, type Translator } from "./i18n";
@@ -57,6 +59,7 @@ type StartupStatus = {
 type Snapshot = {
   startup: StartupStatus | null;
   endpointErrors: Record<string, string>;
+  lifecycleBusy?: boolean;
   status: JsonObject | null;
   health: JsonObject | null;
   state: JsonObject | null;
@@ -112,7 +115,7 @@ const emptySnapshot: Snapshot = {
   config: null,
 };
 
-type SnapshotEndpoint = Exclude<keyof Snapshot, "startup" | "status" | "endpointErrors">;
+type SnapshotEndpoint = Exclude<keyof Snapshot, "startup" | "status" | "endpointErrors" | "lifecycleBusy">;
 
 const endpointMap: Record<SnapshotEndpoint, string> = {
   health: "/v1/health",
@@ -997,21 +1000,40 @@ function App() {
             setBridgeError(null);
             setAgentUnavailable(null);
             const endpointErrors: Record<string, string> = {};
-            const entries = await Promise.all(Object.entries(endpointMap).map(async ([key, path]) => {
+            let lifecycleBusy = false;
+            // These reads share the Agent lifecycle gate. Serialize them within a
+            // refresh so our own reads do not look like an active mutation.
+            const lifecycleReads = new Set(["state", "harnessRuntime", "harnessUi", "profiles", "releases", "recovery"]);
+            let readQueue: Promise<unknown> = Promise.resolve();
+            const entries = await Promise.all(Object.entries(endpointMap).map(([key, path]) => {
+              const read = async () => {
               try {
                 const value = await proxyRequest<JsonObject>(path);
                 return [key as SnapshotEndpoint, value] as const;
               } catch (cause) {
-                endpointErrors[path] = errorMessage(cause);
+                const message = errorMessage(cause);
+                if (isLifecycleBusyError(message)) lifecycleBusy = true;
+                else endpointErrors[path] = message;
                 return [key as SnapshotEndpoint, null] as const;
               }
+              };
+              if (!lifecycleReads.has(key)) return read();
+              const pending = readQueue.then(read);
+              readQueue = pending;
+              return pending;
             }));
             for (const [key, value] of entries) next[key] = value;
             next.endpointErrors = endpointErrors;
-            harnessPollState.current = stringValue(harnessRuntimeValue(next.harnessRuntime), "state");
-            setSnapshot(next);
+            harnessPollState.current = lifecycleBusy ? "busy" : stringValue(harnessRuntimeValue(next.harnessRuntime), "state");
+            setSnapshot(previous => {
+              if (!lifecycleBusy) return next;
+              const instance = stringValue(next.health, "instance_id");
+              const root = stringValue(next.health, "data_root_id");
+              const sameOwner = !!instance && !!root && instance === stringValue(previous.health, "instance_id") && root === stringValue(previous.health, "data_root_id");
+              return lifecycleBusySnapshot(next, previous, sameOwner);
+            });
             if (
-              credentialInvalidation.current !== null &&
+              !lifecycleBusy && credentialInvalidation.current !== null &&
               credentialInvalidationCanSettle(
                 next,
                 credentialInvalidation.current.previousSessionKey,
@@ -1049,7 +1071,7 @@ function App() {
     const poll = async () => {
       await refresh();
       if (cancelled) return;
-      const interval = (harnessPollState.current === "starting" || harnessPollState.current === "failed") ? 400 : 8000;
+      const interval = harnessPollState.current === "busy" ? 1000 : (harnessPollState.current === "starting" || harnessPollState.current === "failed") ? 400 : 8000;
       timer = window.setTimeout(() => void poll(), interval);
     };
     void poll();
@@ -1069,6 +1091,10 @@ function App() {
   }, [refresh]);
 
   const runAction = useCallback(async (label: string, path: string, body: JsonObject): Promise<boolean> => {
+    if (snapshot.lifecycleBusy && !(path === "/v1/updates" && body.action === "cancel")) {
+      setNotice(t("Version or startup operation in progress. Please wait; update progress remains available."));
+      return false;
+    }
     const isNativeAgentLifecycle = path === "/v1/agent";
     if (snapshot.startup === null || (snapshot.startup.available !== true && !isNativeAgentLifecycle)) {
       setError(t("Launcher controls are disabled until the Agent identity is verified."));
@@ -1154,7 +1180,7 @@ function App() {
   }, [snapshot.harnessRuntime, t]);
 
   const content = useMemo(() => {
-    const common = { snapshot, busyAction, credentialInvalidationPending, runAction, refresh, themeMode, setThemeMode, openSettings: () => setActiveModule("settings") };
+    const common = { snapshot, busyAction: busyAction ?? (snapshot.lifecycleBusy ? t("Operation in progress") : null), credentialInvalidationPending, runAction, refresh, themeMode, setThemeMode, openSettings: () => setActiveModule("settings") };
     switch (activeModule) {
       case "profiles": return <ProfilesView {...common} />;
       case "updates": return <UpdatesView {...common} />;
@@ -1200,6 +1226,7 @@ function App() {
         {notice && <div className="notice" role="status"><CheckCircle size={17} />{notice}<button onClick={() => setNotice(null)} aria-label={t("Dismiss notice")}><X size={15} /></button></div>}
         {error && contentMode !== "error" && <div className="notice action-error" role="alert"><WarningCircle size={17} /><span>{error}</span><button onClick={() => setError(null)} aria-label={t("Dismiss error")}><X size={15} /></button></div>}
         {agentUnavailable && contentMode !== "error" && <AgentUnavailableNotice message={agentUnavailable} onRetry={() => void retryStartup()} />}
+        {snapshot.lifecycleBusy && <div className="notice" role="status"><ArrowsClockwise size={17}/><span>{t("Version or startup operation in progress. Showing the last confirmed catalogs; Harness access is temporarily unavailable. Update progress continues to refresh.")}</span></div>}
         {!error && Object.keys(snapshot.endpointErrors).length > 0 && <DegradedNotice errors={snapshot.endpointErrors} />}
         {contentMode === "error"
           ? <ErrorState message={bridgeError ?? t("The native bridge is unavailable.")} onRetry={() => void retryStartup()} />
@@ -1355,7 +1382,7 @@ export function HarnessWebPanel({ snapshot, credentialInvalidationPending, busyA
 }
 
 function CompatibilitySummary({ snapshot, busyAction, runAction }: Pick<ViewProps, "snapshot" | "busyAction" | "runAction">) {
-  const { t } = useI18n();
+  const { locale, t } = useI18n();
   const report = asObject(asObject(snapshot.profiles).compatibility);
   const policy = arrayValue(snapshot.profiles, "disabled_plugins").map(String);
   const [selected, setSelected] = useState<string[]>([]);
@@ -1364,6 +1391,7 @@ function CompatibilitySummary({ snapshot, busyAction, runAction }: Pick<ViewProp
   useEffect(() => setSelected([]), [reportKey]);
   const hasReport = Object.keys(report).length > 0;
   if (!hasReport && !policy.length) return null;
+  const triggerLabel = (value: string | undefined) => value === "version_switch" ? t("During version switch") : value === "startup" ? t("Before startup or restart") : t("Legacy record: trigger not recorded");
   const disabled = arrayValue(report, "disabled");
   const needsChoice = stringValue(report, "status") === "needs_choice";
   const candidates = arrayValue(report, "candidates");
@@ -1390,6 +1418,11 @@ function CompatibilitySummary({ snapshot, busyAction, runAction }: Pick<ViewProp
   return <Panel title={t("Startup compatibility check")} icon={<SlidersHorizontal size={18} />}>
     <p>{t("Source profile")}: {source}{hasReport && <> · {t("Release")}: {target}</>}</p>
     {hasReport && !needsChoice && <p>{t("Effective isolated profile")}: {stringValue(report, "effective_profile")}</p>}
+    {hasReport && <div className="status-block">
+      <span>{t("Checked at")}: {formatTimestamp(numberValue(report, "checked_at_unix"), t("Not available"), locale)} · {triggerLabel(stringValue(report, "trigger"))}</span>
+      <span>{booleanValue(report, "cache_reused") ? t("Reused previous check result") : stringValue(report, "trigger") ? t("New check result") : t("Legacy record: trigger not recorded")}{numberValue(report, "last_used_at_unix") ? ` · ${t("Last used")}: ${formatTimestamp(numberValue(report, "last_used_at_unix"), t("Not available"), locale)} · ${triggerLabel(stringValue(report, "last_trigger"))}` : ""}</span>
+      <span>{t("Plugin errors below were recorded during this check; they are not new errors from viewing this page.")}</span>
+    </div>}
     {hasReport && <StatusPill label={needsChoice ? t("Choose how to handle plugin errors") : disabled.length ? t("Started with isolated plugins") : t("Startup check passed")} tone={needsChoice || disabled.length ? "warn" : "good"} />}
     <p>{t("Checks plugin loading and initialization, not every runtime feature. Original profile and data remain unchanged.")}</p>
     {disabled.length > 0 && <ul>{disabled.map((item) => <li key={stringValue(item, "package")}><strong>{stringValue(item, "package")}</strong>: {t(stringValue(item, "reason") || "")}</li>)}</ul>}
@@ -1422,14 +1455,15 @@ export function ProfilesView(props: ViewProps) {
   const harness = asObject(recovery.harness);
   const gate = recoveryMutationGate(booleanValue(recovery, "harness_stop_required"), harness.state, busyAction !== null);
   return <><CompatibilitySummary snapshot={snapshot} busyAction={busyAction} runAction={runAction} /><PageIntro kicker={t("Control / Profiles")} title={t("Profiles")} detail={t("Profiles own checkpoints and the plugin inventory: select a profile, manage its checkpoints, then adjust its plugins. Profile creation and deletion are unavailable in this release.")} /><Panel title={t("Profile catalog")} icon={<SlidersHorizontal size={18} />}>
-    {gate.reason === "stop_required" || gate.reason === "not_stopped" ? <p className="form-error"><WarningCircle size={15} />{t("Stop Harness before switching profiles or removing plugins.")}</p> : null}
-    <div className="button-row"><input className="form-input" value={newProfileName} placeholder={t("New profile name")} disabled={busyAction !== null} onChange={(event) => setNewProfileName(event.target.value)} /><ActionButton tone="primary" disabled={busyAction !== null || !newProfileName.trim()} onClick={() => void runAction(t("Create profile"), "/v1/profiles", { action: "create", profile: newProfileName.trim() }).then(() => setNewProfileName(""))}>{t("Create profile")}</ActionButton>{[
+    <div className="button-row">{[
       ["settings", t("Open settings.yaml")],
       ["profile_patch", t("Edit profile patch")],
       ["plugin_manifest", t("Edit plugin manifest")],
       ["profile_dir", t("Open profile directory")],
     ].map(([target, label]) => <ActionButton key={target} disabled={busyAction !== null} onClick={() => void runAction(label, "/v1/profiles", { action: "open_path", target })}>{label}</ActionButton>)}</div>
+    {gate.reason === "stop_required" || gate.reason === "not_stopped" ? <p className="form-error"><WarningCircle size={15} />{t("Stop Harness before switching profiles or removing plugins.")}</p> : null}
     <DataList items={manifests} emptyTitle={t("No valid native profiles")} emptyDetail={t("Only valid profile manifests are selectable.")} render={(item) => { const name = stringValue(item, "name") || t("Unnamed profile"); const expanded = expandedProfiles.includes(name); return <><div className="profile-row-toggle" onClick={() => toggleProfile(name)}><span className="profile-chevron" aria-hidden="true">{expanded ? "▾" : "▸"}</span><strong>{name}</strong>{name === active && <StatusPill label={t("Active")} tone="good" />}<span>{t("{count} bundles", { count: arrayValue(item, "bundles").length })}</span></div><span className="row-meta">{name !== active && <ActionButton disabled={gate.disabled} onClick={() => void runAction(t("Profile selection"), "/v1/profiles", { action: "select", profile: name })}>{t("Select")}</ActionButton>}</span></>; }} />
+    <div className="button-row"><input className="form-input" value={newProfileName} placeholder={t("New profile name")} disabled={busyAction !== null} onChange={(event) => setNewProfileName(event.target.value)} /><ActionButton tone="primary" disabled={busyAction !== null || !newProfileName.trim()} onClick={() => void runAction(t("Create profile"), "/v1/profiles", { action: "create", profile: newProfileName.trim() }).then(() => setNewProfileName(""))}>{t("Create profile")}</ActionButton></div>
   </Panel>
   {manifests.map(asObject).map((item) => { const name = stringValue(item, "name"); if (!name || !expandedProfiles.includes(name)) return null; return <div key={name} className="profile-children"><div className="profile-children-title">{t("Belongs to profile")}: {name}</div>
   <CheckpointsView {...props} embedded profileFilter={name} />
@@ -1524,8 +1558,8 @@ export function UpdatesView({ snapshot, busyAction, runAction, refresh }: ViewPr
   return <><CompatibilitySummary snapshot={snapshot} busyAction={busyAction} runAction={runAction} /><PageIntro kicker={t("Releases / Updates")} title={t("Updates")} detail={t("Cold switches are asynchronous and never start Harness automatically.")} />
     
     
-    <Panel title={t("Upstream tags & cold switch")} icon={<CloudArrowUp size={18} />}><div className="status-block"><ActionButton disabled={tagsLoading} onClick={() => void loadTags()}>{tagsLoading ? t("Listing tags") : t("List upstream tags")}</ActionButton>{tagsError ? <span>{tagsError} · <button className="button subtle" onClick={() => void loadTags()}>{t("Refresh")}</button></span> : <span>{tagList ? `${t("Source")}: ${stringValue(tagList, "source")}` : t("No tags loaded")}</span>}<div className="kv-row"><input className="form-input" value={sourceDraft} placeholder="https://github.com/deepseek-ai/deepseek-harness" disabled={busyAction !== null} onChange={(event) => setSourceDraft(event.target.value)} /><ActionButton disabled={busyAction !== null || !sourceDraft.trim() || sourceDraft === currentUpdateSource} onClick={() => void runAction(t("Save update source"), "/v1/config", { action: "set_update", update: { source: sourceDraft.trim(), ref_name: stringValue(update, "ref_name") || "main", git_program: stringValue(update, "git_program") || "git", build_program: stringValue(update, "build_program") || null, build_args: arrayValue(update, "build_args").map(String), verify_program: stringValue(update, "verify_program") || null, verify_args: arrayValue(update, "verify_args").map(String), timeout_secs: numberValue(update, "timeout_secs") } })}>{t("Save update source")}</ActionButton></div>{tags.length > 0 && <select value={selectedTag} onChange={(event) => setSelectedTag(event.target.value)} aria-label={t("Upstream tags")}><option value="">{t("Select a tag")}</option>{tags.map((tag) => <option key={tag} value={tag}>{tag}</option>)}</select>}{selectedTag && <ActionButton tone="primary" disabled={busyAction !== null || tagsLoading || (!!operationId && !coldOperationIsTerminal(operationPhase))} onClick={() => void runAction(t("Switch to tag"), "/v1/updates", { action: "switch", tag: selectedTag, source: persistedSource, mode: persistedMode })}>{releases.some((item) => stringValue(item, "version") === selectedTag) ? t("Switch to tag") : t("Fetch this tag")}</ActionButton>}{selectedTag && <span>{`${t("Selected tag")}: ${selectedTag}`}</span>}</div>{pendingConfirmation && <div className="status-block"><strong>{t("Confirm runtime supply plan")}</strong><SupplyPlanDetails operation={operation} supply={supply} /><p className="form-error"><WarningCircle size={15}/>{operationMode === "system" ? t("System mode may show an installer or elevation prompt and can require restart verification.") : t("Portable mode writes only to the Nexus-owned runtime destination.")}</p><div className="button-row"><ActionButton tone="primary" disabled={!operationId || !confirmation || busyAction !== null} onClick={() => void runAction(t("Confirm cold switch"), "/v1/updates", { action: "confirm", operation_id: operationId, confirmation })}>{t("Confirm exact plan")}</ActionButton><ActionButton tone="danger" disabled={!operationId || busyAction !== null} onClick={() => void runAction(t("Cancel cold switch"), "/v1/updates", { action: "cancel", operation_id: operationId })}>{t("Cancel")}</ActionButton></div></div>}
-    {((!!operationId && !coldOperationIsTerminal(operationPhase)) || updateState === "running") && <><hr className="panel-divider" /><div className="status-block"><StatusPill label={localizedRuntimeState(operationPhase || updateState, t)} tone={operationPhase === "failed" || updateState === "failed" ? "bad" : pendingConfirmation ? "warn" : operationPhase === "succeeded" ? "good" : "neutral"}/><strong>{operationId || stringValue(update, "release_id") || t("No active update")}</strong>{operationId && <progress max="100" value={numberValue(operation, "progress_percent") || 0}>{numberValue(operation, "progress_percent") || 0}%</progress>}<span>{stringValue(operation, "error") || stringValue(update, "error") || t("No update error reported")}</span>{stringValue(operation, "cleanup_error") && <p className="form-error" role="alert"><WarningCircle size={15}/>{t("Cleanup error")}: {stringValue(operation, "cleanup_error")}</p>}{operationId && <span>{t("Owner quiescent")}: {booleanValue(operation, "owner_quiescent") ? t("Yes") : t("No")}{cleanupPending ? ` · ${t("Cleanup pending")}` : ""}</span>}<div className="button-row"><ActionButton disabled={busyAction !== null} onClick={() => void refresh()}>{t("Refresh")}</ActionButton>{operationId && (!coldOperationIsTerminal(operationPhase) || cleanupPending) && <ActionButton tone="danger" disabled={busyAction !== null || operationPhase === "cancelling"} onClick={() => void runAction(t("Cancel cold switch"), "/v1/updates", { action: "cancel", operation_id: operationId })}>{cleanupPending ? t("Retry cleanup") : t("Cancel")}</ActionButton>}</div></div></>}</Panel>
+    <Panel title={t("Upstream tags & cold switch")} icon={<CloudArrowUp size={18} />}><div className="status-block"><ActionButton disabled={tagsLoading} onClick={() => void loadTags()}>{tagsLoading ? t("Listing tags") : t("List upstream tags")}</ActionButton>{tagsError ? <span>{tagsError} · <button className="button subtle" onClick={() => void loadTags()}>{t("Refresh")}</button></span> : <span>{tagList ? `${t("Source")}: ${stringValue(tagList, "source")}` : t("No tags loaded")}</span>}<div className="kv-row"><input className="form-input" value={sourceDraft} placeholder="https://github.com/deepseek-ai/deepseek-harness" disabled={busyAction !== null} onChange={(event) => setSourceDraft(event.target.value)} /><ActionButton disabled={busyAction !== null || !sourceDraft.trim() || sourceDraft === currentUpdateSource} onClick={() => void runAction(t("Save update source"), "/v1/config", { action: "set_update", update: { source: sourceDraft.trim(), ref_name: stringValue(update, "ref_name") || "main", git_program: stringValue(update, "git_program") || "git", build_program: stringValue(update, "build_program") || null, build_args: arrayValue(update, "build_args").map(String), verify_program: stringValue(update, "verify_program") || null, verify_args: arrayValue(update, "verify_args").map(String), timeout_secs: numberValue(update, "timeout_secs") } })}>{t("Save update source")}</ActionButton></div>{tags.length > 0 && <select value={selectedTag} onChange={(event) => setSelectedTag(event.target.value)} aria-label={t("Upstream tags")}><option value="">{t("Select a tag")}</option>{tags.map((tag) => <option key={tag} value={tag}>{tag}</option>)}</select>}{selectedTag && <ActionButton tone="primary" disabled={busyAction !== null || tagsLoading || (!!operationId && !coldOperationIsTerminal(operationPhase))} onClick={() => void runAction(t("Switch to tag"), "/v1/updates", { action: "switch", tag: selectedTag, source: persistedSource, mode: persistedMode })}>{releases.some((item) => stringValue(item, "version") === selectedTag) ? t("Switch to tag") : t("Fetch this tag")}</ActionButton>}{selectedTag && <span>{`${t("Selected tag")}: ${selectedTag}`}</span>}</div>{pendingConfirmation && <div className="status-block"><strong>{t("Confirm runtime supply plan")}</strong><SupplyPlanDetails operation={operation} supply={supply} /><p className="form-error"><WarningCircle size={15}/>{operationMode === "system" ? t("System mode may show an installer or elevation prompt and can require restart verification.") : t("Portable mode writes only to the Nexus-owned runtime destination.")}</p><div className="button-row"><ActionButton tone="primary" disabled={!operationId || !confirmation || busyAction !== null} onClick={() => void runAction(t("Confirm cold switch"), "/v1/updates", { action: "confirm", operation_id: operationId, confirmation })}>{t("Confirm exact plan")}</ActionButton><ActionButton tone="danger" disabled={!operationId || (busyAction !== null && !snapshot.lifecycleBusy)} onClick={() => void runAction(t("Cancel cold switch"), "/v1/updates", { action: "cancel", operation_id: operationId })}>{t("Cancel")}</ActionButton></div></div>}
+    {((!!operationId && !coldOperationIsTerminal(operationPhase)) || updateState === "running") && <><hr className="panel-divider" /><div className="status-block"><StatusPill label={localizedRuntimeState(operationPhase || updateState, t)} tone={operationPhase === "failed" || updateState === "failed" ? "bad" : pendingConfirmation ? "warn" : operationPhase === "succeeded" ? "good" : "neutral"}/><strong>{operationId || stringValue(update, "release_id") || t("No active update")}</strong>{operationId && <progress max="100" value={numberValue(operation, "progress_percent") || 0}>{numberValue(operation, "progress_percent") || 0}%</progress>}<span>{stringValue(operation, "error") || stringValue(update, "error") || t("No update error reported")}</span>{stringValue(operation, "cleanup_error") && <p className="form-error" role="alert"><WarningCircle size={15}/>{t("Cleanup error")}: {stringValue(operation, "cleanup_error")}</p>}{operationId && <span>{t("Owner quiescent")}: {booleanValue(operation, "owner_quiescent") ? t("Yes") : t("No")}{cleanupPending ? ` · ${t("Cleanup pending")}` : ""}</span>}<div className="button-row"><ActionButton disabled={busyAction !== null} onClick={() => void refresh()}>{t("Refresh")}</ActionButton>{operationId && (!coldOperationIsTerminal(operationPhase) || cleanupPending) && <ActionButton tone="danger" disabled={(busyAction !== null && !snapshot.lifecycleBusy) || operationPhase === "cancelling"} onClick={() => void runAction(t("Cancel cold switch"), "/v1/updates", { action: "cancel", operation_id: operationId })}>{cleanupPending ? t("Retry cleanup") : t("Cancel")}</ActionButton>}</div></div></>}</Panel>
     <Panel title={t("Release slots")} icon={<Package size={18} />}><DataList items={releases} emptyTitle={t("No release slots")} emptyDetail={t("A successful cold switch registers and promotes its immutable slot without starting Harness.")} render={(item) => { const slotId = stringValue(item, "id") || ""; const current = stringValue(snapshot.releases, "current_release"); const lkg = stringValue(snapshot.releases, "last_known_good"); const protectedSlot = slotId === current || slotId === lkg; return <><div><strong>{slotId || t("Release")}</strong><span>{stringValue(item, "version") || t("Unknown version")}{slotId === current ? ` · ${t("Current")}` : slotId === lkg ? ` · ${t("Last known good")}` : ""}</span></div><span className="row-meta">{slotId !== current && <ActionButton disabled={busyAction !== null} onClick={() => void runAction(t("Switch to this version"), "/v1/releases", { action: "promote", id: slotId })}>{t("Switch to this version")}</ActionButton>}{!protectedSlot && <ActionButton disabled={busyAction !== null} onClick={() => void runAction(t("Release slot"), "/v1/releases", { action: "remove", id: slotId })}>{t("Release slot")}</ActionButton>}</span></>; }} /></Panel>
   </>;
 }

@@ -4,8 +4,27 @@ export type HarnessControlGate = {
 };
 
 export function invalidatesHarnessCredentials(path: string, action: unknown): boolean {
+  if (path === "/v1/releases" && (action === "promote" || action === "rollback")) return true;
+  if (path === "/v1/updates" && (action === "switch" || action === "confirm")) return true;
   if (action !== "start" && action !== "stop" && action !== "restart") return false;
   return path === "/v1/agent" || path === "/v1/harness";
+}
+
+export function isLifecycleBusyError(message: string): boolean {
+  return /(?:^|: )NEXUS_LIFECYCLE_BUSY:/.test(message);
+}
+
+/** Keep only non-credential catalog data from the same verified Agent. */
+export function lifecycleBusySnapshot<T extends {
+  profiles: unknown; releases: unknown; state: unknown;
+  harnessRuntime: unknown; harnessUi: unknown; recovery: unknown;
+}>(next: T, previous: T, sameOwner: boolean): T & { lifecycleBusy: boolean } {
+  return {
+    ...next, lifecycleBusy: true,
+    profiles: sameOwner ? previous.profiles : null,
+    releases: sameOwner ? previous.releases : null,
+    state: null, harnessRuntime: null, harnessUi: null, recovery: null,
+  };
 }
 
 export function harnessControlGate(

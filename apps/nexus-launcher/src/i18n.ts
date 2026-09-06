@@ -13,6 +13,18 @@ export type TranslationParams = Record<string, string | number>;
 export type Translator = (key: string, params?: TranslationParams) => string;
 
 const english: Record<string, string> = {
+  "Operation in progress": "Operation in progress",
+  "Version or startup operation in progress. Please wait; update progress remains available.": "Version or startup operation in progress. Please wait; update progress remains available.",
+  "Version or startup operation in progress. Showing the last confirmed catalogs; Harness access is temporarily unavailable. Update progress continues to refresh.": "Version or startup operation in progress. Showing the last confirmed catalogs; Harness access is temporarily unavailable. Update progress continues to refresh.",
+  "During version switch": "During version switch",
+  "Before startup or restart": "Before startup or restart",
+  "Legacy record: trigger not recorded": "Legacy record: trigger not recorded",
+  "Checked at": "Checked at",
+  "Reused previous check result": "Reused previous check result",
+  "New check result": "New check result",
+  "Last used": "Last used",
+  "Plugin errors below were recorded during this check; they are not new errors from viewing this page.": "Plugin errors below were recorded during this check; they are not new errors from viewing this page.",
+
   "Saved plugin choices; effective on next check": "Saved plugin choices; effective on next check",
   "Choose how to handle plugin errors": "Choose how to handle plugin errors",
   "Disable plugin in isolated profiles": "Disable plugin in isolated profiles",
@@ -508,6 +520,18 @@ const english: Record<string, string> = {
 };
 
 const chinese: Record<string, string> = {
+  "Operation in progress": "操作进行中",
+  "Version or startup operation in progress. Please wait; update progress remains available.": "版本切换或启动操作正在进行，请稍候；仍可查看更新进度。",
+  "Version or startup operation in progress. Showing the last confirmed catalogs; Harness access is temporarily unavailable. Update progress continues to refresh.": "正在切换版本或检查启动兼容性。当前显示最近确认的目录信息，Harness 入口暂不可用；更新进度会继续刷新。",
+  "During version switch": "切换上游版本时",
+  "Before startup or restart": "启动或重启前",
+  "Legacy record: trigger not recorded": "旧记录未记录触发来源",
+  "Checked at": "实际检查时间",
+  "Reused previous check result": "复用此前检查结果",
+  "New check result": "本次执行了检查",
+  "Last used": "最近使用时间",
+  "Plugin errors below were recorded during this check; they are not new errors from viewing this page.": "下列插件错误是上述检查记录的隔离原因，不表示打开此页面时再次报错。",
+
   "Choose how to handle plugin errors": "请选择插件错误的处理方式",
   "Saved plugin choices; effective on next check": "已保存的停用选择；下次检查生效",
   "Disable plugin in isolated profiles": "在隔离配置中停用插件",

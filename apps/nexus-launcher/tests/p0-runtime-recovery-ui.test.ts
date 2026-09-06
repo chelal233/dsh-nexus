@@ -41,6 +41,9 @@ test("profile hub collapses children; profile plugins show truthful inventory", 
     const markup = renderToStaticMarkup(createElement(ProfilesView, { ...props, snapshot }));
     assert.match(markup, /Profile catalog/);
     assert.match(markup, /▸/);
+    assert.ok(markup.indexOf("Open settings.yaml") < markup.indexOf("profile-row-toggle"));
+    assert.ok(markup.indexOf("profile-row-toggle") < markup.indexOf("New profile name"));
+    assert.ok(markup.indexOf("New profile name") < markup.indexOf(">Create profile<"));
     assert.doesNotMatch(markup, /Saved checkpoints/);
     assert.doesNotMatch(markup, /Plugin inventory/);
     const pluginsMarkup = renderToStaticMarkup(createElement(ProfilePlugins, { ...props, snapshot, profile: "web" }));
@@ -148,5 +151,36 @@ test("checkpoint fixtures show legacy truth and pending retry or abort", async (
     assert.match(markup, /Retry/);
     assert.match(markup, /Abort/);
     assert.match(markup, /snapshot store busy/);
+  } finally { await vite.close(); }
+});
+
+
+test("compatibility provenance distinguishes switch checks, startup cache reuse, and old records", async () => {
+  const { vite, UpdatesView } = await loadViews();
+  try {
+    const report = { status: "isolated", source_profile: "desktop", release_id: "rc1", checked_at_unix: 1788670000, trigger: "version_switch", last_trigger: "startup", last_used_at_unix: 1788670200, cache_reused: true, disabled: [] };
+    const render = (compatibility: object) => renderToStaticMarkup(createElement(UpdatesView, { ...props, snapshot: { ...baseSnapshot, profiles: { compatibility } } }));
+    const cached = render(report);
+    assert.match(cached, /During version switch/);
+    assert.match(cached, /Before startup or restart/);
+    assert.match(cached, /Reused previous check result/);
+    assert.match(cached, /Checked at/);
+    assert.match(cached, /Last used/);
+    assert.doesNotMatch(cached, /New check result/);
+    assert.match(render({ ...report, cache_reused: false, last_trigger: "version_switch" }), /New check result/);
+    const legacy = render({ status: "isolated", disabled: [] });
+    assert.match(legacy, /Legacy record: trigger not recorded/);
+    assert.doesNotMatch(legacy, /New check result/);
+  } finally { await vite.close(); }
+});
+
+
+test("busy cold switch keeps cancellation enabled while other mutations are disabled", async () => {
+  const { vite, UpdatesView } = await loadViews();
+  try {
+    const snapshot = { ...baseSnapshot, lifecycleBusy: true, updates: { update: { state: "running" }, operation: { operation_id: "cold-1", phase: "verifying", progress_percent: 80 } } };
+    const markup = renderToStaticMarkup(createElement(UpdatesView, { ...props, busyAction: "Operation in progress", snapshot }));
+    assert.match(markup, /<button(?![^>]*disabled)[^>]*>Cancel<\/button>/);
+    assert.match(markup, /<button[^>]*disabled[^>]*>Save update source<\/button>/);
   } finally { await vite.close(); }
 });

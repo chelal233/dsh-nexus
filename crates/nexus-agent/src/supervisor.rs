@@ -653,6 +653,11 @@ impl HarnessSupervisor {
         self.start_with_profile_locked(profile, &lifecycle).await
     }
 
+    pub(crate) fn try_acquire_lifecycle(&self) -> Option<HarnessLifecycleGuard> {
+        Arc::clone(&self.lifecycle).try_lock_owned().ok()
+            .map(|guard| HarnessLifecycleGuard { _guard: guard })
+    }
+
     pub(crate) async fn acquire_lifecycle(&self) -> HarnessLifecycleGuard {
         let acquire = Arc::clone(&self.lifecycle).lock_owned();
         #[cfg(test)]

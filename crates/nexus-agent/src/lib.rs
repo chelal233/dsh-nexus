@@ -664,8 +664,18 @@ async fn health(State(state): State<AppState>) -> Json<HealthResponse> {
     Json(response)
 }
 
+fn try_read_lifecycle(state: &AppState) -> Result<supervisor::HarnessLifecycleGuard, axum::response::Response> {
+    // Read routes may settle a checkpoint, so they must retain the same gate
+    // as mutations. Busy is observable immediately instead of queueing behind
+    // a long compatibility probe or restore owner.
+    state.supervisor.try_acquire_lifecycle().ok_or_else(|| api_error_response(
+        StatusCode::CONFLICT, "lifecycle_busy",
+        "NEXUS_LIFECYCLE_BUSY: Harness lifecycle operation is in progress; retry shortly",
+    ))
+}
+
 async fn current_state(State(state): State<AppState>) -> axum::response::Response {
-    let _lifecycle = state.supervisor.acquire_lifecycle().await;
+    let _lifecycle = match try_read_lifecycle(&state) { Ok(guard) => guard, Err(response) => return response };
     if let Err(error) = settle_checkpoint_restore(&state).await {
         return data_error_response(
             io::Error::other(error.to_string()),
@@ -682,7 +692,7 @@ async fn current_state(State(state): State<AppState>) -> axum::response::Respons
 }
 
 async fn harness_status(State(state): State<AppState>) -> axum::response::Response {
-    let _lifecycle = state.supervisor.acquire_lifecycle().await;
+    let _lifecycle = match try_read_lifecycle(&state) { Ok(guard) => guard, Err(response) => return response };
     if let Err(error) = settle_checkpoint_restore(&state).await {
         return data_error_response(
             io::Error::other(error.to_string()),
@@ -730,7 +740,7 @@ fn recovery_log_payload(mut bytes: Vec<u8>, limit: usize, truncated: bool) -> (S
 }
 
 async fn recovery_status(State(state): State<AppState>) -> axum::response::Response {
-    let lifecycle = state.supervisor.acquire_lifecycle().await;
+    let lifecycle = match try_read_lifecycle(&state) { Ok(guard) => guard, Err(response) => return response };
     let mut harness = sync_harness_state(&state).await.into_response().harness;
     let harness_stop_required = !state
         .supervisor
@@ -835,7 +845,7 @@ fn recovery_log_tail(
 /// Lifecycle control remains PID-gated in the GUI, so this read-only handoff
 /// cannot authorize an unowned stop or restart.
 async fn harness_ui(State(state): State<AppState>) -> axum::response::Response {
-    let _lifecycle = state.supervisor.acquire_lifecycle().await;
+    let _lifecycle = match try_read_lifecycle(&state) { Ok(guard) => guard, Err(response) => return response };
     if let Err(error) = settle_checkpoint_restore(&state).await {
         return data_error_response(
             io::Error::other(error.to_string()),
@@ -1195,7 +1205,7 @@ fn profile_list_response(
 }
 
 async fn profile_list(State(state): State<AppState>) -> axum::response::Response {
-    let _lifecycle = state.supervisor.acquire_lifecycle().await;
+    let _lifecycle = match try_read_lifecycle(&state) { Ok(guard) => guard, Err(response) => return response };
     if let Err(error) = settle_checkpoint_restore(&state).await {
         return data_error_response(
             io::Error::other(error.to_string()),
@@ -2697,7 +2707,7 @@ fn release_list_response(catalog: ReleaseCatalog) -> ReleaseListResponse {
 }
 
 async fn release_list(State(state): State<AppState>) -> axum::response::Response {
-    let _lifecycle = state.supervisor.acquire_lifecycle().await;
+    let _lifecycle = match try_read_lifecycle(&state) { Ok(guard) => guard, Err(response) => return response };
     if let Err(error) = settle_checkpoint_restore(&state).await {
         return data_error_response(
             io::Error::other(error.to_string()),
@@ -4257,6 +4267,70 @@ server.listen(0, '127.0.0.1', () => console.log('dsh web: http://127.0.0.1:' + s
         assert!(restored.status().is_success());
         assert!(compatibility::disabled_plugins(home, "demo").unwrap().is_empty());
         assert_eq!(fs::read(&manifest).unwrap(), original);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[tokio::test]
+    async fn read_routes_fail_fast_without_settling_a_locked_checkpoint() {
+        let (state, root) = content_test_state("read-lifecycle-busy");
+        state.releases.register("read-old", "old", None, None).unwrap();
+        state.releases.register("read-target", "target", None, None).unwrap();
+        state.releases.promote("read-old").unwrap();
+        let before_releases = state.releases.load().unwrap();
+        let before_profiles = state.profiles.load().unwrap();
+        let target_profiles = ProfileCatalog::new("partial", vec!["partial".to_owned()]).unwrap();
+        let intent = CheckpointRestoreIntent {
+            checkpoint_id: "read-busy-checkpoint".to_owned(),
+            previous_profiles: before_profiles.clone(),
+            previous_current_release: before_releases.current_release.clone(),
+            previous_last_known_good: before_releases.last_known_good.clone(),
+            target_profiles: target_profiles.clone(),
+            target_current_release: Some("read-target".to_owned()),
+            target_last_known_good: Some("read-old".to_owned()),
+            snapshot: None,
+        };
+        let owner = state.supervisor.acquire_lifecycle().await;
+        state.checkpoint_restores.begin(intent).unwrap();
+        state.releases.restore_release_pointers(Some("read-target"), Some("read-old")).unwrap();
+        state.profiles.write(&target_profiles).unwrap();
+        let partial_releases = state.releases.load().unwrap();
+        let pending = serde_json::to_value(state.checkpoint_restores.load().unwrap()).unwrap();
+        let runtime = serde_json::to_value(state.runtime.read().await.as_payload()).unwrap();
+        async fn read_route(state: AppState, route: usize) -> axum::response::Response {
+            match route {
+                0 => super::current_state(State(state)).await,
+                1 => super::harness_status(State(state)).await,
+                2 => super::recovery_status(State(state)).await,
+                3 => super::harness_ui(State(state)).await,
+                4 => super::profile_list(State(state)).await,
+                _ => super::release_list(State(state)).await,
+            }
+        }
+        for route in 0..6 {
+            let response = timeout(Duration::from_millis(250), read_route(state.clone(), route))
+                .await.expect("read route must not queue behind lifecycle owner");
+            assert_eq!(response.status(), StatusCode::CONFLICT);
+            let body = axum::body::to_bytes(response.into_body(), 64 * 1024).await.unwrap();
+            let error: serde_json::Value = serde_json::from_slice(&body).unwrap();
+            assert_eq!(error["code"], "lifecycle_busy");
+            assert!(error["message"].as_str().unwrap().starts_with("NEXUS_LIFECYCLE_BUSY:"));
+        }
+        assert_eq!(state.releases.load().unwrap(), partial_releases);
+        assert_eq!(state.profiles.load().unwrap(), target_profiles);
+        assert_eq!(serde_json::to_value(state.checkpoint_restores.load().unwrap()).unwrap(), pending);
+        assert_eq!(serde_json::to_value(state.runtime.read().await.as_payload()).unwrap(), runtime);
+        drop(owner);
+        for route in 0..6 {
+            let response = timeout(Duration::from_secs(2), read_route(state.clone(), route))
+                .await.expect("read route resumes after lifecycle owner releases");
+            if route == 0 { assert_eq!(response.status(), StatusCode::OK); }
+            let body = axum::body::to_bytes(response.into_body(), 64 * 1024).await.unwrap();
+            assert!(!String::from_utf8_lossy(&body).contains("NEXUS_LIFECYCLE_BUSY:"));
+        }
+        // The first unlocked read still performs the existing Prepared recovery.
+        assert_eq!(state.releases.load().unwrap(), before_releases);
+        assert_eq!(state.profiles.load().unwrap(), before_profiles);
+        assert!(state.checkpoint_restores.load().unwrap().is_none());
         fs::remove_dir_all(root).unwrap();
     }
 

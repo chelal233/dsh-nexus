@@ -227,6 +227,7 @@ export async function probe(node, entry, home, profile, timeoutMs) {
 
 export async function check(options) {
   const { home, selected, release_id, node, output, work, force = false, timeout_ms = 45000 } = options;
+  const trigger = ['version_switch', 'startup'].includes(options.trigger) ? options.trigger : null;
   const slot = fs.realpathSync(options.slot);
   const source = sourceInfo(home, selected);
   const key = crypto.createHash('sha256').update(JSON.stringify([checkerVersion, slot, release_id, source.source, source.fingerprint])).digest('hex');
@@ -243,7 +244,9 @@ export async function check(options) {
     }
     projectionBefore = profileFingerprint(home, destination);
     if (!force && cached.projection_fingerprint === projectionBefore) {
-      atomicJson(output, cached); return cached;
+      const reused = { ...cached, trigger: cached.trigger ?? null, last_trigger: trigger,
+        last_used_at_unix: Math.floor(Date.now() / 1000), cache_reused: true };
+      atomicJson(output, reused); return reused;
     }
   }
   // Never reuse/mutate an old published projection during checking.
@@ -284,7 +287,8 @@ export async function check(options) {
     if (result.ok) {
       if (sourceInfo(home, source.source).fingerprint !== source.fingerprint) throw Error('Source profile changed during compatibility check');
       const report = { checker_version: checkerVersion, status: disabled.length ? 'isolated' : 'passed', source_profile: source.source,
-        effective_profile: effective, release_id, fingerprint: source.fingerprint, checked_at_unix: Math.floor(Date.now() / 1000), disabled };
+        effective_profile: effective, release_id, fingerprint: source.fingerprint, checked_at_unix: Math.floor(Date.now() / 1000), disabled,
+        trigger, last_trigger: trigger, last_used_at_unix: Math.floor(Date.now() / 1000), cache_reused: false };
       // Remove generated top-level module links through the disposable HOME.
       const modules = path.join(candidate, 'node_modules');
       for (const name of fs.readdirSync(modules)) {
@@ -337,6 +341,7 @@ export async function check(options) {
     atomicJson(output, {checker_version: checkerVersion, status: 'needs_choice',
       source_profile: source.source, effective_profile: effective, release_id,
       fingerprint: source.fingerprint, checked_at_unix: Math.floor(Date.now() / 1000), disabled,
+      trigger, last_trigger: trigger, last_used_at_unix: Math.floor(Date.now() / 1000), cache_reused: false,
       error: String(error.message).slice(0, 600),
       candidates: source.manifest.dsh.profile.bundles.filter(p => !p.startsWith('@deepseek-ai/')).map(packageName => ({
         package: packageName, reason: failures.has(packageName)

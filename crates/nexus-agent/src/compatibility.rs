@@ -161,6 +161,7 @@ pub(crate) async fn prepare(
     write_json_atomic(&root, &input, &serde_json::json!({
         "home":home,"selected":profile,"release_id":release,"slot":slot,
         "node":node,"work":work,"output":output,"force":force,
+        "trigger": if force { "version_switch" } else { "startup" },
     }))?;
     let mut command = std::process::Command::new(node);
     command.arg(&script).arg(&input).current_dir(&root).stdin(Stdio::null()).stdout(Stdio::null());
@@ -219,6 +220,7 @@ mod tests {
             checker_version: 1, status: "passed".to_owned(), source_profile: "original".to_owned(),
             effective_profile: "nexus-projection".to_owned(), release_id: "release-a".to_owned(),
             fingerprint: "fixture".to_owned(), checked_at_unix: 1, disabled: Vec::new(), error: None, candidates: Vec::new(),
+            trigger: None, last_trigger: None, last_used_at_unix: None, cache_reused: false,
         };
         write_json_atomic(&root.join("compatibility"), &root.join("compatibility/latest.json"), &report).unwrap();
         assert_eq!(latest_for_selection(&paths, &home, "original", Some("release-a")), Some(report.clone()));
