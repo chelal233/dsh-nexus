@@ -505,6 +505,8 @@ async fn run(options: Options) -> Result<(), String> {
         Command::Profile(
             ProfileAction::PluginInventory
             | ProfileAction::PluginRemove
+            | ProfileAction::PluginDisable
+            | ProfileAction::PluginEnable
             | ProfileAction::OpenPath
             | ProfileAction::Create,
             _,

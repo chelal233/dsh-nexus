@@ -1184,6 +1184,7 @@ fn profile_list_response(
         .map(|profile| profile.name.clone())
         .collect();
     let mut response = ProfileListResponse::new(catalog.active_profile, names).with_manifests(manifests);
+    response.disabled_plugins = compatibility::disabled_plugins(state.snapshots.configured_dsh_home()?, &response.active_profile)?;
     response.compatibility = compatibility::latest_for_selection(
         &state.paths,
         state.snapshots.configured_dsh_home()?,
@@ -1316,8 +1317,44 @@ async fn profile_control(
                 .into_response()
         }
         ProfileAction::PluginRemove => profile_plugin_remove(state, command).await,
+        ProfileAction::PluginDisable | ProfileAction::PluginEnable => profile_plugin_isolation(state, command).await,
         ProfileAction::OpenPath => profile_open_path(state, command).await,
         ProfileAction::Create => profile_create(state, command).await,
+    }
+}
+
+async fn profile_plugin_isolation(state: AppState, command: ProfileCommand) -> axum::response::Response {
+    let (Some(profile), Some(package)) = (command.profile.as_deref(), command.package.as_deref()) else {
+        return data_error_response(io::Error::new(io::ErrorKind::InvalidInput,
+            "profile and package are required"), "profile_invalid");
+    };
+    if command.target.is_some() {
+        return data_error_response(io::Error::new(io::ErrorKind::InvalidInput,
+            "plugin isolation does not accept a target"), "profile_invalid");
+    }
+    let lifecycle = state.supervisor.acquire_lifecycle().await;
+    if let Err(response) = ensure_checkpoint_mutation_ready(&state).await { return response; }
+    let _update_gate = match state.updater.try_acquire_gate() {
+        Ok(gate) => gate,
+        Err(error) => return update_error_response(error),
+    };
+    if let Err(response) = ensure_harness_selection_quiescent(&state, &lifecycle,
+        "plugin_isolation_conflict", "stop Harness before changing plugin isolation").await {
+        return response;
+    }
+    let result = (|| -> io::Result<ProfileListResponse> {
+        let home = state.snapshots.configured_dsh_home()?;
+        let catalog = state.profiles.load()?;
+        if compatibility::source_profile(home, profile)? != compatibility::source_profile(home, &catalog.active_profile)? {
+            return Err(io::Error::new(io::ErrorKind::InvalidInput,
+                "plugin isolation must belong to the selected profile"));
+        }
+        compatibility::set_plugin_disabled(home, profile, package, command.action == ProfileAction::PluginDisable)?;
+        profile_list_response(&state, catalog)
+    })();
+    match result {
+        Ok(response) => (StatusCode::OK, Json(response)).into_response(),
+        Err(error) => data_error_response(error, "plugin_isolation_failed"),
     }
 }
 
@@ -4159,6 +4196,68 @@ mod checkpoint_tests {
                 instance_id: format!("content-{label}"),                crash_capture_run: Arc::new(Mutex::new(None)),            },
             root,
         )
+    }
+
+    #[tokio::test]
+    #[ignore = "requires NEXUS_TEST_NODE_BINARY for the real startup choice flow"]
+    async fn compatibility_choice_allows_failed_release_to_be_retried() {
+        use crate::{compatibility, profile_control};
+        use nexus_protocol::{ProfileAction, ProfileCommand};
+        let node = PathBuf::from(std::env::var_os("NEXUS_TEST_NODE_BINARY").expect("explicit Node runtime"));
+        let (state, root) = content_test_state("compatibility-choice");
+        let home = state.snapshots.configured_dsh_home().unwrap();
+        let manifest = home.join("profiles/demo/package.json");
+        let original = br#"{"name":"demo","dsh":{"profile":{"bundles":["unclassified"]}}}"#;
+        fs::write(&manifest, original).unwrap();
+        state.releases.register("choice-old", "old", None, None).unwrap();
+        state.releases.register("choice-target", "target", None, None).unwrap();
+        state.releases.promote("choice-old").unwrap();
+        let target = state.releases.release_root("choice-target").unwrap();
+        write_profile_file(&target.join("vendor/core/package.json"), r#"{"name":"@deepseek-ai/test-core"}"#);
+        write_profile_file(&target.join("apps/cli/lib/bin.js"), r#"
+const fs = require('node:fs'), path = require('node:path'), http = require('node:http');
+const manifest = JSON.parse(fs.readFileSync(path.join(process.env.DSH_HOME, 'profiles', process.argv[3], 'package.json')));
+if (manifest.dsh.profile.bundles.includes('unclassified')) {
+  console.error('failed to apply loader entry fixture (unclassified): unsupported setup'); process.exit(1);
+}
+const server = http.createServer((req, res) => res.end('<html>ready</html>'));
+server.listen(0, '127.0.0.1', () => console.log('dsh web: http://127.0.0.1:' + server.address().port + '/'));
+"#);
+        let mut config = state.config.load().unwrap();
+        let mut spec = HarnessLaunchSpec::new(node);
+        spec.mode = nexus_protocol::HarnessLaunchMode::Node;
+        spec.args = vec!["{release_root}/apps/cli/lib/bin.js".to_owned()];
+        config.harness = Some(spec);
+        state.config.write(&config).unwrap();
+        let promote = ReleaseCommand { action: ReleaseAction::Promote, id: Some("choice-target".to_owned()), version: None, source: None, note: None };
+        let failed = release_control(State(state.clone()), Json(promote.clone())).await;
+        assert!(!failed.status().is_success());
+        assert_eq!(state.releases.load().unwrap().current_release.as_deref(), Some("choice-old"));
+        let report = compatibility::latest(&state.paths).unwrap();
+        assert_eq!(report.status, "needs_choice");
+        assert_eq!(report.candidates[0].package, "unclassified");
+        let saved = profile_control(State(state.clone()), Json(ProfileCommand {
+            action: ProfileAction::PluginDisable, profile: Some("demo".to_owned()), package: Some("unclassified".to_owned()), target: None,
+        })).await;
+        assert!(saved.status().is_success());
+        assert_eq!(compatibility::disabled_plugins(home, "demo").unwrap(), vec!["unclassified"]);
+        let retried = release_control(State(state.clone()), Json(promote)).await;
+        if !retried.status().is_success() {
+            let body = axum::body::to_bytes(retried.into_body(), 64 * 1024).await.unwrap();
+            panic!("retry failed: {}", String::from_utf8_lossy(&body));
+        }
+        assert_eq!(state.releases.load().unwrap().current_release.as_deref(), Some("choice-target"));
+        let report = compatibility::latest(&state.paths).unwrap();
+        assert_eq!(report.status, "isolated");
+        assert_eq!(report.disabled[0].reason, "Disabled by user");
+        assert_eq!(fs::read(&manifest).unwrap(), original);
+        let restored = profile_control(State(state.clone()), Json(ProfileCommand {
+            action: ProfileAction::PluginEnable, profile: Some("demo".to_owned()), package: Some("unclassified".to_owned()), target: None,
+        })).await;
+        assert!(restored.status().is_success());
+        assert!(compatibility::disabled_plugins(home, "demo").unwrap().is_empty());
+        assert_eq!(fs::read(&manifest).unwrap(), original);
+        fs::remove_dir_all(root).unwrap();
     }
 
     #[tokio::test]

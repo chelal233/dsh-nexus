@@ -13,6 +13,20 @@ export type TranslationParams = Record<string, string | number>;
 export type Translator = (key: string, params?: TranslationParams) => string;
 
 const english: Record<string, string> = {
+  "Saved plugin choices; effective on next check": "Saved plugin choices; effective on next check",
+  "Choose how to handle plugin errors": "Choose how to handle plugin errors",
+  "Disable plugin in isolated profiles": "Disable plugin in isolated profiles",
+  "Restore plugin on next check": "Restore plugin on next check",
+  "Disabled by user": "Disabled by user",
+  "Retry version switch": "Retry version switch",
+  "Select all third-party plugins": "Select all third-party plugins",
+  "Save disabled plugins": "Save disabled plugins",
+  "Choose plugins to disable, then retry. Unattributed plugins are options, not confirmed faults. Nothing is uninstalled.": "Choose plugins to disable, then retry. Unattributed plugins are options, not confirmed faults. Nothing is uninstalled.",
+  "Saved choices apply to isolated profiles until restored. The original profile remains intact.": "Saved choices apply to isolated profiles until restored. The original profile remains intact.",
+  "After saving, select the upstream version again to retry.": "After saving, select the upstream version again to retry.",
+  "Stop Harness before changing plugin isolation.": "Stop Harness before changing plugin isolation.",
+  "DSH reported a loader error for this plugin": "DSH reported a loader error for this plugin",
+  "Not identified as faulty; optional isolation for troubleshooting": "Not identified as faulty; optional isolation for troubleshooting",
   "Startup compatibility check": "Startup compatibility check",
   "Source profile": "Source profile",
   "Effective isolated profile": "Effective isolated profile",
@@ -494,6 +508,20 @@ const english: Record<string, string> = {
 };
 
 const chinese: Record<string, string> = {
+  "Choose how to handle plugin errors": "请选择插件错误的处理方式",
+  "Saved plugin choices; effective on next check": "已保存的停用选择；下次检查生效",
+  "Disable plugin in isolated profiles": "在隔离配置中停用插件",
+  "Restore plugin on next check": "下次检查时恢复插件",
+  "Disabled by user": "用户选择停用",
+  "Retry version switch": "重试版本切换",
+  "Select all third-party plugins": "选择全部第三方插件",
+  "Save disabled plugins": "保存停用选择",
+  "Choose plugins to disable, then retry. Unattributed plugins are options, not confirmed faults. Nothing is uninstalled.": "选择要停用的插件后重试。未定位的插件仅供排查选择，不代表已确认有故障。不会卸载任何插件。",
+  "Saved choices apply to isolated profiles until restored. The original profile remains intact.": "停用选择持续用于隔离配置，直到手动恢复；原配置保持不变。",
+  "After saving, select the upstream version again to retry.": "保存后重新选择上游版本即可重试。",
+  "Stop Harness before changing plugin isolation.": "请先停止 Harness，再调整插件停用选择。",
+  "DSH reported a loader error for this plugin": "DSH 加载器报告此插件出错",
+  "Not identified as faulty; optional isolation for troubleshooting": "尚未确认故障，可主动停用以排查",
   "Startup compatibility check": "启动兼容性自检",
   "Source profile": "原配置档",
   "Effective isolated profile": "实际隔离配置档",

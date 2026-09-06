@@ -96,6 +96,43 @@ test("compatibility summary identifies the checked release, projection, and disa
   } finally { await vite.close(); }
 });
 
+test("failed compatibility offers explicit plugin choices and retry without claiming success", async () => {
+  const { vite, UpdatesView } = await loadViews();
+  try {
+    const snapshot = { ...baseSnapshot,
+      recovery: { harness_stop_required: false, harness: { state: "stopped" } },
+      releases: { current_release: "old", releases: [{ id: "target" }] },
+      profiles: { compatibility: { status: "needs_choice", source_profile: "desktop", release_id: "target",
+        error: "Unclassified plugin startup error", disabled: [], candidates: [{ package: "third-party", reason: "Not identified as faulty; optional isolation for troubleshooting" }],
+      } },
+    };
+    const markup = renderToStaticMarkup(createElement(UpdatesView, { ...props, snapshot }));
+    assert.match(markup, /Choose how to handle plugin errors/);
+    assert.match(markup, /type="checkbox"/);
+    assert.doesNotMatch(markup, /checked=""/);
+    assert.match(markup, /Select all third-party plugins/);
+    assert.match(markup, /Save disabled plugins/);
+    assert.match(markup, /Retry version switch/);
+    assert.match(markup, /not confirmed faults/);
+    assert.doesNotMatch(markup, /Startup check passed|Effective isolated profile/);
+  } finally { await vite.close(); }
+});
+
+test("saved isolation is visible and reversible before another check", async () => {
+  const { vite, UpdatesView } = await loadViews();
+  try {
+    const snapshot = { ...baseSnapshot,
+      recovery: { harness_stop_required: false, harness: { state: "stopped" } },
+      profiles: { active_profile: "desktop", disabled_plugins: ["third-party"] },
+    };
+    const markup = renderToStaticMarkup(createElement(UpdatesView, { ...props, snapshot }));
+    assert.match(markup, /Saved plugin choices; effective on next check/);
+    assert.match(markup, /Restore plugin on next check/);
+    assert.match(markup, /third-party/);
+    assert.doesNotMatch(markup, /Startup check passed/);
+  } finally { await vite.close(); }
+});
+
 test("checkpoint fixtures show legacy truth and pending retry or abort", async () => {
   const { vite, CheckpointsView } = await loadViews();
   try {

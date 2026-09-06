@@ -328,6 +328,8 @@ pub enum ProfileAction {
     Select,
     PluginInventory,
     PluginRemove,
+    PluginDisable,
+    PluginEnable,
     Create,
     /// Open a profile-related file or directory with the system handler.
     /// Bounded targets only: `settings` (home settings.yaml), `profile_dir`,
@@ -379,6 +381,10 @@ pub struct CompatibilityReport {
     pub fingerprint: String,
     pub checked_at_unix: u64,
     pub disabled: Vec<CompatibilityDisabledPlugin>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+    #[serde(default)]
+    pub candidates: Vec<CompatibilityDisabledPlugin>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -390,6 +396,8 @@ pub struct ProfileListResponse {
     pub manifests: Vec<NativeProfilePayload>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub compatibility: Option<CompatibilityReport>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub disabled_plugins: Vec<String>,
 }
 
 pub type ProfileStatusResponse = ProfileListResponse;
@@ -402,6 +410,7 @@ impl ProfileListResponse {
             profiles,
             manifests: Vec::new(),
             compatibility: None,
+            disabled_plugins: Vec::new(),
         }
     }
 

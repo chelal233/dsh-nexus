@@ -65,8 +65,10 @@ test('unknown errors fail closed without publishing a profile',async()=>{
   const f=fixture();
   try {
     f.write(['unknown']);
-    await assert.rejects(check(f.options),/without an attributable/);
-    assert.equal(fs.existsSync(f.options.output),false);
+    await assert.rejects(check(f.options),/user decision/);
+    const report=JSON.parse(fs.readFileSync(f.options.output));
+    assert.equal(report.status,'needs_choice');
+    assert.deepEqual(report.candidates.map(x=>x.package),['unknown']);
     assert.deepEqual(fs.readdirSync(f.home+'/profiles').filter(x=>x.startsWith('nexus-')),[]);
     assert.deepEqual(fs.readdirSync(f.options.work),[]);
   } finally {f.close();}
@@ -77,7 +79,7 @@ test('timeout fails closed and cleans the owned probe',async()=>{
   try {
     f.write(['timeout']);
     await assert.rejects(check({...f.options,timeout_ms:300}),/timed out/);
-    assert.equal(fs.existsSync(f.options.output),false);
+    assert.equal(JSON.parse(fs.readFileSync(f.options.output)).status,'needs_choice');
     assert.deepEqual(fs.readdirSync(f.options.work),[]);
   } finally {f.close();}
 });
@@ -101,7 +103,7 @@ test('edited effective profiles are rechecked and retained; changed home setting
     const manifest=JSON.parse(fs.readFileSync(path.join(effective,'package.json')));
     manifest.dsh.profile.bundles.push('unknown');
     fs.writeFileSync(path.join(effective,'package.json'),JSON.stringify(manifest));
-    await assert.rejects(check(f.options),/without an attributable/);
+    await assert.rejects(check(f.options),/user decision/);
     assert.ok(JSON.parse(fs.readFileSync(path.join(effective,'package.json'))).dsh.profile.bundles.includes('unknown'));
     manifest.dsh.profile.bundles= ['good','bad'];
     fs.writeFileSync(path.join(effective,'package.json'),JSON.stringify(manifest));
@@ -112,5 +114,24 @@ test('edited effective profiles are rechecked and retained; changed home setting
     const next=await check(f.options);
     assert.notEqual(next.effective_profile,first.effective_profile);
     assert.equal(fs.readFileSync(path.join(f.home,'settings.yaml'),'utf8'),'test: true');
+  } finally {f.close();}
+});
+
+test('user can isolate an unclassified failure and restore it without changing the source',async()=>{
+  const f=fixture();
+  try {
+    f.write(['unknown','good']);
+    const original=fs.readFileSync(path.join(f.source,'package.json'),'utf8');
+    await assert.rejects(check(f.options),/user decision/);
+    const dir=path.join(f.home,'profiles/.nexus-plugin-isolation');
+    fs.mkdirSync(dir);
+    fs.writeFileSync(path.join(dir,'original.json'),JSON.stringify(['unknown']));
+    const isolated=await check(f.options);
+    assert.equal(isolated.status,'isolated');
+    assert.deepEqual(isolated.disabled,[{package:'unknown',reason:'Disabled by user'}]);
+    assert.equal(fs.readFileSync(path.join(f.source,'package.json'),'utf8'),original);
+    fs.writeFileSync(path.join(dir,'original.json'),'[]');
+    await assert.rejects(check(f.options),/user decision/);
+    assert.equal(fs.readFileSync(path.join(f.source,'package.json'),'utf8'),original);
   } finally {f.close();}
 });

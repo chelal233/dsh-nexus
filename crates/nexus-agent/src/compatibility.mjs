@@ -35,7 +35,17 @@ export function sourceInfo(home, selected) {
   const manifest = readJson(path.join(dir, 'package.json'));
   const bundles = manifest.dsh?.profile?.bundles;
   if (!Array.isArray(bundles) || !bundles.every(x => typeof x === 'string' && validPackage(x))) throw Error('Unsupported profile bundle manifest');
-  return { source, dir, manifest, fingerprint: profileFingerprint(home, dir) };
+  const policy = path.join(home, 'profiles', '.nexus-plugin-isolation', source + '.json');
+  let manualDisabled = [], fingerprint = profileFingerprint(home, dir);
+  if (fs.existsSync(policy)) {
+    if (fs.lstatSync(policy).isSymbolicLink()) throw Error('Plugin isolation policy cannot be a link');
+    const bytes = fs.readFileSync(policy);
+    const choices = JSON.parse(bytes.toString('utf8'));
+    if (!Array.isArray(choices) || !choices.every(p => typeof p === 'string' && validPackage(p) && !p.startsWith('@deepseek-ai/'))) throw Error('Invalid plugin isolation policy');
+    manualDisabled = [...new Set(choices)].filter(p => bundles.includes(p));
+    fingerprint = crypto.createHash('sha256').update(fingerprint).update(bytes).digest('hex');
+  }
+  return { source, dir, manifest, fingerprint, manualDisabled };
 }
 
 function profileFingerprint(home, dir) {
@@ -141,6 +151,16 @@ async function stopProbe(child) {
   ]);
 }
 
+function loaderFailures(text, bundles) {
+  const found = new Set();
+  for (const line of text.split('\n')) {
+    const matches = [...line.matchAll(/failed to (?:import|apply) loader entry [^()\r\n]+ \(([^()]+)\):/g)];
+    const pkg = matches.at(-1)?.[1];
+    if (pkg && !pkg.startsWith('@deepseek-ai/') && bundles.includes(pkg)) found.add(pkg);
+  }
+  return found;
+}
+
 async function webReady(address) {
   let url = new URL(address);
   const origin = url.origin;
@@ -231,6 +251,7 @@ export async function check(options) {
   const testHome = path.join(scratch, 'home');
   const candidate = path.join(testHome, 'profiles', effective);
   fs.mkdirSync(candidate, { recursive: true });
+  let disabled = [], failures = new Set();
   try {
   const official = officialPackages(slot);
   // Recheck edited effective profiles without throwing their local changes away.
@@ -251,7 +272,12 @@ export async function check(options) {
   }
   const manifest = cached ? readJson(path.join(base, 'package.json')) : structuredClone(source.manifest);
   manifest.name = 'dsh-profile-' + effective;
-  const disabled = cached ? cached.disabled.filter(item => !manifest.dsh.profile.bundles.includes(item.package)) : [];
+  disabled = cached ? cached.disabled.filter(item => !manifest.dsh.profile.bundles.includes(item.package)) : [];
+  for (const name of source.manualDisabled) {
+    if (!disabled.some(item => item.package === name)) disabled.push({package: name, reason: 'Disabled by user'});
+    manifest.dsh.profile.bundles = manifest.dsh.profile.bundles.filter(p => p !== name);
+    if (manifest.dependencies) delete manifest.dependencies[name];
+  }
   for (let attempt = 0; attempt <= Math.min(source.manifest.dsh.profile.bundles.length, 12); attempt++) {
     fs.writeFileSync(path.join(candidate, 'package.json'), JSON.stringify(manifest, null, 2));
     const result = await probe(node, path.join(slot, 'apps/cli/lib/bin.js'), testHome, effective, timeout_ms);
@@ -296,14 +322,29 @@ export async function check(options) {
       atomicJson(output, report);
       return report;
     }
+    failures = loaderFailures(result.text, manifest.dsh.profile.bundles);
     const rejected = incompatibleBundles(result.text, manifest.dsh.profile.bundles);
-    if (!rejected.length) throw Error('Compatibility startup failed without an attributable third-party API error; original profile preserved');
+    if (!rejected.length) throw Error('Startup check needs a user decision: choose third-party plugins to disable, then retry the switch; original profile preserved');
     disabled.push(...rejected);
     const names = new Set(rejected.map(x => x.package));
     manifest.dsh.profile.bundles = manifest.dsh.profile.bundles.filter(x => !names.has(x));
     for (const name of names) if (manifest.dependencies) delete manifest.dependencies[name];
   }
   throw Error('Compatibility retry limit reached; original profile preserved');
+  } catch (error) {
+    // A failed attempt is actionable evidence, not a successful publication.
+    // No raw startup log or credential is copied into the public report.
+    atomicJson(output, {checker_version: checkerVersion, status: 'needs_choice',
+      source_profile: source.source, effective_profile: effective, release_id,
+      fingerprint: source.fingerprint, checked_at_unix: Math.floor(Date.now() / 1000), disabled,
+      error: String(error.message).slice(0, 600),
+      candidates: source.manifest.dsh.profile.bundles.filter(p => !p.startsWith('@deepseek-ai/')).map(packageName => ({
+        package: packageName, reason: failures.has(packageName)
+          ? 'DSH reported a loader error for this plugin'
+          : 'Not identified as faulty; optional isolation for troubleshooting',
+      })),
+    });
+    throw error;
   } finally {
     if (fs.existsSync(scratch)) {
       if (!within(fs.realpathSync(work), fs.realpathSync(scratch)) || fs.lstatSync(scratch).isSymbolicLink()) throw Error('Unsafe compatibility cleanup path');
