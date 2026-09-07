@@ -57,6 +57,7 @@ const AGENT_ROUTES: &[&str] = &[
     "/v1/harness/discover",
     "/v1/profiles",
     "/v1/recovery",
+    "/v1/preflight",
     "/v1/checkpoints",
     "/v1/releases",
     "/v1/releases/tags",
@@ -183,6 +184,7 @@ impl AgentClient {
         let base_url = Url::parse(&format!("http://127.0.0.1:{port}"))
             .map_err(|error| AgentClientError::InvalidRequest(error.to_string()))?;
         let http = reqwest::Client::builder()
+            .no_proxy()
             .connect_timeout(DEFAULT_CONNECT_TIMEOUT)
             .timeout(DEFAULT_REQUEST_TIMEOUT)
             .redirect(reqwest::redirect::Policy::none())
@@ -430,9 +432,9 @@ pub fn validate_agent_request(
         | "/v1/harness/discover"
         | "/v1/releases/tags"
         | "/v1/runtime"
-        | "/v1/recovery" => *method == Method::GET,
+        | "/v1/preflight" => *method == Method::GET,
         "/v1/runtime/plan" => *method == Method::POST,
-        "/v1/harness" | "/v1/profiles" | "/v1/checkpoints" | "/v1/releases" | "/v1/updates"
+        "/v1/recovery" | "/v1/harness" | "/v1/profiles" | "/v1/checkpoints" | "/v1/releases" | "/v1/updates"
         | "/v1/diagnostics" | "/v1/config" | "/v1/maintenance" => {
             *method == Method::GET || *method == Method::POST
         }
@@ -534,6 +536,7 @@ pub struct AgentRuntime {
     program: Option<PathBuf>,
     resolved_program: Arc<Mutex<Option<PathBuf>>>,
     resource_dir: Option<PathBuf>,
+    expected_build_id: Option<String>,
     child: Arc<Mutex<Option<Child>>>,
     startup_error: Arc<Mutex<Option<String>>>,
     operation: Arc<AsyncMutex<()>>,
@@ -554,6 +557,15 @@ impl fmt::Debug for AgentRuntime {
 }
 
 impl AgentRuntime {
+    /// Bind the GUI's embedded package identity; missing disk metadata then fails closed.
+    pub fn bind_build_identity(&mut self, build_id: &str) -> Result<(), AgentRuntimeError> {
+        if build_id.is_empty() || build_id == "development" || build_id.len() > 128 || build_id.chars().any(char::is_control) {
+            return Err(AgentRuntimeError::NotReady("Invalid packaged build identity".to_owned()));
+        }
+        self.expected_build_id = Some(build_id.to_owned());
+        Ok(())
+    }
+
     pub fn new(config: NexusConfig, program: Option<PathBuf>) -> Result<Self, AgentRuntimeError> {
         Self::new_with_resource_dir(config, program, None)
     }
@@ -589,6 +601,7 @@ impl AgentRuntime {
             resolved_program: Arc::new(Mutex::new(program.clone())),
             program,
             resource_dir,
+            expected_build_id: option_env!("NEXUS_BUILD_ID").map(str::to_owned),
             child: Arc::new(Mutex::new(None)),
             startup_error: Arc::new(Mutex::new(None)),
             operation: Arc::new(AsyncMutex::new(())),
@@ -659,10 +672,13 @@ impl AgentRuntime {
     }
 
     pub async fn probe(&self) -> Result<HealthResponse, AgentRuntimeError> {
-        let mut discovered = None;
-        let health = match self.client().get_json::<HealthResponse>("/v1/health").await {
-            Ok(health) => health,
-            Err(AgentClientError::Transport(_)) => {
+        let primary = self.client().get_json::<HealthResponse>("/v1/health").await
+            .map_err(AgentRuntimeError::Client).and_then(|health| self.validate_health(health));
+        match primary {
+            Ok(health) => Ok(health),
+            Err(primary_error) => {
+                // A live unrelated HTTP listener is just as unavailable as a
+                // closed port. Only adopt a discovery target after identity validation.
                 let Some(record) = self
                     .paths
                     .read_agent_discovery()
@@ -670,9 +686,7 @@ impl AgentRuntime {
                     .flatten()
                     .filter(|record| record.data_root_id == self.data_root_id)
                 else {
-                    return Err(AgentRuntimeError::Client(AgentClientError::Transport(
-                        "no Agent on the configured port and no discovery record".to_owned(),
-                    )));
+                    return Err(primary_error);
                 };
                 let candidate =
                     AgentClient::from_reqwest(record.port, self.base_client.http.clone())
@@ -686,11 +700,22 @@ impl AgentRuntime {
                         "discovery record belongs to a different Agent instance".to_owned(),
                     ));
                 }
-                discovered = Some(record.port);
-                health
+                let health = self.validate_health(health)?;
+                self.adopt_discovered_port(record.port);
+                Ok(health)
             }
-            Err(error) => return Err(AgentRuntimeError::Client(error)),
-        };
+        }
+    }
+
+    /// Application requests require both root identity and the packaged build.
+    /// `probe` remains available for inspecting and stopping a stale Agent.
+    pub async fn probe_ready(&self) -> Result<HealthResponse, AgentRuntimeError> {
+        let health = self.probe().await?;
+        self.require_fresh_binary(&health)?;
+        Ok(health)
+    }
+
+    fn validate_health(&self, health: HealthResponse) -> Result<HealthResponse, AgentRuntimeError> {
         if health.api_version != nexus_protocol::API_VERSION
             || health.service != "nexus-agent"
             || health.instance_id.is_empty()
@@ -711,25 +736,32 @@ impl AgentRuntime {
                 health.status
             )));
         }
-        if let Some(port) = discovered {
-            self.adopt_discovered_port(port);
-        }
         Ok(health)
     }
 
     /// Whether a probed Agent was started from the same binary this launcher
-    /// would spawn. Agents older than the `binary_path` field (None) are
-    /// adopted as-is for backward compatibility.
+    /// would spawn. A packaged build requires the compiled Agent ID to match
+    /// its resource identity, including when an old process uses the same path.
     fn binary_is_fresh(&self, health: &HealthResponse) -> bool {
-        let Some(running) = health.binary_path.as_deref() else {
-            return true;
-        };
         let Ok(resolved) = resolve_agent_program_with_resource_dir(
             self.program.as_deref(),
             self.resource_dir.as_deref(),
         ) else {
-            return true;
+            return self.resource_dir.is_none() && self.expected_build_id.is_none();
         };
+        if self.expected_build_id.as_deref().is_some_and(|id| health.build_id.as_deref() != Some(id)) { return false; }
+        let identity = resolved.parent().unwrap_or_else(|| Path::new(".")).join("release-identity.json");
+        match fs::symlink_metadata(&identity) {
+            Ok(metadata) => {
+                if !metadata.is_file() || nexus_core::path_is_reparse(&metadata) || metadata.len() > 64 * 1024 { return false; }
+                let Some(identity) = fs::read(identity).ok().and_then(|bytes| serde_json::from_slice::<serde_json::Value>(&bytes).ok()) else { return false; };
+                let Some(expected) = identity.get("buildId").and_then(serde_json::Value::as_str).filter(|id| !id.is_empty() && id.len() <= 128 && *id != "development") else { return false; };
+                if health.build_id.as_deref() != Some(expected) || self.expected_build_id.as_deref().is_some_and(|id| id != expected) { return false; }
+            }
+            Err(error) if error.kind() == io::ErrorKind::NotFound && self.expected_build_id.is_none() => {},
+            Err(_) => return false,
+        }
+        let Some(running) = health.binary_path.as_deref() else { return true; };
         let normalize = |value: &str| -> String { value.replace('/', "\\").to_lowercase() };
         if normalize(running) == normalize(&resolved.to_string_lossy()) {
             return true;
@@ -737,6 +769,12 @@ impl AgentRuntime {
         match (fs::canonicalize(running), fs::canonicalize(&resolved)) {
             (Ok(a), Ok(b)) => a == b,
             _ => false,
+        }
+    }
+
+    fn require_fresh_binary(&self, health: &HealthResponse) -> Result<(), AgentRuntimeError> {
+        if self.binary_is_fresh(health) { Ok(()) } else {
+            Err(AgentRuntimeError::NotReady("The running Agent does not match this installation. Stop the old Agent successfully and verify the installed package before retrying.".to_owned()))
         }
     }
 
@@ -755,11 +793,12 @@ impl AgentRuntime {
             // A running Agent from a different binary generation: stop it
             // gracefully through its own endpoint so the fresh binary can
             // take over, then fall through to a normal spawn.
-            let _ = self.stop(wait_secs).await;
+            self.stop(wait_secs).await?;
         }
 
         let _operation = self.operation.lock().await;
         if let Ok(health) = self.probe().await {
+            self.require_fresh_binary(&health)?;
             self.remember_resolved_program();
             return Ok(AgentStartResult {
                 health,
@@ -776,6 +815,7 @@ impl AgentRuntime {
         // lifetime owner after readiness.
         let _bootstrap_lock = acquire_bootstrap_lock(&self.paths)?;
         if let Ok(health) = self.probe().await {
+            self.require_fresh_binary(&health)?;
             self.remember_resolved_program();
             return Ok(AgentStartResult {
                 health,
@@ -802,6 +842,7 @@ impl AgentRuntime {
         // unowned process.
         self.wait_for_runtime_lock_available(wait_secs).await?;
         if let Ok(health) = self.probe().await {
+            self.require_fresh_binary(&health)?;
             self.remember_resolved_program();
             return Ok(AgentStartResult {
                 health,
@@ -878,7 +919,10 @@ impl AgentRuntime {
                     if expected_instance_id.is_empty()
                         || health.instance_id == expected_instance_id =>
                 {
-                    return Ok(health);
+                    match self.require_fresh_binary(&health) {
+                        Ok(()) => return Ok(health),
+                        Err(error) => last_error = Some(error),
+                    }
                 }
                 Ok(health) => {
                     last_error = Some(AgentRuntimeError::NotReady(format!(
@@ -1001,20 +1045,21 @@ impl AgentRuntime {
     pub async fn status(&self) -> AgentStatus {
         self.remember_resolved_program();
         let health = self.probe().await.ok();
-        let available = health.is_some();
+        let running = health.is_some();
+        let available = health.as_ref().is_some_and(|health| self.binary_is_fresh(health));
         AgentStatus {
             available,
-            running: available,
+            running,
             api_base: self.base_url_string(),
             data_root: self.paths.root.display().to_string(),
             data_root_id: health.as_ref().map(|health| health.data_root_id.clone()),
             instance_id: health.as_ref().map(|health| health.instance_id.clone()),
             agent_pid: self.child_pid(),
-            agent_program: self
-                .resolved_program()
-                .map(|path| path.display().to_string()),
+            agent_program: if running { health.as_ref().and_then(|health| health.binary_path.clone()) } else { self.resolved_program().map(|path| path.display().to_string()) },
             message: if available {
                 None
+            } else if running {
+                Some("The running Agent does not match this installation. Stop it successfully before starting the installed build.".to_owned())
             } else {
                 self.startup_error().or_else(|| {
                     Some(format!(
@@ -1350,6 +1395,104 @@ mod tests {
         net::TcpListener,
     };
 
+    #[tokio::test]
+    async fn agent_client_bypasses_download_proxy_environment() {
+        // Isolate environment changes from every other concurrent test.
+        if env::var_os("NEXUS_TEST_LOOPBACK_PROXY").is_none() {
+            let output = std::process::Command::new(env::current_exe().unwrap())
+                .args(["--exact", "tests::agent_client_bypasses_download_proxy_environment", "--nocapture"])
+                .env("NEXUS_TEST_LOOPBACK_PROXY", "1")
+                .env("HTTP_PROXY", "http://127.0.0.1:1").env("http_proxy", "http://127.0.0.1:1")
+                .env("HTTPS_PROXY", "http://127.0.0.1:1").env("https_proxy", "http://127.0.0.1:1")
+                .env("ALL_PROXY", "http://127.0.0.1:1").env("all_proxy", "http://127.0.0.1:1")
+                .env("NO_PROXY", "").env("no_proxy", "")
+                .output().unwrap();
+            assert!(output.status.success(), "{}\n{}", String::from_utf8_lossy(&output.stdout), String::from_utf8_lossy(&output.stderr));
+            return;
+        }
+        let listener = TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0)).await.unwrap();
+        let client = AgentClient::new(listener.local_addr().unwrap().port()).unwrap();
+        let server = tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.unwrap();
+            let mut bytes = [0; 4096]; let _ = socket.read(&mut bytes).await.unwrap();
+            write_json_response(&mut socket, "200 OK", &serde_json::json!({"direct":true})).await;
+        });
+        let response: Value = client.get_json("/v1/health").await.unwrap();
+        assert_eq!(response["direct"], true);
+        server.await.unwrap();
+    }
+
+    async fn packaged_agent_fixture(label: &str) -> (AgentRuntime, TcpListener, PathBuf, HealthResponse) {
+        let root = env::temp_dir().join(format!("nexus-build-identity-{label}-{}-{}", std::process::id(), std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()));
+        let resources = root.join("resources");
+        fs::create_dir_all(&resources).unwrap();
+        let program = resources.join(if cfg!(windows) { "nexus-agent.exe" } else { "nexus-agent" });
+        fs::write(&program, "test binary; never executed").unwrap();
+        fs::write(resources.join("release-identity.json"), r#"{"schemaVersion":1,"buildId":"package-build"}"#).unwrap();
+        let listener = TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0)).await.unwrap();
+        let runtime = AgentRuntime::new_with_resource_dir(NexusConfig { data_dir: Some(root.join("data")), port: listener.local_addr().unwrap().port() }, Some(program.clone()), Some(resources)).unwrap();
+        let mut health = HealthResponse::healthy(runtime.data_root_id().to_owned(), "old-instance".to_owned());
+        health.binary_path = Some(program.to_string_lossy().into_owned());
+        health.build_id = Some("old-build".to_owned());
+        (runtime, listener, root, health)
+    }
+
+    #[tokio::test]
+    async fn packaged_identity_rejects_same_path_old_or_missing_build() {
+        let (mut runtime, listener, root, mut health) = packaged_agent_fixture("match").await;
+        assert!(!runtime.binary_is_fresh(&health));
+        health.build_id = None;
+        assert!(!runtime.binary_is_fresh(&health));
+        health.build_id = Some("package-build".to_owned());
+        assert!(runtime.binary_is_fresh(&health));
+        runtime.bind_build_identity("package-build").unwrap();
+        fs::remove_file(root.join("resources/release-identity.json")).unwrap();
+        assert!(!runtime.binary_is_fresh(&health), "a packaged identity cannot silently fall back when its manifest is missing");
+        fs::write(root.join("resources/release-identity.json"), "broken").unwrap();
+        assert!(!runtime.binary_is_fresh(&health));
+        drop(listener); fs::remove_dir_all(root).unwrap();
+    }
+
+    #[tokio::test]
+    async fn stale_agent_shutdown_failure_cannot_be_reported_as_successful_start() {
+        let (runtime, listener, root, health) = packaged_agent_fixture("stop-failure").await;
+        let server = tokio::spawn(async move {
+            loop {
+                let (mut socket, _) = listener.accept().await.unwrap();
+                let mut bytes = [0; 4096];
+                let count = socket.read(&mut bytes).await.unwrap();
+                if String::from_utf8_lossy(&bytes[..count]).starts_with("POST /v1/shutdown ") {
+                    write_json_response(&mut socket, "500 Internal Server Error", &serde_json::json!({"error":"stop failed"})).await;
+                } else { write_json_response(&mut socket, "200 OK", &health).await; }
+            }
+        });
+        assert!(runtime.start(1).await.is_err());
+        assert!(runtime.child_pid().is_none());
+        let status = runtime.status().await;
+        assert!(status.running && !status.available);
+        assert!(status.message.unwrap().contains("does not match"));
+        assert!(runtime.probe_ready().await.is_err());
+        assert!(runtime.probe().await.is_ok(), "old Agent remains observable for explicit shutdown");
+        server.abort(); let _ = server.await;
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[tokio::test]
+    async fn stale_agent_appearing_after_initial_probe_is_not_adopted() {
+        let (runtime, listener, root, health) = packaged_agent_fixture("late").await;
+        let server = tokio::spawn(async move {
+            for first in [true, false] {
+                let (mut socket, _) = listener.accept().await.unwrap();
+                let mut bytes = [0; 4096]; let _ = socket.read(&mut bytes).await.unwrap();
+                if first { write_json_response(&mut socket, "503 Service Unavailable", &serde_json::json!({"error":"starting"})).await; }
+                else { write_json_response(&mut socket, "200 OK", &health).await; }
+            }
+        });
+        assert!(runtime.start(1).await.is_err());
+        assert!(runtime.child_pid().is_none());
+        server.await.unwrap(); fs::remove_dir_all(root).unwrap();
+    }
+
     async fn write_json_response<T: Serialize>(
         socket: &mut tokio::net::TcpStream,
         status: &str,
@@ -1383,6 +1526,42 @@ mod tests {
             .write_all(body)
             .await
             .expect("test response body write");
+    }
+
+    #[tokio::test]
+    async fn discovery_survives_unrelated_http_on_configured_port() {
+        for collision in ["404", "json", "identity"] {
+            let root = env::temp_dir().join(format!("nexus-discovery-collision-{}-{}-{collision}",
+                std::process::id(), nexus_core::unix_time_nanos_for_update()));
+            let wrong = TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0)).await.unwrap();
+            let correct = TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0)).await.unwrap();
+            let actual = correct.local_addr().unwrap().port();
+            let runtime = AgentRuntime::new(NexusConfig {
+                data_dir: Some(root.clone()), port: wrong.local_addr().unwrap().port(),
+            }, None).unwrap();
+            runtime.paths.ensure_directories().unwrap();
+            runtime.paths.publish_agent_discovery(&nexus_core::AgentDiscoveryRecord {
+                port: actual, instance_id: "owned".into(), data_root_id: runtime.data_root_id.clone(),
+                pid: std::process::id(), updated_at_unix: 0,
+            }).unwrap();
+            let health = HealthResponse::healthy(runtime.data_root_id.clone(), "owned".into());
+            let good_server = tokio::spawn(serve_health_once(correct, health));
+            let wrong_server = tokio::spawn(async move {
+                let (mut socket, _) = wrong.accept().await.unwrap();
+                let mut request = [0; 4096];
+                socket.read(&mut request).await.unwrap();
+                if collision == "identity" {
+                    write_json_response(&mut socket, "200 OK", &HealthResponse::healthy("other-root".into(), "other".into())).await;
+                } else {
+                    write_raw_response(&mut socket, if collision == "404" { "404 Not Found" } else { "200 OK" }, b"{}").await;
+                }
+            });
+            assert_eq!(runtime.probe().await.unwrap().instance_id, "owned");
+            assert_eq!(runtime.client().base_url().port(), Some(actual));
+            wrong_server.await.unwrap();
+            good_server.await.unwrap();
+            fs::remove_dir_all(root).unwrap();
+        }
     }
 
     async fn serve_health_once(listener: TcpListener, health: HealthResponse) {
@@ -1628,7 +1807,9 @@ mod tests {
         assert!(validate_agent_request("/v1/harness/discover", &Method::GET, None).is_ok());
         assert!(validate_agent_request("/v1/runtime", &Method::GET, None).is_ok());
         assert!(validate_agent_request("/v1/recovery", &Method::GET, None).is_ok());
-        assert!(validate_agent_request("/v1/recovery", &Method::POST, Some(b"{}")).is_err());
+        assert!(validate_agent_request("/v1/preflight", &Method::GET, None).is_ok());
+        assert!(validate_agent_request("/v1/preflight", &Method::POST, Some(b"{}")).is_err());
+        assert!(validate_agent_request("/v1/recovery", &Method::POST, Some(b"{\"action\":\"enter\"}")).is_ok());
         assert!(validate_agent_request("/v1/runtime", &Method::POST, None).is_err());
         assert!(validate_agent_request("/v1/runtime", &Method::GET, Some(b"{}")).is_err());
         assert!(validate_agent_request("/v1/runtime/plan", &Method::GET, None).is_err());

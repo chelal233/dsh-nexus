@@ -6,10 +6,12 @@ license.workspace = true
 publish.workspace = true
 
 [dependencies]
+nexus-private-file = { path = "../nexus-private-file" }
 nexus-protocol = { path = "../nexus-protocol" }
 nexus-snapshots = { path = "../nexus-snapshots" }
 serde.workspace = true
 serde_json.workspace = true
+sha2 = "0.10"
 
 [target.'cfg(windows)'.dependencies]
-windows-sys.workspace = true
+windows-sys = { workspace = true, features = ["Win32_System_IO", "Win32_System_Ioctl"] }

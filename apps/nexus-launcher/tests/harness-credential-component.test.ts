@@ -3,17 +3,12 @@ import test from "node:test";
 
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
-import { createServer } from "vite";
+import { createUiTestLoader } from "./ui-test-loader.ts";
 
 test("Overview removes stale Harness credentials while a restart POST is deferred", async () => {
-  const vite = await createServer({
-    root: process.cwd(),
-    appType: "custom",
-    logLevel: "silent",
-    server: { middlewareMode: true },
-  });
+  const loader = await createUiTestLoader();
   try {
-    const { CheckpointsView, OverviewView, credentialInvalidationCanSettle, isRecoverableNoopError } = await vite.ssrLoadModule("/src/App.tsx");
+    const { CheckpointsView, OverviewView, credentialInvalidationCanSettle, isRecoverableNoopError } = await loader.loadModule("/src/App.tsx");
     assert.equal(isRecoverableNoopError("Harness is already running"), true);
     assert.equal(isRecoverableNoopError("Harness is already stopped"), true);
     assert.equal(isRecoverableNoopError("Harness is already running; no lifecycle change was made."), true);
@@ -174,19 +169,14 @@ test("Overview removes stale Harness credentials while a restart POST is deferre
     releasePost();
     await request;
   } finally {
-    await vite.close();
+    await loader.close();
   }
 });
 
 test("Harness web panel uses the system browser for token sessions and preserves safe iframe fallback", async () => {
-  const vite = await createServer({
-    root: process.cwd(),
-    appType: "custom",
-    logLevel: "silent",
-    server: { middlewareMode: true },
-  });
+  const loader = await createUiTestLoader();
   try {
-    const { HarnessWebPanel } = await vite.ssrLoadModule("/src/App.tsx");
+    const { HarnessWebPanel } = await loader.loadModule("/src/App.tsx");
     const baseSnapshot = {
       startup: { available: true },
       endpointErrors: {},
@@ -227,6 +217,6 @@ test("Harness web panel uses the system browser for token sessions and preserves
     assert.match(invalidatedMarkup, /Open in system browser/);
     assert.match(invalidatedMarkup, /disabled/);
   } finally {
-    await vite.close();
+    await loader.close();
   }
 });

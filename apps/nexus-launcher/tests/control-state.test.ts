@@ -17,7 +17,21 @@ import {
   launcherContentMode,
   recoveryMutationGate,
   runtimeSettingsGate,
+  validStartupCheck,
 } from "../src/control-state.ts";
+
+test("startup authorization rejects missing, malformed and contradictory check reports", () => {
+  const report = { api_version: "v1", ready: true, paused: false, checked_at_unix: 1,
+    checks: [{ id: "entry", status: "ok", reason: "exists", next: "" }] };
+  assert.equal(validStartupCheck(report), true);
+  assert.equal(validStartupCheck({ ...report, checks: [{ ...report.checks[0], status: "warning" }] }), true);
+  assert.equal(validStartupCheck({ ...report, ready: false, checks: [{ ...report.checks[0], status: "blocked" }] }), true);
+  for (const value of [null, {}, { ...report, checks: [] }, { ...report, api_version: "v2" },
+    { ...report, ready: "true" }, { ...report, checks: ["ok"] },
+    { ...report, checks: [{ ...report.checks[0], status: "unknown" }] },
+    { ...report, checks: [{ ...report.checks[0], status: "blocked" }] },
+    { ...report, checked_at_unix: -1 }]) assert.equal(validStartupCheck(value), false);
+});
 
 test("missing Harness redirects only confirmed empty setups and specific errors", () => {
   assert.equal(needsHarnessInstall({ harness: null }, { releases: [] }), true);
@@ -170,4 +184,9 @@ test("asynchronous install acceptance never announces completion", () => {
   }
   assert.match(actionNoticeKey("/v1/updates", "cancel"), /Waiting for cleanup/);
   assert.equal(actionNoticeKey("/v1/profiles", "select"), "complete");
+});
+
+test("recovery entry clears Harness credentials but leaving never starts it", () => {
+  assert.equal(invalidatesHarnessCredentials("/v1/recovery", "enter"), true);
+  assert.equal(invalidatesHarnessCredentials("/v1/recovery", "leave"), false);
 });

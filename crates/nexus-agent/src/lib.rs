@@ -40,7 +40,7 @@ use nexus_core::{
     UPDATE_SOURCE_ENV, UPDATE_TIMEOUT_ENV, UPDATE_VERIFY_ARGS_ENV, UPDATE_VERIFY_PROGRAM_ENV,
 };
 use nexus_launcher_core::{
-    harness_observation_matches_session, read_harness_ui_info, unavailable_harness_ui_info,
+    harness_observation_matches_session, read_harness_ui_info_with_observer, HarnessLogObserver, unavailable_harness_ui_info,
 };
 use nexus_protocol::{
     AgentLifecycleState, CheckpointAction, CheckpointCommand, CheckpointContentState,
@@ -66,6 +66,10 @@ pub mod git_worker;
 mod compatibility;
 mod dsh;
 mod runtime;
+mod preflight;
+mod preference_capabilities;
+mod launch_inputs;
+mod recovery_mode;
 mod runtime_plan;
 mod snapshots;
 mod supervisor;
@@ -103,6 +107,7 @@ struct AppState {
     snapshots: snapshots::SnapshotCoordinator,
     harness_sync: Arc<Mutex<()>>,
     crash_capture_run: Arc<Mutex<Option<String>>>,
+    harness_logs: Arc<Mutex<HarnessLogObserver>>,
     #[cfg(test)]
     checkpoint_transition_gate: Arc<Mutex<Option<CheckpointTransitionGate>>>,
     #[cfg(test)]
@@ -225,8 +230,16 @@ pub async fn run_with_instance_id(
     let updater = UpdateExecutor::new(paths.clone(), releases.clone());
     let _ = updater.recover_unattached()?;
     let cold = cold::ColdCoordinator::new(paths.clone());
-    cold.recover()?;
+    if let Err(error) = cold.recover() {
+        if nexus_core::is_config_transaction_error(&error) || cold::is_publication_conflict(&error) {
+            tracing::warn!(%error, "Configuration publication recovery is pending; Agent remains available");
+        } else { return Err(error); }
+    }
     let release_catalog = releases.load()?;
+    if !release_catalog.unavailable_selections.is_empty() {
+        tracing::warn!(releases = ?release_catalog.unavailable_selections,
+            "Selected Harness release is missing or incomplete; Agent remains available for reinstallation");
+    }
     let supervisor = HarnessSupervisor::new(paths.clone())?;
     let metadata = supervisor.metadata_store();
     // A restart can only recover a persisted Harness state by proving the
@@ -258,6 +271,7 @@ pub async fn run_with_instance_id(
         snapshots,
         harness_sync: Arc::new(Mutex::new(())),
         crash_capture_run: Arc::new(Mutex::new(None)),
+        harness_logs: Arc::new(Mutex::new(nexus_launcher_core::HarnessLogObserver::default())),
         #[cfg(test)]
         checkpoint_transition_gate: Arc::new(Mutex::new(None)),
         #[cfg(test)]
@@ -321,7 +335,8 @@ fn build_router(state: AppState) -> Router {
         .route("/v1/harness/discover", get(harness_discover))
         .route("/v1/harness/ui", get(harness_ui))
         .route("/v1/profiles", get(profile_list).post(profile_control))
-        .route("/v1/recovery", get(recovery_status))
+        .route("/v1/recovery", get(recovery_status).post(recovery_control))
+        .route("/v1/preflight", get(preflight::check))
         .route(
             "/v1/checkpoints",
             get(checkpoint_list).post(checkpoint_control),
@@ -336,7 +351,7 @@ fn build_router(state: AppState) -> Router {
             get(diagnostics_status).post(diagnostics_control),
         )
         .route("/v1/config", get(config_status).post(config_control))
-        .route("/v1/maintenance", post(maintenance_control))
+        .route("/v1/maintenance", get(maintenance_status).post(maintenance_dispatch))
         .route("/v1/lifecycle", post(lifecycle))
         .route("/v1/shutdown", post(shutdown))
         .layer(middleware::from_fn_with_state(
@@ -729,6 +744,7 @@ async fn health(State(state): State<AppState>) -> Json<HealthResponse> {
     } else {
         HealthResponse::healthy(state.data_root_id.clone(), state.instance_id.clone())
     };
+    response.build_id = option_env!("NEXUS_BUILD_ID").map(str::to_owned);
     if response.binary_path.is_none() {
         response.binary_path = std::env::current_exe()
             .ok()
@@ -819,6 +835,34 @@ fn recovery_log_payload(mut bytes: Vec<u8>, limit: usize, truncated: bool) -> (S
     (content, fatal)
 }
 
+#[derive(serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RecoveryCommand { action: RecoveryAction }
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum RecoveryAction { Enter, Leave }
+
+async fn recovery_control(State(state): State<AppState>, Json(command): Json<RecoveryCommand>) -> axum::response::Response {
+    // Keep the operation owned if the requesting window closes.
+    match tokio::spawn(async move {
+        let lifecycle = state.supervisor.acquire_lifecycle().await;
+        let paused = matches!(command.action, RecoveryAction::Enter);
+        if let Err(error) = recovery_mode::set_paused(&state.paths, paused) {
+            return data_error_response(error, "recovery_mode_invalid");
+        }
+        if paused {
+            if let Err(error) = state.supervisor.stop_locked(&lifecycle).await {
+                return harness_error_response(error);
+            }
+        }
+        drop(lifecycle);
+        recovery_status(State(state)).await
+    }).await {
+        Ok(response) => response,
+        Err(error) => data_error_response(io::Error::other(error.to_string()), "recovery_mode_failed"),
+    }
+}
+
 async fn recovery_status(State(state): State<AppState>) -> axum::response::Response {
     let lifecycle = match try_read_lifecycle(&state) { Ok(guard) => guard, Err(response) => return response };
     let mut harness = sync_harness_state(&state).await.into_response().harness;
@@ -833,6 +877,14 @@ async fn recovery_status(State(state): State<AppState>) -> axum::response::Respo
     };
     let mut log_tail = Vec::new();
     let mut diagnostic_errors = Vec::new();
+    let (paused, pause_error) = match recovery_mode::paused(&state.paths) {
+        Ok(value) => (value, None),
+        Err(error) => {
+            let message = bounded_checkpoint_diagnostic(&error);
+            diagnostic_errors.push(format!("Recovery mode record: {message}"));
+            (true, Some(message))
+        }
+    };
     let mut fatal_prefix_observed = false;
     match HarnessLogSessionStore::new(state.paths.clone()).read() {
         Ok(Some(session)) => {
@@ -868,6 +920,8 @@ async fn recovery_status(State(state): State<AppState>) -> axum::response::Respo
     (
         StatusCode::OK,
         Json(RecoveryStatusResponse {
+            pause_error,
+            paused,
             api_version: nexus_protocol::API_VERSION.to_owned(),
             manual_entry_available: true,
             harness_stop_required,
@@ -937,14 +991,17 @@ async fn harness_ui(State(state): State<AppState>) -> axum::response::Response {
         (StatusCode::OK, Json(unavailable_harness_ui_info(message))).into_response()
     }
 
+    let mut observer = state.harness_logs.lock().await;
     let session = match HarnessLogSessionStore::new(state.paths.clone()).read() {
         Ok(Some(session)) => session,
         Ok(None) => {
+            observer.invalidate();
             return unavailable_harness_ui_response(
                 "Harness log session marker is not available; restart Harness to establish a safe token boundary",
             )
         }
         Err(error) => {
+            observer.invalidate();
             return unavailable_harness_ui_response(format!(
                 "Harness log session marker is invalid: {error}"
             ))
@@ -952,13 +1009,15 @@ async fn harness_ui(State(state): State<AppState>) -> axum::response::Response {
     };
     let first = sync_harness_state(&state).await.into_response();
     if !harness_ui_process_is_presentable(&first, &session) {
-        return unavailable_harness_ui_response(format!(
+        observer.invalidate();
+            return unavailable_harness_ui_response(format!(
             "Harness is {:?}; a current authentication token is not available",
             first.harness.state
         ));
     }
     if !harness_observation_matches_session(&first, &session) {
-        return unavailable_harness_ui_response(
+        observer.invalidate();
+            return unavailable_harness_ui_response(
             "Agent Harness observation does not match the durable log session marker",
         );
     }
@@ -968,18 +1027,20 @@ async fn harness_ui(State(state): State<AppState>) -> axum::response::Response {
         || !harness_ui_process_is_presentable(&second, &session)
         || !harness_observation_matches_session(&second, &session)
     {
-        return unavailable_harness_ui_response(
+        observer.invalidate();
+            return unavailable_harness_ui_response(
             "Harness changed state while its token was being observed; refresh after it is running",
         );
     }
 
-    let info = read_harness_ui_info(&state.paths);
+    let info = read_harness_ui_info_with_observer(&state.paths, &mut observer, Some(&session));
     let final_session = HarnessLogSessionStore::new(state.paths.clone()).read();
     let final_observation = sync_harness_state(&state).await.into_response();
     if !matches!(final_session, Ok(Some(ref current)) if current == &session)
         || final_observation != second
     {
-        return unavailable_harness_ui_response(
+        observer.invalidate();
+            return unavailable_harness_ui_response(
             "Harness changed state while its token was being observed; refresh after it is running",
         );
     }
@@ -1036,6 +1097,12 @@ async fn harness_control_inner(
             (StatusCode::OK, Json(harness.into_response())).into_response()
         }
         Err(error) => {
+            // Pre-spawn failures have no Harness log session yet. Preserve the
+            // rejected action in Agent logs, which diagnostic bundles include.
+            let (diagnostic, _) = redact_diagnostics_payload(error.to_string().as_bytes());
+            tracing::warn!(action = ?command.action,
+                error = %String::from_utf8_lossy(&diagnostic).trim(),
+                "Harness control failed");
             let _ = sync_harness_state(&state).await;
             harness_error_response(error)
         }
@@ -1126,7 +1193,7 @@ async fn schedule_crash_capture(state: &AppState, observation: &HarnessSnapshot)
     let state = state.clone();
     tokio::spawn(async move {
         let note = format!("auto: crash evidence for run {run_id}");
-        if let Ok(bundle) = state.diagnostics.collect(Some(note)) {
+        if let Ok(Ok(bundle)) = tokio::task::spawn_blocking(move || collect_current_diagnostics(&state, Some(note))).await {
             tracing::info!(
                 bundle = %bundle.id,
                 "captured automatic crash evidence"
@@ -1268,7 +1335,9 @@ fn profile_list_response(
     state: &AppState,
     catalog: ProfileCatalog,
 ) -> io::Result<ProfileListResponse> {
-    let manifests = dsh::native_profiles(state.snapshots.configured_dsh_home()?)?;
+    let home = state.snapshots.configured_dsh_home()?;
+    let mut manifests = dsh::native_profiles(&home)?;
+    for manifest in &mut manifests { manifest.order_undo_id = dsh::order_undo_id(&state.paths, &home, &manifest.name)?; }
     let names = manifests
         .iter()
         .map(|profile| profile.name.clone())
@@ -1276,12 +1345,12 @@ fn profile_list_response(
     let mut response = ProfileListResponse::new(catalog.active_profile, names).with_manifests(manifests);
     response.compatibility = compatibility::latest_for_selection(
         &state.paths,
-        state.snapshots.configured_dsh_home()?,
+        &state.snapshots.configured_dsh_home()?,
         &response.active_profile,
         state.releases.load()?.current_release.as_deref(),
     );
     let policy_profile = response.compatibility.as_ref().map(|report| report.source_profile.as_str()).unwrap_or(&response.active_profile);
-    response.disabled_plugins = compatibility::disabled_plugins(state.snapshots.configured_dsh_home()?, policy_profile)?;
+    response.disabled_plugins = compatibility::disabled_plugins(&state.snapshots.configured_dsh_home()?, policy_profile)?;
     Ok(response)
 }
 
@@ -1352,7 +1421,7 @@ async fn profile_control_inner(
                 );
             };
             let manifests =
-                match dsh::native_profiles(match state.snapshots.configured_dsh_home() {
+                match dsh::native_profiles(&match state.snapshots.configured_dsh_home() {
                     Ok(home) => home,
                     Err(error) => return data_error_response(error, "profile_catalog_unavailable"),
                 }) {
@@ -1386,8 +1455,14 @@ async fn profile_control_inner(
             {
                 return response;
             }
-            if let Err(error) = compatibility::for_profile_selection(&state, profile).await {
-                return data_error_response(error, "profile_compatibility_failed");
+            let paused = match recovery_mode::paused(&state.paths) {
+                Ok(value) => value,
+                Err(error) => return data_error_response(error, "recovery_mode_invalid"),
+            };
+            if !paused {
+                if let Err(error) = compatibility::for_profile_selection(&state, profile).await {
+                    return data_error_response(error, "profile_compatibility_failed");
+                }
             }
             let catalog = match ProfileCatalog::new(
                 profile,
@@ -1426,7 +1501,7 @@ async fn profile_control_inner(
                 .into_response()
         }
         ProfileAction::PluginRemove => profile_plugin_remove(state, command).await,
-        ProfileAction::PluginMove => profile_plugin_move(state, command).await,
+        ProfileAction::PluginMove | ProfileAction::PluginUndoMove => profile_plugin_move(state, command).await,
         ProfileAction::PluginDisable | ProfileAction::PluginEnable => profile_plugin_isolation(state, command).await,
         ProfileAction::OpenPath => profile_open_path(state, command).await,
         ProfileAction::OpenTerminal => profile_open_terminal(state, command).await,
@@ -1456,16 +1531,16 @@ async fn profile_plugin_isolation(state: AppState, command: ProfileCommand) -> a
     let result = (|| -> io::Result<ProfileListResponse> {
         let home = state.snapshots.configured_dsh_home()?;
         let catalog = state.profiles.load()?;
-        let source = compatibility::source_profile(home, profile)?;
+        let source = compatibility::source_profile(&home, profile)?;
         let failed_target = compatibility::latest(&state.paths).is_some_and(|report|
             report.status == "needs_choice" && report.trigger.as_deref() == Some("profile_switch")
                 && report.source_profile == source
                 && state.releases.load().ok().and_then(|catalog| catalog.current_release).as_deref() == Some(report.release_id.as_str()));
-        if source != compatibility::source_profile(home, &catalog.active_profile)? && !failed_target {
+        if source != compatibility::source_profile(&home, &catalog.active_profile)? && !failed_target {
             return Err(io::Error::new(io::ErrorKind::InvalidInput,
                 "plugin isolation must belong to the selected profile"));
         }
-        compatibility::set_plugin_disabled(home, profile, package, command.action == ProfileAction::PluginDisable)?;
+        compatibility::set_plugin_disabled(&home, profile, package, command.action == ProfileAction::PluginDisable)?;
         profile_list_response(&state, catalog)
     })();
     match result {
@@ -1477,6 +1552,17 @@ async fn profile_plugin_isolation(state: AppState, command: ProfileCommand) -> a
 /// Create a new profile from the shipped `web` template. Metadata only:
 /// the new profile is never selected and Harness is never restarted.
 async fn profile_create(state: AppState, command: ProfileCommand) -> axum::response::Response {
+    let lifecycle = state.supervisor.acquire_lifecycle().await;
+    if let Err(response) = ensure_checkpoint_mutation_ready(&state).await { return response; }
+    let _update_gate = match state.updater.try_acquire_gate() {
+        Ok(gate) => gate, Err(error) => return update_error_response(error),
+    };
+    if let Err(response) = ensure_update_idle(&state) { return response; }
+    let _snapshot_gate = match state.snapshots.try_acquire_configuration() {
+        Ok(gate) => gate, Err(error) => return data_error_response(error, "profile_change_conflict"),
+    };
+    if let Err(response) = ensure_harness_selection_quiescent(&state, &lifecycle,
+        "profile_change_conflict", "Stop Harness before creating a profile").await { return response; }
     let Some(name) = command.profile.as_deref() else {
         return data_error_response(
             io::Error::new(io::ErrorKind::InvalidInput, "profile name is required"),
@@ -1807,25 +1893,26 @@ async fn profile_open_path(state: AppState, command: ProfileCommand) -> axum::re
 }
 
 async fn profile_plugin_move(state: AppState, command: ProfileCommand) -> axum::response::Response {
-    let (Some(profile), Some(package)) = (command.profile.as_deref(), command.package.as_deref()) else {
-        return data_error_response(io::Error::new(io::ErrorKind::InvalidInput, "profile and package are required"), "plugin_move_invalid");
-    };
+    let Some(profile) = command.profile else { return data_error_response(io::Error::other("Profile is required"), "plugin_move_invalid"); };
+    let undo = command.action == ProfileAction::PluginUndoMove;
+    if (!undo && command.package.is_none()) || (undo && (command.target.is_none() || command.package.is_some())) {
+        return data_error_response(io::Error::other("Reorder requires package; undo requires its saved operation ID"), "plugin_move_invalid");
+    }
     let lifecycle = state.supervisor.acquire_lifecycle().await;
     if let Err(response) = ensure_checkpoint_mutation_ready(&state).await { return response; }
-    let _update_gate = match state.updater.try_acquire_gate() {
-        Ok(gate) => gate,
-        Err(error) => return update_error_response(error),
-    };
+    let update = match state.updater.try_acquire_gate() { Ok(gate) => gate, Err(error) => return update_error_response(error) };
+    if let Err(response) = ensure_update_idle(&state) { return response; }
+    let snapshots = match state.snapshots.try_acquire_configuration() { Ok(gate) => gate, Err(error) => return data_error_response(error, "plugin_move_conflict") };
     if let Err(response) = ensure_harness_selection_quiescent(&state, &lifecycle,
         "plugin_move_conflict", "stop Harness before changing plugin load order").await { return response; }
-    let home = match state.snapshots.configured_dsh_home() {
-        Ok(home) => home,
-        Err(error) => return data_error_response(error, "profile_catalog_unavailable"),
-    };
-    match dsh::move_profile_plugin(home, profile, package, command.target.as_deref()) {
-        Ok(inventory) => (StatusCode::OK, Json(inventory)).into_response(),
-        Err(error) => data_error_response(error, "plugin_move_failed"),
-    }
+    let home = match state.snapshots.configured_dsh_home() { Ok(home) => home, Err(error) => return data_error_response(error, "profile_catalog_unavailable") };
+    let paths=state.paths.clone();
+    let result=tokio::task::spawn_blocking(move || {
+        let _owners=(lifecycle,update,snapshots);
+        if undo { dsh::undo_profile_order(&paths,&home,&profile,command.target.as_deref().unwrap()) }
+        else { dsh::move_profile_plugin(&paths,&home,&profile,command.package.as_deref().unwrap(),command.target.as_deref()) }
+    }).await.unwrap_or_else(|error|Err(io::Error::other(error.to_string())));
+    match result { Ok(inventory) => (StatusCode::OK, Json(inventory)).into_response(), Err(error) => data_error_response(error, "plugin_move_failed") }
 }
 
 async fn profile_plugin_remove(
@@ -1940,8 +2027,10 @@ async fn checkpoint_list(State(state): State<AppState>) -> axum::response::Respo
         Ok(catalog) => catalog.active_profile,
         Err(error) => return data_error_response(error, "checkpoint_profile_invalid"),
     };
+    let last_capture = state.snapshots.last_capture();
+    let inventory_refresh_pending = last_capture.get("state").and_then(serde_json::Value::as_str) == Some("running");
     let mut diagnostic = state.snapshots.healthy_error();
-    let snapshots = match state.snapshots.list_inspections(profile).await {
+    let snapshots = if inventory_refresh_pending { Vec::new() } else { match state.snapshots.list_inspections(profile).await {
         Ok(snapshots) => snapshots,
         Err(error) => {
             if diagnostic.is_none() {
@@ -1949,7 +2038,7 @@ async fn checkpoint_list(State(state): State<AppState>) -> axum::response::Respo
             }
             Vec::new()
         }
-    };
+    }};
     let pending_restore = match state.checkpoint_restores.load() {
         Ok(Some(journal)) => snapshots::restore_status(&journal, None),
         Ok(None) => None,
@@ -1962,7 +2051,7 @@ async fn checkpoint_list(State(state): State<AppState>) -> axum::response::Respo
                 snapshots,
                 pending_restore,
                 diagnostic,
-            ),
+            ).with_last_capture(last_capture),
         ),
     )
         .into_response()
@@ -1975,7 +2064,7 @@ async fn ensure_checkpoint_mutation_ready(
         return Err(api_error_response(
             StatusCode::CONFLICT,
             "cold_publication_pending",
-            "cold publication recovery is pending; restart the Agent to reconcile it",
+            "Cold publication recovery is pending; use Retry recovery or Keep current and end recovery in Updates",
         ));
     }
     match state.cold.cleanup_pending() {
@@ -2081,7 +2170,8 @@ async fn checkpoint_create(state: AppState, note: Option<String>) -> axum::respo
     let (result_tx, result_rx) = tokio::sync::oneshot::channel();
     tokio::spawn(async move {
         let result = async {
-            let lease = owner_state.snapshots.acquire(profile.clone()).await?;
+            let (lease, capture_id) = owner_state.snapshots.acquire_capture(profile.clone(), "manual").await?;
+            let result = async {
             let manifest = lease.capture_manual(version, note.clone()).await?;
             owner_state.checkpoints.create_with_snapshot(
                 &profile,
@@ -2090,6 +2180,9 @@ async fn checkpoint_create(state: AppState, note: Option<String>) -> axum::respo
                 state_snapshot,
                 Some(snapshots::snapshot_reference(&manifest)),
             )
+            }.await;
+            owner_state.snapshots.finish_capture(&capture_id, &result);
+            result
         }
         .await;
         drop(update_gate);
@@ -3032,11 +3125,13 @@ fn checkpoint_transaction_error(primary: io::Error, rollback: io::Result<()>) ->
 }
 
 fn release_list_response(catalog: ReleaseCatalog) -> ReleaseListResponse {
-    ReleaseListResponse::new(
+    let mut response = ReleaseListResponse::new(
         catalog.current_release,
         catalog.last_known_good,
         catalog.releases,
-    )
+    );
+    response.unavailable_selections = catalog.unavailable_selections;
+    response
 }
 
 async fn release_list(State(state): State<AppState>) -> axum::response::Response {
@@ -3276,7 +3371,15 @@ async fn release_control_inner(
             {
                 return response;
             }
-            let catalog = match state.releases.remove(id) {
+            let id = id.to_owned();
+            let releases = state.releases.clone();
+            let result = tokio::task::spawn_blocking(move || {
+                let _owners = (lifecycle, _update_gate);
+                #[cfg(test)]
+                wait_release_remove_test_gate(&id);
+                releases.remove(&id)
+            }).await.unwrap_or_else(|error| Err(io::Error::other(format!("Release cleanup owner failed: {error}"))));
+            let catalog = match result {
                 Ok(catalog) => catalog,
                 Err(error) if error.kind() == io::ErrorKind::ResourceBusy => {
                     return data_error_response(error, "release_slot_protected");
@@ -3370,6 +3473,15 @@ async fn update_status(State(state): State<AppState>) -> axum::response::Respons
     if let Some(operation) = operation {
         response = response.with_operation(operation);
     }
+    response.configuration_recovery = match state.config.pending_configuration_status() {
+        Ok(status) => status, Err(error) => return data_error_response(error, "config_recovery_unavailable"),
+    };
+    response.publication_recovery = match state.cold.publication_status() {
+        Ok(status) => status, Err(error) => return data_error_response(error, "publication_recovery_unavailable"),
+    };
+    response.install_operation = match state.updater.install_operation() {
+        Ok(operation) => operation, Err(error) => return data_error_response(error, "install_operation_unavailable"),
+    };
     (StatusCode::OK, Json(response)).into_response()
 }
 
@@ -3390,6 +3502,19 @@ async fn update_control(
             {
                 Ok(response) => (StatusCode::CREATED, Json(response)).into_response(),
                 Err(error) => update_error_response(error),
+            }
+        }
+        UpdateAction::OfflineImport | UpdateAction::OfflineExport => {
+            let Some(archive) = command.archive_path.as_deref() else {
+                return api_error_response(StatusCode::BAD_REQUEST,"offline_path_required","archive_path is required");
+            };
+            if let Err(response)=ensure_checkpoint_mutation_ready(&state).await {return response;}
+            match cold::offline::begin(&state,command.action,archive,command.release_id.as_deref()).await {
+                Ok(operation)=>{
+                    tokio::spawn(cold::prepare(state.clone(),operation.operation_id.clone()));
+                    (StatusCode::ACCEPTED,Json(UpdateResponse::new(state.updater.status().unwrap_or_else(|_|nexus_protocol::UpdateRuntimeInfo::idle()),None).with_operation(operation))).into_response()
+                },
+                Err(error)=>data_error_response(error,"offline_operation_rejected"),
             }
         }
         UpdateAction::Switch => {
@@ -3429,6 +3554,64 @@ async fn update_control(
                 Err(error) => data_error_response(error, "cold_operation_rejected"),
             }
         }
+        UpdateAction::PublicationRetry | UpdateAction::PublicationAbandon | UpdateAction::ConfigurationRetry | UpdateAction::ConfigurationAbandon => {
+            let Some(operation_id) = command.operation_id else {
+                return api_error_response(StatusCode::BAD_REQUEST, "cold_operation_id_required", "operation_id is required");
+            };
+            let configuration_only = matches!(command.action, UpdateAction::ConfigurationRetry | UpdateAction::ConfigurationAbandon);
+            if configuration_only && state.cold.publication_pending() {
+                return api_error_response(StatusCode::CONFLICT, "publication_recovery_pending", "Use publication recovery to resolve both pending operations together");
+            }
+            let lifecycle = state.supervisor.acquire_lifecycle().await;
+            if let Err(response) = ensure_harness_stopped(&state, &lifecycle).await { return response; }
+            match state.checkpoint_restores.load() {
+                Ok(None) => {},
+                Ok(Some(_)) => return api_error_response(StatusCode::CONFLICT, "checkpoint_recovery_pending", "Finish checkpoint recovery first"),
+                Err(error) => return data_error_response(error, "checkpoint_recovery_unavailable"),
+            }
+            let update = match state.updater.try_acquire_gate() { Ok(value) => value, Err(error) => return update_error_response(error) };
+            // A persisted Running update may be this interrupted cold publication.
+            // The exclusive owner gate plus ordinary-install record proves quiescence.
+            match state.updater.install_operation() {
+                Ok(Some(operation)) if !operation.owner_quiescent || operation.cleanup_pending || operation.phase == "installing" =>
+                    return api_error_response(StatusCode::CONFLICT, "install_recovery_pending", "Finish ordinary installation recovery first"),
+                Ok(_) => {}, Err(error) => return data_error_response(error, "install_recovery_unavailable"),
+            }
+            let snapshots = match state.snapshots.try_acquire_configuration() {
+                Ok(value) => value, Err(error) => return data_error_response(error, "publication_recovery_conflict"),
+            };
+            let cold = match state.cold.acquire_recovery().await {
+                Ok(value) => value, Err(error) => return data_error_response(error, "publication_recovery_conflict"),
+            };
+            let coordinator = state.cold.clone();
+            let config_store = state.config.clone();
+            let preserve = matches!(command.action, UpdateAction::PublicationAbandon | UpdateAction::ConfigurationAbandon);
+            let result = tokio::task::spawn_blocking(move || {
+                let _guards = (lifecycle, update, snapshots, cold);
+                if configuration_only {
+                    if preserve { config_store.preserve_current_configuration(&operation_id) } else { config_store.retry_configuration(&operation_id) }
+                } else { coordinator.recover_explicit(&operation_id, preserve) }
+            }).await.unwrap_or_else(|error| Err(io::Error::other(error.to_string())));
+            if let Err(error) = result { return data_error_response(error, "publication_recovery_failed"); }
+            let catalog = match state.releases.load() { Ok(value) => value, Err(error) => return data_error_response(error, "release_catalog_unavailable") };
+            if let Err(error) = persist_release_catalog_state(&state, &catalog, false).await {
+                return data_error_response(io::Error::other(error.to_string()), "release_state_persistence_failed");
+            }
+            update_status(State(state)).await
+        }
+        UpdateAction::ClearFinished => {
+            let Some(operation_id) = command.operation_id else {
+                return api_error_response(
+                    StatusCode::BAD_REQUEST,
+                    "cold_operation_id_required",
+                    "operation_id is required",
+                );
+            };
+            match state.cold.clear_finished(&operation_id).await {
+                Ok(()) => update_status(State(state)).await,
+                Err(error) => data_error_response(error, "cold_clear_failed"),
+            }
+        }
         UpdateAction::Confirm => {
             let Some(operation_id) = command.operation_id else {
                 return api_error_response(
@@ -3461,6 +3644,19 @@ async fn update_control(
                     "operation_id is required",
                 );
             };
+            if operation_id.starts_with("install-") {
+                let updater = state.updater.clone();
+                let result = tokio::spawn(async move { updater.cancel_install(&operation_id).await }).await
+                    .unwrap_or_else(|error| Err(io::Error::other(error.to_string())));
+                return match result {
+                    Ok(operation) => {
+                        let mut response = UpdateResponse::new(state.updater.status().unwrap_or_else(|_| nexus_protocol::UpdateRuntimeInfo::idle()), None);
+                        response.install_operation = Some(operation);
+                        (StatusCode::OK, Json(response)).into_response()
+                    },
+                    Err(error) => data_error_response(error, "install_cancel_failed"),
+                };
+            }
             match state.cold.cancel(&operation_id).await {
                 Ok(operation) => (
                     StatusCode::OK,
@@ -3530,6 +3726,18 @@ async fn diagnostics_status(State(state): State<AppState>) -> axum::response::Re
     }
 }
 
+fn collect_current_diagnostics(state: &AppState, note: Option<String>) -> io::Result<nexus_protocol::DiagnosticsBundle> {
+    let mut context = match state.config.load().and_then(|config| config_response_for_paths(&state.paths, config)) {
+        Ok(config) => serde_json::to_value(config)?,
+        Err(error) => serde_json::json!({"config_error": error.to_string()}),
+    };
+    if let Some(prompt) = context.pointer_mut("/harness_preferences/system_prompt") { *prompt = serde_json::json!("[REDACTED]"); }
+    let context = serde_json::json!({"configuration": context,
+        "harness_home": crate::dsh::resolve_dsh_home_for_paths(&state.paths).ok(),
+        "observed_at_unix": nexus_core::unix_time_seconds()});
+    state.diagnostics.collect_with_context(note, Some(context))
+}
+
 async fn diagnostics_control(
     State(state): State<AppState>,
     Json(command): Json<DiagnosticsCommand>,
@@ -3561,12 +3769,27 @@ async fn diagnostics_control(
                 Err(error) => data_error_response(error, "diagnostics_open_failed"),
             }
         }
-        DiagnosticsAction::Collect => {
-            let _lifecycle = state.supervisor.acquire_lifecycle().await;
-            if let Err(response) = ensure_checkpoint_mutation_ready(&state).await {
-                return response;
+        DiagnosticsAction::Export => {
+            if command.bundle.is_some() || command.file.is_some() {
+                return data_error_response(io::Error::new(io::ErrorKind::InvalidInput, "Export collects the current diagnostic context; bundle and file are not accepted"), "diagnostics_invalid");
             }
-            match state.diagnostics.collect(command.note) {
+            let collected = tokio::task::spawn_blocking(move || collect_current_diagnostics(&state, command.note)).await
+                .unwrap_or_else(|error| Err(io::Error::other(error.to_string())));
+            match collected {
+                Ok(bundle) => {
+                    let path = std::path::PathBuf::from(&bundle.directory).join("export.json");
+                    let reveal_error = reveal_diagnostic_export(&path).err().map(|error| error.to_string());
+                    (StatusCode::CREATED, Json(serde_json::json!({"api_version":"v1", "bundles":[bundle], "export_path":path, "reveal_error":reveal_error}))).into_response()
+                }
+                Err(error) => data_error_response(error, "diagnostics_export_failed"),
+            }
+        }
+        DiagnosticsAction::Collect => {
+            // Diagnostics must remain available while a restore is pending.
+            // Collection owns only its diagnostics gate and survives disconnects.
+            let collected = tokio::task::spawn_blocking(move || collect_current_diagnostics(&state, command.note)).await
+                .unwrap_or_else(|error| Err(io::Error::other(error.to_string())));
+            match collected {
                 Ok(bundle) => (
                     StatusCode::CREATED,
                     Json(DiagnosticsResponse::new(vec![bundle])),
@@ -3578,13 +3801,50 @@ async fn diagnostics_control(
     }
 }
 
+fn reveal_diagnostic_export(path: &std::path::Path) -> io::Result<()> {
+    #[cfg(windows)] {
+        use std::os::windows::process::CommandExt;
+        std::process::Command::new("explorer.exe").arg(format!("/select,{}", path.display())).creation_flags(0x0800_0000).spawn()?;
+    }
+    #[cfg(target_os = "macos")] {
+        std::process::Command::new("open").arg("-R").arg(path).spawn()?;
+    }
+    #[cfg(all(unix, not(target_os = "macos")))] {
+        std::process::Command::new("xdg-open").arg(path.parent().ok_or_else(|| io::Error::other("Diagnostic export has no parent"))?).spawn()?;
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+static RELEASE_REMOVE_TEST_GATE: std::sync::Mutex<Option<(String, std::sync::mpsc::Sender<()>, std::sync::mpsc::Receiver<()>)>> = std::sync::Mutex::new(None);
+#[cfg(test)]
+fn wait_release_remove_test_gate(id: &str) {
+    let gate = {
+        let mut stored = RELEASE_REMOVE_TEST_GATE.lock().unwrap();
+        if stored.as_ref().is_some_and(|entry| entry.0 == id) { stored.take() } else { None }
+    };
+    if let Some((_, entered, release)) = gate {
+        entered.send(()).unwrap();
+        release.recv_timeout(std::time::Duration::from_secs(10)).unwrap();
+    }
+}
+
 async fn config_status(State(state): State<AppState>) -> axum::response::Response {
     match state.config.load() {
         Ok(document) => match config_response_for_paths(&state.paths, document) {
-            Ok(response) => (StatusCode::OK, Json(response)).into_response(),
+            Ok(mut response) => {
+                let next = crate::launch_inputs::next(&state.paths).ok();
+                let current = state.supervisor.launch_input_identity().and_then(|(generation, status, session)|
+                    crate::launch_inputs::current(&state.paths, generation, status, &session));
+                response.launch_inputs = Some(serde_json::json!({ "next_launch": next, "running_launch": current }));
+                (StatusCode::OK, Json(response)).into_response()
+            },
             Err(error) => data_error_response(error, "config_unavailable"),
         },
-        Err(error) => data_error_response(error, "config_unavailable"),
+        Err(error) => {
+            let code = if nexus_core::is_config_transaction_error(&error) { "config_recovery_pending" } else { "config_unavailable" };
+            data_error_response(error, code)
+        },
     }
 }
 
@@ -3596,11 +3856,85 @@ struct MaintenanceRequest {
     scope: Option<String>,
 }
 
+#[derive(serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct SpaceRequest {
+    action: String,
+    #[serde(default)] retention_days: Option<u32>,
+    #[serde(default)] preview_id: Option<String>,
+    #[serde(default)] item_ids: Vec<String>,
+}
+
+async fn maintenance_status(State(state): State<AppState>) -> axum::response::Response {
+    match nexus_core::maintenance::MaintenanceStore::new(state.paths).status() {
+        Ok(status) => (StatusCode::OK, Json(status)).into_response(),
+        Err(error) => data_error_response(error, "maintenance_status_failed"),
+    }
+}
+
+async fn maintenance_dispatch(State(state): State<AppState>, Json(value): Json<serde_json::Value>) -> axum::response::Response {
+    if matches!(value.get("action").and_then(|v| v.as_str()), Some("reset" | "restore_previous")) {
+        return match serde_json::from_value(value) {
+            Ok(request) => maintenance_control(State(state), Json(request)).await,
+            Err(error) => data_error_response(io::Error::new(io::ErrorKind::InvalidInput, error), "maintenance_invalid_request"),
+        };
+    }
+    let request: SpaceRequest = match serde_json::from_value(value) {
+        Ok(request) => request,
+        Err(error) => return data_error_response(io::Error::new(io::ErrorKind::InvalidInput, error), "maintenance_invalid_request"),
+    };
+    let paths = state.paths.clone();
+    let protected_logs = match nexus_core::HarnessLogSessionStore::new(paths.clone()).read() {
+        Ok(session) => session.map(|s| vec![s.stdout_log_name, s.stderr_log_name]).unwrap_or_default(),
+        Err(error) => return data_error_response(error, "maintenance_logs_unavailable"),
+    };
+    if request.action == "preview" {
+        let result = tokio::task::spawn_blocking(move || nexus_core::maintenance::MaintenanceStore::new(paths)
+            .preview(request.retention_days.unwrap_or(30), &protected_logs)).await;
+        return match result {
+            Ok(Ok(status)) => (StatusCode::OK, Json(status)).into_response(),
+            Ok(Err(error)) => data_error_response(error, "maintenance_preview_failed"),
+            Err(error) => data_error_response(io::Error::other(error.to_string()), "maintenance_preview_failed"),
+        };
+    }
+    if request.action != "cleanup" {
+        return api_error_response(StatusCode::BAD_REQUEST, "maintenance_invalid_action", "Choose preview, cleanup, or reset");
+    }
+    let Some(preview_id) = request.preview_id else {
+        return api_error_response(StatusCode::BAD_REQUEST, "maintenance_preview_required", "Create and confirm a cleanup preview first");
+    };
+    let lifecycle = state.supervisor.acquire_lifecycle().await;
+    if let Err(response) = ensure_checkpoint_mutation_ready(&state).await { return response; }
+    if let Err(response) = ensure_harness_stopped(&state, &lifecycle).await { return response; }
+    let update_guard = match state.updater.try_acquire_gate() {
+        Ok(guard) => guard, Err(error) => return update_error_response(error),
+    };
+    if let Err(response) = ensure_update_idle(&state) { return response; }
+    let snapshot_guard = match state.snapshots.try_acquire_configuration() {
+        Ok(guard) => guard, Err(error) => return data_error_response(error, "maintenance_conflict"),
+    };
+    let cold_guard = match state.cold.try_acquire_maintenance() {
+        Ok(guard) => guard, Err(error) => return data_error_response(error, "maintenance_conflict"),
+    };
+    // The worker owns every gate until the durable result is written, even if
+    // the HTTP connection closes. Cleanup never follows a client-supplied path.
+    let result = tokio::task::spawn_blocking(move || {
+        let _guards = (lifecycle, update_guard, snapshot_guard, cold_guard);
+        nexus_core::maintenance::MaintenanceStore::new(paths).cleanup(&preview_id, &request.item_ids, &protected_logs)
+    }).await;
+    match result {
+        Ok(Ok(status)) => (StatusCode::OK, Json(status)).into_response(),
+        Ok(Err(error)) => data_error_response(error, "maintenance_cleanup_failed"),
+        Err(error) => data_error_response(io::Error::other(error.to_string()), "maintenance_cleanup_failed"),
+    }
+}
+
 async fn maintenance_control(
     State(state): State<AppState>,
     Json(request): Json<MaintenanceRequest>,
 ) -> axum::response::Response {
-    if request.action != "reset" {
+    let restore_previous = request.action == "restore_previous";
+    if request.action != "reset" && !restore_previous {
         return api_error_response(
             StatusCode::BAD_REQUEST,
             "maintenance_invalid_action",
@@ -3619,32 +3953,48 @@ async fn maintenance_control(
         }
     };
     let lifecycle = state.supervisor.acquire_lifecycle().await;
+    if let Err(response) = ensure_checkpoint_mutation_ready(&state).await { return response; }
     if let Err(response) = ensure_harness_stopped(&state, &lifecycle).await {
         return response;
     }
-    if state
-        .cold
-        .load()
-        .ok()
-        .flatten()
-        .is_some_and(|operation| !operation.phase.is_terminal())
-    {
-        return api_error_response(
-            StatusCode::CONFLICT,
-            "cold_operation_active",
-            "a cold-install operation is active; cancel or finish it before resetting",
-        );
+    let update_guard = match state.updater.try_acquire_gate() {
+        Ok(guard) => guard, Err(error) => return update_error_response(error),
+    };
+    if let Err(response) = ensure_update_idle(&state) { return response; }
+    let snapshot_guard = match state.snapshots.try_acquire_configuration() {
+        Ok(guard) => guard, Err(error) => return data_error_response(error, "maintenance_conflict"),
+    };
+    let cold_guard = match state.cold.try_acquire_maintenance() {
+        Ok(guard) => guard, Err(error) => return data_error_response(error, "maintenance_conflict"),
+    };
+    if restore_previous {
+        if scope != "config" { return api_error_response(StatusCode::BAD_REQUEST, "maintenance_invalid_scope", "Previous configuration restore does not change the slot registry"); }
+        let config = state.config.clone();
+        let restored = tokio::task::spawn_blocking(move || {
+            let _guards = (lifecycle, update_guard, snapshot_guard, cold_guard);
+            config.restore_previous()
+        }).await;
+        return match restored {
+            Ok(Ok(_)) => (StatusCode::OK, Json(serde_json::json!({"status":"ok", "action":"restore_previous", "restart_required":true,
+                "note":"Previous valid Nexus configuration restored. Harness was not started."}))).into_response(),
+            Ok(Err(error)) => data_error_response(error, "config_restore_failed"),
+            Err(error) => data_error_response(io::Error::other(error.to_string()), "config_restore_failed"),
+        };
     }
     let paths = state.paths.clone();
     let owned_scope = scope.to_owned();
-    // Backup first (pure copies), then the default rewrite through the
-    // shared ConfigStore gate, then journal/pointer removal.
-    let backup = {
-        let paths = paths.clone();
-        let scope = owned_scope.clone();
-        tokio::task::spawn_blocking(move || backup_reset_targets(&paths, &scope)).await
-    };
-    let (backup_dir, backed_up) = match backup {
+    let config = state.config.clone();
+    let task_scope = owned_scope.clone();
+    // Guards belong to the blocking owner, so a disconnected HTTP caller
+    // cannot unlock configuration while this reset is still writing.
+    let reset = tokio::task::spawn_blocking(move || {
+        let _guards = (lifecycle, update_guard, snapshot_guard, cold_guard);
+        let (backup_dir, backed_up) = backup_reset_targets(&paths, &task_scope)?;
+        config.write(&nexus_core::NexusConfigFile::default())?;
+        let removed = clear_reset_targets(&paths, &task_scope)?;
+        Ok::<_, io::Error>((backup_dir, backed_up, removed))
+    }).await;
+    let (backup_dir, backed_up, removed) = match reset {
         Ok(Ok(values)) => values,
         Ok(Err(error)) => return data_error_response(error, "maintenance_reset_failed"),
         Err(error) => {
@@ -3654,41 +4004,15 @@ async fn maintenance_control(
             )
         }
     };
-    if let Err(error) = state.config.write(&nexus_core::NexusConfigFile::default()) {
-        return data_error_response(error, "maintenance_reset_failed");
-    }
-    let removed = {
-        let paths = paths.clone();
-        let scope = owned_scope.clone();
-        tokio::task::spawn_blocking(move || clear_reset_targets(&paths, &scope)).await
-    };
-    let removed = match removed {
-        Ok(Ok(values)) => values,
-        Ok(Err(error)) => return data_error_response(error, "maintenance_reset_failed"),
-        Err(error) => {
-            return data_error_response(
-                io::Error::other(error.to_string()),
-                "maintenance_reset_failed",
-            )
-        }
-    };
-    // Post-check: a cold operation started between the guard and now makes
-    // this reset racing with an install; surface it instead of staying quiet.
-    let cold_started = state
-        .cold
-        .load()
-        .ok()
-        .flatten()
-        .is_some_and(|operation| !operation.phase.is_terminal());
     (
         StatusCode::OK,
         Json(serde_json::json!({
-            "status": if cold_started { "ok_with_warning" } else { "ok" },
+            "status": "ok",
             "scope": owned_scope,
             "backup_dir": backup_dir.to_string_lossy(),
             "backed_up": backed_up,
             "removed": removed,
-            "warning": cold_started.then_some("a cold-install operation started during the reset"),
+            "warning": null,
         })),
     )
         .into_response()
@@ -3743,8 +4067,8 @@ fn clear_reset_targets(paths: &nexus_core::NexusPaths, scope: &str) -> io::Resul
 }
 
 fn backup_file(source: &std::path::Path, backup_dir: &std::path::Path, name: &str, backed_up: &mut Vec<String>) -> io::Result<()> {
-    if source.exists() {
-        std::fs::copy(source, backup_dir.join(name))?;
+    if let Some(bytes) = nexus_core::read_regular_file_bounded(source, 4 * 1024 * 1024)? {
+        nexus_core::write_private_bytes_atomic(backup_dir, &backup_dir.join(name), &bytes)?;
         backed_up.push(name.to_owned());
     }
     Ok(())
@@ -3814,7 +4138,8 @@ async fn config_control(
                 Ok(())
             })
         }
-        ConfigAction::SetUpdate => {
+        ConfigAction::SetUpdate | ConfigAction::SetUpdateSource => {
+            let source_only = command.action == ConfigAction::SetUpdateSource;
             let Some(payload) = command.update else {
                 return data_error_response(
                     io::Error::new(
@@ -3824,10 +4149,7 @@ async fn config_control(
                     "config_invalid",
                 );
             };
-            let update = match UpdateSpec::from_payload(payload) {
-                Ok(update) => update,
-                Err(error) => return data_error_response(error, "config_invalid"),
-            };
+            if let Err(error) = nexus_core::validate_update_source(&payload.source) { return data_error_response(error, "config_invalid"); }
             if let Err(response) = ensure_checkpoint_mutation_ready(&state).await {
                 return response;
             }
@@ -3839,6 +4161,12 @@ async fn config_control(
                 return response;
             }
             transact_config_response(&state, move |document| {
+                let update = if source_only {
+                    let mut current = document.update.clone().map(Ok).unwrap_or_else(|| serde_json::from_value::<UpdateSpec>(serde_json::json!({"source":payload.source})).map_err(io::Error::other))?;
+                    current.source = payload.source;
+                    current.validate()?;
+                    current
+                } else { UpdateSpec::from_payload(payload)? };
                 document.update = Some(update);
                 Ok(())
             })
@@ -3856,6 +4184,35 @@ async fn config_control(
             }
             transact_config_response(&state, |document| {
                 document.update = None;
+                Ok(())
+            })
+        }
+        ConfigAction::SetHarnessPreferences => {
+            let Some(payload) = command.harness_preferences else {
+                return data_error_response(io::Error::new(io::ErrorKind::InvalidInput,
+                    "harness_preferences is required; use an empty object to inherit"), "config_invalid");
+            };
+            let preferences = match nexus_core::normalize_harness_preferences(payload) {
+                Ok(value) => value,
+                Err(error) => return data_error_response(error, "config_invalid"),
+            };
+            for value in [&preferences.deepseek_base_url, &preferences.search_base_url].into_iter().flatten() {
+                if value.parse::<axum::http::Uri>().ok().and_then(|url| url.host().map(str::to_owned)).is_none() {
+                    return data_error_response(io::Error::new(io::ErrorKind::InvalidInput, "Invalid API base URL"), "config_invalid");
+                }
+            }
+            let lifecycle = state.supervisor.acquire_lifecycle().await;
+            if let Err(response) = ensure_checkpoint_mutation_ready(&state).await { return response; }
+            if let Err(response) = ensure_harness_stopped(&state, &lifecycle).await { return response; }
+            let _update_gate = match state.updater.try_acquire_gate() {
+                Ok(gate) => gate, Err(error) => return update_error_response(error),
+            };
+            if let Err(response) = ensure_update_idle(&state) { return response; }
+            let _snapshot_gate = match state.snapshots.try_acquire_configuration() {
+                Ok(gate) => gate, Err(error) => return data_error_response(error, "config_change_conflict"),
+            };
+            transact_config_response(&state, move |document| {
+                document.harness_preferences = (preferences != Default::default()).then_some(preferences);
                 Ok(())
             })
         }
@@ -3953,6 +4310,7 @@ fn config_response(document: NexusConfigFile) -> ConfigResponse {
     )
     .with_runtime(document.runtime.map(|runtime| runtime.to_payload()))
     .with_snapshots(snapshots)
+    .with_harness_preferences(document.harness_preferences)
     .with_harness_readiness_url_redacted(harness_readiness_url_redacted)
 }
 
@@ -3992,6 +4350,7 @@ fn config_response_for_paths(
         releases: None,
         runtime: document.runtime,
         snapshots: document.snapshots,
+        harness_preferences: document.harness_preferences,
     };
     Ok(config_response(effective)
         .with_environment_overrides(harness_env_override, update_env_override))
@@ -4194,6 +4553,7 @@ fn harness_error_response(error: HarnessSupervisorError) -> axum::response::Resp
         HarnessSupervisorError::NotConfigured => {
             (StatusCode::UNPROCESSABLE_ENTITY, "harness_not_configured")
         }
+        HarnessSupervisorError::RecoveryPaused => (StatusCode::CONFLICT, "harness_start_paused"),
         HarnessSupervisorError::AlreadyRunning => (StatusCode::CONFLICT, "harness_already_running"),
         HarnessSupervisorError::Unattached => (StatusCode::CONFLICT, "harness_unattached"),
         HarnessSupervisorError::InvalidProfile(_) => {
@@ -4574,6 +4934,7 @@ mod cors_tests {
         let secret = "Authorization: Bearer DUMMY-RECOVERY-SECRET";
         let startup_error = redact_recovery_error(Some(secret));
         let response = RecoveryStatusResponse {
+            pause_error: None,            paused: false,
             api_version: nexus_protocol::API_VERSION.to_owned(),
             manual_entry_available: true,
             harness_stop_required: false,
@@ -4643,6 +5004,342 @@ mod checkpoint_tests {
                 .map(|directory| directory.join(name))
                 .find(|candidate| candidate.is_file())
         })
+    }
+
+    #[tokio::test]
+    async fn harness_preferences_switch_only_the_pointer_and_clear_to_original_home() {
+        use nexus_protocol::{ConfigAction, ConfigCommand, HarnessPreferencesPayload};
+        let (state, root) = content_test_state("preferences");
+        let original = state.snapshots.configured_dsh_home().unwrap();
+        let original_bytes = fs::read(original.join("settings.yaml")).unwrap();
+        let selected = root.join("new-harness-data");
+        let command = ConfigCommand {
+            action: ConfigAction::SetHarnessPreferences,
+            harness_preferences: Some(HarnessPreferencesPayload {
+                home: Some(selected.to_string_lossy().into_owned()), port: Some(0),
+                open_browser: Some(false), ..Default::default()
+            }), ..Default::default()
+        };
+        let lease = state.snapshots.acquire("demo".into()).await.unwrap();
+        let blocked = super::config_control(State(state.clone()), Json(command.clone())).await;
+        assert_eq!(blocked.status(), StatusCode::CONFLICT);
+        drop(lease);
+        let saved = super::config_control(State(state.clone()), Json(command)).await;
+        assert!(saved.status().is_success());
+        assert_eq!(state.snapshots.configured_dsh_home().unwrap(), selected);
+        assert_eq!(crate::dsh::resolve_dsh_home_for_paths(&state.paths).unwrap(), selected);
+        assert!(!selected.exists(), "saving must not create, copy or move Harness data");
+        assert_eq!(fs::read(original.join("settings.yaml")).unwrap(), original_bytes);
+        let cleared = super::config_control(State(state.clone()), Json(ConfigCommand {
+            action: ConfigAction::SetHarnessPreferences,
+            harness_preferences: Some(HarnessPreferencesPayload { home: Some("  ".into()), ..Default::default() }),
+            ..Default::default()
+        })).await;
+        assert!(cleared.status().is_success());
+        assert!(state.config.load().unwrap().harness_preferences.is_none());
+        assert_eq!(state.snapshots.configured_dsh_home().unwrap(), original);
+        assert!(!selected.exists());
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[tokio::test]
+    async fn maintenance_blocks_busy_owners_and_resets_idle_configuration() {
+        let (state, root) = content_test_state("maintenance-owners");
+        let before = fs::read(&state.paths.config_file).unwrap();
+        let request = || Json(super::MaintenanceRequest { action: "reset".into(), scope: Some("config".into()) });
+        let update = state.updater.try_acquire_gate().unwrap();
+        assert_eq!(super::maintenance_control(State(state.clone()), request()).await.status(), StatusCode::CONFLICT);
+        drop(update);
+        let snapshot = state.snapshots.try_acquire_configuration().unwrap();
+        assert_eq!(super::maintenance_control(State(state.clone()), request()).await.status(), StatusCode::CONFLICT);
+        drop(snapshot);
+        let cold = state.cold.try_acquire_maintenance().unwrap();
+        assert_eq!(super::maintenance_control(State(state.clone()), request()).await.status(), StatusCode::CONFLICT);
+        drop(cold);
+        assert_eq!(fs::read(&state.paths.config_file).unwrap(), before);
+        let response = super::maintenance_control(State(state.clone()), request()).await;
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(response.into_body(), 65536).await.unwrap();
+        let value: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        let backup = std::path::PathBuf::from(value["backup_dir"].as_str().unwrap());
+        assert_eq!(fs::read(backup.join("config.json")).unwrap(), before);
+        assert_eq!(state.config.load().unwrap(), nexus_core::NexusConfigFile::default());
+        assert!(root.join("dsh-home").exists());
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[tokio::test]
+    async fn maintenance_restores_previous_only_when_owners_are_idle_without_starting() {
+        let (state, root) = content_test_state("maintenance-undo");
+        let previous = state.config.load().unwrap();
+        let mut current = previous.clone();
+        current.harness_preferences.get_or_insert_with(Default::default).telemetry_disabled = Some(true);
+        state.config.write(&current).unwrap();
+        let request = || Json(super::MaintenanceRequest { action: "restore_previous".into(), scope: Some("config".into()) });
+        let update = state.updater.try_acquire_gate().unwrap();
+        assert_eq!(super::maintenance_control(State(state.clone()), request()).await.status(), StatusCode::CONFLICT);
+        drop(update);
+        let snapshot = state.snapshots.try_acquire_configuration().unwrap();
+        assert_eq!(super::maintenance_control(State(state.clone()), request()).await.status(), StatusCode::CONFLICT);
+        drop(snapshot);
+        let cold = state.cold.try_acquire_maintenance().unwrap();
+        assert_eq!(super::maintenance_control(State(state.clone()), request()).await.status(), StatusCode::CONFLICT);
+        drop(cold);
+        assert_eq!(state.config.load().unwrap(), current);
+        assert_eq!(super::maintenance_control(State(state.clone()), request()).await.status(), StatusCode::OK);
+        assert_eq!(state.config.load().unwrap(), previous);
+        assert!(state.supervisor.status().await.pid.is_none());
+        fs::write(&state.paths.config_file, b"{").unwrap();
+        assert_ne!(super::maintenance_control(State(state.clone()), request()).await.status(), StatusCode::OK);
+        assert_eq!(fs::read(&state.paths.config_file).unwrap(), b"{");
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[tokio::test]
+    async fn release_cleanup_owner_survives_http_cancellation() {
+        let (state,root)=content_test_state("release-cleanup-owner");
+        let id=format!("owner-{}", nexus_core::unix_time_nanos_for_update());
+        let (entered_tx,entered_rx)=std::sync::mpsc::channel();
+        let (release_tx,release_rx)=std::sync::mpsc::channel();
+        *super::RELEASE_REMOVE_TEST_GATE.lock().unwrap()=Some((id.clone(),entered_tx,release_rx));
+        let owned=state.clone();
+        let task=tokio::spawn(async move {
+            super::release_control(State(owned),Json(nexus_protocol::ReleaseCommand {
+                action:nexus_protocol::ReleaseAction::Remove,id:Some(id),version:None,source:None,note:None,
+            })).await
+        });
+        tokio::task::spawn_blocking(move || entered_rx.recv_timeout(std::time::Duration::from_secs(10)).unwrap()).await.unwrap();
+        task.abort(); let _=task.await;
+        assert!(state.updater.try_acquire_gate().is_err());
+        assert!(state.supervisor.try_acquire_lifecycle().is_none());
+        release_tx.send(()).unwrap();
+        let guard=tokio::time::timeout(std::time::Duration::from_secs(10),state.supervisor.acquire_lifecycle()).await.unwrap();
+        drop(guard);
+        assert!(state.updater.try_acquire_gate().is_ok());
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[tokio::test]
+    async fn standalone_configuration_preserve_api_keeps_external_current() {
+        let (state,root)=content_test_state("configuration-preserve-api");
+        let current=fs::read(&state.paths.config_file).unwrap();
+        nexus_core::write_private_json_atomic(&state.paths.root,&state.paths.root.join("config-write.pending.json"),
+            &serde_json::json!({"schema":1,"committed":false,"rotate":false,"old_current":null,"old_previous":null,"target":[123,125]})).unwrap();
+        let status=state.config.pending_configuration_status().unwrap().unwrap();
+        let id=status["operation_id"].as_str().unwrap().to_owned();
+        let response=super::update_control(State(state.clone()),Json(nexus_protocol::UpdateCommand {
+            action:nexus_protocol::UpdateAction::ConfigurationAbandon,operation_id:Some(id),..Default::default()
+        })).await;
+        assert_eq!(response.status(),StatusCode::OK);
+        assert_eq!(fs::read(&state.paths.config_file).unwrap(),current);
+        assert!(state.config.pending_configuration_status().unwrap().is_none());
+        assert!(super::ensure_checkpoint_mutation_ready(&state).await.is_ok());
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[tokio::test]
+    async fn maintenance_cleanup_uses_existing_owner_gates() {
+        let (state, root) = content_test_state("cleanup-owner-gates");
+        let request = || Json(serde_json::json!({"action":"cleanup", "preview_id":"test", "item_ids":["item-0"]}));
+        let update = state.updater.try_acquire_gate().unwrap();
+        assert_eq!(super::maintenance_dispatch(State(state.clone()), request()).await.status(), StatusCode::CONFLICT);
+        drop(update);
+        let snapshot = state.snapshots.try_acquire_configuration().unwrap();
+        assert_eq!(super::maintenance_dispatch(State(state.clone()), request()).await.status(), StatusCode::CONFLICT);
+        drop(snapshot);
+        let cold = state.cold.try_acquire_maintenance().unwrap();
+        assert_eq!(super::maintenance_dispatch(State(state.clone()), request()).await.status(), StatusCode::CONFLICT);
+        drop(cold);
+        assert_eq!(super::maintenance_status(State(state)).await.status(), StatusCode::OK);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[tokio::test]
+    async fn harness_preferences_reach_child_without_changing_launch_directory() {
+        let (state, root) = content_test_state("preferences-child");
+        let selected = root.join("selected-home");
+        state.releases.register("verified-preferences", "0.1.2-rc.1", None, None).unwrap();
+        state.releases.promote("verified-preferences").unwrap();
+        let slot = state.releases.release_root("verified-preferences").unwrap();
+        write_profile_file(&slot.join("package.json"), r#"{"name":"@deepseek-ai/dsh-root","version":"0.1.2-rc.1"}"#);
+        let entry = slot.join("apps/cli/lib/bin.js");
+        let capture = root.join("child-observed.json");
+        write_profile_file(&entry, &format!(
+            "require('node:fs').writeFileSync({}, JSON.stringify({{home:process.env.DSH_HOME, telemetry:process.env.DSH_TELEMETRY_DISABLED, args:process.argv.slice(2), cwd:process.cwd()}})); setInterval(()=>{{}},1000);",
+            serde_json::to_string(&capture).unwrap()));
+        let mut launch = HarnessLaunchSpec::new(executable_on_path(if cfg!(windows) { "node.exe" } else { "node" }).expect("Node fixture runtime"));
+        launch.mode = nexus_protocol::HarnessLaunchMode::Node;
+        launch.args = vec![entry.to_string_lossy().into_owned(), "--profile".into(), "{profile}".into()];
+        launch.working_dir = Some(root.clone());
+        state.config.write(&NexusConfigFile {
+            harness: Some(launch.clone()),
+            harness_preferences: Some(nexus_protocol::HarnessPreferencesPayload {
+                home: Some(selected.to_string_lossy().into_owned()), port: Some(0),
+                open_browser: Some(false), telemetry_disabled: Some(false), ..Default::default()
+            }), ..Default::default()
+        }).unwrap();
+        state.supervisor.start_with_profile("web").await.unwrap();
+        let observed = timeout(Duration::from_secs(10), async {
+            loop {
+                if let Ok(bytes) = fs::read(&capture) {
+                    if let Ok(value) = serde_json::from_slice::<serde_json::Value>(&bytes) { break value; }
+                }
+                sleep(Duration::from_millis(20)).await;
+            }
+        }).await;
+        state.supervisor.stop().await.unwrap();
+        let observed = observed.unwrap();
+        assert_eq!(observed["home"], selected.to_string_lossy().as_ref());
+        assert_eq!(observed["telemetry"], "");
+        assert_eq!(observed["cwd"], root.to_string_lossy().as_ref());
+        assert_eq!(observed["args"], serde_json::json!(["--profile", "web", "--port", "0", "--no-open"]));
+        assert_eq!(state.config.load().unwrap().harness, Some(launch));
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn preflight_collects_missing_slot_entry_and_home_without_starting() {
+        let (state, root) = content_test_state("preflight-multiple-blockers");
+        let inaccessible = root.join("not-a-directory");
+        fs::create_dir(&inaccessible).unwrap();
+        let mut spec = HarnessLaunchSpec::new(root.join("node.exe"));
+        spec.mode = nexus_protocol::HarnessLaunchMode::Node;
+        spec.args = vec!["{release_root}/apps/cli/lib/bin.js".into()];
+        state.config.write(&NexusConfigFile {
+            harness: Some(spec),
+            harness_preferences: Some(nexus_protocol::HarnessPreferencesPayload {
+                home: Some(inaccessible.to_string_lossy().into_owned()), ..Default::default()
+            }),
+            ..Default::default()
+        }).unwrap();
+        fs::remove_dir(&inaccessible).unwrap();
+        fs::write(&inaccessible, "preserve").unwrap();
+        let (checks, _) = crate::preflight::collect(&state, false);
+        for id in ["home", "release", "entry"] {
+            assert!(checks.iter().any(|check| check["id"] == id && check["status"] == "blocked"), "{id}: {checks:?}");
+        }
+        assert_eq!(fs::read_to_string(inaccessible).unwrap(), "preserve");
+        assert!(state.releases.load().unwrap().current_release.is_none());
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn preflight_custom_command_does_not_require_managed_runtime_or_slot() {
+        let (state, root) = content_test_state("preflight-custom");
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let mut spec = HarnessLaunchSpec::new(std::env::current_exe().unwrap());
+        spec.readiness_url = Some(format!("tcp://{}", listener.local_addr().unwrap()));
+        state.config.write(&NexusConfigFile {
+            harness: Some(spec), ..Default::default()
+        }).unwrap();
+        let (checks, runtime) = crate::preflight::collect(&state, false);
+        assert!(runtime.is_none());
+        assert!(!checks.iter().any(|check| check["status"] == "blocked"), "{checks:?}");
+        state.config.transaction(|config| {
+            config.harness_preferences = Some(nexus_protocol::HarnessPreferencesPayload { telemetry_disabled: Some(false), ..Default::default() }); Ok(())
+        }).unwrap();
+        let (checks, _) = crate::preflight::collect(&state, false);
+        assert!(checks.iter().any(|check| check["id"] == "preferences" && check["status"] == "blocked"));
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[tokio::test]
+    async fn recovery_mode_blocks_start_restart_and_leaves_stopped() {
+        let (state, root) = content_test_state("recovery-mode");
+        fs::write(state.paths.run_dir.join("harness-recovery.json"), b"{").unwrap();
+        let response = super::recovery_status(State(state.clone())).await;
+        let bytes = axum::body::to_bytes(response.into_body(), 64 * 1024).await.unwrap();
+        let report: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        assert!(report["pause_error"].is_string());
+        assert_eq!(report["paused"], true);
+        let response = super::recovery_control(State(state.clone()), Json(super::RecoveryCommand { action: super::RecoveryAction::Enter })).await;
+        assert_eq!(response.status(), StatusCode::OK);
+        assert!(super::recovery_mode::paused(&state.paths).unwrap());
+        let response = axum::response::IntoResponse::into_response(super::preflight::check(State(state.clone())).await);
+        let bytes = axum::body::to_bytes(response.into_body(), 64 * 1024).await.unwrap();
+        let check: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(check["paused"], true);
+        assert!(check["checks"].as_array().unwrap().iter().any(|item| item["id"] == "recovery_mode" && item["status"] == "warning"));
+        assert!(matches!(state.supervisor.start().await, Err(super::HarnessSupervisorError::RecoveryPaused)));
+        assert!(matches!(state.supervisor.restart().await, Err(super::HarnessSupervisorError::RecoveryPaused)));
+        let response = super::recovery_control(State(state.clone()), Json(super::RecoveryCommand { action: super::RecoveryAction::Leave })).await;
+        assert_eq!(response.status(), StatusCode::OK);
+        assert!(!super::recovery_mode::paused(&state.paths).unwrap());
+        assert!(state.supervisor.selection_change_is_quiescent(&state.supervisor.acquire_lifecycle().await).await);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[tokio::test]
+    async fn recovery_mode_selects_valid_profile_without_launch_probe_and_creates_blank_profile() {
+        let (state, root) = content_test_state("recovery-select");
+        let home = state.snapshots.configured_dsh_home().unwrap().clone();
+        write_profile_file(&home.join("profiles/target/package.json"),
+            r#"{"name":"target","dsh":{"profile":{"bundles":["plugin-one"]}}}"#);
+        let mut config = state.config.load().unwrap();
+        config.harness_preferences = Some(nexus_protocol::HarnessPreferencesPayload { home: Some(home.to_string_lossy().into_owned()), ..Default::default() });
+        let mut harness = HarnessLaunchSpec::new(root.join("missing-runtime").join("node.exe"));
+        harness.mode = nexus_protocol::HarnessLaunchMode::Node;
+        harness.args = vec!["{release_root}/apps/cli/lib/bin.js".to_owned()];
+        config.harness = Some(harness);
+        state.config.write(&config).unwrap();
+        state.releases.register("recovery-version", "test", None, None).unwrap();
+        state.releases.promote("recovery-version").unwrap();
+        super::recovery_mode::set_paused(&state.paths, true).unwrap();
+        for (action, name) in [(nexus_protocol::ProfileAction::Select, "target"), (nexus_protocol::ProfileAction::Create, "new-empty")] {
+            let response = super::profile_control(State(state.clone()), Json(nexus_protocol::ProfileCommand {
+                action, profile: Some(name.to_owned()), package: None, target: None,
+            })).await;
+            assert!(response.status().is_success(), "{}", response.status());
+        }
+        assert_eq!(state.profiles.load().unwrap().active_profile, "target");
+        assert!(!state.paths.root.join("compatibility/latest.json").exists());
+        // Creation must still honor the same mutation exclusion as configuration edits.
+        let _snapshot = state.snapshots.try_acquire_configuration().unwrap();
+        let response = super::profile_control(State(state.clone()), Json(nexus_protocol::ProfileCommand {
+            action: nexus_protocol::ProfileAction::Create, profile: Some("blocked".to_owned()), package: None, target: None,
+        })).await;
+        assert!(!response.status().is_success());
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[tokio::test]
+    async fn corrupt_install_journal_keeps_control_plane_and_diagnostics_available() {
+        let (state, root) = content_test_state("corrupt-install-journal");
+        let journal = state.paths.root.join("install-operation.json");
+        fs::write(&journal, "{interrupted-invalid-record").unwrap();
+        state.updater.state_store().write(&nexus_protocol::UpdateRuntimeInfo::running("interrupted".into(), 1)).unwrap();
+        let recovered = state.updater.recover_unattached().unwrap();
+        assert_eq!(recovered.state, nexus_protocol::UpdateState::Failed);
+        let _ = super::health(State(state.clone())).await;
+        assert_eq!(super::current_state(State(state.clone())).await.status(), StatusCode::OK);
+        assert_eq!(super::harness_status(State(state.clone())).await.status(), StatusCode::OK);
+        assert_eq!(super::recovery_status(State(state.clone())).await.status(), StatusCode::OK);
+        let bundle = super::collect_current_diagnostics(&state, None).unwrap();
+        assert!(bundle.files.iter().any(|file| file.name == "install-operation.json"));
+        let updates = super::update_status(State(state.clone())).await;
+        assert!(!updates.status().is_success());
+        let body = axum::body::to_bytes(updates.into_body(), 64 * 1024).await.unwrap();
+        assert!(String::from_utf8_lossy(&body).contains("install_operation_unavailable"));
+        assert!(state.updater.install(Some("blocked".into()), Some("test".into())).await.is_err());
+        let reset = super::maintenance_control(State(state.clone()), Json(super::MaintenanceRequest { action: "reset".into(), scope: None })).await;
+        assert!(!reset.status().is_success());
+        assert_eq!(fs::read_to_string(&journal).unwrap(), "{interrupted-invalid-record");
+        fs::remove_file(journal).unwrap();
+        assert!(state.updater.try_acquire_gate().is_ok());
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[tokio::test]
+    async fn checkpoint_capture_progress_get_does_not_wait_for_capture_owner() {
+        let (state, root) = content_test_state("capture-progress");
+        let (lease, id) = state.snapshots.acquire_capture("demo".into(), "manual").await.unwrap();
+        let response = tokio::time::timeout(std::time::Duration::from_secs(1), super::checkpoint_list(State(state.clone()))).await.expect("GET does not wait for capture owner");
+        assert_eq!(response.status(), axum::http::StatusCode::OK);
+        let body = axum::body::to_bytes(response.into_body(), 64 * 1024).await.unwrap();
+        let value: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(value["inventory_refresh_pending"], true); assert_eq!(value["last_capture"]["state"], "running");
+        assert!(value["checkpoints"].is_array());
+        state.snapshots.finish_capture(&id, &Ok::<_, io::Error>(())); drop(lease); drop(state); let _ = fs::remove_dir_all(root);
     }
 
     fn content_test_state(label: &str) -> (AppState, PathBuf) {
@@ -4715,7 +5412,8 @@ mod checkpoint_tests {
                 )),
                 shutdown,
                 data_root_id: data_root_identity(&paths).expect("data root identity reads"),
-                instance_id: format!("content-{label}"),                crash_capture_run: Arc::new(Mutex::new(None)),            },
+                instance_id: format!("content-{label}"),                crash_capture_run: Arc::new(Mutex::new(None)),
+        harness_logs: Arc::new(Mutex::new(nexus_launcher_core::HarnessLogObserver::default())),            },
             root,
         )
     }
@@ -4762,7 +5460,7 @@ server.listen(0, '127.0.0.1', () => console.log('dsh web: http://127.0.0.1:' + s
             action: ProfileAction::PluginDisable, profile: Some("demo".to_owned()), package: Some("unclassified".to_owned()), target: None,
         })).await;
         assert!(saved.status().is_success());
-        assert_eq!(compatibility::disabled_plugins(home, "demo").unwrap(), vec!["unclassified"]);
+        assert_eq!(compatibility::disabled_plugins(&home, "demo").unwrap(), vec!["unclassified"]);
         let retried = release_control(State(state.clone()), Json(promote)).await;
         if !retried.status().is_success() {
             let body = axum::body::to_bytes(retried.into_body(), 64 * 1024).await.unwrap();
@@ -4777,7 +5475,7 @@ server.listen(0, '127.0.0.1', () => console.log('dsh web: http://127.0.0.1:' + s
             action: ProfileAction::PluginEnable, profile: Some("demo".to_owned()), package: Some("unclassified".to_owned()), target: None,
         })).await;
         assert!(restored.status().is_success());
-        assert!(compatibility::disabled_plugins(home, "demo").unwrap().is_empty());
+        assert!(compatibility::disabled_plugins(&home, "demo").unwrap().is_empty());
         assert_eq!(fs::read(&manifest).unwrap(), original);
         fs::remove_dir_all(root).unwrap();
     }
@@ -4858,8 +5556,20 @@ server.listen(0, '127.0.0.1', () => console.log('dsh web: http://127.0.0.1:' + s
             package: Some("b".to_owned()), target: Some("a".to_owned()),
         })).await;
         assert_eq!(response.status(), StatusCode::OK);
-        assert_eq!(super::dsh::native_profile(home, "other").unwrap().bundles, ["b", "a"]);
+        assert_eq!(super::dsh::native_profile(&home, "other").unwrap().bundles, ["b", "a"]);
         assert_eq!(state.profiles.load().unwrap(), before);
+        let id=super::dsh::order_undo_id(&state.paths,&home,"other").unwrap().unwrap();
+        let request=|| Json(nexus_protocol::ProfileCommand { action:nexus_protocol::ProfileAction::PluginUndoMove,
+            profile:Some("other".into()),package:None,target:Some(id.clone()) });
+        let snapshot_owner=state.snapshots.try_acquire_configuration().unwrap();
+        assert_eq!(super::profile_control(State(state.clone()),request()).await.status(),StatusCode::CONFLICT);
+        drop(snapshot_owner);
+        let update_owner=state.updater.try_acquire_gate().unwrap();
+        assert_eq!(super::profile_control(State(state.clone()),request()).await.status(),StatusCode::CONFLICT);
+        drop(update_owner);
+        assert_eq!(super::profile_control(State(state.clone()),request()).await.status(),StatusCode::OK);
+        assert_eq!(super::dsh::native_profile(&home,"other").unwrap().bundles,["a","b"]);
+        assert_eq!(state.profiles.load().unwrap(),before);
         fs::remove_dir_all(root).unwrap();
     }
 
@@ -4975,7 +5685,16 @@ server.listen(0, '127.0.0.1', () => console.log('dsh web: http://127.0.0.1:' + s
 
     #[tokio::test]
     async fn materialization_failure_stays_prepared_blocks_mutations_and_abort_rolls_back() {
-        let (state, root) = content_test_state("pending-abort");
+        let (mut state, root) = content_test_state("pending-abort");
+        let selected_home = state.snapshots.configured_dsh_home().unwrap();
+        state.config.transaction(|document| {
+            document.harness_preferences = Some(nexus_protocol::HarnessPreferencesPayload {
+                home: Some(selected_home.to_string_lossy().into_owned()), ..Default::default()
+            });
+            Ok(())
+        }).unwrap();
+        state.snapshots = super::snapshots::SnapshotCoordinator::new(
+            state.paths.clone(), Ok(root.join("different-default-home")));
         let response = checkpoint_create(state.clone(), Some("before change".to_owned())).await;
         assert_eq!(response.status(), axum::http::StatusCode::CREATED);
         let body = axum::body::to_bytes(response.into_body(), 64 * 1024)
@@ -5030,6 +5749,17 @@ server.listen(0, '127.0.0.1', () => console.log('dsh web: http://127.0.0.1:' + s
 
         let blocked = checkpoint_create(state.clone(), Some("blocked".to_owned())).await;
         assert_eq!(blocked.status(), axum::http::StatusCode::CONFLICT);
+        let config_before = fs::read(&state.paths.config_file).unwrap();
+        let pointers_before = fs::read(&state.paths.release_pointers_file).ok();
+        for scope in ["config", "slots"] {
+            let reset = super::maintenance_control(State(state.clone()), Json(super::MaintenanceRequest {
+                action: "reset".into(), scope: Some(scope.into()),
+            })).await;
+            assert_eq!(reset.status(), StatusCode::CONFLICT);
+            assert_eq!(fs::read(&state.paths.config_file).unwrap(), config_before);
+            assert_eq!(fs::read(&state.paths.release_pointers_file).ok(), pointers_before);
+            assert_eq!(state.snapshots.configured_dsh_home().unwrap(), selected_home);
+        }
         let response = checkpoint_restore_abort(state.clone(), Some(created.checkpoint.id)).await;
         assert_eq!(response.status(), axum::http::StatusCode::OK);
         assert!(state
@@ -5457,6 +6187,7 @@ server.listen(0, '127.0.0.1', () => console.log('dsh web: http://127.0.0.1:' + s
         let config = ConfigStore::new(paths.clone());
         config
             .write(&NexusConfigFile {
+                harness_preferences: None,
                 harness: Some(HarnessLaunchSpec {
                     mode: Default::default(),
                     program,
@@ -5508,7 +6239,8 @@ server.listen(0, '127.0.0.1', () => console.log('dsh web: http://127.0.0.1:' + s
             checkpoint_commit_result_failure: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             shutdown,
             data_root_id: data_root_identity(&paths).expect("data-root identity reads"),
-            instance_id: "checkpoint-test-agent".to_owned(),            crash_capture_run: Arc::new(Mutex::new(None)),        };
+            instance_id: "checkpoint-test-agent".to_owned(),            crash_capture_run: Arc::new(Mutex::new(None)),
+        harness_logs: Arc::new(Mutex::new(nexus_launcher_core::HarnessLogObserver::default())),        };
 
         let restore_state = state.clone();
         let checkpoint_id = checkpoint.id.clone();
@@ -5824,6 +6556,7 @@ mod switch_ownership_tests {
         let config = ConfigStore::new(paths.clone());
         config
             .write(&NexusConfigFile {
+                harness_preferences: None,
                 harness: None,
                 update: Some(update),
                 releases: None,
@@ -5864,7 +6597,41 @@ mod switch_ownership_tests {
             checkpoint_commit_result_failure: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             shutdown,
             data_root_id: data_root_identity(&paths).expect("data-root identity reads"),
-            instance_id: "switch-test-agent".to_owned(),            crash_capture_run: Arc::new(Mutex::new(None)),        }
+            instance_id: "switch-test-agent".to_owned(),            crash_capture_run: Arc::new(Mutex::new(None)),
+        harness_logs: Arc::new(Mutex::new(nexus_launcher_core::HarnessLogObserver::default())),        }
+    }
+
+    #[tokio::test]
+    async fn update_source_only_preserves_latest_private_commands_and_defaults() {
+        let state = switch_test_state("source-only");
+        let root = state.paths.root.clone();
+        state.config.transaction(|document| {
+            let update = document.update.as_mut().unwrap();
+            update.ref_name = "custom-ref".into(); update.build_program = Some("custom-build".into());
+            update.build_args = vec!["--token".into(), "BUILD-SECRET".into()];
+            update.verify_program = Some("custom-verify".into()); update.verify_args = vec!["--password=VERIFY-SECRET".into()];
+            update.timeout_secs = Some(987); Ok(())
+        }).unwrap();
+        let mut stale = state.config.load().unwrap().update.unwrap().to_payload();
+        stale.source = "https://example.test/updated".into();
+        stale.build_args = vec!["[REDACTED]".into()];
+        state.config.transaction(|document| { document.update.as_mut().unwrap().ref_name = "newer-concurrent-ref".into(); Ok(()) }).unwrap();
+        let response = config_control(State(state.clone()), Json(ConfigCommand { action: ConfigAction::SetUpdateSource, update: Some(stale), ..Default::default() })).await;
+        assert_eq!(response.status(), axum::http::StatusCode::OK);
+        let body = axum::body::to_bytes(response.into_body(), 64 * 1024).await.unwrap();
+        let text = String::from_utf8_lossy(&body);
+        assert!(!text.contains("BUILD-SECRET")); assert!(!text.contains("VERIFY-SECRET"));
+        let update = state.config.load().unwrap().update.unwrap();
+        assert_eq!(update.source, "https://example.test/updated"); assert_eq!(update.ref_name, "newer-concurrent-ref");
+        assert_eq!(update.build_args, vec!["--token", "BUILD-SECRET"]); assert_eq!(update.verify_args, vec!["--password=VERIFY-SECRET"]);
+        assert_eq!(update.build_program.unwrap().to_str(), Some("custom-build")); assert_eq!(update.verify_program.unwrap().to_str(), Some("custom-verify"));
+        assert_eq!(update.timeout_secs, Some(987));
+        state.config.transaction(|document| { document.update = None; Ok(()) }).unwrap();
+        let command: ConfigCommand = serde_json::from_value(serde_json::json!({"action":"set_update_source","update":{"source":"https://example.test/new"}})).unwrap();
+        assert_eq!(config_control(State(state.clone()), Json(command)).await.status(), axum::http::StatusCode::OK);
+        let update = state.config.load().unwrap().update.unwrap();
+        assert_eq!(update.ref_name, "main"); assert_eq!(update.git_program.to_str(), Some("git"));
+        drop(state); let _ = fs::remove_dir_all(root);
     }
 
     #[tokio::test]

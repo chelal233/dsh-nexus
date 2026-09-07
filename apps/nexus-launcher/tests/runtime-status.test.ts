@@ -3,19 +3,14 @@ import test from "node:test";
 
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
-import { createServer } from "vite";
+import { createUiTestLoader } from "./ui-test-loader.ts";
 
 async function loadRuntimeStatusPanel() {
-  const vite = await createServer({
-    root: process.cwd(),
-    appType: "custom",
-    logLevel: "silent",
-    server: { middlewareMode: true },
-  });
-  const module = await vite.ssrLoadModule("/src/App.tsx");
-  const i18n = await vite.ssrLoadModule("/src/i18n.ts");
+  const loader = await createUiTestLoader();
+  const module = await loader.loadModule("/src/App.tsx");
+  const i18n = await loader.loadModule("/src/i18n.ts");
   return {
-    vite,
+    loader,
     RuntimeStatusPanel: module.RuntimeStatusPanel,
     runtimeStatusFromResponse: module.runtimeStatusFromResponse,
     createRuntimeStatusController: module.createRuntimeStatusController,
@@ -24,7 +19,7 @@ async function loadRuntimeStatusPanel() {
 }
 
 test("RuntimeStatusPanel renders verified tool metadata and escapes paths", async () => {
-  const { vite, RuntimeStatusPanel, I18nProvider } = await loadRuntimeStatusPanel();
+  const { loader, RuntimeStatusPanel, I18nProvider } = await loadRuntimeStatusPanel();
   try {
     assert.equal(typeof RuntimeStatusPanel, "function");
     let checkCalls = 0;
@@ -120,12 +115,12 @@ test("RuntimeStatusPanel renders verified tool metadata and escapes paths", asyn
     assert.match(reasonMarkup, /Runtime tool was not found/);
     assert.match(reasonMarkup, /This runtime could not be verified/);
   } finally {
-    await vite.close();
+    await loader.close();
   }
 });
 
 test("RuntimeStatusPanel renders loading and Agent unavailable states", async () => {
-  const { vite, RuntimeStatusPanel } = await loadRuntimeStatusPanel();
+  const { loader, RuntimeStatusPanel } = await loadRuntimeStatusPanel();
   try {
     const loading = renderToStaticMarkup(createElement(RuntimeStatusPanel, {
       agentAvailable: true,
@@ -143,12 +138,12 @@ test("RuntimeStatusPanel renders loading and Agent unavailable states", async ()
     assert.match(unavailable, /Agent is unavailable/);
     assert.match(unavailable, /disabled/);
   } finally {
-    await vite.close();
+    await loader.close();
   }
 });
 
 test("RuntimeStatusPanel renders a retryable error state", async () => {
-  const { vite, RuntimeStatusPanel } = await loadRuntimeStatusPanel();
+  const { loader, RuntimeStatusPanel } = await loadRuntimeStatusPanel();
   try {
     const markup = renderToStaticMarkup(createElement(RuntimeStatusPanel, {
       agentAvailable: true,
@@ -164,7 +159,7 @@ test("RuntimeStatusPanel renders a retryable error state", async () => {
     assert.match(markup, /Retry/);
     assert.doesNotMatch(markup, /git version/);
   } finally {
-    await vite.close();
+    await loader.close();
   }
 });
 
@@ -181,7 +176,7 @@ function runtimePayload(tools: unknown[]): Record<string, unknown> {
 }
 
 test("runtime status parser canonicalizes order and requires verified available metadata", async () => {
-  const { vite, runtimeStatusFromResponse } = await loadRuntimeStatusPanel();
+  const { loader, runtimeStatusFromResponse } = await loadRuntimeStatusPanel();
   try {
     assert.equal(typeof runtimeStatusFromResponse, "function");
     const parsed = runtimeStatusFromResponse(runtimePayload(validRuntimeTools()));
@@ -197,12 +192,12 @@ test("runtime status parser canonicalizes order and requires verified available 
       assert.equal(pathParsed.tools[0].path, path);
     }
   } finally {
-    await vite.close();
+    await loader.close();
   }
 });
 
 test("runtime status parser rejects malformed, duplicate, missing, and non-absolute entries", async () => {
-  const { vite, runtimeStatusFromResponse } = await loadRuntimeStatusPanel();
+  const { loader, runtimeStatusFromResponse } = await loadRuntimeStatusPanel();
   try {
     assert.equal(typeof runtimeStatusFromResponse, "function");
     const malformed: Array<[string, unknown]> = [];
@@ -247,12 +242,12 @@ test("runtime status parser rejects malformed, duplicate, missing, and non-absol
       );
     }
   } finally {
-    await vite.close();
+    await loader.close();
   }
 });
 
 test("runtime status controller is manual, injectable, and clears old success on failure", async () => {
-  const { vite, createRuntimeStatusController } = await loadRuntimeStatusPanel();
+  const { loader, createRuntimeStatusController } = await loadRuntimeStatusPanel();
   try {
     assert.equal(typeof createRuntimeStatusController, "function");
     const requests: Array<[string, string]> = [];
@@ -291,6 +286,6 @@ test("runtime status controller is manual, injectable, and clears old success on
     assert.equal(events[2].status, null);
     assert.equal(events[3].status, null);
   } finally {
-    await vite.close();
+    await loader.close();
   }
 });

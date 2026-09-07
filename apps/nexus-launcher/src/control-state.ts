@@ -3,10 +3,24 @@ export type HarnessControlGate = {
   externallyManaged: boolean;
 };
 
+export function validStartupCheck(value: unknown): boolean {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const report = value as Record<string, unknown>;
+  if (report.api_version !== "v1" || typeof report.ready !== "boolean" || typeof report.paused !== "boolean"
+      || !Number.isSafeInteger(report.checked_at_unix) || Number(report.checked_at_unix) < 0
+      || !Array.isArray(report.checks) || report.checks.length === 0 || report.checks.length > 64) return false;
+  if (!report.checks.every(entry => entry && typeof entry === "object" && !Array.isArray(entry)
+      && typeof entry.id === "string" && entry.id.length > 0
+      && ["ok", "warning", "blocked"].includes(entry.status)
+      && typeof entry.reason === "string" && typeof entry.next === "string")) return false;
+  return report.ready === !report.checks.some(entry => entry.status === "blocked");
+}
+
 export function invalidatesHarnessCredentials(path: string, action: unknown): boolean {
+  if (path === "/v1/recovery" && action === "enter") return true;
   if (path === "/v1/profiles" && action === "select") return true;
   if (path === "/v1/releases" && (action === "promote" || action === "rollback")) return true;
-  if (path === "/v1/updates" && (action === "switch" || action === "confirm")) return true;
+  if (path === "/v1/updates" && (action === "switch" || action === "confirm" || action === "offline_import")) return true;
   if (action !== "start" && action !== "stop" && action !== "restart") return false;
   return path === "/v1/agent" || path === "/v1/harness";
 }
@@ -113,6 +127,7 @@ export function coldOperationIsTerminal(phase: unknown): boolean {
 }
 
 export function actionNoticeKey(path: string, action: unknown): string {
+  if (path === "/v1/updates" && (action === "offline_import" || action === "offline_export")) return "Offline package request accepted. Follow the current stage to confirm completion.";
   if (path === "/v1/updates" && (action === "switch" || action === "confirm")) {
     return "Installation request accepted. Follow the current stage below to confirm completion.";
   }

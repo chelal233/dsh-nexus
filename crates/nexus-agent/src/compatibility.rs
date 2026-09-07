@@ -21,7 +21,7 @@ pub(crate) fn latest_for_selection(
     if report.status == "needs_choice" && report.trigger.as_deref() == Some("profile_switch") {
         return (Some(report.release_id.as_str()) == release).then_some(report);
     }
-    let source = source_profile(home, selected).ok()?;
+    let source = source_profile(&home, selected).ok()?;
     (report.source_profile == source).then_some(report)
 }
 
@@ -76,7 +76,7 @@ fn read_plain_json(path: &Path) -> io::Result<serde_json::Value> {
 }
 
 pub(crate) fn disabled_plugins(home: &Path, profile: &str) -> io::Result<Vec<String>> {
-    let source = source_profile(home, profile)?;
+    let source = source_profile(&home, profile)?;
     let file = home.join("profiles/.nexus-plugin-isolation").join(format!("{source}.json"));
     match read_plain_json(&file) {
         Ok(value) => serde_json::from_value(value).map_err(io::Error::other),
@@ -86,7 +86,7 @@ pub(crate) fn disabled_plugins(home: &Path, profile: &str) -> io::Result<Vec<Str
 }
 
 pub(crate) fn set_plugin_disabled(home: &Path, profile: &str, package: &str, disabled: bool) -> io::Result<()> {
-    let source = source_profile(home, profile)?;
+    let source = source_profile(&home, profile)?;
     let profiles = home.join("profiles");
     ensure_work_directory(&profiles)?;
     let source_dir = profiles.join(&source);
@@ -126,7 +126,7 @@ pub(crate) async fn for_release(
     let home = state.snapshots.configured_dsh_home()?;
     let profile = state.profiles.load()?.active_profile;
     let slot = state.releases.release_root(id)?;
-    prepare(&state.paths, home, &profile, id, &slot, &spec.program, force, cancellation).await?;
+    prepare(&state.paths, &home, &profile, id, &slot, &spec.program, force, cancellation).await?;
     Ok(())
 }
 
@@ -134,7 +134,7 @@ pub(crate) async fn for_profile_selection(state: &crate::AppState, profile: &str
     let Some(spec) = state.config.load()?.harness else { return Ok(()); };
     if spec.mode != HarnessLaunchMode::Node { return Ok(()); }
     let Some(release) = state.releases.load()?.current_release else { return Ok(()); };
-    prepare_with_trigger(&state.paths, state.snapshots.configured_dsh_home()?, profile,
+    prepare_with_trigger(&state.paths, &state.snapshots.configured_dsh_home()?, profile,
         &release, &state.releases.release_root(&release)?, &spec.program, true,
         &CancellationToken::default(), "profile_switch").await?;
     Ok(())
@@ -164,6 +164,9 @@ async fn prepare_with_trigger(
     if fs::symlink_metadata(&pending).is_ok() {
         return Err(io::Error::other("Compatibility process cleanup is pending; reconcile the owned probe before retrying"));
     }
+    let preferences = nexus_core::load_harness_preferences(paths)?;
+    let capabilities = crate::preference_capabilities::resolve(Some(slot), home, profile, &preferences)?;
+    let preferences_env = nexus_core::harness_preferences_environment(&preferences, &capabilities);
     // A first-run installation may not have created a native profile yet.
     if !home.join("profiles").join(profile).join("package.json").is_file() { return Ok(None); }
     if !slot.join("apps/cli/lib/bin.js").is_file() {
@@ -183,8 +186,14 @@ async fn prepare_with_trigger(
         "home":home,"selected":profile,"release_id":release,"slot":slot,
         "node":node,"work":work,"output":output,"force":force,
         "trigger": trigger,
+        "preference_capabilities": { "adapter_version": crate::preference_capabilities::VERIFIED_VERSION, "capabilities": capabilities },
+        "patches": preferences.patches.as_deref().unwrap_or(&[]),
+        "preferences_env": preferences_env.iter().filter(|(key, _)| key != "DSH_HOME")
+            .map(|(key, value)| (key.to_string_lossy().into_owned(), value.to_string_lossy().into_owned()))
+            .collect::<std::collections::BTreeMap<_, _>>(),
     }))?;
     let mut command = std::process::Command::new(node);
+    command.envs(preferences_env);
     command.arg(&script).arg(&input).current_dir(&root).stdin(Stdio::null()).stdout(Stdio::null());
     tracing::info!(release, profile, "checking target release plugin startup compatibility");
     write_json_atomic(&root, &pending, &serde_json::json!({"work":work,"release":release,"profile":profile}))?;
@@ -207,7 +216,7 @@ async fn prepare_with_trigger(
     let report: CompatibilityReport = serde_json::from_slice(&bytes).map_err(io::Error::other)?;
     validate_profile_name(&report.source_profile)?;
     validate_profile_name(&report.effective_profile)?;
-    if report.release_id != release || report.source_profile != source_profile(home, profile)?
+    if report.release_id != release || report.source_profile != source_profile(&home, profile)?
         || !matches!(report.status.as_str(), "passed" | "isolated" | "needs_choice") {
         return Err(io::Error::other("Compatibility report does not match target release"));
     }

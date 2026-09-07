@@ -746,7 +746,8 @@ impl SnapshotStore {
                 )
             })?;
             let name = entry.file_name().to_string_lossy().into_owned();
-            if !matches!(name.as_str(), "healthy" | "manual") {
+            let staging = validation::is_generated_name(&name, ".staging-snapshot-");
+            if !matches!(name.as_str(), "healthy" | "manual") && !staging {
                 return Err(SnapshotError::UnsafePath(format!(
                     "unidentified snapshot publication orphan: {}",
                     entry.path().display()
@@ -764,7 +765,7 @@ impl SnapshotStore {
             let old = self.healthy_orphan_path(index, "old");
             let next = self.healthy_orphan_path(index, "next");
             let old_present = validation::validate_optional_directory_tree(&self.data_root, &old)?;
-            let next_present =
+            let mut next_present =
                 validation::validate_optional_directory_tree(&self.data_root, &next)?;
             let destination_present =
                 validation::validate_optional_directory_tree(&self.data_root, &destination)?;
@@ -778,7 +779,14 @@ impl SnapshotStore {
                 self.validate_healthy_candidate(&old)?;
             }
             if next_present {
-                self.validate_healthy_candidate(&next)?;
+                if self.validate_healthy_candidate(&next).is_err() {
+                    // Capture has not published a valid snapshot. Preserve the
+                    // entire candidate, including unknown contents, outside the
+                    // published inventory and free this slot for a future capture.
+                    let quarantine = self.snapshot_root.join(format!(".staging-{}", new_identifier("snapshot")));
+                    validation::rename_durable(&next, &quarantine)?;
+                    next_present = false;
+                }
             }
             if destination_present {
                 if next_present {
@@ -792,7 +800,7 @@ impl SnapshotStore {
                 if next_present {
                     validation::remove_directory_all_durable(&next)?;
                 }
-            } else {
+            } else if next_present {
                 validation::rename_durable(&next, &destination)?;
             }
         }

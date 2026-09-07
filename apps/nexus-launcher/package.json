@@ -1,6 +1,6 @@
 {
   "name": "nexus-launcher",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "private": true,
   "type": "module",
   "scripts": {
@@ -9,6 +9,9 @@
     "build": "tsc --noEmit && vite build",
     "prepare:agent": "node src-tauri/scripts/prepare-agent.mjs",
     "prepare:runtime": "node src-tauri/scripts/prepare-runtime.mjs",
+    "prepare:release": "node src-tauri/scripts/prepare-release.mjs",
+    "verify:release": "node src-tauri/scripts/prepare-release.mjs --verify",
+    "test:bundled-runtime": "node --test tests/bundled-runtime.test.mjs",
     "typecheck": "tsc --noEmit",
     "tauri": "tauri",
     "tauri:dev": "tauri dev",

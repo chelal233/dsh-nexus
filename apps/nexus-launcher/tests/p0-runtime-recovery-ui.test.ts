@@ -3,7 +3,7 @@ import test from "node:test";
 
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
-import { createServer } from "vite";
+import { createUiTestLoader } from "./ui-test-loader.ts";
 
 const startup = { available: true, running: true };
 const baseSnapshot = {
@@ -22,13 +22,13 @@ const props = {
 };
 
 async function loadViews() {
-  const vite = await createServer({ root: process.cwd(), appType: "custom", logLevel: "silent", server: { middlewareMode: true } });
-  const app = await vite.ssrLoadModule("/src/App.tsx");
-  return { vite, GuideView: app.GuideView, CompatibilitySummary: app.CompatibilitySummary, CompatibilityDialog: app.CompatibilityDialog, ProfilesView: app.ProfilesView, ProfilePlugins: app.ProfilePlugins, UpdatesView: app.UpdatesView, CheckpointsView: app.CheckpointsView };
+  const loader = await createUiTestLoader();
+  const app = await loader.loadModule("/src/App.tsx");
+  return { loader, RecoveryModePanel: app.RecoveryModePanel, GuideView: app.GuideView, CompatibilitySummary: app.CompatibilitySummary, CompatibilityDialog: app.CompatibilityDialog, ProfilesView: app.ProfilesView, ProfilePlugins: app.ProfilePlugins, UpdatesView: app.UpdatesView, CheckpointsView: app.CheckpointsView };
 }
 
 test("profile hub collapses children; profile plugins show truthful inventory", async () => {
-  const { vite, ProfilesView, ProfilePlugins } = await loadViews();
+  const { loader, ProfilesView, ProfilePlugins } = await loadViews();
   try {
     const snapshot = {
       ...baseSnapshot,
@@ -51,11 +51,11 @@ test("profile hub collapses children; profile plugins show truthful inventory", 
     assert.match(pluginsMarkup, /Built-in/);
     assert.match(pluginsMarkup, /extra-plugin/);
     assert.match(pluginsMarkup, /Removable/);
-  } finally { await vite.close(); }
+  } finally { await loader.close(); }
 });
 
 test("cold operations render stages without a confirmation pause", async () => {
-  const { vite, UpdatesView } = await loadViews();
+  const { loader, UpdatesView } = await loadViews();
   try {
     const snapshot = {
       ...baseSnapshot,
@@ -73,11 +73,43 @@ test("cold operations render stages without a confirmation pause", async () => {
     assert.match(markup, /Current stage/);
     assert.match(markup, /v1\.2\.3/);
     assert.match(markup, /test an isolated profile first/);
-  } finally { await vite.close(); }
+  } finally { await loader.close(); }
+});
+
+test("finished cold attempts show dated collapsed history and safe actions", async () => {
+  const { loader, UpdatesView } = await loadViews();
+  try {
+    const operation = {
+      operation_id: "cold-old", phase: "failed", tag: "v0.1.2-rc1",
+      updated_at_unix: 1788753322, progress_percent: 100,
+      error: "old npm failure", output_tail: "old build output", cleanup_pending: false,
+    };
+    const render = (overrides = {}) => renderToStaticMarkup(createElement(UpdatesView, {
+      ...props, snapshot: { ...baseSnapshot, updates: { operation: { ...operation, ...overrides } } },
+    }));
+    const history = render();
+    assert.match(history, /Last installation/);
+    assert.match(history, /2026/);
+    assert.match(history, /saved installation record/);
+    assert.match(history, /<details><summary>Installation log and details<\/summary>/);
+    assert.match(history, /old npm failure/);
+    assert.match(history, /Retry installation/);
+    assert.match(history, /Clear finished record/);
+    assert.doesNotMatch(history, /Current stage|<progress|role="alert"/);
+    const cleanup = render({ cleanup_pending: true, cleanup_error: "still cleaning" });
+    assert.match(cleanup, /Retry cleanup/);
+    assert.match(cleanup, /still cleaning/);
+    assert.doesNotMatch(cleanup, /Retry installation|Clear finished record/);
+    const active = render({ phase: "building", error: null });
+    assert.match(active, /Current stage/);
+    assert.match(active, /<progress/);
+    assert.match(active, /old build output/);
+    assert.doesNotMatch(active, /Last installation|Installation log and details|Clear finished record/);
+  } finally { await loader.close(); }
 });
 
 test("compatibility summary identifies the checked release, projection, and disabled plugin", async () => {
-  const { vite, CompatibilitySummary } = await loadViews();
+  const { loader, CompatibilitySummary } = await loadViews();
   try {
     const snapshot = { ...baseSnapshot, profiles: { compatibility: {
       status: "isolated", source_profile: "desktop", effective_profile: "nexus-projection", release_id: "rc1",
@@ -91,11 +123,32 @@ test("compatibility summary identifies the checked release, projection, and disa
     assert.match(markup, /third-party-plugin/);
     assert.match(markup, /missing startup API/);
     assert.match(markup, /not every runtime feature/);
-  } finally { await vite.close(); }
+  } finally { await loader.close(); }
+});
+
+test("startup dialog exposes an explicit basic check without claiming success before execution", async () => {
+  const { loader, CompatibilityDialog } = await loadViews();
+  try {
+    const markup = renderToStaticMarkup(createElement(CompatibilityDialog, {
+      ...props, snapshot: baseSnapshot, pending: false, onClose: () => undefined,
+    }));
+    assert.match(markup, /Run basic checks/);
+    assert.match(markup, /Does not compile or start Harness/);
+    assert.doesNotMatch(markup, /No blocking issues found/);
+    const blocked = renderToStaticMarkup(createElement(CompatibilityDialog, {
+      ...props, snapshot: baseSnapshot, pending: false, onClose: () => undefined,
+      basicResult: { api_version: "v1", ready: false, checked_at_unix: 1, checks: [
+        { id: "entry", status: "blocked", reason: "ENTRY_MISSING", next: "REPAIR_VERSION" },
+        { id: "home", status: "blocked", reason: "HOME_DENIED", next: "CHOOSE_HOME" },
+      ] },
+    }));
+    for (const message of ["ENTRY_MISSING", "REPAIR_VERSION", "HOME_DENIED", "CHOOSE_HOME"]) assert.match(blocked, new RegExp(message));
+    assert.match(blocked, /Resolve the blocking issues before startup/);
+  } finally { await loader.close(); }
 });
 
 test("failed compatibility offers explicit plugin choices and retry without claiming success", async () => {
-  const { vite, CompatibilitySummary } = await loadViews();
+  const { loader, CompatibilitySummary } = await loadViews();
   try {
     const snapshot = { ...baseSnapshot,
       recovery: { harness_stop_required: false, harness: { state: "stopped" } },
@@ -113,11 +166,11 @@ test("failed compatibility offers explicit plugin choices and retry without clai
     assert.match(markup, /Retry version switch/);
     assert.match(markup, /not confirmed faults/);
     assert.doesNotMatch(markup, /Startup check passed|Effective isolated profile/);
-  } finally { await vite.close(); }
+  } finally { await loader.close(); }
 });
 
 test("saved isolation is visible and reversible before another check", async () => {
-  const { vite, CompatibilitySummary } = await loadViews();
+  const { loader, CompatibilitySummary } = await loadViews();
   try {
     const snapshot = { ...baseSnapshot,
       recovery: { harness_stop_required: false, harness: { state: "stopped" } },
@@ -128,11 +181,11 @@ test("saved isolation is visible and reversible before another check", async () 
     assert.match(markup, /Restore plugin on next check/);
     assert.match(markup, /third-party/);
     assert.doesNotMatch(markup, /Startup check passed/);
-  } finally { await vite.close(); }
+  } finally { await loader.close(); }
 });
 
 test("checkpoint fixtures show legacy truth and pending retry or abort", async () => {
-  const { vite, CheckpointsView } = await loadViews();
+  const { loader, CheckpointsView } = await loadViews();
   try {
     const snapshot = { ...baseSnapshot, recovery: { harness_stop_required: false, harness: { state: "stopped" } }, checkpoints: {
       checkpoints: [{ id: "legacy-1", profile: "web", created_at_unix: 1, state: { profile: "web" } }],
@@ -146,12 +199,12 @@ test("checkpoint fixtures show legacy truth and pending retry or abort", async (
     assert.match(markup, /Retry/);
     assert.match(markup, /Abort/);
     assert.match(markup, /snapshot store busy/);
-  } finally { await vite.close(); }
+  } finally { await loader.close(); }
 });
 
 
 test("compatibility provenance distinguishes switch checks, startup cache reuse, and old records", async () => {
-  const { vite, CompatibilitySummary } = await loadViews();
+  const { loader, CompatibilitySummary } = await loadViews();
   try {
     const report = { status: "isolated", source_profile: "desktop", release_id: "rc1", checked_at_unix: 1788670000, trigger: "version_switch", last_trigger: "startup", last_used_at_unix: 1788670200, cache_reused: true, disabled: [] };
     const render = (compatibility: object) => renderToStaticMarkup(createElement(CompatibilitySummary, { ...props, snapshot: { ...baseSnapshot, profiles: { compatibility } } }));
@@ -166,23 +219,23 @@ test("compatibility provenance distinguishes switch checks, startup cache reuse,
     const legacy = render({ status: "isolated", disabled: [] });
     assert.match(legacy, /Legacy record: trigger not recorded/);
     assert.doesNotMatch(legacy, /New check result/);
-  } finally { await vite.close(); }
+  } finally { await loader.close(); }
 });
 
 
 test("busy cold switch keeps cancellation enabled while other mutations are disabled", async () => {
-  const { vite, UpdatesView } = await loadViews();
+  const { loader, UpdatesView } = await loadViews();
   try {
     const snapshot = { ...baseSnapshot, lifecycleBusy: true, updates: { update: { state: "running" }, operation: { operation_id: "cold-1", phase: "verifying", progress_percent: 80 } } };
     const markup = renderToStaticMarkup(createElement(UpdatesView, { ...props, busyAction: "Operation in progress", snapshot }));
     assert.match(markup, /<button(?![^>]*disabled)[^>]*>Cancel<\/button>/);
     assert.match(markup, /<button[^>]*disabled[^>]*>Save update source<\/button>/);
-  } finally { await vite.close(); }
+  } finally { await loader.close(); }
 });
 
 
 test("check details live in a dialog and actual startup failure overrides preflight success", async () => {
- const { vite, CompatibilityDialog, ProfilesView } = await loadViews();
+ const { loader, CompatibilityDialog, ProfilesView } = await loadViews();
  try {
   const snapshot = { ...baseSnapshot, harnessRuntime: { harness: { state: "failed" } }, recovery: { log_tail: [{ stream: "stderr", content: "task-board ledger is already owned", truncated: false }] }, profiles: { compatibility: { status: "passed", trigger: "profile_switch", last_trigger: "profile_switch", source_profile: "desktop", release_id: "rc1" } } };
   const page = renderToStaticMarkup(createElement(ProfilesView, { ...props, snapshot }));
@@ -197,12 +250,12 @@ test("check details live in a dialog and actual startup failure overrides prefli
   assert.doesNotMatch(busy, /Startup check passed/);
   const earlyFailure = renderToStaticMarkup(createElement(CompatibilityDialog, { ...props, snapshot: { ...baseSnapshot, startup: { ...startup, harness_startup_error: "Node entry missing" } }, pending: false, onClose() {} }));
   assert.match(earlyFailure, /Node entry missing/);
- } finally { await vite.close(); }
+ } finally { await loader.close(); }
 });
 
 
 test("plugin rows expose movable installed bundles, locked roots and read-only projections", async () => {
- const { vite, ProfilePlugins } = await loadViews();
+ const { loader, ProfilePlugins } = await loadViews();
  try {
   const bundles = ["@deepseek-ai/dsh-base", "@deepseek-ai/dsh-web-app", "third-party"];
   const manifest = { name: "desktop", bundles, plugins: bundles.map((packageName, i) => ({ package: packageName, builtin: i < 2, removable: i === 2 })) };
@@ -217,12 +270,12 @@ test("plugin rows expose movable installed bundles, locked roots and read-only p
   assert.doesNotMatch(generated, /draggable="true"/);
   const running = renderToStaticMarkup(createElement(ProfilePlugins, { ...props, profile: "desktop", snapshot: { ...snapshot, recovery: { harness: { state: "running" } } } }));
   assert.doesNotMatch(running, /draggable="true"/);
- } finally { await vite.close(); }
+ } finally { await loader.close(); }
 });
 
 
 test("update progress keeps stage and terminal errors visible without ownership internals", async () => {
-  const { vite, UpdatesView } = await loadViews();
+  const { loader, UpdatesView } = await loadViews();
   try {
     const render = (operation: object) => renderToStaticMarkup(createElement(UpdatesView, { ...props, snapshot: { ...baseSnapshot, updates: { update: { state: "idle", error: "older failure" }, operation } } }));
     const running = render({ operation_id: "cold-private-id", tag: "v1", phase: "cloning", progress_percent: 10, owner_quiescent: false });
@@ -234,14 +287,14 @@ test("update progress keeps stage and terminal errors visible without ownership 
     assert.match(failed, /Clone connection failed/);
     assert.match(failed, /Retry cleanup/);
     const completed = render({ operation_id: "cold-private-id", phase: "succeeded", progress_percent: 100 });
-    assert.match(completed, /Current stage/);
+    assert.match(completed, /Last installation/);
     assert.doesNotMatch(completed, /older failure/);
-  } finally { await vite.close(); }
+  } finally { await loader.close(); }
 });
 
 
 test("guide joins environment, installation and start without enabling an empty setup", async () => {
-  const { vite, GuideView } = await loadViews();
+  const { loader, GuideView } = await loadViews();
   try {
     const snapshot = { ...baseSnapshot, harnessRuntime: {state: "detached"}, releases: {releases: []} };
     const markup = renderToStaticMarkup(createElement(GuideView, { ...props, snapshot }));
@@ -251,13 +304,13 @@ test("guide joins environment, installation and start without enabling an empty 
     assert.match(markup, /Install a version above before starting Harness/);
     assert.match(markup, /disabled=""[^>]*>[^]*?Start<\/button>/);
     assert.doesNotMatch(markup, /role="dialog"/);
-  } finally { await vite.close(); }
+  } finally { await loader.close(); }
 });
 
 test("a stale legacy success does not hide a running or failed cold operation", async () => {
-  const { vite, UpdatesView } = await loadViews();
+  const { loader, UpdatesView } = await loadViews();
   try {
-    const snapshot = { ...baseSnapshot, updates: { update: {state: "succeeded"}, operation: {operation_id: "new", phase: "cloning", tag: "v-next"} } };
+    const snapshot = { ...baseSnapshot, releases: { releases: [] }, updates: { update: {state: "succeeded"}, operation: {operation_id: "new", phase: "cloning", tag: "v-next"} } };
     const active = renderToStaticMarkup(createElement(UpdatesView, {...props, snapshot}));
     assert.match(active, /Cloning/);
     assert.doesNotMatch(active, /Current stage: Succeeded/);
@@ -267,5 +320,21 @@ test("a stale legacy success does not hide a running or failed cold operation", 
     const missing = renderToStaticMarkup(createElement(UpdatesView, {...props, snapshot}));
     assert.match(missing, /Verifying installed version/);
     assert.match(missing, /version slot is unavailable/);
-  } finally { await vite.close(); }
+  } finally { await loader.close(); }
+});
+
+
+test("recovery mode explains persistent pause and never labels leaving as startup", async () => {
+  const { loader, RecoveryModePanel } = await loadViews();
+  try {
+    const html = renderToStaticMarkup(createElement(RecoveryModePanel, { ...props,
+      snapshot: { ...baseSnapshot, recovery: { paused: true } } }));
+    assert.match(html, /Harness startup is paused/);
+    assert.match(html, /Leaving does not start Harness/);
+    assert.match(html, /Leave recovery mode/);
+    const invalid = renderToStaticMarkup(createElement(RecoveryModePanel, { ...props,
+      snapshot: { ...baseSnapshot, recovery: { paused: true, pause_error: "invalid JSON" } } }));
+    assert.match(invalid, /Repair and enter recovery mode/);
+    assert.doesNotMatch(invalid, /Leave recovery mode/);
+  } finally { await loader.close(); }
 });

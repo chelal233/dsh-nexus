@@ -187,8 +187,8 @@ async function webReady(address) {
   return false;
 }
 
-export async function probe(node, entry, home, profile, timeoutMs) {
-  const child = spawn(node, [entry, '--profile', profile, '--no-open', '--host', '127.0.0.1', '--port', '0'], {
+export async function probe(node, entry, home, profile, timeoutMs, patches = []) {
+  const child = spawn(node, [entry, '--profile', profile, ...patches.flatMap(p => ['--patch', p]), '--no-open', '--host', '127.0.0.1', '--port', '0'], {
     cwd: home, windowsHide: true, detached: process.platform !== 'win32',
     env: { ...process.env, DSH_HOME: home }, stdio: ['ignore', 'pipe', 'pipe'],
   });
@@ -230,7 +230,10 @@ export async function check(options) {
   const trigger = ['version_switch', 'profile_switch', 'startup'].includes(options.trigger) ? options.trigger : null;
   const slot = fs.realpathSync(options.slot);
   const source = sourceInfo(home, selected);
-  const key = crypto.createHash('sha256').update(JSON.stringify([checkerVersion, slot, release_id, source.source, source.fingerprint])).digest('hex');
+  const patches = options.patches ?? [];
+  const preferencesFingerprint = crypto.createHash('sha256').update(JSON.stringify({ environment: options.preferences_env ?? {}, capabilities: options.preference_capabilities ?? null }));
+  for (const patch of patches) preferencesFingerprint.update(patch).update(fs.readFileSync(patch));
+  const key = crypto.createHash('sha256').update(JSON.stringify([checkerVersion, slot, release_id, source.source, source.fingerprint, preferencesFingerprint.digest('hex')])).digest('hex');
   const effective = 'nexus-' + key.slice(0, 24);
   const destination = path.join(home, 'profiles', effective);
   const metadataFile = path.join(destination, marker);
@@ -283,7 +286,7 @@ export async function check(options) {
   }
   for (let attempt = 0; attempt <= Math.min(source.manifest.dsh.profile.bundles.length, 12); attempt++) {
     fs.writeFileSync(path.join(candidate, 'package.json'), JSON.stringify(manifest, null, 2));
-    const result = await probe(node, path.join(slot, 'apps/cli/lib/bin.js'), testHome, effective, timeout_ms);
+    const result = await probe(node, path.join(slot, 'apps/cli/lib/bin.js'), testHome, effective, timeout_ms, patches);
     if (result.ok) {
       if (sourceInfo(home, source.source).fingerprint !== source.fingerprint) throw Error('Source profile changed during compatibility check');
       const report = { checker_version: checkerVersion, status: disabled.length ? 'isolated' : 'passed', source_profile: source.source,

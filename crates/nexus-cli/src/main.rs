@@ -1,6 +1,6 @@
 use std::{env, net::SocketAddr, process};
 
-use nexus_core::{NexusConfig, DEFAULT_AGENT_PORT};
+use nexus_core::{NexusConfig, DEFAULT_AGENT_PORT, PORT_ENV, AgentDiscoveryRecord, data_root_identity};
 use nexus_protocol::{
     CheckpointAction, CheckpointCommand, CheckpointCreateResponse, CheckpointListResponse,
     CheckpointRestoreResponse, ConfigAction, ConfigCommand, ConfigResponse, DiagnosticsAction,
@@ -16,7 +16,8 @@ use nexus_protocol::{
 struct Options {
     command: Command,
     json: bool,
-    port: u16,
+    config: NexusConfig,
+    explicit_port: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -65,10 +66,17 @@ async fn main() {
 }
 
 fn parse_args() -> Result<Option<Options>, String> {
-    let mut config = NexusConfig::from_env();
+    parse_args_from(NexusConfig::from_env(), valid_environment_port(env::var(PORT_ENV).ok().as_deref()).is_some(), env::args_os().skip(1))
+}
+
+fn valid_environment_port(value: Option<&str>) -> Option<u16> {
+    value.and_then(|value| value.parse::<u16>().ok()).filter(|port| *port != 0)
+}
+
+fn parse_args_from(mut config: NexusConfig, mut explicit_port: bool, args: impl Iterator<Item = std::ffi::OsString>) -> Result<Option<Options>, String> {
     let mut command = None;
     let mut json = false;
-    let mut args = env::args_os().skip(1).peekable();
+    let mut args = args.peekable();
 
     while let Some(argument) = args.next() {
         match argument.to_string_lossy().as_ref() {
@@ -431,6 +439,7 @@ fn parse_args() -> Result<Option<Options>, String> {
                 }
             }
             "--port" => {
+                explicit_port = true;
                 let value = args
                     .next()
                     .ok_or_else(|| "--port requires a value".to_owned())?;
@@ -458,17 +467,69 @@ fn parse_args() -> Result<Option<Options>, String> {
     Ok(Some(Options {
         command,
         json,
-        port: if config.port == 0 {
-            DEFAULT_AGENT_PORT
-        } else {
-            config.port
-        },
+        config,
+        explicit_port,
     }))
 }
 
+fn local_client(headers: reqwest::header::HeaderMap) -> Result<reqwest::Client, String> {
+    reqwest::Client::builder().no_proxy().redirect(reqwest::redirect::Policy::none())
+        .default_headers(headers).build().map_err(|error| format!("cannot create the local Agent client: {error}"))
+}
+
+async fn resolve_agent_client(config: &NexusConfig, explicit_port: bool) -> Result<(reqwest::Client, SocketAddr), String> {
+    let paths = config.paths();
+    // An explicit port chooses an address, never a different data owner.
+    let root_identity = Some(data_root_identity(&paths)
+        .map_err(|error| format!("cannot identify Nexus data directory: {error}"))?);
+    let discovery = if explicit_port { None } else {
+        let path = paths.agent_discovery_file();
+        match std::fs::symlink_metadata(&path) {
+            Ok(metadata) => {
+                if !metadata.is_file() || nexus_core::path_is_reparse(&metadata) || metadata.len() > 64 * 1024 {
+                    return Err("Agent discovery record is unsafe or too large".into());
+                }
+                use std::io::Read;
+                let file = std::fs::File::open(path).map_err(|error| error.to_string())?;
+                let mut bytes = Vec::new();
+                file.take(64 * 1024 + 1).read_to_end(&mut bytes).map_err(|error| error.to_string())?;
+                if bytes.len() > 64 * 1024 { return Err("Agent discovery record is too large".into()); }
+                let record: AgentDiscoveryRecord = serde_json::from_slice(&bytes).map_err(|error| format!("invalid Agent discovery record: {error}"))?;
+                if record.port == 0 || record.instance_id.is_empty() || Some(&record.data_root_id) != root_identity.as_ref() {
+                    return Err("Agent discovery record does not belong to this data directory".into());
+                }
+                Some(record)
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
+            Err(error) => return Err(format!("cannot read Agent discovery: {error}")),
+        }
+    };
+    let port = discovery.as_ref().map(|record| record.port).unwrap_or(if config.port == 0 { DEFAULT_AGENT_PORT } else { config.port });
+    let address = SocketAddr::from(([127, 0, 0, 1], port));
+    let client = local_client(reqwest::header::HeaderMap::new())?;
+    let mut response = client.get(format!("http://{address}/v1/health")).timeout(std::time::Duration::from_secs(5))
+        .send().await.map_err(|error| format!("Agent health is unavailable: {error}"))?;
+    if !response.status().is_success() { return Err(format!("Agent health returned HTTP {}", response.status())); }
+    let mut bytes = Vec::new();
+    while let Some(chunk) = response.chunk().await.map_err(|error| error.to_string())? {
+        if bytes.len() + chunk.len() > 64 * 1024 { return Err("Agent health response is too large".into()); }
+        bytes.extend_from_slice(&chunk);
+    }
+    let health: nexus_protocol::HealthResponse = serde_json::from_slice(&bytes).map_err(|error| format!("invalid Agent health: {error}"))?;
+    if health.api_version != nexus_protocol::API_VERSION || health.service != "nexus-agent"
+        || health.status != nexus_protocol::HealthStatus::Ok || health.instance_id.is_empty() || health.data_root_id.is_empty()
+        || root_identity.as_ref().is_some_and(|root| root != &health.data_root_id)
+        || discovery.as_ref().is_some_and(|record| record.instance_id != health.instance_id) {
+        return Err("Agent health identity does not match the selected Nexus instance".into());
+    }
+    let mut headers = reqwest::header::HeaderMap::new();
+    headers.insert("x-nexus-data-root-id", health.data_root_id.parse().map_err(|_| "Invalid Agent data-root identity")?);
+    headers.insert("x-nexus-instance-id", health.instance_id.parse().map_err(|_| "Invalid Agent instance identity")?);
+    Ok((local_client(headers)?, address))
+}
+
 async fn run(options: Options) -> Result<(), String> {
-    let address = SocketAddr::from(([127, 0, 0, 1], options.port));
-    let client = reqwest::Client::new();
+    let (client, address) = resolve_agent_client(&options.config, options.explicit_port).await?;
     let response = match &options.command {
         Command::Status => client
             .get(format!("http://{address}/v1/state"))
@@ -505,6 +566,7 @@ async fn run(options: Options) -> Result<(), String> {
         Command::Profile(
             ProfileAction::PluginInventory
             | ProfileAction::PluginMove
+            | ProfileAction::PluginUndoMove
             | ProfileAction::PluginRemove
             | ProfileAction::PluginDisable
             | ProfileAction::PluginEnable
@@ -571,6 +633,7 @@ async fn run(options: Options) -> Result<(), String> {
         Command::Update(action, release_id, version, third, source, mode) => client
             .post(format!("http://{address}/v1/updates"))
             .json(&UpdateCommand {
+                archive_path: None,
                 action: *action,
                 release_id: release_id.clone(),
                 version: version.clone(),
@@ -625,6 +688,7 @@ async fn run(options: Options) -> Result<(), String> {
         Command::Config(action, runtime) => client
             .post(format!("http://{address}/v1/config"))
             .json(&ConfigCommand {
+                harness_preferences: None,
                 action: *action,
                 harness: None,
                 update: None,
@@ -1090,4 +1154,115 @@ Usage:
 
 Queries and controls the loopback Nexus Agent API."#
     );
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::{io::{Read, Write}, net::TcpListener, fs};
+
+    fn fixture(label: &str) -> (NexusConfig, TcpListener) {
+        let root = env::temp_dir().join(format!("nexus-cli-{label}-{}", nexus_core::unix_time_nanos_for_update()));
+        fs::create_dir_all(&root).unwrap();
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        (NexusConfig { data_dir: Some(root), port: listener.local_addr().unwrap().port() }, listener)
+    }
+    fn respond(listener: TcpListener, body: String, expect_command: bool) -> std::thread::JoinHandle<()> {
+        std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            stream.set_read_timeout(Some(std::time::Duration::from_secs(5))).unwrap();
+            let mut bytes = [0; 8192];
+            let n = stream.read(&mut bytes).unwrap();
+            assert!(String::from_utf8_lossy(&bytes[..n]).starts_with("GET /v1/health"));
+            write!(stream, "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len()).unwrap();
+            if expect_command {
+                let (mut stream, _) = listener.accept().unwrap();
+                let n = stream.read(&mut bytes).unwrap();
+                let request = String::from_utf8_lossy(&bytes[..n]);
+                assert!(request.starts_with("POST /v1/harness"));
+                assert!(request.contains("x-nexus-instance-id: fixture"));
+                assert!(request.contains("x-nexus-data-root-id:"));
+                write!(stream, "HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\n{{}}").unwrap();
+            }
+        })
+    }
+    fn health(root: &str, instance: &str) -> String {
+        serde_json::json!({"api_version":"v1","service":"nexus-agent","status":"ok","data_root_id":root,"instance_id":instance}).to_string()
+    }
+    #[test]
+    fn explicit_ports_include_valid_environment_and_default_port() {
+        assert_eq!(valid_environment_port(Some("0")), None);
+        assert_eq!(valid_environment_port(Some("bad")), None);
+        assert_eq!(valid_environment_port(Some("9800")), Some(9800));
+        let parse = |args: &[&str], explicit| parse_args_from(NexusConfig::default(), explicit, args.iter().map(std::ffi::OsString::from)).unwrap().unwrap();
+        assert!(parse(&["status", "--port", "9800"], false).explicit_port);
+        assert!(parse(&["status"], true).explicit_port);
+        assert!(!parse(&["status"], false).explicit_port);
+    }
+    #[tokio::test]
+    async fn discovers_current_root_and_binds_mutations() {
+        let (mut config, listener) = fixture("discovery");
+        let port = config.port;
+        config.port = 1;
+        let paths = config.paths();
+        let root = data_root_identity(&paths).unwrap();
+        paths.publish_agent_discovery(&AgentDiscoveryRecord { port, data_root_id: root.clone(), instance_id: "fixture".into(), pid: 1, updated_at_unix: 1 }).unwrap();
+        let server = respond(listener, health(&root, "fixture"), true);
+        let (client, address) = resolve_agent_client(&config, false).await.unwrap();
+        assert_eq!(address.port(), port);
+        client.post(format!("http://{address}/v1/harness")).json(&serde_json::json!({"action":"stop"})).send().await.unwrap();
+        server.join().unwrap();
+        fs::remove_dir_all(paths.root).unwrap();
+    }
+    #[tokio::test]
+    async fn explicit_port_ignores_discovery_but_automatic_rejects_stale_identity() {
+        for explicit in [false, true] {
+            let (config, listener) = fixture("explicit");
+            let paths = config.paths();
+            let root = data_root_identity(&paths).unwrap();
+            paths.publish_agent_discovery(&AgentDiscoveryRecord { port: if explicit { 1 } else { config.port }, data_root_id: root.clone(), instance_id: "old".into(), pid: 1, updated_at_unix: 1 }).unwrap();
+            let server = respond(listener, health(&root, "fixture"), false);
+            assert_eq!(resolve_agent_client(&config, explicit).await.is_ok(), explicit);
+            server.join().unwrap();
+            fs::remove_dir_all(paths.root).unwrap();
+        }
+    }
+    #[tokio::test]
+    async fn explicit_port_rejects_another_data_root_before_mutation() {
+        let (config, listener) = fixture("explicit-wrong-root");
+        let server = respond(listener, health("other-root", "fixture"), false);
+        assert!(resolve_agent_client(&config, true).await.is_err());
+        server.join().unwrap();
+        fs::remove_dir_all(config.paths().root).unwrap();
+    }
+
+    #[tokio::test]
+    async fn local_health_redirect_is_never_followed() {
+        let (config, listener) = fixture("redirect");
+        let server = std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let mut bytes = [0; 4096];
+            stream.read(&mut bytes).unwrap();
+            write!(stream, "HTTP/1.1 302 Found\r\nLocation: http://127.0.0.1:1/redirected\r\nContent-Length: 0\r\nConnection: close\r\n\r\n").unwrap();
+        });
+        let error = resolve_agent_client(&config, true).await.unwrap_err();
+        assert!(error.contains("HTTP 302"), "{error}");
+        server.join().unwrap();
+        fs::remove_dir_all(config.paths().root).unwrap();
+    }
+
+    #[tokio::test]
+    async fn default_fallback_rejects_wrong_root_and_invalid_discovery_never_connects() {
+        let (config, listener) = fixture("wrong-root");
+        let paths = config.paths();
+        let server = respond(listener, health("other-root", "fixture"), false);
+        assert!(resolve_agent_client(&config, false).await.is_err());
+        server.join().unwrap();
+        fs::create_dir_all(&paths.run_dir).unwrap();
+        for bytes in [b"{".to_vec(), vec![b'x'; 65537]] {
+            fs::write(paths.agent_discovery_file(), bytes).unwrap();
+            assert!(resolve_agent_client(&config, false).await.is_err());
+        }
+        fs::remove_dir_all(paths.root).unwrap();
+    }
 }

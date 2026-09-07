@@ -19,6 +19,7 @@ pub enum NativeLocale {
 pub enum NativeText {
     TrayShow,
     TrayQuit,
+    TrayStopQuit,
     TrayTooltip,
     MinimizedTitle,
     MinimizedBody,
@@ -106,14 +107,16 @@ fn windows_ui_locale() -> Option<NativeLocale> {
 pub const fn text(locale: NativeLocale, key: NativeText) -> &'static str {
     match (locale, key) {
         (NativeLocale::English, NativeText::TrayShow) => "Show launcher",
-        (NativeLocale::English, NativeText::TrayQuit) => "Quit",
+        (NativeLocale::English, NativeText::TrayQuit) => "Exit launcher (keep services running)",
+        (NativeLocale::English, NativeText::TrayStopQuit) => "Stop services and exit",
         (NativeLocale::English, NativeText::TrayTooltip) => "Nexus Launcher",
         (NativeLocale::English, NativeText::MinimizedTitle) => "Nexus Launcher",
         (NativeLocale::English, NativeText::MinimizedBody) => {
             "Launcher is still running in the system tray"
         }
         (NativeLocale::SimplifiedChinese, NativeText::TrayShow) => "显示启动器",
-        (NativeLocale::SimplifiedChinese, NativeText::TrayQuit) => "退出",
+        (NativeLocale::SimplifiedChinese, NativeText::TrayQuit) => "退出启动器（服务继续运行）",
+        (NativeLocale::SimplifiedChinese, NativeText::TrayStopQuit) => "停止服务并退出",
         (NativeLocale::SimplifiedChinese, NativeText::TrayTooltip) => "Nexus Launcher",
         (NativeLocale::SimplifiedChinese, NativeText::MinimizedTitle) => "Nexus Launcher",
         (NativeLocale::SimplifiedChinese, NativeText::MinimizedBody) => "启动器仍在系统托盘中运行",
@@ -136,7 +139,7 @@ mod tests {
         );
         assert_eq!(
             text(NativeLocale::SimplifiedChinese, NativeText::TrayQuit),
-            "退出"
+            "退出启动器（服务继续运行）"
         );
     }
 

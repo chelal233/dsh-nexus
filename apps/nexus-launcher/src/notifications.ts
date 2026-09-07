@@ -3,6 +3,7 @@ import {
   requestPermission,
   sendNotification,
 } from "@tauri-apps/plugin-notification";
+import { invoke } from "@tauri-apps/api/core";
 
 const STORAGE_KEY = "nexus.notifications.enabled";
 
@@ -15,6 +16,7 @@ export function notificationsEnabledPreference(): boolean {
 }
 
 export function setNotificationsEnabledPreference(enabled: boolean): void {
+  void invoke("set_native_notifications", { enabled }).catch(() => undefined);
   try {
     window.localStorage.setItem(STORAGE_KEY, enabled ? "1" : "0");
   } catch {

@@ -362,14 +362,145 @@ async fn observe_runtimes_with_selection_budget(
                 .collect(),
         );
     };
-    let (git, node, pnpm) = tokio::join!(
-        observe_selected_tool_until("git", runtime.clone(), config.clone(), deadline, budget),
-        observe_selected_tool_until("node", runtime.clone(), config.clone(), deadline, budget),
-        observe_selected_tool_until("pnpm", runtime, config, deadline, budget),
+    let selected = config.blocking_fs.run(deadline, move || {
+        prefer_bundled_runtime(runtime.unwrap_or_default(), nexus_core::bundled_runtime_dir().as_deref())
+    }).await;
+    let Some(selected) = selected else {
+        return RuntimeListResponse::new(RUNTIME_TOOLS.iter().map(|name| budget_exceeded_status(name)).collect());
+    };
+    let (git, (node, pnpm)) = tokio::join!(
+        observe_selected_tool_until("git", Some(selected.clone()), config.clone(), deadline, budget),
+        observe_node_package_managers(selected, config, deadline, budget),
     );
     let tools = vec![git, node, pnpm];
     debug_assert_eq!(tools.len(), RUNTIME_TOOLS.len());
     RuntimeListResponse::new(tools)
+}
+
+/// Explicit pins are authoritative. An installed bundle is the default set,
+/// including when a damaged bundle must be reported instead of hidden by PATH.
+fn prefer_bundled_runtime(mut runtime: RuntimeConfig, root: Option<&Path>) -> RuntimeConfig {
+    if let Some(root) = root.filter(|root| root.is_dir()) {
+        runtime.node.get_or_insert_with(|| nexus_core::RuntimePin {
+            path: root.join("node").join(if cfg!(windows) { "node.exe" } else { "node" }),
+            ownership: RuntimeOwnership::Bundled,
+        });
+        runtime.pnpm.get_or_insert_with(|| nexus_core::RuntimePin {
+            path: root.join("pnpm/bin/pnpm.cjs"),
+            ownership: RuntimeOwnership::Bundled,
+        });
+    }
+    runtime
+}
+
+/// Use the same effective Node and transitive PATH for observation and spawn.
+/// Absolute launch programs remain authoritative; only bare Node is resolved.
+pub(crate) fn runtime_for_launch(spec: &mut nexus_core::HarnessLaunchSpec, configured: RuntimeConfig, root: Option<&Path>) -> RuntimeConfig {
+    if spec.mode != nexus_protocol::HarnessLaunchMode::Node { return configured; }
+    let mut runtime = prefer_bundled_runtime(configured, root);
+    let bare_node = spec.program.to_str().is_some_and(|program| {
+        program == "node" || program == "node.exe"
+            || (cfg!(windows) && (program.eq_ignore_ascii_case("node") || program.eq_ignore_ascii_case("node.exe")))
+    });
+    if bare_node {
+        if let Some(node) = &runtime.node { spec.program = node.path.clone(); }
+    } else if spec.program.is_absolute() {
+        if runtime.node.as_ref().is_none_or(|node| node.path != spec.program) {
+            runtime.node = Some(nexus_core::RuntimePin { path: spec.program.clone(), ownership: RuntimeOwnership::System });
+        }
+    }
+    runtime
+}
+
+async fn observe_node_package_managers(
+    mut runtime: RuntimeConfig,
+    config: ProbeConfig,
+    deadline: Instant,
+    budget: ProbeBudget,
+) -> (RuntimeToolStatus, RuntimeToolStatus) {
+    let mut node = observe_selected_tool_until("node", Some(runtime.clone()), config.clone(), deadline, budget).await;
+    if node.available {
+        runtime.node = node.path.as_ref().map(|path| nexus_core::RuntimePin {
+            path: PathBuf::from(path),
+            ownership: match node.source.as_deref() {
+                Some("bundled") => RuntimeOwnership::Bundled,
+                Some("nexus") => RuntimeOwnership::Nexus,
+                _ => RuntimeOwnership::System,
+            },
+        });
+    }
+    let pnpm_was_configured = runtime.pnpm.is_some();
+    let mut pnpm = observe_selected_tool_until("pnpm", Some(runtime.clone()), config.clone(), deadline, budget).await;
+    if !node.available {
+        if pnpm.available {
+            pnpm.available = false;
+            pnpm.reason = Some("node_unavailable".to_owned());
+        }
+        return (node, pnpm);
+    }
+    if pnpm.available {
+        runtime.pnpm = pnpm.path.as_ref().map(|path| nexus_core::RuntimePin {
+            path: PathBuf::from(path),
+            ownership: match pnpm.source.as_deref() {
+                Some("bundled") => RuntimeOwnership::Bundled,
+                Some("nexus") => RuntimeOwnership::Nexus,
+                _ => RuntimeOwnership::System,
+            },
+        });
+        // Automatic discovery may have probed a shim with the ambient Node.
+        // Recheck using exactly the selection and PATH that will run Harness.
+        if !pnpm_was_configured {
+            pnpm = observe_configured_pin_until("pnpm", runtime.clone(), config.clone(), deadline, budget).await;
+        }
+    }
+    let command_runtime = runtime.clone();
+    let command_config = config.clone();
+    let prepared = config.blocking_fs.run(deadline, move || {
+        if Instant::now() >= cleanup_start(deadline, budget.cleanup) {
+            return Err(REASON_PROBE_BUDGET_EXCEEDED);
+        }
+        prepare_npm_probe_command(&command_runtime, &command_config)
+    }).await;
+    let result = match prepared {
+        Some(Ok(command)) => run_prepared_version_probe("npm", command, &config, deadline, budget)
+            .await.map_err(|reason| if reason == REASON_PROBE_BUDGET_EXCEEDED
+                || Instant::now() >= cleanup_start(deadline, budget.cleanup) {
+                REASON_PROBE_BUDGET_EXCEEDED
+            } else { "npm_probe_failed" }),
+        Some(Err(reason)) => Err(reason),
+        None => Err(REASON_PROBE_BUDGET_EXCEEDED),
+    };
+    if let Err(reason) = result {
+        node.available = false;
+        node.reason = Some(reason.to_owned());
+    }
+    (node, pnpm)
+}
+
+fn prepare_npm_probe_command(runtime: &RuntimeConfig, config: &ProbeConfig) -> Result<Command, &'static str> {
+    let node = runtime.node.as_ref().ok_or("node_unavailable")?;
+    let program = canonical_configured_path(&node.path, node.ownership, config)?;
+    let parent = program.parent().ok_or("npm_missing")?;
+    let npm = parent.join(if cfg!(windows) { "npm.cmd" } else { "npm" });
+    if canonical_file(&npm).is_none() {
+        return Err("npm_missing");
+    }
+    let npm_entry = if cfg!(windows) {
+        parent.join("node_modules/npm/bin/npm-cli.js")
+    } else {
+        fs::canonicalize(&npm).map_err(|_| "npm_missing")?
+    };
+    let npm_entry = canonical_file(&npm_entry).ok_or("npm_missing")?;
+    let cwd = config.probe_cwd.as_deref().filter(|path| is_safe_probe_cwd(path))
+        .ok_or(REASON_PROBE_CWD_UNAVAILABLE)?;
+    let mut command = Command::new(program);
+    // Probe one directly owned process; the packaging test separately proves
+    // nested npm.cmd execution without developer tools on PATH.
+    command.arg(display_path(&npm_entry)).arg("--version")
+        .envs(nexus_core::build_runtime_child_env(runtime, config.search_path.as_deref()).map_err(|_| REASON_CONFIGURED_COMMAND_INVALID)?)
+        .current_dir(cwd).stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::null()).kill_on_drop(true);
+    apply_probe_environment(&mut command);
+    Ok(command)
 }
 
 async fn observe_selected_tool_until(
@@ -470,7 +601,10 @@ fn prepare_configured_probe_command(
     };
     let program = canonical_configured_path(&spec.program, program_owner, config)?;
     if spec.prefix_args.is_empty() {
-        return prepare_probe_command(&program, config.probe_cwd.as_deref());
+        let mut command = prepare_probe_command(&program, config.probe_cwd.as_deref())?;
+        command.envs(nexus_core::build_runtime_child_env(runtime, config.search_path.as_deref())
+            .map_err(|_| REASON_CONFIGURED_COMMAND_INVALID)?);
+        return Ok(command);
     }
     if name != "pnpm" || spec.prefix_args.len() != 1 {
         return Err(REASON_CONFIGURED_COMMAND_INVALID);
@@ -495,8 +629,12 @@ fn prepare_configured_probe_command(
         return Err(REASON_CONFIGURED_COMMAND_INVALID);
     }
     let mut command = Command::new(program);
+    command.envs(nexus_core::build_runtime_child_env(runtime, config.search_path.as_deref())
+        .map_err(|_| REASON_CONFIGURED_COMMAND_INVALID)?);
     command
-        .arg(entry)
+        // Node's script loader rejects the Win32 verbatim prefix returned by
+        // canonicalize, just as it does during automatic bundled discovery.
+        .arg(display_path(&entry))
         .arg("--version")
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
@@ -1230,7 +1368,7 @@ fn parse_version(name: &str, output: &[u8]) -> Option<String> {
             let value = line.strip_prefix('v')?;
             valid_node_version(value).then(|| line.to_owned())
         }
-        "pnpm" => valid_dot_version(line, false).then(|| line.to_owned()),
+        "pnpm" | "npm" => valid_dot_version(line, false).then(|| line.to_owned()),
         _ => None,
     }
 }
@@ -1711,6 +1849,104 @@ mod tests {
         );
     }
 
+    #[test]
+    fn bundled_selection_is_a_set_and_preserves_explicit_pins() {
+        let root = fixture_root("bundled-selection");
+        let selected = prefer_bundled_runtime(RuntimeConfig::default(), Some(&root));
+        assert_eq!(selected.node.as_ref().unwrap().ownership, RuntimeOwnership::Bundled);
+        assert_eq!(selected.pnpm.as_ref().unwrap().ownership, RuntimeOwnership::Bundled);
+        let custom = nexus_core::RuntimePin {
+            path: root.join("custom/node.exe"),
+            ownership: RuntimeOwnership::System,
+        };
+        let selected = prefer_bundled_runtime(RuntimeConfig {
+            node: Some(custom.clone()), ..RuntimeConfig::default()
+        }, Some(&root));
+        assert_eq!(selected.node, Some(custom));
+        assert_eq!(selected.pnpm.unwrap().path, root.join("pnpm/bin/pnpm.cjs"));
+        assert_eq!(prefer_bundled_runtime(RuntimeConfig::default(), None), RuntimeConfig::default());
+        assert_eq!(prefer_bundled_runtime(RuntimeConfig::default(), Some(&root.join("absent"))), RuntimeConfig::default());
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn node_without_paired_npm_is_rejected_before_spawn() {
+        let root = fixture_root("missing-npm");
+        let node = write_version_fixture(&root.join("custom"), "node", "v24.1.0");
+        let runtime = RuntimeConfig {
+            node: Some(nexus_core::RuntimePin { path: node, ownership: RuntimeOwnership::System }),
+            ..RuntimeConfig::default()
+        };
+        assert_eq!(prepare_npm_probe_command(&runtime, &config_for(&root, None)).unwrap_err(), "npm_missing");
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn launch_defaults_resolve_bare_node_and_align_absolute_node_path() {
+        let root = fixture_root("launch-runtime-defaults");
+        let mut spec = nexus_core::HarnessLaunchSpec::new("node".into());
+        spec.mode = nexus_protocol::HarnessLaunchMode::Node;
+        let runtime = runtime_for_launch(&mut spec, RuntimeConfig::default(), Some(&root));
+        assert_eq!(spec.program, runtime.node.as_ref().unwrap().path);
+        assert_eq!(runtime.node.as_ref().unwrap().ownership, RuntimeOwnership::Bundled);
+        #[cfg(windows)]
+        {
+            let mut upper = spec.clone();
+            upper.program = "NODE.EXE".into();
+            let selected = runtime_for_launch(&mut upper, RuntimeConfig::default(), Some(&root));
+            assert_eq!(upper.program, selected.node.unwrap().path);
+        }
+        let explicit = root.join("explicit/node.exe");
+        spec.program = explicit.clone();
+        let runtime = runtime_for_launch(&mut spec, runtime, Some(&root));
+        assert_eq!(spec.program, explicit);
+        assert_eq!(runtime.node.as_ref().unwrap().path, explicit);
+        let environment = nexus_core::build_runtime_child_env(&runtime, None).unwrap();
+        assert_eq!(std::env::split_paths(&environment[0].1).next().unwrap(), explicit.parent().unwrap());
+        let direct = nexus_core::HarnessLaunchSpec::new("custom-command".into());
+        assert_eq!(runtime_for_launch(&mut direct.clone(), RuntimeConfig::default(), Some(&root)), RuntimeConfig::default());
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[cfg(windows)]
+    #[tokio::test]
+    async fn shipped_runtime_checks_combination_with_no_developer_path() {
+        let bundle = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../../apps/nexus-launcher/src-tauri/resources/runtime");
+        if !bundle.join("node/node.exe").is_file() {
+            // The source-only test suite does not download release resources.
+            return;
+        }
+        let root = fixture_root("complete-bundled-combination");
+        let mut config = config_for(&root, None);
+        config.search_path = Some(env::join_paths([
+            PathBuf::from(env::var_os("SystemRoot").unwrap()).join("System32")
+        ]).unwrap());
+        let mut launch = nexus_core::HarnessLaunchSpec::new("node".into());
+        launch.mode = nexus_protocol::HarnessLaunchMode::Node;
+        let runtime = runtime_for_launch(&mut launch, RuntimeConfig::default(), Some(&bundle));
+        assert_eq!(launch.program, runtime.node.as_ref().unwrap().path);
+        let npm_probe = prepare_npm_probe_command(&runtime, &config).unwrap();
+        let npm_args: Vec<_> = npm_probe.as_std().get_args().collect();
+        assert_eq!(npm_args.len(), 2);
+        assert!(npm_args[0].to_string_lossy().ends_with("npm-cli.js"));
+        assert_eq!(npm_args[1], OsStr::new("--version"));
+        let (node, pnpm) = observe_node_package_managers(runtime.clone(), config.clone(),
+            Instant::now() + PRODUCTION_PROBE_BUDGET.round, PRODUCTION_PROBE_BUDGET).await;
+        assert!(node.available, "{node:?}");
+        assert!(pnpm.available, "{pnpm:?}");
+        let mut broken = runtime;
+        let incomplete = root.join("incomplete");
+        fs::create_dir_all(&incomplete).unwrap();
+        fs::copy(&broken.node.as_ref().unwrap().path, incomplete.join("node.exe")).unwrap();
+        broken.node.as_mut().unwrap().path = incomplete.join("node.exe");
+        let (node, _) = observe_node_package_managers(broken, config,
+            Instant::now() + PRODUCTION_PROBE_BUDGET.round, PRODUCTION_PROBE_BUDGET).await;
+        assert!(!node.available);
+        assert_eq!(node.reason.as_deref(), Some("npm_missing"));
+        let _ = fs::remove_dir_all(root);
+    }
+
     fn write_nonzero_fixture(directory: &Path, name: &str) -> PathBuf {
         if cfg!(windows) {
             write_probe_fixture(directory, name, "@echo off\r\nexit /b 7\r\n")
@@ -1794,6 +2030,32 @@ mod tests {
         .await;
         assert!(!status.available);
         assert_eq!(status.reason.as_deref(), Some(REASON_CONFIGURED_PATH_MISSING));
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn configured_pnpm_script_uses_node_compatible_path() {
+        let root = fixture_root("configured-script-path");
+        let entry = root.join("runtime with spaces").join("pnpm.cjs");
+        fs::create_dir_all(entry.parent().unwrap()).unwrap();
+        fs::write(&entry, "console.log('11.7.0')").unwrap();
+        let node = env::current_exe().unwrap();
+        let runtime = RuntimeConfig {
+            node: Some(nexus_core::RuntimePin {
+                path: node,
+                ownership: RuntimeOwnership::Bundled,
+            }),
+            pnpm: Some(nexus_core::RuntimePin {
+                path: entry.clone(),
+                ownership: RuntimeOwnership::Bundled,
+            }),
+            ..RuntimeConfig::default()
+        };
+        let command = prepare_configured_probe_command("pnpm", &runtime, &config_for(&root, None))
+            .expect("configured script probe prepares");
+        let args: Vec<_> = command.as_std().get_args().collect();
+        assert_eq!(args, vec![entry.as_os_str(), OsStr::new("--version")]);
         let _ = fs::remove_dir_all(root);
     }
 

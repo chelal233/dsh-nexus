@@ -76,6 +76,13 @@ pub(crate) fn resolve_dsh_home() -> io::Result<PathBuf> {
     Ok(native_home.join(".dsh"))
 }
 
+pub(crate) fn resolve_dsh_home_for_paths(paths: &NexusPaths) -> io::Result<PathBuf> {
+    match nexus_core::load_harness_preferences(paths)?.home {
+        Some(home) => Ok(PathBuf::from(home)),
+        None => resolve_dsh_home(),
+    }
+}
+
 pub(crate) fn canonical_dsh_home(path: &Path) -> io::Result<PathBuf> {
     let metadata = fs::symlink_metadata(path)?;
     if metadata.file_type().is_symlink() || !metadata.is_dir() {
@@ -341,6 +348,7 @@ pub(crate) fn native_profile(dsh_home: &Path, profile: &str) -> io::Result<Nativ
     );
     Ok(NativeProfilePayload {
         name: profile.to_owned(),
+        order_undo_id: None,
         source_profile: generated_source_profile(&profile_dir, profile)?,
         bundles,
         plugins,
@@ -370,11 +378,12 @@ fn generated_source_profile(directory: &Path, profile: &str) -> io::Result<Optio
     Ok(Some(report.source_profile))
 }
 
-pub(crate) fn move_profile_plugin(home: &Path, profile: &str, package: &str, target: Option<&str>) -> io::Result<NativeProfilePayload> {
+pub(crate) fn move_profile_plugin(paths: &NexusPaths, home: &Path, profile: &str, package: &str, target: Option<&str>) -> io::Result<NativeProfilePayload> {
     let directory = profile_directory(home, profile)?;
     let manifest = directory.join("package.json");
     let inventory = native_profile(home, profile)?;
-    let before = fs::read(&manifest)?;
+    let before = nexus_core::read_regular_file_bounded(&manifest, MAX_PROFILE_MANIFEST_BYTES)?
+        .ok_or_else(|| io::Error::other("Profile manifest is missing"))?;
     if let Some(source) = &inventory.source_profile {
         return Err(io::Error::new(io::ErrorKind::PermissionDenied,
             format!("Generated compatibility profiles are read-only; reorder source profile {source}")));
@@ -395,11 +404,94 @@ pub(crate) fn move_profile_plugin(home: &Path, profile: &str, package: &str, tar
         return Err(io::Error::new(io::ErrorKind::WouldBlock, "Profile bundles changed during reorder; refresh and retry"));
     }
     *value.pointer_mut("/dsh/profile/bundles").ok_or_else(|| io::Error::other("Profile bundles disappeared"))? = serde_json::json!(ordered);
-    if fs::read(&manifest)? != before {
+    if nexus_core::read_regular_file_bounded(&manifest,MAX_PROFILE_MANIFEST_BYTES)?.as_deref() != Some(before.as_slice()) {
         return Err(io::Error::new(io::ErrorKind::WouldBlock, "Profile manifest changed during reorder; refresh and retry"));
     }
-    nexus_core::write_json_atomic(&directory, &manifest, &value)?;
-    native_profile(home, profile)
+    let after = nexus_protocol::encode_json(&value).map_err(io::Error::other)?;
+    if after.len() as u64 > MAX_PROFILE_MANIFEST_BYTES { return Err(io::Error::other("Profile manifest is too large")); }
+    if before == after { return native_profile(home, profile); }
+    let record = OrderUndo { schema:1, profile:profile.into(), home:directory_identity(home)?, directory:directory_identity(&directory)?, before, after };
+    let id=format!("order-{}", nexus_core::unix_time_nanos_for_update());
+    let record_path=order_record_path(paths,profile,&id,true)?;
+    let temp=record_path.with_extension("tmp");
+    nexus_core::write_private_bytes_atomic(record_path.parent().unwrap(),&temp,&serde_json::to_vec(&record).map_err(io::Error::other)?)?;
+    let published=fs::hard_link(&temp,&record_path);let _=fs::remove_file(&temp);published?;
+    if nexus_core::read_regular_file_bounded(&manifest,MAX_PROFILE_MANIFEST_BYTES)?.as_deref()!=Some(record.before.as_slice()) {
+        let _=fs::remove_file(&record_path);
+        return Err(io::Error::new(io::ErrorKind::WouldBlock,"Profile manifest changed during reorder"));
+    }
+    if let Err(error)=nexus_core::write_private_bytes_atomic(&directory,&manifest,&record.after) {
+        if nexus_core::read_regular_file_bounded(&manifest,MAX_PROFILE_MANIFEST_BYTES).ok().flatten().as_deref()==Some(record.before.as_slice()) { let _=fs::remove_file(&record_path); }
+        return Err(error);
+    }
+    // Keep the newest successful undo; a failed new operation never touches it.
+    for old in order_records(paths,profile)? {
+        if old!=record_path {
+            if let Ok(saved)=read_order_record(&old) {
+                if saved.home==record.home && saved.directory==record.directory { let _=fs::remove_file(old); }
+            }
+        }
+    }
+    let mut inventory=native_profile(home,profile)?;inventory.order_undo_id=Some(id);Ok(inventory)
+}
+
+#[derive(serde::Serialize,serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct OrderUndo { schema:u32, profile:String, home:String, directory:String, before:Vec<u8>, after:Vec<u8> }
+fn directory_identity(path:&Path)->io::Result<String> { nexus_core::data_root_identity(&NexusPaths::from_root(path.to_path_buf())) }
+fn order_record_path(paths:&NexusPaths,profile:&str,id:&str,create:bool)->io::Result<PathBuf> {
+    validate_profile_name(profile)?;
+    if !id.starts_with("order-") || id.len()>80 || !id[6..].bytes().all(|v|v.is_ascii_digit()) {return Err(io::Error::other("Invalid order operation ID"));}
+    if create { paths.ensure_directories()?; }
+    let root=paths.root.join("plugin-order-undo");let directory=root.join(profile);
+    for path in [&root,&directory] {
+        match fs::symlink_metadata(path) {
+            Ok(meta) if !meta.is_dir() || nexus_core::path_is_reparse(&meta)=>return Err(io::Error::other("Unsafe order undo directory")),
+            Ok(_)=>{}, Err(error) if error.kind()==io::ErrorKind::NotFound && create=>fs::create_dir(path)?,
+            Err(error) if error.kind()==io::ErrorKind::NotFound=>{}, Err(error)=>return Err(error),
+        }
+    }
+    Ok(directory.join(format!("{id}.json")))
+}
+fn order_records(paths:&NexusPaths,profile:&str)->io::Result<Vec<PathBuf>> {
+    let probe=order_record_path(paths,profile,"order-0",false)?;
+    let entries=match fs::read_dir(probe.parent().unwrap()) {Ok(v)=>v,Err(e) if e.kind()==io::ErrorKind::NotFound=>return Ok(Vec::new()),Err(e)=>return Err(e)};
+    let mut result=Vec::new();
+    for entry in entries {let entry=entry?;let name=entry.file_name();let Some(name)=name.to_str() else {continue;};
+        if let Some(id)=name.strip_suffix(".json") {if id.starts_with("order-") && id[6..].bytes().all(|v|v.is_ascii_digit()) {result.push(entry.path());}}
+        if result.len()>128 {return Err(io::Error::other("Too many order recovery records; preserve them and export diagnostics"));}
+    }
+    result.sort();result.reverse();Ok(result)
+}
+fn read_order_record(path:&Path)->io::Result<OrderUndo> {
+    let bytes=nexus_core::read_regular_file_bounded(path,10*1024*1024)?.ok_or_else(||io::Error::other("Order undo record is missing"))?;
+    let record:OrderUndo=serde_json::from_slice(&bytes).map_err(|_|io::Error::other("Invalid order undo record"))?;
+    if record.schema!=1 || record.before.len() as u64>MAX_PROFILE_MANIFEST_BYTES || record.after.len() as u64>MAX_PROFILE_MANIFEST_BYTES {return Err(io::Error::other("Invalid order undo bounds"));}
+    Ok(record)
+}
+pub(crate) fn order_undo_id(paths:&NexusPaths,home:&Path,profile:&str)->io::Result<Option<String>> {
+    let directory=profile_directory(home,profile)?;
+    let current=nexus_core::read_regular_file_bounded(&directory.join("package.json"),MAX_PROFILE_MANIFEST_BYTES)?;
+    let home_id=directory_identity(home)?;let directory_id=directory_identity(&directory)?;
+    for path in order_records(paths,profile)? {
+        let saved=read_order_record(&path)?;
+        if saved.profile==profile && saved.home==home_id && saved.directory==directory_id && current.as_deref()==Some(saved.after.as_slice()) {
+            return Ok(path.file_stem().and_then(|v|v.to_str()).map(str::to_owned));
+        }
+    }
+    Ok(None)
+}
+pub(crate) fn undo_profile_order(paths:&NexusPaths,home:&Path,profile:&str,id:&str)->io::Result<NativeProfilePayload> {
+    let directory=profile_directory(home,profile)?;let manifest=directory.join("package.json");
+    if native_profile(home,profile)?.source_profile.is_some() {return Err(io::Error::other("Generated profiles are read-only"));}
+    let path=order_record_path(paths,profile,id,false)?;let saved=read_order_record(&path)?;
+    if saved.profile!=profile || saved.home!=directory_identity(home)? || saved.directory!=directory_identity(&directory)? {return Err(io::Error::other("Order undo belongs to a different profile location"));}
+    let current=nexus_core::read_regular_file_bounded(&manifest,MAX_PROFILE_MANIFEST_BYTES)?.ok_or_else(||io::Error::other("Profile manifest is missing"))?;
+    if current!=saved.after {return Err(io::Error::new(io::ErrorKind::WouldBlock,"Profile manifest changed after reorder; undo will not overwrite it"));}
+    let _:serde_json::Value=serde_json::from_slice(&saved.before).map_err(|_|io::Error::other("Invalid original profile manifest"))?;
+    nexus_core::write_private_bytes_atomic(&directory,&manifest,&saved.before)?;
+    let _=fs::remove_file(path);
+    native_profile(home,profile)
 }
 
 fn valid_package_name(value: &str) -> bool {
@@ -479,6 +571,12 @@ fn remove_profile_plugin_with_runner(
         build_runtime_child_env(&runtime, env::var_os("PATH").as_deref())?
             .into_iter()
             .collect();
+    let preferences = nexus_core::load_harness_preferences(paths)?;
+    // Plugin removal must remain usable to repair a profile even when launch
+    // overrides are incompatible. It needs only the selected data directory;
+    // startup settings are validated on preflight/start, never sent to this command.
+    let command_preferences = nexus_protocol::HarnessPreferencesPayload { home: preferences.home, ..Default::default() };
+    child_env.extend(nexus_core::harness_preferences_environment(&command_preferences, &nexus_core::HarnessProfileCapabilities::default()));
     child_env.insert(
         OsString::from(DSH_HOME_ENV),
         dsh_home.as_os_str().to_owned(),
@@ -670,8 +768,11 @@ fn run_owned_process_cancelled(
     cancelled: impl Fn() -> bool,
 ) -> io::Result<ExitStatus> {
     configure_owned_process(command);
+    let job_name = command.get_envs().find(|(key, _)| *key == "NEXUS_OWNED_JOB_NAME")
+        .and_then(|(_, value)| value).map(|value| value.to_string_lossy().into_owned());
+    command.env_remove("NEXUS_OWNED_JOB_NAME");
     let child = command.spawn()?;
-    let mut tree = OwnedProcessTree::new(child, fault)?;
+    let mut tree = OwnedProcessTree::new_named(child, fault, job_name.as_deref())?;
     if let Err(error) = tree.resume(fault) {
         return tree.cleanup_failure(error);
     }
@@ -737,7 +838,7 @@ struct OwnedProcessTree {
 }
 
 impl OwnedProcessTree {
-    fn new(mut child: Child, fault: ProcessTreeFault) -> io::Result<Self> {
+    fn new_named(mut child: Child, fault: ProcessTreeFault, job_name: Option<&str>) -> io::Result<Self> {
         #[cfg(windows)]
         {
             #[cfg(not(test))]
@@ -748,7 +849,7 @@ impl OwnedProcessTree {
                 let _ = child.wait();
                 return Err(io::Error::other("injected failure before job creation"));
             }
-            let job = match create_kill_on_close_job() {
+            let job = match create_named_kill_on_close_job(job_name) {
                 Ok(job) => job,
                 Err(error) => {
                     let _ = child.kill();
@@ -897,11 +998,21 @@ fn tree_is_empty(tree: &OwnedProcessTree) -> io::Result<bool> {
 
 #[cfg(windows)]
 pub(crate) fn create_kill_on_close_job() -> io::Result<windows_sys::Win32::Foundation::HANDLE> {
+    create_named_kill_on_close_job(None)
+}
+
+#[cfg(windows)]
+fn create_named_kill_on_close_job(name: Option<&str>) -> io::Result<windows_sys::Win32::Foundation::HANDLE> {
     use windows_sys::Win32::System::JobObjects::{
         CreateJobObjectW, JobObjectExtendedLimitInformation, SetInformationJobObject,
         JOBOBJECT_EXTENDED_LIMIT_INFORMATION, JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
     };
-    let job = unsafe { CreateJobObjectW(std::ptr::null(), std::ptr::null()) };
+    let wide: Option<Vec<u16>> = name.map(|name| name.encode_utf16().chain(Some(0)).collect());
+    let job = unsafe { CreateJobObjectW(std::ptr::null(), wide.as_ref().map_or(std::ptr::null(), |name| name.as_ptr())) };
+    if !job.is_null() && name.is_some() && unsafe { windows_sys::Win32::Foundation::GetLastError() } == 183 {
+        unsafe { windows_sys::Win32::Foundation::CloseHandle(job) };
+        return Err(io::Error::new(io::ErrorKind::AlreadyExists, "Owned operation Job already exists"));
+    }
     if job.is_null() {
         return Err(io::Error::last_os_error());
     }
@@ -952,6 +1063,54 @@ pub(crate) fn terminate_job_tree(job: usize) -> io::Result<()> {
         Err(io::Error::last_os_error())
     } else {
         Ok(())
+    }
+}
+
+/// An owned Windows Job handle. The handle is not inherited by its members.
+/// Keeping it as an integer makes its thread-safe ownership explicit without
+/// lending the raw handle to tasks that could outlive this owner.
+#[cfg(windows)]
+pub(crate) struct WindowsJob(usize);
+
+/// Query only a previously persisted operation Job; never terminate or adopt
+/// an arbitrary process. A missing Job has no associated live processes.
+pub(crate) fn named_operation_job_is_empty(name: &str) -> io::Result<bool> {
+    #[cfg(windows)] {
+        use windows_sys::Win32::{Foundation::{CloseHandle, GetLastError}, System::JobObjects::OpenJobObjectW};
+        let wide: Vec<u16> = name.encode_utf16().chain(Some(0)).collect();
+        let job = unsafe { OpenJobObjectW(0x0004 /* JOB_OBJECT_QUERY */, 0, wide.as_ptr()) };
+        if job.is_null() {
+            let error = unsafe { GetLastError() };
+            return if error == 2 { Ok(true) } else { Err(io::Error::from_raw_os_error(error as i32)) };
+        }
+        let result = job_is_empty(job);
+        unsafe { CloseHandle(job) };
+        result
+    }
+    #[cfg(not(windows))] { let _ = name; Err(io::Error::new(io::ErrorKind::Unsupported, "Named process-tree recovery requires Windows")) }
+}
+
+#[cfg(windows)]
+impl WindowsJob {
+    pub(crate) fn new() -> io::Result<Self> {
+        create_kill_on_close_job().map(|job| Self(job as usize))
+    }
+
+    pub(crate) fn assign_and_resume(&self, child: &tokio::process::Child) -> io::Result<()> {
+        let handle = child.raw_handle().ok_or_else(|| io::Error::other("Harness process handle is unavailable"))?;
+        assign_process_to_job(handle.cast(), self.0 as _)?;
+        resume_process_primary_thread(child.id().ok_or_else(|| io::Error::other("Harness process id is unavailable"))?)
+    }
+
+    pub(crate) fn terminate(&self) -> io::Result<()> { terminate_job_tree(self.0) }
+
+    pub(crate) fn is_empty(&self) -> io::Result<bool> { job_is_empty(self.0 as _) }
+}
+
+#[cfg(windows)]
+impl Drop for WindowsJob {
+    fn drop(&mut self) {
+        unsafe { windows_sys::Win32::Foundation::CloseHandle(self.0 as _) };
     }
 }
 
@@ -1019,6 +1178,11 @@ fn terminate_tree(tree: &mut OwnedProcessTree) -> io::Result<()> {
 
 #[cfg(windows)]
 fn tree_is_empty(tree: &OwnedProcessTree) -> io::Result<bool> {
+    job_is_empty(tree.job)
+}
+
+#[cfg(windows)]
+fn job_is_empty(job: windows_sys::Win32::Foundation::HANDLE) -> io::Result<bool> {
     use windows_sys::Win32::System::JobObjects::{
         JobObjectBasicAccountingInformation, QueryInformationJobObject,
         JOBOBJECT_BASIC_ACCOUNTING_INFORMATION,
@@ -1026,7 +1190,7 @@ fn tree_is_empty(tree: &OwnedProcessTree) -> io::Result<bool> {
     let mut accounting = JOBOBJECT_BASIC_ACCOUNTING_INFORMATION::default();
     let ok = unsafe {
         QueryInformationJobObject(
-            tree.job,
+            job,
             JobObjectBasicAccountingInformation,
             (&mut accounting as *mut JOBOBJECT_BASIC_ACCOUNTING_INFORMATION).cast(),
             std::mem::size_of::<JOBOBJECT_BASIC_ACCOUNTING_INFORMATION>() as u32,
@@ -1174,24 +1338,24 @@ mod tests {
             "dsh":{"profile":{"other":"unchanged","bundles":["b","@deepseek-ai/dsh-web-app","a","@deepseek-ai/dsh-base","template"]}},
             "dependencies":{"a":"1","b":"2","dependency-only":"3"}});
         fs::write(&path, serde_json::to_vec(&original).unwrap()).unwrap();
-        let moved = move_profile_plugin(&home, "web", "a", Some("b")).unwrap();
+        let moved = move_profile_plugin(&NexusPaths::from_root(home.join(".nexus-test")), &home, "web", "a", Some("b")).unwrap();
         assert_eq!(moved.bundles, ["@deepseek-ai/dsh-base", "@deepseek-ai/dsh-web-app", "a", "b", "template"]);
         let mut expected = original;
         expected["dsh"]["profile"]["bundles"] = serde_json::json!(moved.bundles);
         assert_eq!(serde_json::from_slice::<serde_json::Value>(&fs::read(&path).unwrap()).unwrap(), expected);
-        let moved = move_profile_plugin(&home, "web", "a", None).unwrap();
+        let moved = move_profile_plugin(&NexusPaths::from_root(home.join(".nexus-test")), &home, "web", "a", None).unwrap();
         assert_eq!(moved.bundles, ["@deepseek-ai/dsh-base", "@deepseek-ai/dsh-web-app", "b", "template", "a"]);
         let before_invalid = fs::read(&path).unwrap();
         for (package, target) in [("@deepseek-ai/dsh-base", None), ("@deepseek-ai/dsh-web-app", None),
             ("a", Some("@deepseek-ai/dsh-base")), ("a", Some("@deepseek-ai/dsh-web-app")),
             ("dependency-only", None), ("a", Some("dependency-only")), ("a", Some("absent")), ("a", Some("a"))] {
-            assert!(move_profile_plugin(&home, "web", package, target).is_err());
+            assert!(move_profile_plugin(&NexusPaths::from_root(home.join(".nexus-test")), &home, "web", package, target).is_err());
             assert_eq!(fs::read(&path).unwrap(), before_invalid);
         }
         let ordinary = home.join("profiles/nexus-user");
         fs::create_dir(&ordinary).unwrap();
         fs::write(ordinary.join("package.json"), &before_invalid).unwrap();
-        assert!(move_profile_plugin(&home, "nexus-user", "a", Some("b")).is_ok());
+        assert!(move_profile_plugin(&NexusPaths::from_root(home.join(".nexus-test")), &home, "nexus-user", "a", Some("b")).is_ok());
         let generated = home.join("profiles/copy");
         fs::create_dir(&generated).unwrap();
         fs::write(generated.join("package.json"), &before_invalid).unwrap();
@@ -1200,8 +1364,48 @@ mod tests {
             "release_id":"test","fingerprint":"fixture","checked_at_unix":1,"disabled":[]
         })).unwrap()).unwrap();
         assert_eq!(native_profile(&home, "copy").unwrap().source_profile.as_deref(), Some("web"));
-        assert!(move_profile_plugin(&home, "copy", "a", Some("b")).is_err());
+        assert!(move_profile_plugin(&NexusPaths::from_root(home.join(".nexus-test")), &home, "copy", "a", Some("b")).is_err());
         assert_eq!(fs::read(generated.join("package.json")).unwrap(), before_invalid);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn order_undo_preserves_raw_fields_and_rejects_external_edits_and_other_home() {
+        let (root,paths,home,_release)=plugin_fixture();
+        let manifest=home.join("profiles/web/package.json");
+        let original=b"{\n \"name\":\"test\",\"unknown\":{\"key\":\"original\"},\"dependencies\":{},\"dsh\":{\"profile\":{\"bundles\":[\"a\",\"b\"]}}\n}";
+        // Keep intentionally unusual formatting as the exact undo target.
+        let original=String::from_utf8(original.to_vec()).unwrap().replace("\\n","\n").replace("\\\"","\"").into_bytes();
+        fs::write(&manifest,&original).unwrap();
+        let moved=move_profile_plugin(&paths,&home,"web","a",None).unwrap();
+        let id=moved.order_undo_id.unwrap();
+        let record=order_record_path(&paths,"web",&id,false).unwrap();
+        nexus_private_file::verify_private(&fs::File::open(&record).unwrap()).unwrap();
+        assert_eq!(order_undo_id(&paths,&home,"web").unwrap().as_deref(),Some(id.as_str()));
+        let changed=fs::read(&manifest).unwrap();fs::write(&manifest,b"{\"name\":\"external\",\"dependencies\":{}} ").unwrap();
+        assert!(undo_profile_order(&paths,&home,"web",&id).is_err());
+        assert!(order_undo_id(&paths,&home,"web").unwrap().is_none());
+        fs::write(&manifest,&changed).unwrap();
+        let other=root.join("other-home");fs::create_dir_all(other.join("profiles/web")).unwrap();fs::write(other.join("profiles/web/package.json"),&changed).unwrap();
+        assert!(undo_profile_order(&paths,&other,"web",&id).is_err());
+        undo_profile_order(&paths,&home,"web",&id).unwrap();
+        assert_eq!(fs::read(&manifest).unwrap(),original);
+        assert!(order_undo_id(&paths,&home,"web").unwrap().is_none());
+        fs::remove_dir_all(root).unwrap();
+    }
+    #[cfg(windows)]
+    #[test]
+    fn failed_second_order_keeps_first_undo() {
+        use std::os::windows::fs::OpenOptionsExt;
+        let (root,paths,home,_release)=plugin_fixture();let manifest=home.join("profiles/web/package.json");
+        let original=br#"{"name":"test","dependencies":{},"dsh":{"profile":{"bundles":["a","b","c"]}}}"#;
+        fs::write(&manifest,original).unwrap();
+        let id=move_profile_plugin(&paths,&home,"web","a",None).unwrap().order_undo_id.unwrap();
+        let lock=fs::OpenOptions::new().read(true).share_mode(3).open(&manifest).unwrap();
+        assert!(move_profile_plugin(&paths,&home,"web","b",None).is_err());drop(lock);
+        assert_eq!(order_undo_id(&paths,&home,"web").unwrap().as_deref(),Some(id.as_str()));
+        undo_profile_order(&paths,&home,"web",&id).unwrap();
+        assert_eq!(fs::read(&manifest).unwrap(),original);
         fs::remove_dir_all(root).unwrap();
     }
 

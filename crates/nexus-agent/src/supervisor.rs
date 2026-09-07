@@ -88,6 +88,7 @@ pub(crate) struct HarnessLifecycleGuard {
 #[derive(Debug)]
 pub enum HarnessSupervisorError {
     NotConfigured,
+    RecoveryPaused,
     AlreadyRunning,
     Unattached,
     InvalidProfile(String),
@@ -105,6 +106,7 @@ impl fmt::Display for HarnessSupervisorError {
                 formatter,
                 "Harness is not configured; set harness.program in Nexus config.json or {HARNESS_PROGRAM_ENV}"
             ),
+            Self::RecoveryPaused => formatter.write_str("Harness startup is paused in recovery mode; leave recovery mode before starting"),
             Self::AlreadyRunning => formatter.write_str("Harness is already running"),
             Self::Unattached => formatter.write_str(
                 "Harness is running but is not attached to this Agent instance; stop it from its owning Agent",
@@ -123,14 +125,10 @@ impl std::error::Error for HarnessSupervisorError {}
 
 const HARNESS_PROGRAM_ENV: &str = "NEXUS_HARNESS_PROGRAM";
 
-/// Process-wide Job Object handle (as usize) holding the running Harness
-/// process tree. Kill-on-close ties the whole tree to this Agent process;
-/// the stop path terminates the tree explicitly.
-#[cfg(not(test))]
-static HARNESS_JOB: std::sync::Mutex<Option<usize>> = std::sync::Mutex::new(None);
-
 struct SupervisorInner {
     child: Option<Child>,
+    #[cfg(windows)]
+    job: Option<crate::dsh::WindowsJob>,
     runtime: HarnessRuntimeInfo,
     generation: u64,
     operation_epoch: u64,
@@ -144,6 +142,52 @@ struct SupervisorInner {
     readiness_owner: Option<ReadinessOwner>,
     attached_readiness: Option<AttachedReadinessState>,
     unattached_monitor_started: bool,
+}
+
+pub(crate) fn preflight_readiness_endpoint(spec: &HarnessLaunchSpec) -> Result<Option<(String, u16)>, HarnessSupervisorError> {
+    spec.readiness_url.as_deref().map(|url| ReadinessTarget::parse(url).map(|target| (target.host, target.port))).transpose()
+}
+
+struct SpawnedHarness {
+    child: Child,
+    #[cfg(windows)]
+    job: crate::dsh::WindowsJob,
+}
+
+async fn spawn_owned_harness(mut command: Command) -> io::Result<SpawnedHarness> {
+    #[cfg(windows)]
+    {
+        // No Harness instruction runs until the whole future tree is owned.
+        let job = crate::dsh::WindowsJob::new()?;
+        command.creation_flags(windows_sys::Win32::System::Threading::CREATE_SUSPENDED
+            | windows_sys::Win32::System::Threading::CREATE_NO_WINDOW);
+        let mut child = command.spawn()?;
+        if let Err(error) = job.assign_and_resume(&child) {
+            // Before assignment the only process is the suspended direct child;
+            // after assignment the Job also covers any resumed descendants.
+            let cleanup = child.kill().await;
+            drop(job);
+            return Err(io::Error::new(error.kind(), format!("cannot own Harness process tree: {error}; direct child cleanup: {cleanup:?}")));
+        }
+        Ok(SpawnedHarness { child, job })
+    }
+    #[cfg(not(windows))]
+    { command.spawn().map(|child| SpawnedHarness { child }) }
+}
+
+#[cfg(windows)]
+async fn finish_owned_job(inner: &mut SupervisorInner) -> io::Result<()> {
+    let Some(job) = inner.job.as_ref() else { return Ok(()); };
+    job.terminate()?;
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while !job.is_empty()? {
+        if Instant::now() >= deadline {
+            return Err(io::Error::new(io::ErrorKind::TimedOut, "Harness process tree is still stopping"));
+        }
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    inner.job = None;
+    Ok(())
 }
 
 #[cfg(test)]
@@ -271,6 +315,8 @@ impl HarnessSupervisor {
             releases,
             inner: Arc::new(Mutex::new(SupervisorInner {
                 child: None,
+                #[cfg(windows)]
+                job: None,
                 runtime,
                 generation: log_session.generation,
                 operation_epoch: 0,
@@ -348,6 +394,10 @@ impl HarnessSupervisor {
         _lifecycle: &HarnessLifecycleGuard,
     ) -> bool {
         let inner = self.inner.lock().await;
+        #[cfg(windows)]
+        if inner.job.as_ref().is_some_and(|job| !job.is_empty().unwrap_or(false)) {
+            return false;
+        }
         inner.child.is_none()
             && !inner.stop_pending
             && !inner.start_ownership_pending
@@ -391,6 +441,11 @@ impl HarnessSupervisor {
             updated_at_unix: Some(unix_time_seconds()),
         };
         Ok(())
+    }
+
+    /// Optional explanation must never wait for, poll, or mutate a lifecycle owner.
+    pub(crate) fn launch_input_identity(&self) -> Option<(u64, HarnessState, HarnessLogSession)> {
+        self.inner.try_lock().ok().map(|inner| (inner.generation, inner.runtime.state, inner.log_session.clone()))
     }
 
     pub(crate) async fn status_observation(&self) -> (u64, HarnessRuntimeInfo, HarnessLogSession) {
@@ -515,7 +570,20 @@ impl HarnessSupervisor {
         };
 
         let readiness = match load_harness_launch_spec(&self.paths) {
-            Ok(Some(spec)) => readiness_config(&spec).ok().flatten(),
+            Ok(Some(mut spec)) => {
+                let effective = (|| -> io::Result<()> {
+                    let preferences = nexus_core::load_harness_preferences(&self.paths)?;
+                    let profile = nexus_core::ProfileStore::new(self.paths.clone()).load()?.active_profile;
+                    let home = crate::dsh::resolve_dsh_home_for_paths(&self.paths)?;
+                    normalize_managed_launch(&mut spec, &self.releases)?;
+                    let root = self.releases.load()?.current_release.as_deref().map(|id| self.releases.release_root(id)).transpose()?;
+                    crate::preference_capabilities::validate_launch(&spec, &preferences, root.as_deref())?;
+                    let capabilities = crate::preference_capabilities::resolve(root.as_deref(), &home, &profile, &preferences)?;
+                    nexus_core::apply_harness_preferences(&mut spec, &preferences, &capabilities);
+                    Ok(())
+                })();
+                effective.ok().and_then(|()| readiness_config(&spec).ok().flatten())
+            },
             Ok(None) | Err(_) => None,
         };
         let token_requires_owned_evidence = readiness
@@ -700,6 +768,7 @@ impl HarnessSupervisor {
         &self,
         profile: &str,
     ) -> Result<HarnessRuntimeInfo, HarnessSupervisorError> {
+        crate::recovery_mode::ensure_start_allowed(&self.paths)?;
         validate_profile_name(profile)
             .map_err(|error| HarnessSupervisorError::InvalidProfile(error.to_string()))?;
         let mut spec = load_harness_launch_spec(&self.paths)
@@ -708,7 +777,16 @@ impl HarnessSupervisor {
             .ok_or(HarnessSupervisorError::NotConfigured)?;
         normalize_managed_launch(&mut spec, &self.releases)
             .map_err(HarnessSupervisorError::Configuration)?;
-        let readiness = readiness_config(&spec)?;
+        let preferences = nexus_core::load_harness_preferences(&self.paths)
+            .map_err(HarnessSupervisorError::Configuration)?;
+        let configured_runtime = nexus_core::ConfigStore::new(self.paths.clone()).load()
+            .map_err(HarnessSupervisorError::Configuration)?.runtime.unwrap_or_default();
+        let effective_runtime = crate::runtime::runtime_for_launch(&mut spec, configured_runtime,
+            nexus_core::bundled_runtime_dir().as_deref());
+        let runtime_env = nexus_core::build_runtime_child_env(&effective_runtime, std::env::var_os("PATH").as_deref())
+            .map_err(HarnessSupervisorError::Configuration)?;
+        let selected_home = crate::dsh::resolve_dsh_home_for_paths(&self.paths)
+            .map_err(HarnessSupervisorError::Configuration)?;
         let release_catalog = self
             .releases
             .load()
@@ -717,6 +795,10 @@ impl HarnessSupervisor {
         let release_root = release_id
             .map(|id| self.releases.release_root(id))
             .transpose()
+            .map_err(HarnessSupervisorError::Configuration)?;
+        crate::preference_capabilities::validate_launch(&spec, &preferences, release_root.as_deref())
+            .map_err(HarnessSupervisorError::Configuration)?;
+        crate::preference_capabilities::resolve(release_root.as_deref(), &selected_home, profile, &preferences)
             .map_err(HarnessSupervisorError::Configuration)?;
         // The lifecycle owner remains held while the isolated check runs, but
         // never hold `inner` across the child-process probe.
@@ -739,7 +821,7 @@ impl HarnessSupervisor {
                             return Err(HarnessSupervisorError::AlreadyRunning);
                         }
                     }
-                    let home = crate::dsh::resolve_dsh_home().map_err(HarnessSupervisorError::Configuration)?;
+                    let home = selected_home.clone();
                     compatible_profile = crate::compatibility::prepare(&self.paths, &home, profile, id, root,
                         &spec.program, false, &nexus_core::CancellationToken::default()).await
                         .map_err(HarnessSupervisorError::Configuration)?.map(|report| report.effective_profile);
@@ -747,6 +829,10 @@ impl HarnessSupervisor {
             }
         }
         let profile = compatible_profile.as_deref().unwrap_or(profile);
+        let capabilities = crate::preference_capabilities::resolve(release_root.as_deref(), &selected_home, profile, &preferences)
+            .map_err(HarnessSupervisorError::Configuration)?;
+        nexus_core::apply_harness_preferences(&mut spec, &preferences, &capabilities);
+        let readiness = readiness_config(&spec)?;
         let program = spec
             .render_path_for_context(&spec.program, profile, release_id, release_root.as_deref())
             .map_err(HarnessSupervisorError::Configuration)?;
@@ -803,6 +889,8 @@ impl HarnessSupervisor {
             }
             // Start and Restart both arrive here, after the existing process
             // check. Do not mutate a live instance's shared module fallback.
+            #[cfg(windows)]
+            finish_owned_job(&mut inner).await.map_err(HarnessSupervisorError::Process)?;
             let managed_entry = if spec.mode == HarnessLaunchMode::Node {
                 arguments.first().map(Path::new)
             } else {
@@ -812,8 +900,7 @@ impl HarnessSupervisor {
                 let managed = fs::canonicalize(entry).ok().zip(fs::canonicalize(root).ok())
                     .is_some_and(|(entry, root)| entry.starts_with(root));
                 if managed {
-                    let home = crate::dsh::resolve_dsh_home()
-                        .map_err(HarnessSupervisorError::Configuration)?;
+                    let home = selected_home.clone();
                     let repaired = ReleaseStore::heal_module_farm(&home, root)
                         .map_err(HarnessSupervisorError::Configuration)?;
                     tracing::info!(repaired, release = ?release_id, "prepared Harness module farm");
@@ -823,6 +910,12 @@ impl HarnessSupervisor {
             let (session, stdout, stderr) = self
                 .prepare_log_session(&inner, generation)
                 .map_err(HarnessSupervisorError::Persistence)?;
+            let inputs = crate::launch_inputs::describe(profile, &selected_home, &program, working_dir.as_deref(),
+                release_root.as_deref(), &preferences, crate::launch_inputs::environment_override(), &arguments);
+            if crate::launch_inputs::record(&self.paths, inputs, &session).is_err() {
+                // Explanation is optional; a stale record cannot match this new run.
+                tracing::warn!("Could not save safe Harness launch inputs; configuration explanation unavailable");
+            }
             // Write-ahead ownership intent: the session marker is durable and
             // launch_pending before process creation. If the Agent exits after
             // this point, startup recovery converts even an older terminal
@@ -872,6 +965,9 @@ impl HarnessSupervisor {
                 return Err(HarnessSupervisorError::Persistence(error));
             }
             let mut command = Command::new(&program);
+            command.envs(runtime_env.iter().map(|(key, value)| (key, value)));
+            command.envs(nexus_core::harness_preferences_environment(&preferences, &capabilities));
+            command.env("DSH_HOME", &selected_home);
             command
                 .args(&arguments)
                 .kill_on_drop(true)
@@ -882,8 +978,8 @@ impl HarnessSupervisor {
                 command.current_dir(working_dir);
             }
 
-            let child = match command.spawn() {
-                Ok(child) => child,
+            let spawned = match spawn_owned_harness(command).await {
+                Ok(spawned) => spawned,
                 Err(error) => {
                     inner.runtime =
                         failed_runtime(&inner.runtime, format!("failed to start Harness: {error}"));
@@ -900,6 +996,7 @@ impl HarnessSupervisor {
                     return Err(HarnessSupervisorError::Spawn(error));
                 }
             };
+            let child = spawned.child;
             let Some(pid) = child.id() else {
                 let error = io::Error::other("spawned Harness did not expose a process id");
                 inner.runtime = failed_runtime(&inner.runtime, error.to_string());
@@ -908,21 +1005,8 @@ impl HarnessSupervisor {
                 return Err(HarnessSupervisorError::Spawn(error));
             };
             inner.runtime = HarnessRuntimeInfo::starting(pid, now);
-            #[cfg(all(windows, not(test)))]
-            {
-                // Tie the whole Harness process tree (plugin children
-                // included) to a kill-on-close Job Object owned by this
-                // Agent process.
-                if let Ok(job) = crate::dsh::create_kill_on_close_job() {
-                    if let Some(handle) = child.raw_handle() {
-                        if crate::dsh::assign_process_to_job(handle.cast(), job).is_ok() {
-                            if let Ok(mut slot) = HARNESS_JOB.lock() {
-                                *slot = Some(job as usize);
-                            }
-                        }
-                    }
-                }
-            }
+            #[cfg(windows)]
+            { inner.job = Some(spawned.job); }
             inner.child = Some(child);
             inner.start_ownership_pending = true;
             let owner_epoch = next_operation_epoch(&mut inner);
@@ -1055,6 +1139,24 @@ impl HarnessSupervisor {
         let (child, stop_generation, stop_epoch, readiness, attached_readiness, started_at) = {
             let mut inner = self.inner.lock().await;
             if inner.child.is_none() {
+                #[cfg(windows)]
+                if inner.job.is_some() && !inner.stop_pending {
+                    // A bootstrap parent may have handed off to descendants.
+                    // They remain ours even though there is no direct child.
+                    finish_owned_job(&mut inner).await.map_err(HarnessSupervisorError::Process)?;
+                    inner.recovery = None;
+                    inner.readiness = None;
+                    inner.readiness_owner = None;
+                    inner.attached_readiness = None;
+                    inner.unattached_monitor_started = false;
+                    inner.start_ownership_pending = false;
+                    next_operation_epoch(&mut inner);
+                    inner.runtime.state = HarnessState::Stopped;
+                    inner.runtime.pid = None;
+                    inner.runtime.updated_at_unix = Some(unix_time_seconds());
+                    clear_launch_pending(&self.log_sessions, &mut inner).map_err(HarnessSupervisorError::Persistence)?;
+                    self.store.update_harness(inner.runtime.clone()).map_err(HarnessSupervisorError::Persistence)?;
+                }
                 if inner.stop_pending {
                     return Err(HarnessSupervisorError::AlreadyRunning);
                 } else if inner.log_session.launch_pending
@@ -1145,16 +1247,6 @@ impl HarnessSupervisor {
             Ok(Some(exit)) => exit,
             Ok(None) => {
                 killed = true;
-                #[cfg(all(windows, not(test)))]
-                {
-                    // The graceful window elapsed without an exit: terminate
-                    // the entire job tree, not only the direct child.
-                    if let Ok(slot) = HARNESS_JOB.lock() {
-                        if let Some(job) = *slot {
-                            let _ = crate::dsh::terminate_job_tree(job);
-                        }
-                    }
-                }
                 if let Err(error) = child.kill().await {
                     self.restore_stop_child(
                         stop_generation,
@@ -1213,6 +1305,11 @@ impl HarnessSupervisor {
                 || !inner.stop_pending
             {
                 return Ok(inner.runtime.clone());
+            }
+            #[cfg(windows)]
+            if let Err(error) = finish_owned_job(&mut inner).await {
+                inner.stop_pending = false;
+                return Err(HarnessSupervisorError::Process(error));
             }
             inner.stop_pending = false;
             inner.runtime = runtime.clone();
@@ -1334,6 +1431,7 @@ impl HarnessSupervisor {
         profile: &str,
         _lifecycle: &HarnessLifecycleGuard,
     ) -> Result<HarnessRuntimeInfo, HarnessSupervisorError> {
+        crate::recovery_mode::ensure_start_allowed(&self.paths)?;
         let _ = self.stop_inner().await?;
         self.start_with_profile_inner(profile).await
     }
@@ -1583,6 +1681,11 @@ impl HarnessSupervisor {
             let mut inner = self.inner.lock().await;
             if inner.generation != generation || inner.operation_epoch != cancellation_epoch {
                 return Ok(());
+            }
+            #[cfg(windows)]
+            if let Err(error) = finish_owned_job(&mut inner).await {
+                inner.stop_pending = false;
+                return Err(format!("failed to reap Harness process tree after start failure: {error}"));
             }
             inner.stop_pending = false;
             inner.start_ownership_pending = false;
@@ -2327,6 +2430,8 @@ fn poll_child(
             }
         }
     } else {
+        #[cfg(windows)]
+        if let Some(job) = inner.job.as_ref() { job.terminate()?; }
         let runtime = runtime_from_exit(&inner.runtime, exit, false);
         clear_launch_pending(log_sessions, inner)?;
         runtime
@@ -2948,6 +3053,47 @@ mod tests {
         ReadinessConfig, ReadinessOwner, ReadinessTarget, RecoveryState, StartPersistGate,
     };
 
+    #[cfg(windows)]
+    #[tokio::test]
+    async fn windows_owned_harness_job_stops_descendants_after_parent_exit() {
+        use windows_sys::Win32::{Foundation::{CloseHandle, WAIT_TIMEOUT}, System::Threading::{OpenProcess, WaitForSingleObject}};
+        // Exercise the production suspended spawn path, both before and after
+        // the supervisor has observed a bootstrap parent's successful exit.
+        for observe_exit in [false, true] {
+            let root = std::env::temp_dir().join(format!("nexus-harness-job-{}", unix_time_nanos_for_update()));
+            fs::create_dir_all(&root).unwrap();
+            let powershell = PathBuf::from(std::env::var_os("SystemRoot").unwrap())
+                .join("System32/WindowsPowerShell/v1.0/powershell.exe");
+            let mut command = tokio::process::Command::new(&powershell);
+            command.args(["-NoProfile", "-NonInteractive", "-Command",
+                "$p=Start-Process -FilePath $env:NEXUS_JOB_TEST_POWERSHELL -ArgumentList '-NoProfile -NonInteractive -Command Start-Sleep -Seconds 300' -WindowStyle Hidden -PassThru; [IO.File]::WriteAllText($env:NEXUS_JOB_TEST_PID,[string]$p.Id)"])
+                .env("NEXUS_JOB_TEST_POWERSHELL", &powershell)
+                .env("NEXUS_JOB_TEST_PID", root.join("descendant.pid"))
+                .kill_on_drop(true);
+            let mut spawned = super::spawn_owned_harness(command).await.unwrap();
+            assert!(timeout(Duration::from_secs(20), spawned.child.wait()).await.unwrap().unwrap().success());
+            assert!(!spawned.job.is_empty().unwrap(), "the bootstrap descendant must remain owned after its parent exits");
+            let pid: u32 = fs::read_to_string(root.join("descendant.pid")).unwrap().parse().unwrap();
+            let process = unsafe { OpenProcess(0x00100000, 0, pid) };
+            assert!(!process.is_null());
+            assert_eq!(unsafe { WaitForSingleObject(process, 0) }, WAIT_TIMEOUT);
+            let supervisor = HarnessSupervisor::with_graceful_wait(NexusPaths::from_root(root.clone()), Duration::from_millis(50)).unwrap();
+            {
+                let mut inner = supervisor.inner.lock().await;
+                inner.job = Some(spawned.job);
+                inner.child = if observe_exit { None } else { Some(spawned.child) };
+                inner.runtime.state = HarnessState::Running;
+                inner.runtime.pid = None;
+            }
+            let stopped = supervisor.stop().await.unwrap();
+            assert_eq!(stopped.state, HarnessState::Stopped);
+            assert_eq!(unsafe { WaitForSingleObject(process, 5000) }, 0, "Stop must reap descendants in either parent state");
+            unsafe { CloseHandle(process) };
+            assert!(supervisor.inner.lock().await.job.is_none());
+            fs::remove_dir_all(root).unwrap();
+        }
+    }
+
     #[test]
     fn managed_launch_rebinds_stale_slot_but_preserves_external_commands_and_arguments() {
         let root = std::env::temp_dir().join(format!(
@@ -3145,6 +3291,7 @@ mod tests {
         };
         ConfigStore::new(paths.clone())
             .write(&NexusConfigFile {
+                harness_preferences: None,
                 harness: Some(HarnessLaunchSpec {
                     mode: Default::default(),
                     program,
@@ -3208,6 +3355,7 @@ mod tests {
         let paths = NexusPaths::from_root(root.clone());
         ConfigStore::new(paths.clone())
             .write(&NexusConfigFile {
+                harness_preferences: None,
                 harness: Some(HarnessLaunchSpec {
                     mode: Default::default(),
                     program: PathBuf::from("unused-harness"),
@@ -3336,6 +3484,7 @@ mod tests {
         };
         ConfigStore::new(paths.clone())
             .write(&NexusConfigFile {
+                harness_preferences: None,
                 harness: Some(HarnessLaunchSpec {
                     mode: Default::default(),
                     program,
@@ -3436,6 +3585,7 @@ mod tests {
         });
         ConfigStore::new(paths.clone())
             .write(&NexusConfigFile {
+                harness_preferences: None,
                 harness: Some(HarnessLaunchSpec {
                     mode: Default::default(),
                     program: PathBuf::from("unused-harness"),
@@ -3546,6 +3696,7 @@ mod tests {
         };
         ConfigStore::new(paths.clone())
             .write(&NexusConfigFile {
+                harness_preferences: None,
                 harness: Some(HarnessLaunchSpec {
                     mode: Default::default(),
                     program,
@@ -3771,6 +3922,7 @@ mod tests {
         };
         ConfigStore::new(paths.clone())
             .write(&NexusConfigFile {
+                harness_preferences: None,
                 harness: Some(HarnessLaunchSpec {
                     mode: Default::default(),
                     program,
@@ -3847,6 +3999,7 @@ mod tests {
         };
         ConfigStore::new(paths.clone())
             .write(&NexusConfigFile {
+                harness_preferences: None,
                 harness: Some(HarnessLaunchSpec {
                     mode: Default::default(),
                     program,
@@ -3927,6 +4080,7 @@ mod tests {
         };
         ConfigStore::new(paths.clone())
             .write(&NexusConfigFile {
+                harness_preferences: None,
                 harness: Some(HarnessLaunchSpec {
                     mode: Default::default(),
                     program,
@@ -4000,6 +4154,7 @@ mod tests {
         };
         ConfigStore::new(paths.clone())
             .write(&NexusConfigFile {
+                harness_preferences: None,
                 harness: Some(HarnessLaunchSpec {
                     mode: Default::default(),
                     program,
@@ -4068,6 +4223,7 @@ mod tests {
         };
         ConfigStore::new(paths.clone())
             .write(&NexusConfigFile {
+                harness_preferences: None,
                 harness: Some(HarnessLaunchSpec {
                     mode: Default::default(),
                     program,
@@ -4150,6 +4306,7 @@ mod tests {
         let (program, args) = immediate_nonzero_marker_command(&marker);
         ConfigStore::new(paths.clone())
             .write(&NexusConfigFile {
+                harness_preferences: None,
                 harness: Some(HarnessLaunchSpec {
                     mode: Default::default(),
                     program,
@@ -4244,6 +4401,7 @@ mod tests {
         let (program, args) = immediate_nonzero_marker_command(&marker);
         ConfigStore::new(paths.clone())
             .write(&NexusConfigFile {
+                harness_preferences: None,
                 harness: Some(HarnessLaunchSpec {
                     mode: Default::default(),
                     program,
@@ -4334,6 +4492,7 @@ mod tests {
         };
         ConfigStore::new(paths.clone())
             .write(&NexusConfigFile {
+                harness_preferences: None,
                 harness: Some(HarnessLaunchSpec {
                     mode: Default::default(),
                     program,
@@ -4397,6 +4556,7 @@ mod tests {
         let (program, args) = immediate_nonzero_marker_command(&marker);
         ConfigStore::new(paths.clone())
             .write(&NexusConfigFile {
+                harness_preferences: None,
                 harness: Some(HarnessLaunchSpec {
                     mode: Default::default(),
                     program,
@@ -4457,6 +4617,7 @@ mod tests {
         };
         ConfigStore::new(paths.clone())
             .write(&NexusConfigFile {
+                harness_preferences: None,
                 harness: Some(HarnessLaunchSpec {
                     mode: Default::default(),
                     program,
@@ -4510,6 +4671,7 @@ mod tests {
         };
         ConfigStore::new(paths.clone())
             .write(&NexusConfigFile {
+                harness_preferences: None,
                 harness: Some(HarnessLaunchSpec {
                     mode: Default::default(),
                     program,
@@ -4597,6 +4759,7 @@ mod tests {
         };
         ConfigStore::new(paths.clone())
             .write(&NexusConfigFile {
+                harness_preferences: None,
                 harness: Some(HarnessLaunchSpec {
                     mode: Default::default(),
                     program,
@@ -4711,6 +4874,7 @@ mod tests {
         };
         ConfigStore::new(paths.clone())
             .write(&NexusConfigFile {
+                harness_preferences: None,
                 harness: Some(HarnessLaunchSpec {
                     mode: Default::default(),
                     program,
@@ -4757,6 +4921,7 @@ mod tests {
         let paths = NexusPaths::from_root(root.clone());
         ConfigStore::new(paths.clone())
             .write(&NexusConfigFile {
+                harness_preferences: None,
                 harness: Some(HarnessLaunchSpec {
                     mode: Default::default(),
                     program: if cfg!(windows) {
@@ -4819,6 +4984,7 @@ mod tests {
         let paths = NexusPaths::from_root(root.clone());
         ConfigStore::new(paths.clone())
             .write(&NexusConfigFile {
+                harness_preferences: None,
                 harness: Some(HarnessLaunchSpec {
                     mode: Default::default(),
                     program: PathBuf::from("nexus-harness-program-does-not-exist"),
@@ -4910,6 +5076,7 @@ mod tests {
         };
         ConfigStore::new(paths.clone())
             .write(&NexusConfigFile {
+                harness_preferences: None,
                 harness: Some(HarnessLaunchSpec {
                     mode: Default::default(),
                     program,
@@ -5191,6 +5358,7 @@ mod tests {
         });
         ConfigStore::new(paths.clone())
             .write(&NexusConfigFile {
+                harness_preferences: None,
                 harness: Some(HarnessLaunchSpec {
                     mode: Default::default(),
                     program: PathBuf::from("unused-harness"),
@@ -5244,6 +5412,7 @@ mod tests {
         });
         ConfigStore::new(paths.clone())
             .write(&NexusConfigFile {
+                harness_preferences: None,
                 harness: Some(HarnessLaunchSpec {
                     mode: Default::default(),
                     program: PathBuf::from("unused-harness"),
@@ -5520,6 +5689,7 @@ mod tests {
         let paths = NexusPaths::from_root(root.clone());
         ConfigStore::new(paths.clone())
             .write(&NexusConfigFile {
+                harness_preferences: None,
                 harness: Some(HarnessLaunchSpec {
                     mode: Default::default(),
                     program: PathBuf::from("must-not-run"),
@@ -5604,6 +5774,7 @@ mod tests {
         let shell = std::env::var_os("ComSpec").unwrap_or_else(|| "cmd.exe".into());
         ConfigStore::new(paths.clone())
             .write(&NexusConfigFile {
+                harness_preferences: None,
                 harness: Some(HarnessLaunchSpec {
                     mode: Default::default(),
                     program: PathBuf::from(shell),
@@ -5713,6 +5884,7 @@ mod tests {
         };
         ConfigStore::new(paths.clone())
             .write(&NexusConfigFile {
+                harness_preferences: None,
                 harness: Some(HarnessLaunchSpec {
                     mode: Default::default(),
                     program,
@@ -5792,6 +5964,7 @@ mod tests {
         let (program, args) = immediate_nonzero_marker_command(&marker);
         ConfigStore::new(paths.clone())
             .write(&NexusConfigFile {
+                harness_preferences: None,
                 harness: Some(HarnessLaunchSpec {
                     mode: Default::default(),
                     program,
@@ -5873,6 +6046,7 @@ mod tests {
         };
         ConfigStore::new(paths.clone())
             .write(&NexusConfigFile {
+                harness_preferences: None,
                 harness: Some(HarnessLaunchSpec {
                     mode: Default::default(),
                     program,
@@ -6107,6 +6281,7 @@ mod tests {
         };
         ConfigStore::new(paths.clone())
             .write(&NexusConfigFile {
+                harness_preferences: None,
                 harness: Some(HarnessLaunchSpec {
                     mode: Default::default(),
                     program,
@@ -6237,6 +6412,7 @@ mod tests {
         });
         ConfigStore::new(paths.clone())
             .write(&NexusConfigFile {
+                harness_preferences: None,
                 harness: Some(HarnessLaunchSpec {
                     mode: Default::default(),
                     program: PathBuf::from("must-not-run"),
@@ -6356,6 +6532,7 @@ mod tests {
         });
         ConfigStore::new(paths.clone())
             .write(&NexusConfigFile {
+                harness_preferences: None,
                 harness: Some(HarnessLaunchSpec {
                     mode: Default::default(),
                     program: PathBuf::from("must-not-run"),

@@ -1,5 +1,10 @@
 /target/
+/target-rtest/
+/.tmp-ui-audit/
+/diag-1788759841895444900/
 **/target/
 *.rs.bk
 .DS_Store
 Thumbs.db
+/apps/nexus-launcher/src-tauri/resources/release-identity.json
+/apps/nexus-launcher/src-tauri/resources/release-manifest.json

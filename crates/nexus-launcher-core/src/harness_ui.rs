@@ -171,6 +171,32 @@ pub struct HarnessLogCursor {
     pub offset: u64,
     pub fingerprint: u64,
     pub candidate: Option<HarnessUrlCandidate>,
+    evidence: Option<TokenEvidence>,
+}
+
+#[derive(Clone)]
+struct TokenEvidence { start: u64, bytes: Vec<u8> }
+impl std::fmt::Debug for TokenEvidence {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("TokenEvidence").field("start", &self.start).field("bytes", &"[REDACTED]").finish()
+    }
+}
+
+fn verify_evidence(file: &mut fs::File, evidence: &TokenEvidence, watermark: u64, length: u64) -> io::Result<bool> {
+    if evidence.start < watermark || evidence.bytes.is_empty() || evidence.bytes.len() as u64 > HARNESS_LOG_TAIL_BYTES {
+        return Ok(false);
+    }
+    let Some(end) = evidence.start.checked_add(evidence.bytes.len() as u64) else { return Ok(false); };
+    // A complete URL always has a following delimiter; EOF alone is not one.
+    if end >= length { return Ok(false); }
+    let read_start = evidence.start.saturating_sub(1);
+    let left = usize::from(evidence.start != 0);
+    let mut bytes = vec![0; left + evidence.bytes.len() + 1];
+    file.seek(SeekFrom::Start(read_start))?;
+    file.read_exact(&mut bytes)?;
+    Ok((left == 0 || bytes[0].is_ascii_whitespace())
+        && bytes[left..left + evidence.bytes.len()] == evidence.bytes
+        && bytes.last().is_some_and(u8::is_ascii_whitespace))
 }
 
 #[derive(Debug)]
@@ -231,39 +257,22 @@ impl HarnessLogObserver {
         session_watermark: u64,
         expected_file_identity: Option<&str>,
     ) -> io::Result<Option<HarnessUrlCandidate>> {
-        let snapshot = read_log_snapshot(path)?;
-        if expected_file_identity.is_some_and(|expected| expected != snapshot.file_identity) {
-            self.files.remove(path);
-            return Ok(None);
-        }
-        let previous = self.files.get(path).cloned();
-        if previous.as_ref().is_some_and(|previous| {
-            snapshot.length == previous.offset && snapshot.fingerprint == previous.fingerprint
-        }) {
-            let previous = previous.expect("same-file cursor is present");
-            self.files.insert(
-                path.to_owned(),
-                HarnessLogCursor {
-                    offset: snapshot.length,
-                    fingerprint: snapshot.fingerprint,
-                    candidate: previous.candidate.clone(),
-                },
-            );
-            return Ok(previous.candidate);
-        }
-
-        // A bounded overlap cannot prove that a file was appended: a rotated
-        // file may preserve the overlap while replacing bytes before it. Parse
-        // the complete current tail and discard candidates no longer present.
-        // A session watermark belongs to the append-only file that existed
-        // when the Agent started Harness. A shorter replacement cannot prove
-        // where this run begins, so fail closed instead of treating its first
-        // byte as current output and potentially reviving an old token.
-        if snapshot.length < session_watermark {
-            self.files.remove(path);
-            return Ok(None);
-        }
-        let mut candidate = None;
+        let previous = self.files.remove(path);
+        let mut file = fs::File::open(path)?;
+        let snapshot = read_log_snapshot(&mut file)?;
+        if expected_file_identity.is_some_and(|expected| expected != snapshot.file_identity)
+            || snapshot.length < session_watermark { return Ok(None); }
+        // Re-read the original bytes and both boundaries on this SAME handle,
+        // even when length, timestamps and the bounded tail have not changed.
+        let verified = previous.as_ref().and_then(|previous| previous.evidence.as_ref())
+            .map(|evidence| verify_evidence(&mut file, evidence, session_watermark, snapshot.length))
+            .transpose()?.unwrap_or(false);
+        let mut candidate = if verified { previous.as_ref().and_then(|old| old.candidate.clone()) } else { None };
+        let mut evidence = if verified { previous.and_then(|old| old.evidence) } else { None };
+        // Keep the original seen boundary fixed throughout this scan. Older
+        // words must not acquire the append's timestamp before we reach the
+        // retained word again, even when several URLs remain in the tail.
+        let retained_end = candidate.as_ref().map(|candidate| candidate.offset);
         for (word_start, word_end) in log_word_ranges(&snapshot.bytes) {
             if (word_start == 0 && !snapshot.left_delimited)
                 || (word_end == snapshot.bytes.len() && !snapshot.right_delimited)
@@ -276,7 +285,8 @@ impl HarnessLogObserver {
             // end after it. This rejects a URL whose bytes straddle the
             // previous and current run while allowing output in a new file to
             // begin at offset zero.
-            if absolute_start < session_watermark || absolute_end <= session_watermark {
+            if absolute_start < session_watermark || absolute_end <= session_watermark
+                || retained_end.is_some_and(|end| absolute_end <= end) {
                 continue;
             }
             let Ok(word) = std::str::from_utf8(&snapshot.bytes[word_start..word_end]) else {
@@ -286,6 +296,8 @@ impl HarnessLogObserver {
             let Some((url, token)) = parse_loopback_harness_url(cleaned) else {
                 continue;
             };
+            let next_evidence = TokenEvidence { start: absolute_start, bytes: snapshot.bytes[word_start..word_end].to_vec() };
+            if evidence.as_ref().is_some_and(|old| old.start == next_evidence.start && old.bytes == next_evidence.bytes) { continue; }
             let next = HarnessUrlCandidate {
                 url,
                 token,
@@ -300,6 +312,7 @@ impl HarnessLogObserver {
                 harness_candidate_cmp(current, &next).is_lt()
             }) {
                 candidate = Some(next);
+                evidence = Some(next_evidence);
             }
         }
 
@@ -309,6 +322,7 @@ impl HarnessLogObserver {
                 offset: snapshot.length,
                 fingerprint: snapshot.fingerprint,
                 candidate: candidate.clone(),
+                evidence,
             },
         );
         Ok(candidate)
@@ -342,8 +356,7 @@ fn harness_candidate_cmp(
         ))
 }
 
-fn read_log_snapshot(path: &Path) -> io::Result<HarnessLogSnapshot> {
-    let mut file = fs::File::open(path)?;
+fn read_log_snapshot(file: &mut fs::File) -> io::Result<HarnessLogSnapshot> {
     let metadata = file.metadata()?;
     let modified_at_nanos = metadata
         .modified()
@@ -358,7 +371,7 @@ fn read_log_snapshot(path: &Path) -> io::Result<HarnessLogSnapshot> {
     file.seek(SeekFrom::Start(read_start))?;
     let mut bytes = Vec::new();
     let expected_len = length.saturating_sub(read_start);
-    (&mut file).take(expected_len).read_to_end(&mut bytes)?;
+    (&mut *file).take(expected_len).read_to_end(&mut bytes)?;
     if bytes.len() as u64 != expected_len {
         return Err(io::Error::new(
             io::ErrorKind::UnexpectedEof,

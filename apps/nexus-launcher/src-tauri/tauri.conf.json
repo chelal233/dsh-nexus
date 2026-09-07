@@ -1,12 +1,12 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "Nexus Launcher",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "identifier": "com.nexus.launcher",
   "build": {
     "beforeDevCommand": "pnpm dev",
     "devUrl": "http://localhost:1420",
-    "beforeBuildCommand": "pnpm prepare:agent && pnpm prepare:runtime && pnpm build",
+    "beforeBuildCommand": "pnpm prepare:agent && pnpm prepare:runtime && pnpm test:bundled-runtime && pnpm prepare:release && pnpm build && pnpm verify:release",
     "frontendDist": "../dist"
   },
   "app": {
@@ -33,9 +33,11 @@
     "active": true,
     "targets": ["nsis", "msi"],
     "resources": {
-      "resources/nexus-agent*": "",
-      "resources/nexus-launcher*": "",
-      "resources/nexusctl*": "",
+      "resources/nexus-agent.exe": "nexus-agent.exe",
+      "resources/nexus-launcher.exe": "nexus-launcher.exe",
+      "resources/nexusctl.exe": "nexusctl.exe",
+      "resources/release-manifest.json": "release-manifest.json",
+      "resources/release-identity.json": "release-identity.json",
       "resources/runtime": "runtime/"
     },
     "category": "Utility",

@@ -46,6 +46,7 @@ use sha2::Sha256;
 use tokio::{net::TcpListener, sync::Mutex, time::sleep};
 
 mod installer_shutdown;
+mod installer_cleanup;
 
 fn unavailable_harness_ui_info(_paths: &NexusPaths, message: String) -> HarnessUiInfo {
     nexus_launcher_core::unavailable_harness_ui_info(message)
@@ -224,6 +225,21 @@ struct LaunchRecord {
 
 #[tokio::main]
 async fn main() {
+    if env::args_os().nth(1).as_deref() == Some(std::ffi::OsStr::new("installer-cleanup")) {
+        if let Err(message) = installer_cleanup::run(env::args_os().skip(2).collect()) {
+            eprintln!("nexus-launcher installer-cleanup: {message}");
+            process::exit(1);
+        }
+        return;
+    }
+    #[cfg(windows)]
+    if env::args_os().nth(1).as_deref() == Some(std::ffi::OsStr::new("installer-parse-arguments")) {
+        if let Err(message) = installer_shutdown::print_arguments() {
+            eprintln!("nexus-launcher installer-parse-arguments: {message}");
+            process::exit(1);
+        }
+        return;
+    }
     if env::args_os().nth(1).as_deref() == Some(std::ffi::OsStr::new("installer-stop")) {
         if let Err(message) = installer_shutdown::run(env::args_os().skip(2).collect()) {
             eprintln!("nexus-launcher installer-stop: {message}");
@@ -1514,13 +1530,13 @@ fn print_logs(options: &Options, paths: &NexusPaths) {
 }
 
 fn launch_record_path(paths: &NexusPaths) -> PathBuf {
-    paths.run_dir.join("agent.json")
+    paths.run_dir.join("launcher-agent.json")
 }
 
 fn write_launch_record(paths: &NexusPaths, record: &LaunchRecord) -> io::Result<()> {
     let path = launch_record_path(paths);
     let temporary = paths.run_dir.join(format!(
-        ".agent.json.tmp-{}-{}",
+        ".launcher-agent.json.tmp-{}-{}",
         process::id(),
         unix_time_nanos()
     ));
@@ -1694,6 +1710,12 @@ mod tests {
         ));
         let paths = NexusPaths::from_root(root.clone());
         paths.ensure_directories().expect("directories create");
+        let discovery = nexus_core::AgentDiscoveryRecord {
+            port: 54321, instance_id: "discovery-owner".into(),
+            data_root_id: "discovery-root".into(), pid: 123, updated_at_unix: 10,
+        };
+        paths.publish_agent_discovery(&discovery).unwrap();
+        let discovery_bytes = fs::read(paths.run_dir.join("agent.json")).unwrap();
         let record = LaunchRecord {
             pid: 42,
             port: nexus_core::DEFAULT_AGENT_PORT,
@@ -1716,10 +1738,12 @@ mod tests {
                     .expect("directory entry reads")
                     .file_name()
                     .to_string_lossy()
-                    .starts_with(".agent.json.tmp-")),
+                    .starts_with(".launcher-agent.json.tmp-")),
             "an atomic launch-record publication must not leave a temporary file"
         );
         remove_launch_record(&paths);
+        assert_eq!(fs::read(paths.run_dir.join("agent.json")).unwrap(), discovery_bytes);
+        assert_eq!(paths.read_agent_discovery().unwrap().unwrap().instance_id, "discovery-owner");
         let _ = fs::remove_dir_all(root);
     }
 
@@ -2362,6 +2386,64 @@ mod tests {
         );
 
         let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn harness_log_cursor_does_not_refresh_old_words_across_streams() {
+        let root = std::env::temp_dir().join(format!("nexus-token-age-{}", nexus_core::unix_time_nanos_for_update()));
+        let paths = NexusPaths::from_root(root.clone());
+        paths.ensure_directories().unwrap();
+        let stdout = paths.logs_dir.join("harness.stdout.log");
+        let stderr = paths.logs_dir.join("harness.stderr.log");
+        let timestamp = |path: &std::path::Path, seconds| {
+            fs::OpenOptions::new().write(true).open(path).unwrap()
+                .set_modified(std::time::UNIX_EPOCH + std::time::Duration::from_secs(seconds)).unwrap();
+        };
+        fs::write(&stdout, "http://127.0.0.1:3080/?token=first\nhttp://127.0.0.1:3080/?token=second\n").unwrap();
+        timestamp(&stdout, 100);
+        let session = test_harness_log_session(&paths, "age", 1, 0, 0);
+        let mut observer = HarnessLogObserver::default();
+        assert_eq!(read_harness_ui_info_with_observer(&paths, &mut observer, Some(&session)).token.as_deref(), Some("second"));
+        fs::write(&stderr, "http://127.0.0.1:3080/?token=new-stderr\n").unwrap();
+        timestamp(&stderr, 200);
+        assert_eq!(read_harness_ui_info_with_observer(&paths, &mut observer, Some(&session)).token.as_deref(), Some("new-stderr"));
+        fs::OpenOptions::new().append(true).open(&stdout).unwrap().write_all(b"ordinary output\n").unwrap();
+        timestamp(&stdout, 300);
+        assert_eq!(read_harness_ui_info_with_observer(&paths, &mut observer, Some(&session)).token.as_deref(), Some("new-stderr"));
+        fs::OpenOptions::new().append(true).open(&stdout).unwrap().write_all(b"http://127.0.0.1:3080/?token=new-stdout\n").unwrap();
+        timestamp(&stdout, 400);
+        assert_eq!(read_harness_ui_info_with_observer(&paths, &mut observer, Some(&session)).token.as_deref(), Some("new-stdout"));
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn harness_log_cursor_retains_only_verified_original_bytes_beyond_tail() {
+        use std::io::{Seek, SeekFrom};
+        for mutation in ["token", "left", "right", "session"] {
+            let root = std::env::temp_dir().join(format!("nexus-token-proof-{mutation}-{}", nexus_core::unix_time_nanos_for_update()));
+            let paths = NexusPaths::from_root(root.clone());
+            paths.ensure_directories().unwrap();
+            let stdout = paths.logs_dir.join("harness.stdout.log");
+            let url = "http://127.0.0.1:3080/?token=current";
+            fs::write(&stdout, format!("x {url}\n")).unwrap();
+            let session = test_harness_log_session(&paths, "proof", 1, 0, 0);
+            let mut observer = HarnessLogObserver::default();
+            assert_eq!(read_harness_ui_info_with_observer(&paths, &mut observer, Some(&session)).token.as_deref(), Some("current"));
+            fs::OpenOptions::new().append(true).open(&stdout).unwrap().write_all(&vec![b'x'; HARNESS_LOG_TAIL_BYTES as usize + 20]).unwrap();
+            assert_eq!(read_harness_ui_info_with_observer(&paths, &mut observer, Some(&session)).token.as_deref(), Some("current"));
+            if mutation == "session" {
+                assert!(!read_harness_ui_info_with_observer(&paths, &mut observer, None).available);
+                assert!(!read_harness_ui_info_with_observer(&paths, &mut observer, Some(&session)).available);
+            } else {
+                let offset = match mutation { "left" => 1, "right" => 2 + url.len(), _ => 2 + url.len() - 1 };
+                let mut file = fs::OpenOptions::new().write(true).open(&stdout).unwrap();
+                file.seek(SeekFrom::Start(offset as u64)).unwrap();
+                file.write_all(b"Z").unwrap();
+                drop(file);
+                assert!(!read_harness_ui_info_with_observer(&paths, &mut observer, Some(&session)).available, "{mutation}");
+            }
+            fs::remove_dir_all(root).unwrap();
+        }
     }
 
     #[test]

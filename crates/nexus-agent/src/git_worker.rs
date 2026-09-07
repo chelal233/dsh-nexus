@@ -56,7 +56,40 @@ async fn external_run(operation: &Operation, external: &ExternalGit, directory: 
     }
 }
 
+fn retryable_network_error(error: &io::Error) -> bool {
+    if !crate::cold::command_owner_quiescent(error) { return false; }
+    if matches!(error.kind(), io::ErrorKind::ConnectionReset | io::ErrorKind::ConnectionAborted | io::ErrorKind::ConnectionRefused | io::ErrorKind::NotConnected | io::ErrorKind::BrokenPipe) { return true; }
+    if error.kind() != io::ErrorKind::Other { return false; }
+    let message = error.to_string().to_ascii_lowercase();
+    if ["authentication", "certificate", "not advertised", "not found", "403", "404", "401", "permission denied"].iter().any(|part| message.contains(part)) { return false; }
+    ["connection reset", "connection refused", "connection timed out", "could not resolve host", "failed to resolve", "failed to connect", "temporary failure", "unexpected eof", "early eof", "http 502", "http 503", "http 504"].iter().any(|part| message.contains(part))
+}
+
 async fn run_preferred(operation: Operation, directory: &Path, duration: Duration, cancellation: &CancellationToken, external: Option<ExternalGit>) -> io::Result<serde_json::Value> {
+    let start = Instant::now();
+    for attempt in 0..3 {
+        let remaining = duration.checked_sub(start.elapsed()).filter(|value| !value.is_zero())
+            .ok_or_else(|| io::Error::new(io::ErrorKind::TimedOut, "Git operation exhausted its total timeout"))?;
+        let result = run_preferred_once(operation.clone(), directory, remaining, cancellation, external.clone()).await;
+        let error = match result { Ok(value) => return Ok(value), Err(error) => error };
+        if attempt == 2 || matches!(operation, Operation::Head { .. }) || cancellation.is_cancelled() || !retryable_network_error(&error) { return Err(error); }
+        if let Operation::Clone { candidate, parent, .. } = &operation {
+            candidate_in_parent(candidate, parent)?;
+            crate::cold::remove_owned_directory(parent, candidate)?;
+        }
+        // Backoff shares the original deadline and is cancellation-responsive.
+        tracing::info!(attempt = attempt + 1, "retrying transient Git download failure");
+        let delay_end = Instant::now() + Duration::from_secs(attempt + 1);
+        while Instant::now() < delay_end {
+            if cancellation.is_cancelled() { return Err(io::Error::new(io::ErrorKind::Interrupted, "Git operation cancelled")); }
+            if start.elapsed() >= duration { return Err(io::Error::new(io::ErrorKind::TimedOut, "Git operation exhausted its total timeout")); }
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+    }
+    unreachable!()
+}
+
+async fn run_preferred_once(operation: Operation, directory: &Path, duration: Duration, cancellation: &CancellationToken, external: Option<ExternalGit>) -> io::Result<serde_json::Value> {
     let start = Instant::now();
     if cancellation.is_cancelled() { return Err(io::Error::new(io::ErrorKind::Interrupted, "Git operation cancelled")); }
     if let Operation::Clone { candidate, parent, .. } = &operation {
@@ -320,5 +353,17 @@ mod tests {
         assert_eq!(result.unwrap_err().kind(), io::ErrorKind::TimedOut);
         assert!(!fs::read_dir(&root).unwrap().any(|entry| entry.unwrap().file_name().to_string_lossy().starts_with("embedded-git-")));
         fs::remove_dir_all(root).unwrap();
+    }
+}
+
+#[cfg(test)]
+mod retry_policy_tests {
+    use super::*;
+    #[test]
+    fn retries_only_transient_download_failures() {
+        for text in ["embedded Git: failed to resolve address", "connection reset by peer", "HTTP 503"] { assert!(retryable_network_error(&io::Error::other(text)), "{text}"); }
+        for text in ["authentication failed", "HTTP 404", "certificate verification failed", "Requested Git ref is not advertised", "permission denied: connection reset"] { assert!(!retryable_network_error(&io::Error::other(text)), "{text}"); }
+        assert!(!retryable_network_error(&io::Error::new(io::ErrorKind::TimedOut, "connection timed out")));
+        assert!(!retryable_network_error(&io::Error::new(io::ErrorKind::Interrupted, "connection reset")));
     }
 }

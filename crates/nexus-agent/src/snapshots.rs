@@ -29,11 +29,33 @@ pub(crate) struct SnapshotCoordinator {
     configuration_error: Option<String>,
     owner: Arc<Semaphore>,
     healthy_error: Arc<std::sync::Mutex<Option<String>>>,
+    capture_record: Arc<std::sync::Mutex<Option<CaptureRecord>>>,
+    capture_persistence_error: Arc<std::sync::Mutex<bool>>,
 }
 
 pub(crate) struct SnapshotLease {
     store: Arc<SnapshotStore>,
     owner: Arc<OwnedSemaphorePermit>,
+}
+
+#[derive(Clone, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct CaptureRecord {
+    id: String,
+    kind: String,
+    state: String,
+    started_at_unix: u64,
+    updated_at_unix: u64,
+    error: Option<String>,
+}
+
+fn capture_time() -> u64 {
+    std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_secs()
+}
+
+fn capture_error(error: &io::Error) -> String {
+    let redacted = nexus_core::redact_diagnostics_payload(error.to_string().as_bytes()).0;
+    String::from_utf8_lossy(&redacted).chars().take(2048).collect()
 }
 
 impl SnapshotCoordinator {
@@ -48,11 +70,72 @@ impl SnapshotCoordinator {
             configuration_error,
             owner: Arc::new(Semaphore::new(1)),
             healthy_error: Arc::new(std::sync::Mutex::new(None)),
+            capture_record: Arc::new(std::sync::Mutex::new(None)),
+            capture_persistence_error: Arc::new(std::sync::Mutex::new(false)),
         }
     }
 
-    pub(crate) fn configured_dsh_home(&self) -> io::Result<&PathBuf> {
-        self.dsh_home.as_ref().ok_or_else(|| {
+    pub(crate) fn begin_capture(&self, kind: &str) -> String {
+        let id = format!("{}-{}", std::process::id(), std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_nanos());
+        let record = CaptureRecord { id: id.clone(), kind: kind.into(), state: "running".into(), started_at_unix: capture_time(), updated_at_unix: capture_time(), error: None };
+        if let Ok(mut current) = self.capture_record.lock() {
+            self.persist_capture(&record);
+            *current = Some(record);
+        }
+        id
+    }
+
+    pub(crate) fn finish_capture<T>(&self, id: &str, result: &io::Result<T>) {
+        if let Ok(mut current) = self.capture_record.lock() {
+            if let Some(record) = current.as_mut().filter(|record| record.id == id) {
+                record.state = if result.is_ok() { "succeeded" } else { "failed" }.into();
+                record.updated_at_unix = capture_time();
+                record.error = result.as_ref().err().map(capture_error);
+                self.persist_capture(record);
+            }
+        }
+    }
+
+    fn persist_capture(&self, record: &CaptureRecord) {
+        let failed = nexus_core::write_private_json_atomic(&self.paths.run_dir, &self.paths.run_dir.join("last-capture.json"), record).is_err();
+        if let Ok(mut current) = self.capture_persistence_error.lock() { *current = failed; }
+        if failed {
+            tracing::warn!("could not persist snapshot capture result");
+        }
+    }
+
+    pub(crate) fn last_capture(&self) -> serde_json::Value {
+        if let Ok(current) = self.capture_record.lock() {
+            if let Some(record) = current.as_ref() {
+                let mut value = serde_json::to_value(record).unwrap_or_default();
+                if self.capture_persistence_error.lock().map(|value| *value).unwrap_or(true) { value["persistence_error"] = serde_json::json!("Capture result could not be saved. This status may be lost after restarting Agent."); }
+                return value;
+            }
+        }
+        let read = || -> io::Result<Option<CaptureRecord>> {
+            let path = self.paths.run_dir.join("last-capture.json");
+            let bytes = match nexus_core::read_regular_file_bounded(&path, 65536) {
+                Ok(Some(value)) => value, Ok(None) => return Ok(None), Err(error) => return Err(error),
+            };
+            let mut record: CaptureRecord = serde_json::from_slice(&bytes).map_err(io::Error::other)?;
+            if record.id.len() > 128 || !record.id.bytes().all(|b| b.is_ascii_digit() || b == b'-') { return Err(io::Error::other("invalid capture identity")); }
+            if !["manual", "healthy"].contains(&record.kind.as_str()) || !["running", "succeeded", "failed"].contains(&record.state.as_str()) { return Err(io::Error::other("invalid capture record")); }
+            if record.state == "running" { record.state = "interrupted".into(); }
+            record.error = record.error.map(|error| capture_error(&io::Error::other(error)));
+            Ok(Some(record))
+        };
+        match read() {
+            Ok(Some(record)) => serde_json::to_value(record).unwrap_or_default(),
+            Ok(None) => serde_json::Value::Null,
+            Err(_) => serde_json::json!({"state":"unavailable", "error":"Saved capture result could not be read. Existing snapshots are unchanged."}),
+        }
+    }
+
+    pub(crate) fn configured_dsh_home(&self) -> io::Result<PathBuf> {
+        if let Some(home) = nexus_core::load_harness_preferences(&self.paths)?.home {
+            return Ok(PathBuf::from(home));
+        }
+        self.dsh_home.clone().ok_or_else(|| {
             io::Error::new(
                 io::ErrorKind::NotFound,
                 self.configuration_error
@@ -62,20 +145,33 @@ impl SnapshotCoordinator {
         })
     }
 
-    pub(crate) async fn acquire(&self, profile: String) -> io::Result<SnapshotLease> {
-        let owner = Arc::clone(&self.owner)
-            .acquire_owned()
-            .await
-            .map_err(|_| io::Error::other("snapshot I/O owner is closed"))?;
-        let paths = self.paths.clone();
-        let dsh_home = self.configured_dsh_home()?.clone();
-        let store = tokio::task::spawn_blocking(move || build_store(paths, dsh_home, profile))
-            .await
-            .map_err(|error| io::Error::other(format!("snapshot store task failed: {error}")))??;
-        Ok(SnapshotLease {
-            store: Arc::new(store),
-            owner: Arc::new(owner),
+    pub(crate) fn try_acquire_configuration(&self) -> io::Result<OwnedSemaphorePermit> {
+        Arc::clone(&self.owner).try_acquire_owned().map_err(|_| {
+            io::Error::new(io::ErrorKind::ResourceBusy, "Snapshot I/O is active; retry after it finishes")
         })
+    }
+
+    pub(crate) async fn acquire(&self, profile: String) -> io::Result<SnapshotLease> {
+        self.acquire_with_capture(profile, None).await.map(|(lease, _)| lease)
+    }
+
+    pub(crate) async fn acquire_capture(&self, profile: String, kind: &str) -> io::Result<(SnapshotLease, String)> {
+        self.acquire_with_capture(profile, Some(kind)).await.map(|(lease, id)| (lease, id.unwrap_or_default()))
+    }
+
+    async fn acquire_with_capture(&self, profile: String, kind: Option<&str>) -> io::Result<(SnapshotLease, Option<String>)> {
+        let owner = Arc::clone(&self.owner).acquire_owned().await
+            .map_err(|_| io::Error::other("snapshot I/O owner is closed"))?;
+        let id = kind.map(|kind| self.begin_capture(kind));
+        let result = async {
+            let paths = self.paths.clone();
+            let dsh_home = self.configured_dsh_home()?;
+            tokio::task::spawn_blocking(move || build_store(paths, dsh_home, profile)).await
+                .map_err(|error| io::Error::other(format!("snapshot store task failed: {error}")))?
+        }.await;
+        if result.is_err() { if let Some(id) = id.as_ref() { self.finish_capture(id, &result); } }
+        let store = result?;
+        Ok((SnapshotLease { store: Arc::new(store), owner: Arc::new(owner) }, id))
     }
 
     pub(crate) async fn acquire_bound(
@@ -144,7 +240,7 @@ impl SnapshotCoordinator {
 
     pub(crate) fn record_healthy_result(&self, result: &io::Result<SnapshotReference>) {
         if let Ok(mut current) = self.healthy_error.lock() {
-            *current = result.as_ref().err().map(ToString::to_string);
+            *current = result.as_ref().err().map(capture_error);
         }
     }
 
@@ -153,11 +249,13 @@ impl SnapshotCoordinator {
         profile: String,
         dsh_version: String,
     ) -> io::Result<SnapshotReference> {
-        let lease = self.acquire(profile).await?;
-        let manifest = lease
-            .call(move |store| store.capture_healthy(CaptureRequest { dsh_version }))
-            .await?;
-        Ok(snapshot_reference(&manifest))
+        let (lease, id) = self.acquire_capture(profile, "healthy").await?;
+        let result = async {
+            let manifest = lease.call(move |store| store.capture_healthy(CaptureRequest { dsh_version })).await?;
+            Ok(snapshot_reference(&manifest))
+        }.await;
+        self.finish_capture(&id, &result);
+        result
     }
 }
 
@@ -470,6 +568,55 @@ mod tests {
             fs::create_dir_all(parent).expect("creates synthetic parent");
         }
         fs::write(path, content).expect("writes synthetic profile file");
+    }
+
+    #[tokio::test]
+    async fn capture_result_is_private_durable_redacted_and_waiters_do_not_replace_owner() {
+        let fixture = Fixture::new("capture-record");
+        let coordinator = fixture.coordinator();
+        let (lease, id) = coordinator.acquire_capture("demo".into(), "manual").await.unwrap();
+        assert_eq!(coordinator.last_capture()["state"], "running");
+        let waiter = coordinator.clone();
+        let next = tokio::spawn(async move { waiter.acquire_capture("demo".into(), "healthy").await });
+        tokio::task::yield_now().await;
+        assert_eq!(coordinator.last_capture()["id"], id);
+        assert_eq!(fixture.coordinator().last_capture()["state"], "interrupted");
+        let failure: io::Result<()> = Err(io::Error::other("token=CAPTURE-SECRET https://example.test/?api_key=QUERY-SECRET"));
+        coordinator.finish_capture(&id, &failure);
+        let stored = fs::read(fixture.paths.run_dir.join("last-capture.json")).unwrap();
+        assert!(!String::from_utf8_lossy(&stored).contains("CAPTURE-SECRET"));
+        assert!(!String::from_utf8_lossy(&stored).contains("QUERY-SECRET"));
+        assert_eq!(fixture.coordinator().last_capture()["state"], "failed");
+        drop(lease);
+        let (lease, next_id) = next.await.unwrap().unwrap();
+        assert_ne!(next_id, id);
+        coordinator.finish_capture(&next_id, &Ok::<_, io::Error>(()));
+        assert_eq!(fixture.coordinator().last_capture()["state"], "succeeded");
+        drop(lease);
+    }
+
+    #[test]
+    fn capture_result_corruption_and_failed_persistence_do_not_block_snapshots() {
+        let fixture = Fixture::new("capture-corrupt");
+        let path = fixture.paths.run_dir.join("last-capture.json");
+        write(&path, "broken record SECRET-NOT-DISPLAYED");
+        let status = fixture.coordinator().last_capture();
+        assert_eq!(status["state"], "unavailable");
+        assert!(!status.to_string().contains("SECRET-NOT-DISPLAYED"));
+        write(&path, &" ".repeat(65537));
+        assert_eq!(fixture.coordinator().last_capture()["state"], "unavailable");
+        fs::remove_file(&path).unwrap();
+        fs::create_dir(&path).unwrap();
+        let coordinator = fixture.coordinator();
+        let id = coordinator.begin_capture("manual");
+        coordinator.finish_capture(&id, &Err::<(), _>(io::Error::other("capture failed")));
+        assert_eq!(coordinator.last_capture()["state"], "failed");
+        assert_eq!(coordinator.last_capture()["error"], "capture failed");
+        assert!(coordinator.last_capture()["persistence_error"].is_string());
+        fs::remove_dir(&path).unwrap();
+        let next = coordinator.begin_capture("healthy");
+        coordinator.finish_capture(&next, &Ok::<_, io::Error>(()));
+        assert!(coordinator.last_capture()["persistence_error"].is_null());
     }
 
     #[tokio::test]

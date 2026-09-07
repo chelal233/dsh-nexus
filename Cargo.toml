@@ -1,6 +1,7 @@
 [workspace]
 members = [
     "crates/nexus-protocol",
+    "crates/nexus-private-file",
     "crates/nexus-core",
     "crates/nexus-agent",
     "crates/nexus-cli",
@@ -12,7 +13,7 @@ resolver = "2"
 
 [workspace.package]
 edition = "2021"
-version = "0.1.0"
+version = "0.1.1"
 license = "MIT"
 publish = false
 

@@ -3,6 +3,10 @@ use std::{env, path::PathBuf, process};
 use nexus_core::NexusConfig;
 
 fn main() {
+    if env::args_os().nth(1).as_deref() == Some(std::ffi::OsStr::new("--build-identity")) {
+        println!("{}", serde_json::json!({ "buildId": option_env!("NEXUS_BUILD_ID").unwrap_or("development"), "version": env!("CARGO_PKG_VERSION") }));
+        return;
+    }
     if env::args_os().nth(1).as_deref() == Some(std::ffi::OsStr::new("--git-worker")) {
         let result = env::args_os().nth(2).map(PathBuf::from)
             .ok_or_else(|| std::io::Error::other("Git worker request is required"))

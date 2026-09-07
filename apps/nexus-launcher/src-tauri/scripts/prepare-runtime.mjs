@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import { createReadStream, createWriteStream } from "node:fs";
-import { access, copyFile, cp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import { access, cp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { spawn } from "node:child_process";
 import { Readable } from "node:stream";
@@ -11,7 +11,8 @@ import { fileURLToPath } from "node:url";
 // packaging. The runtime/ directory maps to <install dir>/runtime/ in the
 // produced installers, which is exactly what nexus-core::bundled_runtime_dir
 // observes at run time:
-//   runtime/node/node.exe    official Windows x64 distribution binary
+//   runtime/node/            full official Windows x64 Node distribution,
+//                            including npm/npx and their package tree
 //   runtime/pnpm/            the full pnpm npm package tree; the entry run by
 //                            the bundled Node is pnpm/bin/pnpm.cjs, whose
 //                            relative imports stay inside pnpm/
@@ -43,12 +44,16 @@ const npmRegistry = (process.env.NEXUS_NPM_REGISTRY || "https://registry.npmjs.o
 const PINNED_NODE_SHA256 = {
   "24.20.0": "5c976096e04e5c2c1f091938926234cc9fbebfe9787ddd149351b3b0ecc707b5",
 };
+const PINNED_NODE_ZIP_SHA256 = {
+  "24.20.0": "6cac9ffbca8f6a47091e4b5c772e0606049c3871cb67d900c0cedde630e545ba",
+};
 const PINNED_PNPM_INTEGRITY = {
   "11.7.0": "sha512-GcyFLBIMcSV2DyRD7mvgyltA+fUFmN4aCaHxd1A+AQ5Xwjx3ZG4B52HeWb+HT7IqM5jDOrlpH8E+uUa28PTWIA==",
 };
 const officialNodeMirror = nodeMirror === "https://nodejs.org/dist";
 const officialNpmRegistry = npmRegistry === "https://registry.npmjs.org";
 const pinnedNodeSha = PINNED_NODE_SHA256[nodeVersion];
+const pinnedNodeZipSha = PINNED_NODE_ZIP_SHA256[nodeVersion];
 const pinnedPnpmIntegrity = PINNED_PNPM_INTEGRITY[pnpmVersion];
 if (!officialNodeMirror && !pinnedNodeSha) {
   console.warn(`[prepare-runtime] WARNING: non-official node mirror with no pinned checksum for ${nodeVersion}; verification is same-source only.`);
@@ -133,23 +138,33 @@ async function stageNode() {
   const nodeDir = path.join(resourceRuntime, "node");
   await mkdir(nodeDir, { recursive: true });
   await mkdir(cacheRoot, { recursive: true });
-  const destination = path.join(cacheRoot, `node-v${nodeVersion}-win-x64.exe`);
+  const archiveName = `node-v${nodeVersion}-win-x64.zip`;
+  const destination = path.join(cacheRoot, archiveName);
   const shasums = await fetchText(`${nodeMirror}/v${nodeVersion}/SHASUMS256.txt`);
-  const line = shasums
-    .split("\n")
-    .find((entry) => entry.trimEnd().endsWith(`win-x64/node.exe`));
-  if (!line) {
-    throw new Error(`SHASUMS256.txt for v${nodeVersion} has no win-x64/node.exe entry`);
-  }
+  const line = shasums.split("\n").find((entry) => entry.trim().split(/\s+/)[1] === archiveName);
+  if (!line) throw new Error(`SHASUMS256.txt has no ${archiveName} entry`);
   const expected = line.trim().split(/\s+/)[0];
-  if (pinnedNodeSha && expected !== pinnedNodeSha) {
-    throw new Error(`SHASUMS256 for v${nodeVersion} does not match the pinned checksum; refusing the mirror payload`);
+  if (pinnedNodeZipSha && expected !== pinnedNodeZipSha) {
+    throw new Error("Node archive checksum does not match the pinned value");
   }
-  const enforced = pinnedNodeSha || expected;
-  await cachedDownload(`${nodeMirror}/v${nodeVersion}/win-x64/node.exe`, destination, enforced);
+  await cachedDownload(`${nodeMirror}/v${nodeVersion}/${archiveName}`, destination, pinnedNodeZipSha || expected);
+  const extractDir = path.join(cacheRoot, `node-extract-${nodeVersion}`);
+  await rm(extractDir, { recursive: true, force: true });
+  await mkdir(extractDir, { recursive: true });
+  try {
+    await run(tarCommand, ["-xf", destination, "-C", extractDir]);
+    await rm(nodeDir, { recursive: true, force: true });
+    await cp(path.join(extractDir, `node-v${nodeVersion}-win-x64`), nodeDir, { recursive: true });
+  } finally {
+    await rm(extractDir, { recursive: true, force: true });
+  }
   const target = path.join(nodeDir, "node.exe");
-  await rm(target, { force: true });
-  await copyFile(destination, target);
+  const binarySha = await sha256(target);
+  if (pinnedNodeSha && binarySha !== pinnedNodeSha) throw new Error("Bundled node.exe checksum mismatch");
+  const npm = JSON.parse(await readFile(path.join(nodeDir, "node_modules/npm/package.json"), "utf8"));
+  await access(path.join(nodeDir, "npm.cmd"));
+  await access(path.join(nodeDir, "npx.cmd"));
+  await run(target, [path.join(nodeDir, "node_modules/npm/bin/npm-cli.js"), "--version"]);
 
   const probe = spawn(target, ["--version"], { stdio: ["ignore", "pipe", "ignore"] });
   const version = await new Promise((resolve, reject) => {
@@ -166,7 +181,7 @@ async function stageNode() {
       }
     });
   });
-  return { version, sha256: expected };
+  return { version, sha256: binarySha, archiveSha256: expected, npmVersion: npm.version };
 }
 
 async function stagePnpm() {
@@ -216,6 +231,10 @@ async function stagePnpm() {
     const target = path.join(resourceRuntime, "pnpm");
     await rm(target, { recursive: true, force: true });
     await cp(path.join(extractDir, "package"), target, { recursive: true });
+    // Nested lifecycle scripts invoke pnpm by name. Resolve the bundled Node
+    // relative to this shim, without a global install or system PATH changes.
+    await writeFile(path.join(target, "bin/pnpm.cmd"),
+      '@ECHO OFF\r\n"%~dp0..\\..\\node\\node.exe" "%~dp0pnpm.cjs" %*\r\n');
   } finally {
     await rm(extractDir, { recursive: true, force: true });
   }
@@ -237,7 +256,14 @@ async function isUpToDate(manifestFile) {
     } else if (manifest.node?.sha256 && stagedSha !== manifest.node.sha256) {
       return false;
     }
+    if (!manifest.node?.npmVersion || !manifest.node?.archiveSha256) return false;
+    const npm = JSON.parse(await readFile(path.join(resourceRuntime, "node/node_modules/npm/package.json"), "utf8"));
+    if (npm.version !== manifest.node.npmVersion) return false;
+    await access(path.join(resourceRuntime, "node/npm.cmd"));
+    await access(path.join(resourceRuntime, "node/npx.cmd"));
+    await access(path.join(resourceRuntime, "node/node_modules/npm/bin/npm-cli.js"));
     await access(path.join(resourceRuntime, "pnpm", "bin", "pnpm.cjs"));
+    await access(path.join(resourceRuntime, "pnpm", "bin", "pnpm.cmd"));
     return true;
   } catch {
     return false;
@@ -246,13 +272,13 @@ async function isUpToDate(manifestFile) {
 
 const manifestFile = path.join(resourceRuntime, "manifest.json");
 if (await isUpToDate(manifestFile)) {
-  console.log(`[prepare-runtime] bundled runtime already staged (node ${nodeVersion}, pnpm ${pnpmVersion})`);
+  console.log(`[prepare-runtime] bundled runtime already staged (node ${nodeVersion} with npm, pnpm ${pnpmVersion})`);
 } else {
   const node = await stageNode();
   const pnpm = await stagePnpm();
   await writeFile(
     manifestFile,
-    `${JSON.stringify({ node: { version: node.version, sha256: node.sha256 }, pnpm }, null, 2)}\n`,
+    `${JSON.stringify({ node, pnpm }, null, 2)}\n`,
   );
-  console.log(`[prepare-runtime] staged node ${node.version} and pnpm ${pnpm.version} at ${resourceRuntime}`);
+  console.log(`[prepare-runtime] staged node ${node.version} with npm ${node.npmVersion} and pnpm ${pnpm.version} at ${resourceRuntime}`);
 }

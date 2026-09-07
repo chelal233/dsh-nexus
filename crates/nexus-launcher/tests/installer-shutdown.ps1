@@ -6,10 +6,18 @@ param(
 $ErrorActionPreference = 'Stop'
 $fixture = Join-Path ([IO.Path]::GetTempPath()) ('nexus-installer-test-' + [Guid]::NewGuid())
 $owned = @()
+$originalPath = $env:PATH
 New-Item -ItemType Directory -Path $fixture > $null
 try {
+    # Match the installer: run its copied payload from a temporary directory,
+    # without any development tools discoverable through PATH.
+    $payload = Join-Path $fixture 'nexus-installer-stop.exe'
+    Copy-Item -LiteralPath $LauncherBinary -Destination $payload
+    $LauncherBinary = $payload
+    $env:PATH = ''
     $records = @()
-    foreach ($name in @('install with spaces', 'other installation')) {
+    $unicodeName = 'install ' + [char]0x7528 + [char]0x6237 + ' with spaces & $literal'
+    foreach ($name in @($unicodeName, 'other installation')) {
         $install = Join-Path $fixture $name
         $data = Join-Path $fixture ($name + ' data')
         New-Item -ItemType Directory -Path $install > $null
@@ -80,6 +88,7 @@ server.listen(0, '127.0.0.1', () => {
         Write-Output 'PASS: HTTP shutdown acceptance without process exit times out and preserves the running process.'
     }
 } finally {
+    $env:PATH = $originalPath
     foreach ($child in $owned) {
         if (-not $child.HasExited) { $child.Kill(); $child.WaitForExit() }
         $child.Dispose()

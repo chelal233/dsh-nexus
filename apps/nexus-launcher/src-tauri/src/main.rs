@@ -20,7 +20,7 @@ use serde_json::{json, Value};
 use tauri::{
     menu::{Menu, MenuItem},
     tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
-    AppHandle, Manager, WindowEvent,
+    AppHandle, Emitter, Manager, WindowEvent,
 };
 
 mod native_i18n;
@@ -28,6 +28,20 @@ use native_i18n::{text as native_text, NativeText};
 
 const START_WAIT_SECS: u64 = nexus_launcher_core::DEFAULT_START_WAIT_SECS;
 const STOP_WAIT_SECS: u64 = nexus_launcher_core::DEFAULT_STOP_WAIT_SECS;
+static NATIVE_NOTIFICATIONS_ENABLED: AtomicBool = AtomicBool::new(false);
+static MINIMIZE_NOTICE_SHOWN: AtomicBool = AtomicBool::new(false);
+static EXIT_IN_PROGRESS: AtomicBool = AtomicBool::new(false);
+
+#[tauri::command]
+fn set_native_notifications(enabled: bool) {
+    NATIVE_NOTIFICATIONS_ENABLED.store(enabled, Ordering::Release);
+}
+
+#[tauri::command]
+fn build_identity() -> Result<Value, String> {
+    serde_json::from_str(include_str!(concat!(env!("OUT_DIR"), "/release-identity.json")))
+        .map_err(|error| error.to_string())
+}
 
 /// The native shell talks to the independent Agent only through its versioned
 /// loopback API. `/v1/agent` is the small native lifecycle adapter because an
@@ -42,6 +56,7 @@ const ALLOWED_ROUTES: &[&str] = &[
     "/v1/harness/discover",
     "/v1/profiles",
     "/v1/recovery",
+    "/v1/preflight",
     "/v1/checkpoints",
     "/v1/releases",
     "/v1/releases/tags",
@@ -71,8 +86,13 @@ struct AgentCommand {
 impl AppState {
     fn new(resource_dir: Option<PathBuf>) -> Result<Self, String> {
         let config = NexusConfig::from_env();
-        let runtime = AgentRuntime::new_with_resource_dir(config, None, resource_dir)
+        let mut runtime = AgentRuntime::new_with_resource_dir(config, None, resource_dir)
             .map_err(|error| error.to_string())?;
+        if !cfg!(debug_assertions) {
+            let identity = build_identity()?;
+            let id = identity.get("buildId").and_then(Value::as_str).ok_or("Packaged build identity is missing")?;
+            runtime.bind_build_identity(id).map_err(|error| error.to_string())?;
+        }
         Ok(Self {
             runtime: Arc::new(runtime),
             startup_attempted: Arc::new(AtomicBool::new(false)),
@@ -137,7 +157,7 @@ fn schedule_configured_harness(state: AppState) {
 }
 
 async fn start_configured_harness(state: &AppState) -> Result<(), String> {
-    let health = match state.runtime.probe().await {
+    let health = match state.runtime.probe_ready().await {
         Ok(health) => health,
         Err(error) => {
             eprintln!("nexus-launcher-app: Harness auto-start skipped: {error}");
@@ -148,6 +168,12 @@ async fn start_configured_harness(state: &AppState) -> Result<(), String> {
         .runtime
         .client()
         .with_expected_identity(AgentIdentity::from(&health));
+    let recovery = client.get_json::<Value>("/v1/recovery").await.map_err(|error| error.to_string())?;
+    match recovery.get("paused").and_then(Value::as_bool) {
+        Some(true) => return Ok(()),
+        Some(false) => {},
+        None => return Err("Cannot determine Harness recovery mode; retry or export diagnostics".to_owned()),
+    }
     let config = match client.get_json::<Value>("/v1/config").await {
         Ok(config) => config,
         Err(error) => {
@@ -211,7 +237,7 @@ async fn proxy_request(
         }
         let health = state
             .runtime
-            .probe()
+            .probe_ready()
             .await
             .map_err(|error| error.to_string())?;
         let client = state
@@ -239,7 +265,7 @@ async fn proxy_request(
         .map_err(|error| error.to_string())?;
     let health = state
         .runtime
-        .probe()
+        .probe_ready()
         .await
         .map_err(|error| error.to_string())?;
     let client = state
@@ -384,7 +410,8 @@ fn tray_menu(
         true,
         None::<&str>,
     )?;
-    Menu::with_items(app, &[&show, &quit])
+    let stop_quit = MenuItem::with_id(app, "stop-quit", native_text(locale, NativeText::TrayStopQuit), true, None::<&str>)?;
+    Menu::with_items(app, &[&show, &quit, &stop_quit])
 }
 
 #[cfg(desktop)]
@@ -403,6 +430,21 @@ fn setup_tray(app: &mut tauri::App) -> tauri::Result<()> {
         .on_menu_event(|app, event| match event.id.as_ref() {
             "show" => show_window(app),
             "quit" => app.exit(0),
+            "stop-quit" => {
+                if EXIT_IN_PROGRESS.swap(true, Ordering::AcqRel) { return; }
+                let app = app.clone();
+                let state = app.state::<AppState>().inner().clone();
+                tauri::async_runtime::spawn(async move {
+                    match execute_agent_action(&state, Some(&json!({"action":"stop"}))).await {
+                        Ok(_) => app.exit(0),
+                        Err(error) => {
+                            EXIT_IN_PROGRESS.store(false, Ordering::Release);
+                            show_window(&app);
+                            let _ = app.emit("nexus-native-error", error);
+                        }
+                    }
+                });
+            }
             _ => {}
         })
         .on_tray_icon_event(|tray, event| {
@@ -494,10 +536,12 @@ fn main() {
             None,
         ))
         .invoke_handler(tauri::generate_handler![
+            build_identity,
             startup_status,
             retry_startup,
             proxy_request,
             set_native_locale,
+            set_native_notifications,
             autostart_status,
             autostart_set,
             agent_log_set
@@ -539,6 +583,7 @@ fn main() {
                 api.prevent_close();
                 let app = window.app_handle();
                 let _ = window.hide();
+                if !NATIVE_NOTIFICATIONS_ENABLED.load(Ordering::Acquire) || MINIMIZE_NOTICE_SHOWN.swap(true, Ordering::AcqRel) { return; }
                 use tauri_plugin_notification::NotificationExt;
                 let _ = app
                     .notification()
@@ -570,13 +615,16 @@ mod tests {
         use std::{io::{Read, Write}, net::TcpListener, time::{Duration, Instant}};
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         let root = std::env::temp_dir().join(format!("nexus-bootstrap-dialog-{}-{}", std::process::id(), listener.local_addr().unwrap().port()));
-        let runtime = Arc::new(AgentRuntime::new(NexusConfig { data_dir: Some(root.clone()), port: listener.local_addr().unwrap().port() }, None).unwrap());
+        std::fs::create_dir_all(&root).unwrap();
+        let program = root.join("fixture-agent.exe");
+        std::fs::write(&program, "fixture; never executed").unwrap();
+        let runtime = Arc::new(AgentRuntime::new(NexusConfig { data_dir: Some(root.clone()), port: listener.local_addr().unwrap().port() }, Some(program)).unwrap());
         let identity = runtime.data_root_id().to_owned();
         let state = AppState { runtime, startup_attempted: Arc::new(AtomicBool::new(true)), desired_running: Arc::new(AtomicBool::new(true)), harness_startup_error: Arc::new(Mutex::new(None)) };
         let (reached_tx, reached_rx) = std::sync::mpsc::channel();
         let (release_tx, release_rx) = std::sync::mpsc::channel();
         let server = std::thread::spawn(move || {
-            for route in ["GET /v1/health", "GET /v1/config", "POST /v1/harness"] {
+            for route in ["GET /v1/health", "GET /v1/recovery", "GET /v1/config", "POST /v1/harness"] {
                 let (mut stream, _) = listener.accept().unwrap();
                 stream.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
                 let mut bytes = [0u8; 8192];
@@ -584,6 +632,8 @@ mod tests {
                 assert!(String::from_utf8_lossy(&bytes[..length]).starts_with(route));
                 let (status, body) = if route.ends_with("health") {
                     ("200 OK", json!({"api_version":"v1","service":"nexus-agent","status":"ok","data_root_id":identity,"instance_id":"fixture"}).to_string())
+                } else if route.ends_with("recovery") {
+                    ("200 OK", json!({"api_version":"v1","paused":false}).to_string())
                 } else if route.ends_with("config") {
                     ("200 OK", json!({"harness":{"mode":"node"}}).to_string())
                 } else {

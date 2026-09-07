@@ -1,17 +1,12 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { createServer } from "vite";
+import { createUiTestLoader } from "./ui-test-loader.ts";
 
 test("Harness config keeps legacy direct arguments unchanged", async () => {
-  const vite = await createServer({
-    root: process.cwd(),
-    appType: "custom",
-    logLevel: "silent",
-    server: { middlewareMode: true },
-  });
+  const loader = await createUiTestLoader();
   try {
-    const { harnessDraftFromConfig } = await vite.ssrLoadModule("/src/App.tsx");
+    const { harnessDraftFromConfig } = await loader.loadModule("/src/App.tsx");
     assert.deepEqual(
       harnessDraftFromConfig({
         harness: {
@@ -34,19 +29,14 @@ test("Harness config keeps legacy direct arguments unchanged", async () => {
       },
     );
   } finally {
-    await vite.close();
+    await loader.close();
   }
 });
 
 test("Node candidates expose entry separately while preserving additional args", async () => {
-  const vite = await createServer({
-    root: process.cwd(),
-    appType: "custom",
-    logLevel: "silent",
-    server: { middlewareMode: true },
-  });
+  const loader = await createUiTestLoader();
   try {
-    const { harnessCandidates, harnessConfigPayloadFromDraft, harnessDraftFromConfig, isLoopbackReadinessTarget } = await vite.ssrLoadModule("/src/App.tsx");
+    const { harnessCandidates, harnessConfigPayloadFromDraft, harnessDraftFromConfig, isLoopbackReadinessTarget } = await loader.loadModule("/src/App.tsx");
     const [candidate] = harnessCandidates({
       api_version: "v1",
       candidates: [{
@@ -105,6 +95,6 @@ test("Node candidates expose entry separately while preserving additional args",
     assert.equal(isLoopbackReadinessTarget("tcp://127.0.0.1"), false);
     assert.equal(isLoopbackReadinessTarget("tcp://127.0.0.1:3080/health"), false);
   } finally {
-    await vite.close();
+    await loader.close();
   }
 });

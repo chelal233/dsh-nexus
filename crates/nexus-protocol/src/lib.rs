@@ -49,6 +49,9 @@ pub struct HealthResponse {
     /// from an older build and restart it deliberately.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub binary_path: Option<String>,
+    /// Identity compiled into the running executable, never read from a replaceable file.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub build_id: Option<String>,
     /// Capability version for the split Node `entry` + `args` Harness config.
     /// Missing in older Agent responses and therefore defaults to zero.
     #[serde(default)]
@@ -64,6 +67,7 @@ impl HealthResponse {
             data_root_id,
             instance_id,
             binary_path: None,
+            build_id: None,
             harness_config_wire_version: HARNESS_CONFIG_WIRE_VERSION,
         }
     }
@@ -76,6 +80,7 @@ impl HealthResponse {
             data_root_id,
             instance_id,
             binary_path: None,
+            build_id: None,
             harness_config_wire_version: HARNESS_CONFIG_WIRE_VERSION,
         }
     }
@@ -331,6 +336,7 @@ pub enum ProfileAction {
     PluginDisable,
     PluginEnable,
     PluginMove,
+    PluginUndoMove,
     Create,
     /// Open a profile-related file or directory with the system handler.
     /// Bounded targets only: `settings` (home settings.yaml), `profile_dir`,
@@ -367,6 +373,8 @@ pub struct ProfilePluginPayload {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct NativeProfilePayload {
     pub name: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub order_undo_id: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub source_profile: Option<String>,
     pub bundles: Vec<String>,
@@ -624,6 +632,10 @@ pub struct RecoveryLogTail {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct RecoveryStatusResponse {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pause_error: Option<String>,
+    #[serde(default)]
+    pub paused: bool,
     pub api_version: String,
     pub manual_entry_available: bool,
     pub harness_stop_required: bool,
@@ -674,9 +686,19 @@ pub struct CheckpointListResponse {
     pub pending_restore: Option<CheckpointRestoreStatus>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub healthy_capture_error: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_capture: Option<serde_json::Value>,
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub inventory_refresh_pending: bool,
 }
 
 impl CheckpointListResponse {
+    pub fn with_last_capture(mut self, value: serde_json::Value) -> Self {
+        self.inventory_refresh_pending = value.get("state").and_then(serde_json::Value::as_str) == Some("running");
+        self.last_capture = (!value.is_null()).then_some(value);
+        self
+    }
+
     pub fn new(checkpoints: Vec<CheckpointManifest>) -> Self {
         Self {
             api_version: API_VERSION.to_owned(),
@@ -684,6 +706,8 @@ impl CheckpointListResponse {
             snapshots: Vec::new(),
             pending_restore: None,
             healthy_capture_error: None,
+            last_capture: None,
+            inventory_refresh_pending: false,
         }
     }
 
@@ -777,6 +801,8 @@ pub struct ReleasePointers {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ReleaseListResponse {
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub unavailable_selections: Vec<String>,
     pub api_version: String,
     pub current_release: Option<String>,
     pub last_known_good: Option<String>,
@@ -790,6 +816,7 @@ impl ReleaseListResponse {
         releases: Vec<ReleaseManifest>,
     ) -> Self {
         Self {
+            unavailable_selections: Vec::new(),
             api_version: API_VERSION.to_owned(),
             current_release,
             last_known_good,
@@ -1033,6 +1060,13 @@ pub enum UpdateAction {
     Switch,
     Confirm,
     Cancel,
+    ClearFinished,
+    PublicationRetry,
+    PublicationAbandon,
+    ConfigurationRetry,
+    ConfigurationAbandon,
+    OfflineImport,
+    OfflineExport,
 }
 
 impl Default for UpdateAction {
@@ -1058,6 +1092,8 @@ pub struct UpdateCommand {
     pub operation_id: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub confirmation: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub archive_path: Option<String>,
 }
 
 /// Result of an open-path request: what was opened and where it resolved.
@@ -1113,9 +1149,15 @@ impl ColdOperationPhase {
     }
 }
 
+fn default_cold_operation_kind() -> String { "cold_switch".into() }
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ColdOperation {
     pub operation_id: String,
+    #[serde(default = "default_cold_operation_kind")]
+    pub kind: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub archive_path: Option<String>,
     pub phase: ColdOperationPhase,
     pub tag: String,
     pub source: RuntimeSource,
@@ -1217,6 +1259,29 @@ pub struct UpdateResponse {
     pub release: Option<ReleaseManifest>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub operation: Option<ColdOperation>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub install_operation: Option<InstallOperation>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub publication_recovery: Option<serde_json::Value>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub configuration_recovery: Option<serde_json::Value>,
+}
+
+/// Ordinary configured installation; distinct from a cold version switch.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct InstallOperation {
+    pub operation_id: String,
+    #[serde(default)]
+    pub job_name: Option<String>,
+    pub release_id: String,
+    pub candidate: String,
+    pub phase: String,
+    pub cancel_requested: bool,
+    pub owner_quiescent: bool,
+    pub cleanup_pending: bool,
+    pub error: Option<String>,
+    pub cleanup_error: Option<String>,
 }
 
 impl UpdateResponse {
@@ -1226,6 +1291,9 @@ impl UpdateResponse {
             update,
             release,
             operation: None,
+            install_operation: None,
+            publication_recovery: None,
+            configuration_recovery: None,
         }
     }
 
@@ -1242,6 +1310,7 @@ impl UpdateResponse {
 pub enum DiagnosticsAction {
     Status,
     Collect,
+    Export,
     OpenPath,
 }
 
@@ -1410,13 +1479,51 @@ pub struct SnapshotsConfigPayload {
     pub max_manual_snapshots: u32,
 }
 
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct HarnessPreferencesPayload {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub home: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub port: Option<u16>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub open_browser: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub telemetry_disabled: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub deepseek_base_url: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub search_base_url: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub search_provider: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fetch_provider: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub agents_home: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bundled_skill_dir: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub patches: Option<Vec<String>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub permission_mode: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tools_mode: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub context_window: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub system_prompt: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_tokens_as_success: Option<bool>,
+}
+
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum ConfigAction {
     Status,
+    SetHarnessPreferences,
     SetHarness,
     ClearHarness,
     SetUpdate,
+    SetUpdateSource,
     ClearUpdate,
     SetRuntime,
     ClearRuntime,
@@ -1433,6 +1540,8 @@ impl Default for ConfigAction {
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ConfigCommand {
     pub action: ConfigAction,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub harness_preferences: Option<HarnessPreferencesPayload>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub harness: Option<HarnessConfigPayload>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -1451,6 +1560,10 @@ pub struct ConfigCommand {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ConfigResponse {
     pub api_version: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub launch_inputs: Option<serde_json::Value>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub harness_preferences: Option<HarnessPreferencesPayload>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub harness: Option<HarnessConfigPayload>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -1480,8 +1593,10 @@ impl ConfigResponse {
             api_version: API_VERSION.to_owned(),
             harness,
             update,
+            launch_inputs: None,
             runtime: None,
             snapshots: None,
+            harness_preferences: None,
             harness_readiness_url_redacted: false,
             harness_env_override: false,
             update_env_override: false,
@@ -1490,6 +1605,11 @@ impl ConfigResponse {
 
     pub fn with_runtime(mut self, runtime: Option<RuntimeConfigPayload>) -> Self {
         self.runtime = runtime;
+        self
+    }
+
+    pub fn with_harness_preferences(mut self, preferences: Option<HarnessPreferencesPayload>) -> Self {
+        self.harness_preferences = preferences;
         self
     }
 
@@ -1850,6 +1970,7 @@ mod tests {
     #[test]
     fn config_protocol_round_trips_explicit_mutation_actions() {
         let command = ConfigCommand {
+            harness_preferences: None,
             action: ConfigAction::SetHarness,
             harness: Some(HarnessConfigPayload {
                 mode: HarnessLaunchMode::Direct,

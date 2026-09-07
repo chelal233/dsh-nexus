@@ -2,6 +2,44 @@
 //! directory, so it neither locks nor depends on the previous installed CLI.
 use std::{ffi::OsString, path::PathBuf};
 
+/// Use the OS parser compiled into the installer payload. Never compile C#
+/// in the customer's PowerShell process to obtain this Win32 entry point.
+#[cfg(windows)]
+fn parse_arguments(command: &std::ffi::OsStr) -> Result<Vec<String>, String> {
+    use std::os::windows::ffi::OsStrExt;
+    use windows_sys::Win32::{Foundation::LocalFree, UI::Shell::CommandLineToArgvW};
+    let wide: Vec<u16> = command.encode_wide().collect();
+    if wide.is_empty() || wide.contains(&0) {
+        return Err("Agent command line is empty or contains NUL".into());
+    }
+    let wide: Vec<u16> = wide.into_iter().chain(Some(0)).collect();
+    let mut count = 0;
+    unsafe {
+        let argv = CommandLineToArgvW(wide.as_ptr(), &mut count);
+        if argv.is_null() {
+            return Err(std::io::Error::last_os_error().to_string());
+        }
+        let result = (0..count).map(|index| {
+            let value = *argv.add(index as usize);
+            let mut length = 0;
+            while *value.add(length) != 0 { length += 1; }
+            String::from_utf16(std::slice::from_raw_parts(value, length))
+                .map_err(|_| "Agent arguments contain invalid Unicode".to_owned())
+        }).collect();
+        LocalFree(argv.cast());
+        result
+    }
+}
+
+#[cfg(windows)]
+pub fn print_arguments() -> Result<(), String> {
+    let command = std::env::var_os("NEXUS_INSTALL_STOP_COMMAND_LINE")
+        .ok_or("Missing Agent command line")?;
+    let arguments = parse_arguments(&command)?;
+    println!("{}", serde_json::to_string(&arguments).map_err(|error| error.to_string())?);
+    Ok(())
+}
+
 fn install_dir(args: &[OsString]) -> Result<PathBuf, String> {
     if args.len() != 2 || args[0] != "--install-dir" {
         return Err("expected installer-stop --install-dir PATH".to_owned());
@@ -30,6 +68,7 @@ pub fn run(args: Vec<OsString>) -> Result<(), String> {
                 include_str!("installer_shutdown.ps1"),
             ])
             .env("NEXUS_INSTALL_STOP_DIRECTORY", directory)
+            .env("NEXUS_INSTALL_STOP_HELPER", std::env::current_exe().map_err(|error| error.to_string())?)
             .creation_flags(0x08000000) // CREATE_NO_WINDOW
             .spawn()
             .map_err(|error| format!("cannot run installer shutdown: {error}"))?;
@@ -63,6 +102,28 @@ pub fn run(args: Vec<OsString>) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(windows)]
+    #[test]
+    fn native_parser_preserves_quoted_unicode_and_metacharacters() {
+        let command = std::ffi::OsStr::new(
+            r#""C:\Program Files\Nexus\nexus-agent.exe" --data-dir "C:\Users\用户\data & $name" --instance-id instance"#,
+        );
+        assert_eq!(parse_arguments(command).unwrap(), vec![
+            "C:\\Program Files\\Nexus\\nexus-agent.exe", "--data-dir",
+            "C:\\Users\\用户\\data & $name", "--instance-id", "instance",
+        ]);
+        assert!(parse_arguments(std::ffi::OsStr::new("")).is_err());
+        assert!(parse_arguments(std::ffi::OsStr::new("a\0b")).is_err());
+    }
+
+    #[test]
+    fn installer_script_never_compiles_source() {
+        let script = include_str!("installer_shutdown.ps1").to_ascii_lowercase();
+        for forbidden in ["add-type", "csc.exe", "codedom", "compileassembly", "dotnet build"] {
+            assert!(!script.contains(forbidden), "Installer must not use {forbidden}");
+        }
+    }
 
     #[test]
     fn rejects_missing_relative_and_extra_install_arguments() {

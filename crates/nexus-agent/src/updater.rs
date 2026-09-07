@@ -7,11 +7,9 @@ use nexus_core::{
     validate_release_version, validate_update_ref, ConfigStore, NexusPaths,
     ReleaseCatalog, ReleaseStore, UpdateSpec, UpdateStateStore,
 };
-use nexus_protocol::{ReleaseManifest, UpdateResponse, UpdateRuntimeInfo, UpdateState};
+use nexus_protocol::{InstallOperation, ReleaseManifest, UpdateResponse, UpdateRuntimeInfo, UpdateState};
 use tokio::{
-    process::Command,
     sync::{oneshot, Mutex, OwnedMutexGuard},
-    time::timeout,
 };
 
 #[derive(Debug)]
@@ -69,6 +67,8 @@ pub struct UpdateExecutor {
     state: UpdateStateStore,
     gate: Arc<Mutex<()>>,
     cleanup_unconfirmed: Arc<std::sync::atomic::AtomicBool>,
+    cancellation: Arc<Mutex<Option<(String, nexus_core::CancellationToken)>>>,
+    operation_gate: Arc<std::sync::Mutex<()>>,
     #[cfg(test)]
     command_gate: Arc<Mutex<Option<UpdateCommandGate>>>,
     #[cfg(test)]
@@ -91,6 +91,8 @@ impl UpdateExecutor {
             releases,
             gate: Arc::new(Mutex::new(())),
             cleanup_unconfirmed: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            cancellation: Arc::new(Mutex::new(None)),
+            operation_gate: Arc::new(std::sync::Mutex::new(())),
             #[cfg(test)]
             command_gate: Arc::new(Mutex::new(None)),
             #[cfg(test)]
@@ -104,8 +106,110 @@ impl UpdateExecutor {
         self.state.clone()
     }
 
+    pub(crate) fn install_operation(&self) -> io::Result<Option<InstallOperation>> {
+        let path = self.paths.root.join("install-operation.json");
+        let metadata = match fs::symlink_metadata(&path) {
+            Ok(value) => value,
+            Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(None),
+            Err(error) => return Err(error),
+        };
+        if !metadata.is_file() || nexus_core::path_is_reparse(&metadata) || metadata.len() > 256 * 1024 {
+            return Err(io::Error::other("Invalid install operation record"));
+        }
+        let operation: InstallOperation = serde_json::from_slice(&fs::read(path)?)?;
+        validate_release_id(&operation.operation_id)?;
+        validate_release_id(&operation.release_id)?;
+        let candidate = Path::new(&operation.candidate);
+        if !operation.operation_id.starts_with("install-")
+            || candidate.parent() != Some(self.paths.downloads_dir.as_path())
+            || !candidate.file_name().and_then(|s| s.to_str()).is_some_and(|name| name.starts_with(".update-"))
+            || !["installing", "succeeded", "cancelled", "failed"].contains(&operation.phase.as_str()) {
+            return Err(io::Error::other("Install operation identity/path is invalid"));
+        }
+        if operation.job_name.as_ref().is_some_and(|name| name != &format!("Global\\NexusInstall-{}", operation.operation_id)) {
+            return Err(io::Error::other("Install operation Job identity is invalid"));
+        }
+        Ok(Some(operation))
+    }
+
+    fn write_install_operation(&self, operation: &InstallOperation) -> io::Result<()> {
+        let _guard = self.operation_gate.lock().map_err(|_| io::Error::other("Install operation lock poisoned"))?;
+        let mut operation = operation.clone();
+        if self.install_operation()?.is_some_and(|current| current.operation_id == operation.operation_id && current.cancel_requested) {
+            operation.cancel_requested = true;
+        }
+        nexus_core::write_json_atomic(&self.paths.root, &self.paths.root.join("install-operation.json"), &operation)
+    }
+
+    fn finish_install_cleanup(&self, operation: &mut InstallOperation) -> io::Result<()> {
+        if !operation.owner_quiescent {
+            operation.cleanup_error = Some("Process-tree shutdown is unconfirmed; candidate preserved".into());
+        } else {
+            match crate::cold::remove_owned_directory(&self.paths.downloads_dir, Path::new(&operation.candidate)) {
+                Ok(()) => { operation.cleanup_pending = false; operation.cleanup_error = None; },
+                Err(error) => { operation.cleanup_error = Some(format!("Candidate cleanup failed: {error}")); },
+            }
+        }
+        self.write_install_operation(operation)
+    }
+
+    pub(crate) async fn cancel_install(&self, operation_id: &str) -> io::Result<InstallOperation> {
+        let operation = self.install_operation()?.ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "Installation not found"))?;
+        if operation.operation_id != operation_id { return Err(io::Error::new(io::ErrorKind::InvalidInput, "Stale installation id")); }
+        {
+            let cancellation = self.cancellation.lock().await;
+            if let Some((id, token)) = cancellation.as_ref() {
+                if id == operation_id {
+                    token.cancel();
+                    let mut operation = operation.clone(); operation.cancel_requested = true;
+                    self.write_install_operation(&operation)?;
+                }
+            }
+        }
+        // Keep the cancel owner alive separately from the HTTP request too.
+        let _guard = self.gate.lock().await;
+        let mut operation = self.install_operation()?.ok_or_else(|| io::Error::other("Installation record disappeared"))?;
+        if operation.operation_id != operation_id { return Err(io::Error::other("Stale installation id")); }
+        if operation.cleanup_pending {
+            if !operation.owner_quiescent {
+                if let Some(name) = operation.job_name.as_deref() {
+                    operation.owner_quiescent = crate::dsh::named_operation_job_is_empty(name)?;
+                }
+            }
+            self.finish_install_cleanup(&mut operation)?;
+        }
+        Ok(operation)
+    }
+
     pub fn recover_unattached(&self) -> io::Result<UpdateRuntimeInfo> {
+        if let Err(error) = self.recover_install_unattached() {
+            // Keep the control plane and diagnostics available. The ordinary
+            // write gate still reads this same record and fails closed.
+            tracing::warn!(%error, "Installation recovery remains pending; record preserved and update mutations blocked");
+        }
+        // Preserve the pre-existing fatal policy for the shared update state.
         self.state.recover_unattached()
+    }
+
+    fn recover_install_unattached(&self) -> io::Result<()> {
+        if let Some(mut operation) = self.install_operation()? {
+            if !operation.owner_quiescent {
+                if let Some(name) = operation.job_name.as_deref() {
+                    match crate::dsh::named_operation_job_is_empty(name) {
+                        Ok(true) => operation.owner_quiescent = true,
+                        Ok(false) => {},
+                        Err(error) => operation.cleanup_error = Some(format!("Cannot verify previous operation Job: {error}")),
+                    }
+                }
+                operation.phase = "failed".into();
+                operation.cleanup_pending = true;
+                operation.error.get_or_insert_with(|| "Installation interrupted before its owner confirmed shutdown".into());
+                operation.cleanup_error.get_or_insert_with(|| "Previous process-tree shutdown is unconfirmed; candidate preserved. Export diagnostics before manual recovery.".into());
+                self.write_install_operation(&operation)?;
+            }
+            if operation.cleanup_pending && operation.owner_quiescent { self.finish_install_cleanup(&mut operation)?; }
+        }
+        Ok(())
     }
 
     pub fn status(&self) -> Result<UpdateRuntimeInfo, UpdateExecutorError> {
@@ -116,28 +220,34 @@ impl UpdateExecutor {
         let guard = Arc::clone(&self.gate)
             .try_lock_owned()
             .map_err(|_| UpdateExecutorError::AlreadyRunning)?;
+        if self.install_operation().map_err(UpdateExecutorError::Persistence)?
+            .is_some_and(|operation| !operation.owner_quiescent || operation.cleanup_pending) {
+            return Err(UpdateExecutorError::AlreadyRunning);
+        }
         if self.cleanup_unconfirmed.load(std::sync::atomic::Ordering::Acquire) {
             return Err(UpdateExecutorError::AlreadyRunning);
         }
         Ok(guard)
     }
 
-    fn cleanup_failed_candidate(&self, candidate: &Path, error: &UpdateExecutorError) {
+    fn cleanup_failed_candidate(&self, candidate: &Path, error: &UpdateExecutorError) -> Result<(), UpdateExecutorError> {
         let quiescent = match error {
-            UpdateExecutorError::Configuration(source) => crate::cold::command_owner_quiescent(source),
-            _ => true,
+            UpdateExecutorError::Configuration(source) => crate::cold::command_owner_quiescent(source), _ => true,
         };
-        self.cleanup_candidate(candidate, quiescent);
+        self.cleanup_candidate(candidate, quiescent).map_err(UpdateExecutorError::Persistence)
     }
 
-    fn cleanup_candidate(&self, candidate: &Path, owner_quiescent: bool) {
-        if !owner_quiescent {
-            // Preserve a possibly active checkout and refuse further mutations
-            // in this Agent lifetime when process teardown could not be proven.
-            self.cleanup_unconfirmed.store(true, std::sync::atomic::Ordering::Release);
-            return;
-        }
-        let _ = crate::cold::remove_owned_directory(&self.paths.downloads_dir, candidate);
+    fn cleanup_candidate(&self, candidate: &Path, owner_quiescent: bool) -> io::Result<()> {
+        let mut operation = self.install_operation()?.filter(|operation| Path::new(&operation.candidate) == candidate)
+            .unwrap_or_else(|| InstallOperation {
+                operation_id: format!("install-{}", nexus_core::new_instance_id()), job_name: None, release_id: "legacy-update".into(),
+                candidate: candidate.to_string_lossy().into_owned(), phase: "failed".into(), cancel_requested: false,
+                owner_quiescent, cleanup_pending: true, error: Some("Update candidate cleanup required".into()), cleanup_error: None,
+            });
+        operation.owner_quiescent = owner_quiescent;
+        operation.cleanup_pending = true;
+        self.write_install_operation(&operation)?;
+        self.finish_install_cleanup(&mut operation)
     }
 
     #[cfg(test)]
@@ -241,10 +351,10 @@ impl UpdateExecutor {
             unix_time_nanos_for_update()
         ));
         if let Err(error) = self
-            .install_inner(&spec, &candidate, &release_id, &version)
+            .install_inner(&spec, &candidate, &release_id, &version, &nexus_core::CancellationToken::default())
             .await
         {
-            self.cleanup_failed_candidate(&candidate, &error);
+            self.cleanup_failed_candidate(&candidate, &error)?;
             return Err(self.record_switch_failure(
                 Some(release_id),
                 Some(started_at),
@@ -390,61 +500,52 @@ impl UpdateExecutor {
         requested_version: Option<String>,
         _guard: OwnedMutexGuard<()>,
     ) -> Result<UpdateResponse, UpdateExecutorError> {
-        self.state
-            .recover_unattached()
-            .map_err(UpdateExecutorError::Persistence)?;
-        let spec = load_update_spec(&self.paths)
-            .map_err(UpdateExecutorError::Configuration)?
+        let spec = load_update_spec(&self.paths).map_err(UpdateExecutorError::Configuration)?
             .ok_or(UpdateExecutorError::NotConfigured)?;
         let release_id = resolve_release_id(requested_id, &spec)?;
         let version = resolve_release_version(requested_version, &spec)?;
         let started_at = unix_time_seconds();
-        let running = UpdateRuntimeInfo::running(release_id.clone(), started_at);
-        self.state
-            .write(&running)
-            .map_err(UpdateExecutorError::Persistence)?;
-
-        let candidate = self.paths.downloads_dir.join(format!(
-            ".update-{release_id}-{}",
-            unix_time_nanos_for_update()
-        ));
-        let result = self
-            .install_inner(&spec, &candidate, &release_id, &version)
-            .await;
-        match result {
-            Ok(release) => {
-                let finished = UpdateRuntimeInfo {
-                    state: UpdateState::Succeeded,
-                    release_id: Some(release_id),
-                    started_at_unix: Some(started_at),
-                    finished_at_unix: Some(unix_time_seconds()),
-                    exit_code: Some(0),
-                    error: None,
-                };
-                self.state
-                    .write(&finished)
-                    .map_err(UpdateExecutorError::Persistence)?;
-                Ok(UpdateResponse::new(finished, Some(release)))
-            }
-            Err(error) => {
-                self.cleanup_failed_candidate(&candidate, &error);
-                let failed = UpdateRuntimeInfo {
-                    state: UpdateState::Failed,
-                    release_id: Some(release_id),
-                    started_at_unix: Some(started_at),
-                    finished_at_unix: Some(unix_time_seconds()),
-                    exit_code: error_exit_code(&error),
-                    error: Some(error.to_string()),
-                };
-                match self.state.write(&failed) {
-                    Ok(()) => Err(error),
-                    Err(persistence) => Err(UpdateExecutorError::Persistence(io::Error::new(
-                        persistence.kind(),
-                        format!("{error}; failed to persist terminal update state: {persistence}"),
-                    ))),
-                }
-            }
+        let candidate = self.paths.downloads_dir.join(format!(".update-{release_id}-{}", unix_time_nanos_for_update()));
+        let operation_id = format!("install-{}", nexus_core::new_instance_id());
+        let job_name = format!("Global\\NexusInstall-{operation_id}");
+        let token = nexus_core::CancellationToken::with_job_name(job_name.clone());
+        let mut operation = InstallOperation {
+            operation_id, job_name: Some(job_name), release_id: release_id.clone(),
+            candidate: candidate.to_string_lossy().into_owned(), phase: "installing".into(),
+            cancel_requested: false, owner_quiescent: false, cleanup_pending: false, error: None, cleanup_error: None,
+        };
+        let mut cancellation_owner = self.cancellation.lock().await;
+        self.write_install_operation(&operation).map_err(UpdateExecutorError::Persistence)?;
+        *cancellation_owner = Some((operation.operation_id.clone(), token.clone()));
+        drop(cancellation_owner);
+        let result = match self.state.write(&UpdateRuntimeInfo::running(release_id.clone(), started_at)) {
+            Ok(()) => self.install_inner(&spec, &candidate, &release_id, &version, &token).await,
+            Err(error) => Err(UpdateExecutorError::Persistence(error)),
+        };
+        *self.cancellation.lock().await = None;
+        operation.cancel_requested = token.is_cancelled();
+        operation.owner_quiescent = result.as_ref().err().map_or(true, |error| match error {
+            UpdateExecutorError::Configuration(error) => crate::cold::command_owner_quiescent(error), _ => true,
+        });
+        operation.phase = if result.is_ok() { "succeeded" } else if token.is_cancelled() { "cancelled" } else { "failed" }.into();
+        operation.error = result.as_ref().err().map(ToString::to_string);
+        if result.is_err() {
+            operation.cleanup_pending = true;
+            self.write_install_operation(&operation).map_err(UpdateExecutorError::Persistence)?;
+            self.finish_install_cleanup(&mut operation).map_err(UpdateExecutorError::Persistence)?;
+        } else {
+            self.write_install_operation(&operation).map_err(UpdateExecutorError::Persistence)?;
         }
+        let terminal = UpdateRuntimeInfo {
+            state: if result.is_ok() { UpdateState::Succeeded } else { UpdateState::Failed },
+            release_id: Some(release_id), started_at_unix: Some(started_at), finished_at_unix: Some(unix_time_seconds()),
+            exit_code: result.as_ref().map_or_else(|error| error_exit_code(error), |_| Some(0)), error: operation.error.clone(),
+        };
+        self.state.write(&terminal).map_err(UpdateExecutorError::Persistence)?;
+        result.map(|release| {
+            let mut response = UpdateResponse::new(terminal, Some(release));
+            response.install_operation = Some(operation); response
+        })
     }
 
     async fn install_inner(
@@ -453,6 +554,7 @@ impl UpdateExecutor {
         candidate: &Path,
         release_id: &str,
         version: &str,
+        cancellation: &nexus_core::CancellationToken,
     ) -> Result<ReleaseManifest, UpdateExecutorError> {
         self.paths
             .ensure_directories()
@@ -466,9 +568,10 @@ impl UpdateExecutor {
         let clone_spec = spec.clone();
         let clone_candidate = candidate.to_owned();
         let clone_directory = self.paths.run_dir.clone();
+        let clone_cancellation = cancellation.clone();
         let clone = tokio::spawn(async move {
             crate::git_worker::clone_candidate(&clone_spec.source, &clone_spec.ref_name, &clone_candidate,
-                &clone_directory, clone_spec.timeout(), &nexus_core::CancellationToken::default(),
+                &clone_directory, clone_spec.timeout(), &clone_cancellation,
                 Some(crate::git_worker::ExternalGit { program: clone_spec.git_program.clone(), prefix: Vec::new() })).await
         });
         #[cfg(test)]
@@ -488,6 +591,7 @@ impl UpdateExecutor {
                 &args,
                 Some(candidate),
                 spec.timeout(),
+                cancellation,
                 #[cfg(test)]
                 &self.command_gate,
             )
@@ -503,12 +607,16 @@ impl UpdateExecutor {
                 &args,
                 Some(candidate),
                 spec.timeout(),
+                cancellation,
                 #[cfg(test)]
                 &self.command_gate,
             )
             .await?;
         }
 
+        if cancellation.is_cancelled() {
+            return Err(UpdateExecutorError::Configuration(io::Error::new(io::ErrorKind::Interrupted, "Installation cancelled before publication")));
+        }
         self.releases
             .register_prepared(
                 candidate,
@@ -575,6 +683,7 @@ async fn run_logged_command(
     args: &[String],
     working_dir: Option<&Path>,
     command_timeout: Duration,
+    cancellation: &nexus_core::CancellationToken,
     #[cfg(test)] command_gate: &Arc<Mutex<Option<UpdateCommandGate>>>,
 ) -> Result<(), UpdateExecutorError> {
     paths
@@ -596,41 +705,15 @@ async fn run_logged_command(
         .append(true)
         .open(stderr_path)
         .map_err(|source| UpdateExecutorError::Spawn { phase, source })?;
-    let mut command = Command::new(program);
-    command
-        .args(args)
-        .stdin(Stdio::null())
-        .stdout(Stdio::from(stdout))
-        .stderr(Stdio::from(stderr))
-        .kill_on_drop(true);
-    if let Some(working_dir) = working_dir {
-        command.current_dir(working_dir);
-    }
-    let mut child = command
-        .spawn()
-        .map_err(|source| UpdateExecutorError::Spawn { phase, source })?;
+    let mut command = std::process::Command::new(program);
+    command.args(args).stdin(Stdio::null()).stdout(Stdio::from(stdout)).stderr(Stdio::from(stderr));
+    if let Some(working_dir) = working_dir { command.current_dir(working_dir); }
     #[cfg(test)]
     if let Some(gate) = command_gate.lock().await.take() {
-        let _ = gate.reached.send(());
-        let _ = gate.release.await;
+        let _ = gate.reached.send(()); let _ = gate.release.await;
     }
-    let wait = timeout(command_timeout, child.wait()).await;
-    match wait {
-        Ok(Ok(status)) if status.success() => Ok(()),
-        Ok(Ok(status)) => Err(UpdateExecutorError::Failed {
-            phase,
-            code: status.code(),
-        }),
-        Ok(Err(source)) => Err(UpdateExecutorError::Process { phase, source }),
-        Err(_) => {
-            let _ = child.kill().await;
-            let _ = child.wait().await;
-            Err(UpdateExecutorError::TimedOut {
-                phase,
-                timeout: command_timeout,
-            })
-        }
-    }
+    crate::cold::run_owned_command(command, phase, command_timeout, &paths.run_dir, cancellation)
+        .await.map_err(UpdateExecutorError::Configuration)
 }
 
 /// Parse `git ls-remote --tags` output into bare tag names. Peeled
@@ -659,6 +742,9 @@ pub fn parse_ls_remote_tags(stdout: &str) -> Vec<String> {
 
 #[cfg(test)]
 mod tests {
+    use super::{run_logged_command, InstallOperation};
+    use std::{path::Path, sync::Arc};
+    use tokio::sync::Mutex;
     use super::{parse_ls_remote_tags, resolve_release_id, resolve_release_version, UpdateExecutor, UpdateExecutorError};
     #[test]
     fn parse_ls_remote_tags_dedupes_and_reverses() {
@@ -705,6 +791,7 @@ def	refs/tags/v0.9.0^{}
     fn write_test_update(paths: &NexusPaths, git_program: PathBuf) {
         ConfigStore::new(paths.clone())
             .write(&NexusConfigFile {
+                harness_preferences: None,
                 harness: None,
                 update: Some(UpdateSpec {
                     source: "https://example.invalid/repo".to_owned(),
@@ -741,6 +828,122 @@ def	refs/tags/v0.9.0^{}
         assert_eq!(version, "feature/test");
     }
 
+    #[test]
+    fn install_recovery_preserves_specific_cleanup_error_and_shared_state_errors() {
+        let root = std::env::temp_dir().join(format!("nexus-install-recovery-errors-{}", nexus_core::new_instance_id()));
+        let paths = NexusPaths::from_root(root.clone()); paths.ensure_directories().unwrap();
+        let executor = UpdateExecutor::new(paths.clone(), ReleaseStore::new(paths.clone()));
+        executor.write_install_operation(&InstallOperation {
+            operation_id: format!("install-{}", nexus_core::new_instance_id()), job_name: None,
+            release_id: "interrupted".into(), candidate: paths.downloads_dir.join(".update-interrupted").to_string_lossy().into_owned(),
+            phase: "failed".into(), cancel_requested: false, owner_quiescent: false, cleanup_pending: true,
+            error: Some("Primary failure".into()), cleanup_error: Some("Cannot verify previous operation Job: access denied".into()),
+        }).unwrap();
+        executor.recover_unattached().unwrap();
+        let record = executor.install_operation().unwrap().unwrap();
+        assert_eq!(record.cleanup_error.as_deref(), Some("Cannot verify previous operation Job: access denied"));
+        assert!(executor.try_acquire_gate().is_err());
+        fs::write(&paths.update_state_file, "invalid shared state").unwrap();
+        assert!(executor.recover_unattached().is_err(), "Other existing startup errors remain fatal");
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[tokio::test]
+    async fn explicit_install_cancel_is_id_bound_and_preserves_committed_release() {
+        let root = std::env::temp_dir().join(format!("nexus-explicit-cancel-{}", nexus_core::new_instance_id()));
+        fs::create_dir_all(&root).unwrap();
+        let paths = NexusPaths::from_root(root.clone());
+        write_test_update(&paths, fake_git_program(&root));
+        let executor = UpdateExecutor::new(paths.clone(), ReleaseStore::new(paths));
+        let (started, reached) = oneshot::channel();
+        let (release, wait) = oneshot::channel();
+        executor.observe_next_command(started, wait).await;
+        let owner = executor.clone();
+        let install = tokio::spawn(async move { owner.install(Some("cancel-me".into()), Some("test".into())).await });
+        timeout(Duration::from_secs(5), reached).await.unwrap().unwrap();
+        let operation = executor.install_operation().unwrap().unwrap();
+        assert!(executor.cancel_install("install-stale").await.is_err());
+        let cancel_owner = executor.clone();
+        let id = operation.operation_id;
+        let cancel = tokio::spawn(async move { cancel_owner.cancel_install(&id).await });
+        timeout(Duration::from_secs(3), async {
+            while !executor.install_operation().unwrap().unwrap().cancel_requested { tokio::task::yield_now().await; }
+        }).await.unwrap();
+        release.send(()).unwrap();
+        assert!(install.await.unwrap().is_err());
+        let cancelled = cancel.await.unwrap().unwrap();
+        assert_eq!(cancelled.phase, "cancelled");
+        assert!(cancelled.owner_quiescent && !cancelled.cleanup_pending);
+        assert!(!Path::new(&cancelled.candidate).exists());
+        let result = executor.install(Some("committed".into()), Some("test".into())).await.unwrap();
+        let id = result.install_operation.unwrap().operation_id;
+        assert_eq!(executor.cancel_install(&id).await.unwrap().phase, "succeeded");
+        assert!(executor.releases.get("committed").is_ok());
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[cfg(windows)]
+    #[tokio::test]
+    async fn install_named_job_blocks_recovery_until_cancel_reaps_descendants() {
+        let root = std::env::temp_dir().join(format!("nexus-install-tree-{}", nexus_core::new_instance_id()));
+        let paths = NexusPaths::from_root(root.clone()); paths.ensure_directories().unwrap();
+        let executor = UpdateExecutor::new(paths.clone(), ReleaseStore::new(paths.clone()));
+        let id = format!("install-{}", nexus_core::new_instance_id());
+        let name = format!("Global\\NexusInstall-{id}");
+        let token = nexus_core::CancellationToken::with_job_name(name.clone());
+        let candidate = paths.downloads_dir.join(".update-tree"); fs::create_dir(&candidate).unwrap();
+        fs::write(candidate.join("keep"), "data").unwrap();
+        executor.write_install_operation(&InstallOperation { operation_id: id.clone(), job_name: Some(name.clone()),
+            release_id: "tree".into(), candidate: candidate.to_string_lossy().into_owned(), phase: "installing".into(),
+            cancel_requested: false, owner_quiescent: false, cleanup_pending: false, error: None, cleanup_error: None }).unwrap();
+        let marker = root.join("descendant.txt");
+        let child_script = root.join("child.ps1");
+        fs::write(&child_script, format!("while ($true) {{ Add-Content -LiteralPath '{}' -Value 'owned'; Start-Sleep -Milliseconds 20 }}", marker.display().to_string().replace('\'', "''"))).unwrap();
+        let parent_script = root.join("parent.ps1");
+        fs::write(&parent_script, format!("Start-Process -WindowStyle Hidden -FilePath \"$PSHOME\\powershell.exe\" -ArgumentList @('-NoProfile','-File','{}'); while ($true) {{ Start-Sleep -Seconds 1 }}", child_script.display().to_string().replace('\'', "''"))).unwrap();
+        let powershell = std::path::PathBuf::from(std::env::var_os("SystemRoot").unwrap()).join("System32/WindowsPowerShell/v1.0/powershell.exe");
+        let args = vec!["-NoProfile".into(), "-File".into(), parent_script.to_string_lossy().into_owned()];
+        let owned_paths = paths.clone(); let owned_token = token.clone();
+        let command = tokio::spawn(async move { run_logged_command(&owned_paths, "build", "tree", &powershell, &args, None,
+            Duration::from_secs(15), &owned_token, &Arc::new(Mutex::new(None))).await });
+        timeout(Duration::from_secs(8), async { while !marker.is_file() { tokio::time::sleep(Duration::from_millis(20)).await; } }).await.unwrap();
+        assert!(!crate::dsh::named_operation_job_is_empty(&name).unwrap());
+        let fresh = UpdateExecutor::new(paths.clone(), ReleaseStore::new(paths));
+        fresh.recover_unattached().unwrap();
+        assert!(candidate.join("keep").exists());
+        assert!(fresh.try_acquire_gate().is_err());
+        token.cancel(); assert!(command.await.unwrap().is_err());
+        let length = fs::metadata(&marker).unwrap().len();
+        tokio::time::sleep(Duration::from_millis(200)).await;
+        assert_eq!(fs::metadata(&marker).unwrap().len(), length);
+        assert!(crate::dsh::named_operation_job_is_empty(&name).unwrap());
+        let settled = fresh.cancel_install(&id).await.unwrap();
+        assert!(settled.owner_quiescent && !settled.cleanup_pending);
+        assert!(!candidate.exists()); assert!(fresh.try_acquire_gate().is_ok());
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[cfg(windows)]
+    #[tokio::test]
+    async fn install_cleanup_failure_is_durable_and_retryable_after_restart() {
+        use std::os::windows::fs::OpenOptionsExt;
+        let root = std::env::temp_dir().join(format!("nexus-install-cleanup-{}", nexus_core::new_instance_id()));
+        let paths = NexusPaths::from_root(root.clone()); paths.ensure_directories().unwrap();
+        let candidate = paths.downloads_dir.join(".update-cleanup"); fs::create_dir(&candidate).unwrap();
+        let locked = fs::OpenOptions::new().write(true).create(true).share_mode(0).open(candidate.join("locked")).unwrap();
+        let executor = UpdateExecutor::new(paths.clone(), ReleaseStore::new(paths.clone()));
+        executor.cleanup_candidate(&candidate, true).unwrap();
+        let operation = executor.install_operation().unwrap().unwrap();
+        assert!(operation.cleanup_pending && operation.cleanup_error.is_some());
+        let fresh = UpdateExecutor::new(paths.clone(), ReleaseStore::new(paths));
+        fresh.recover_unattached().unwrap(); assert!(fresh.try_acquire_gate().is_err());
+        drop(locked);
+        let settled = fresh.cancel_install(&operation.operation_id).await.unwrap();
+        assert!(!settled.cleanup_pending && settled.cleanup_error.is_none());
+        assert!(!candidate.exists()); assert!(fresh.try_acquire_gate().is_ok());
+        fs::remove_dir_all(root).unwrap();
+    }
+
     #[tokio::test]
     async fn update_config_gate_excludes_install() {
         let root = std::env::temp_dir().join(format!(
@@ -770,16 +973,16 @@ def	refs/tags/v0.9.0^{}
         let root = std::env::temp_dir().join(format!("nexus-update-cleanup-{}", nexus_core::unix_time_nanos_for_update()));
         let paths = NexusPaths::from_root(root.clone());
         paths.ensure_directories().unwrap();
-        let candidate = paths.downloads_dir.join("owned-candidate");
+        let candidate = paths.downloads_dir.join(".update-owned-candidate");
         fs::create_dir(&candidate).unwrap();
         fs::write(candidate.join("keep.txt"), "active").unwrap();
         let executor = UpdateExecutor::new(paths.clone(), ReleaseStore::new(paths.clone()));
-        executor.cleanup_candidate(&candidate, false);
+        executor.cleanup_candidate(&candidate, false).unwrap();
         assert_eq!(fs::read_to_string(candidate.join("keep.txt")).unwrap(), "active");
         assert!(matches!(executor.try_acquire_gate(), Err(UpdateExecutorError::AlreadyRunning)));
         assert!(matches!(executor.clone().try_acquire_gate(), Err(UpdateExecutorError::AlreadyRunning)));
         let fresh = UpdateExecutor::new(paths.clone(), ReleaseStore::new(paths));
-        fresh.cleanup_candidate(&candidate, true);
+        fresh.cleanup_candidate(&candidate, true).unwrap();
         assert!(!candidate.exists());
         fs::remove_dir_all(root).unwrap();
     }
@@ -794,6 +997,7 @@ def	refs/tags/v0.9.0^{}
         let paths = NexusPaths::from_root(root.clone());
         ConfigStore::new(paths.clone())
             .write(&NexusConfigFile {
+                harness_preferences: None,
                 harness: None,
                 update: Some(UpdateSpec {
                     source: "https://example.invalid/repo".to_owned(),
@@ -991,6 +1195,7 @@ def	refs/tags/v0.9.0^{}
         drop(guard);
         ConfigStore::new(paths.clone())
             .write(&NexusConfigFile {
+                harness_preferences: None,
                 harness: None,
                 update: None,
                 releases: None,

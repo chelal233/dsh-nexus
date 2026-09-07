@@ -27,6 +27,11 @@ use serde::{Deserialize, Serialize};
 
 pub mod runtime_requirements;
 pub mod disk;
+mod harness_preferences;
+pub use harness_preferences::*;
+mod config_protection;
+pub use config_protection::*;
+pub mod maintenance;
 
 pub const DEFAULT_AGENT_PORT: u16 = 3090;
 pub const DEFAULT_PROFILE: &str = "web";
@@ -162,9 +167,11 @@ pub fn bundled_runtime_dir() -> Option<PathBuf> {
 
 /// Cooperative cancellation flag shared across command owners.
 #[derive(Debug, Clone, Default)]
-pub struct CancellationToken(Arc<AtomicBool>);
+pub struct CancellationToken(Arc<AtomicBool>, Option<Arc<str>>);
 
 impl CancellationToken {
+    pub fn with_job_name(name: String) -> Self { Self(Arc::new(AtomicBool::new(false)), Some(name.into())) }
+    pub fn job_name(&self) -> Option<&str> { self.1.as_deref() }
     pub fn cancel(&self) {
         self.0.store(true, Ordering::Release);
     }
@@ -1242,6 +1249,9 @@ fn validate_checkpoint_manifest(manifest: &CheckpointManifest) -> io::Result<()>
 /// and rollback.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ReleaseCatalog {
+    /// Read-time diagnostics only. Missing selections are never launchable.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub unavailable_selections: Vec<String>,
     #[serde(default = "default_release_schema")]
     pub schema_version: u32,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -1255,6 +1265,7 @@ pub struct ReleaseCatalog {
 impl Default for ReleaseCatalog {
     fn default() -> Self {
         Self {
+            unavailable_selections: Vec::new(),
             schema_version: RELEASE_SCHEMA_VERSION,
             current_release: None,
             last_known_good: None,
@@ -1445,6 +1456,9 @@ impl ReleaseStore {
         validate_optional_release_text(note.as_deref(), "release note")?;
 
         let _guard = self.lock_gate()?;
+        if self.pending_cleanup(id)?.is_some() {
+            return Err(io::Error::new(io::ErrorKind::ResourceBusy, "Finish the previous cleanup before reusing this release id"));
+        }
         let mut catalog = self.load_unlocked()?;
         if catalog.find(id).is_some() {
             return Err(io::Error::new(
@@ -1486,6 +1500,9 @@ impl ReleaseStore {
         validate_optional_release_text(note.as_deref(), "release note")?;
 
         let _guard = self.lock_gate()?;
+        if self.pending_cleanup(id)?.is_some() {
+            return Err(io::Error::new(io::ErrorKind::ResourceBusy, "Finish the previous cleanup before reusing this release id"));
+        }
         let mut catalog = self.load_unlocked()?;
         if catalog.find(id).is_some() {
             return Err(io::Error::new(
@@ -1552,7 +1569,10 @@ impl ReleaseStore {
             let previous = catalog.current_release.clone();
             if let Some(previous) = catalog.current_release.replace(id.to_owned()) {
                 catalog.last_known_good = Some(previous);
+            } else if catalog.last_known_good.as_deref() == Some(id) {
+                catalog.last_known_good = None;
             }
+            catalog.normalize()?;
             self.retarget_launch_placeholder(&previous.unwrap_or_default(), Some(id))?;
             self.write_pointers(&catalog)?;
         }
@@ -1564,10 +1584,15 @@ impl ReleaseStore {
     /// The manifest-bearing directory is the disk truth, so removing it is the
     /// whole operation; pointers never referenced the removed id here.
     pub fn remove(&self, id: &str) -> io::Result<ReleaseCatalog> {
+        self.remove_with_digest(id, None)
+    }
+
+    pub(crate) fn remove_with_digest(&self, id: &str, digest: Option<&str>) -> io::Result<ReleaseCatalog> {
         validate_release_id(id)?;
         let _guard = self.lock_gate()?;
         let mut catalog = self.load_unlocked()?;
-        if catalog.find(id).is_none() {
+        let pending = self.pending_cleanup(id)?;
+        if catalog.find(id).is_none() && pending.is_none() {
             return Err(io::Error::new(
                 io::ErrorKind::NotFound,
                 format!("release {id} was not found"),
@@ -1586,10 +1611,53 @@ impl ReleaseStore {
             ));
         }
         let slot_dir = self.slot_dir(id)?;
-        fs::remove_dir_all(&slot_dir)?;
+        ensure_configuration_paths_preserved(&self.paths, &slot_dir)?;
+        ensure_harness_homes_preserved(&self.paths.root, &slot_dir)?;
+        if let Some(journal) = CheckpointRestoreJournalStore::new(self.paths.clone()).load()? {
+            let intent = journal.intent;
+            if [intent.previous_current_release, intent.previous_last_known_good,
+                intent.target_current_release, intent.target_last_known_good]
+                .iter().any(|reference| reference.as_deref() == Some(id)) {
+                return Err(io::Error::new(io::ErrorKind::ResourceBusy,
+                    format!("release {id} is referenced by an unfinished checkpoint restore")));
+            }
+        }
+        // External ownership survives even a crash after deleting the final
+        // in-slot metadata. A pending target is excluded from the catalog.
+        let manifest = pending.or_else(|| catalog.find(id).cloned()).ok_or_else(|| invalid_data("Cleanup manifest missing"))?;
+        let ownership = maintenance::CleanupOwnership::begin_bound(&self.paths, "release", id, serde_json::to_value(&manifest)?, digest)?;
+        ownership.delete(&self.paths)?;
         catalog.releases.retain(|item| item.id != id);
         catalog.normalize()?;
         Ok(catalog)
+    }
+
+    /// A failed deletion retains ownership for explicit retry, without
+    /// representing the partially removed slot as an installed version.
+    pub fn pending_cleanup(&self, id: &str) -> io::Result<Option<ReleaseManifest>> {
+        validate_release_id(id)?;
+        if let Some(ownership) = maintenance::CleanupOwnership::load(&self.paths, "release", id)? {
+            let manifest: ReleaseManifest = serde_json::from_value(ownership.manifest)?;
+            validate_release_manifest(&manifest)?;
+            if manifest.id != id { return Err(invalid_data("Pending release cleanup does not match its slot")); }
+            return Ok(Some(manifest));
+        }
+        let slot = self.slot_dir(id)?;
+        let marker = slot.join(".nexus-cleanup.json");
+        let metadata = match fs::symlink_metadata(&marker) {
+            Ok(value) => value, Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(None), Err(error) => return Err(error),
+        };
+        if path_is_reparse(&metadata) || !metadata.is_file() || path_is_reparse(&fs::symlink_metadata(&slot)?) {
+            return Err(invalid_data("Unsafe pending release cleanup record"));
+        }
+        let mut bytes = Vec::new();
+        use std::io::Read;
+        fs::File::open(marker)?.take(256 * 1024 + 1).read_to_end(&mut bytes)?;
+        if bytes.len() > 256 * 1024 { return Err(invalid_data("Pending release cleanup record is too large")); }
+        let manifest: ReleaseManifest = decode_json(&bytes).map_err(invalid_data)?;
+        validate_release_manifest(&manifest)?;
+        if manifest.id != id { return Err(invalid_data("Pending release cleanup does not match its slot")); }
+        Ok(Some(manifest))
     }
 
 /// Keep the profile module link farm (`~/.dsh/profiles/node_modules`)
@@ -1600,6 +1668,8 @@ impl ReleaseStore {
 /// real directories and indirect farm parents are never replaced.
 pub fn heal_module_farm(dsh_home: &Path, slot_root: &Path) -> io::Result<usize> {
     let farm = dsh_home.join("profiles").join("node_modules");
+    // A cold installation can finish before Harness has ever created its home.
+    Self::ensure_module_directory(dsh_home)?;
     Self::ensure_module_directory(&dsh_home.join("profiles"))?;
     Self::ensure_module_directory(&farm)?;
     let mut repaired = 0;
@@ -1700,12 +1770,31 @@ fn is_module_link(metadata: &fs::Metadata) -> bool {
 }
 
 fn ensure_module_directory(path: &Path) -> io::Result<()> {
-    match fs::symlink_metadata(path) {
-        Ok(metadata) if metadata.is_dir() && !Self::is_module_link(&metadata) => Ok(()),
-        Ok(_) => Err(io::Error::other(format!("module farm parent is not a real directory: {}", path.display()))),
-        Err(error) if error.kind() == io::ErrorKind::NotFound => fs::create_dir(path),
-        Err(error) => Err(error),
+    if !path.is_absolute() || path.components().any(|component| matches!(component, std::path::Component::ParentDir)) {
+        return Err(io::Error::new(io::ErrorKind::InvalidInput, "module farm directory must be absolute without parent traversal"));
     }
+    // Walk from the volume root before creating anything: a linked ancestor
+    // must not redirect a newly selected home into somebody else's directory.
+    let ancestors: Vec<_> = path.ancestors().collect();
+    for directory in ancestors.into_iter().rev() {
+        match fs::symlink_metadata(directory) {
+            Ok(metadata) if metadata.is_dir() && !Self::is_module_link(&metadata) => {}
+            Ok(_) => return Err(io::Error::other(format!("module farm parent is not a real directory: {}", directory.display()))),
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {
+                match fs::create_dir(directory) {
+                    Ok(()) => {}
+                    Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {}
+                    Err(error) => return Err(error),
+                }
+                let metadata = fs::symlink_metadata(directory)?;
+                if !metadata.is_dir() || Self::is_module_link(&metadata) {
+                    return Err(io::Error::other(format!("module farm directory changed during creation: {}", directory.display())));
+                }
+            }
+            Err(error) => return Err(error),
+        }
+    }
+    Ok(())
 }
 
 fn replace_module_link(link: &Path, target: &Path) -> io::Result<()> {
@@ -1740,29 +1829,51 @@ fn remove_module_link(path: &Path) -> io::Result<()> {
 
 #[cfg(windows)]
 fn create_dir_junction(link: &Path, target: &Path) -> io::Result<()> {
-    use std::os::windows::process::CommandExt;
-    // cmd builtins interpret forward slashes as switches, unlike Rust paths.
-    let link = link.to_string_lossy().replace('/', "\\");
-    let target = target.to_string_lossy().replace('/', "\\");
-    let output = std::process::Command::new("cmd")
-        .creation_flags(0x08000000) // CREATE_NO_WINDOW: no console per package.
-        .args([
-            "/C",
-            "mklink",
-            "/J",
-            &link,
-            &target,
-        ])
-        .stdin(std::process::Stdio::null())
-        .output()?;
-    if output.status.success() {
-        Ok(())
-    } else {
-        Err(io::Error::other(format!(
-            "mklink failed: {}",
-            String::from_utf8_lossy(&output.stderr).trim()
-        )))
+    use std::os::windows::{ffi::OsStrExt, fs::OpenOptionsExt, io::AsRawHandle};
+    use windows_sys::Win32::{
+        Storage::FileSystem::{FILE_FLAG_BACKUP_SEMANTICS, FILE_FLAG_OPEN_REPARSE_POINT, FILE_SHARE_READ, FILE_SHARE_WRITE, MAXIMUM_REPARSE_DATA_BUFFER_SIZE},
+        System::{IO::DeviceIoControl, Ioctl::FSCTL_SET_REPARSE_POINT},
+    };
+    let target = fs::canonicalize(target)?;
+    if !target.is_dir() {
+        return Err(io::Error::new(io::ErrorKind::InvalidInput, "junction target must be a directory"));
     }
+    let target_wide: Vec<u16> = target.as_os_str().encode_wide().collect();
+    let prefix: Vec<u16> = r"\\?\".encode_utf16().collect();
+    if !target_wide.starts_with(&prefix) || target_wide.get(5) != Some(&(b':' as u16)) {
+        return Err(io::Error::new(io::ErrorKind::Unsupported, "junction target must be on a local Windows volume"));
+    }
+    let substitute: Vec<u16> = r"\??\".encode_utf16().chain(target_wide[4..].iter().copied()).collect();
+    let print: Vec<u16> = target_wide[4..].to_vec();
+    let data_length = 8 + (substitute.len() + print.len() + 2) * 2;
+    if data_length + 8 > MAXIMUM_REPARSE_DATA_BUFFER_SIZE as usize {
+        return Err(io::Error::new(io::ErrorKind::InvalidInput, "junction target is too long"));
+    }
+    // MOUNT_POINT reparse data has an 8-byte common header, four u16 name
+    // offsets/lengths, then two NUL-terminated UTF-16 paths. No shell parses it.
+    let mut buffer = Vec::with_capacity(data_length + 8);
+    buffer.extend_from_slice(&0xa0000003u32.to_le_bytes()); // IO_REPARSE_TAG_MOUNT_POINT
+    for value in [data_length as u16, 0, 0, (substitute.len() * 2) as u16,
+        ((substitute.len() + 1) * 2) as u16, (print.len() * 2) as u16] {
+        buffer.extend_from_slice(&value.to_le_bytes());
+    }
+    for value in substitute.into_iter().chain([0]).chain(print).chain([0]) {
+        buffer.extend_from_slice(&value.to_le_bytes());
+    }
+    fs::create_dir(link)?;
+    let result = (|| {
+        let handle = fs::OpenOptions::new().write(true)
+            .share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE)
+            .custom_flags(FILE_FLAG_OPEN_REPARSE_POINT | FILE_FLAG_BACKUP_SEMANTICS)
+            .open(link)?;
+        let mut returned = 0;
+        let succeeded = unsafe { DeviceIoControl(handle.as_raw_handle(), FSCTL_SET_REPARSE_POINT,
+            buffer.as_ptr().cast(), buffer.len() as u32, std::ptr::null_mut(), 0,
+            &mut returned, std::ptr::null_mut()) };
+        if succeeded == 0 { Err(io::Error::last_os_error()) } else { Ok(()) }
+    })();
+    if result.is_err() { let _ = fs::remove_dir(link); }
+    result
 }
 
 #[cfg(not(windows))]
@@ -1961,6 +2072,7 @@ fn create_dir_junction(link: &Path, target: &Path) -> io::Result<()> {
         }
 
         let mut catalog = ReleaseCatalog {
+            unavailable_selections: Vec::new(),
             schema_version: RELEASE_SCHEMA_VERSION,
             current_release: pointers.current_release,
             last_known_good: pointers.last_known_good,
@@ -1973,6 +2085,19 @@ fn create_dir_junction(link: &Path, target: &Path) -> io::Result<()> {
                     continue;
                 }
                 let slot_id = entry.file_name().to_string_lossy().into_owned();
+                if is_valid_release_id(&slot_id) {
+                    let ownership_path = maintenance::CleanupOwnership::record_path(&self.paths, "release", &slot_id)?;
+                    match fs::symlink_metadata(ownership_path) {
+                        Ok(_) => continue,
+                        Err(error) if error.kind() == io::ErrorKind::NotFound => (),
+                        Err(_) => continue,
+                    }
+                }
+                if fs::symlink_metadata(entry.path().join(".nexus-cleanup.json")).is_ok() {
+                    // Partial cleanup is unavailable, but must not poison the
+                    // healthy slots or current selection in this catalog.
+                    continue;
+                }
                 let manifest_path = entry.path().join("manifest.json");
                 if !manifest_path.exists() {
                     // A partially prepared slot is not selectable until its
@@ -1988,6 +2113,20 @@ fn create_dir_junction(link: &Path, target: &Path) -> io::Result<()> {
                 catalog.releases.push(manifest);
             }
         }
+        // A deleted/incomplete slot must not take the control plane offline.
+        // Keep the pointer document and residual files untouched for diagnosis;
+        // only exclude unresolved selections from this effective catalog.
+        for pointer in [&mut catalog.current_release, &mut catalog.last_known_good] {
+            if let Some(id) = pointer.as_deref() {
+                validate_release_id(id)?;
+                if !catalog.releases.iter().any(|release| release.id == id) {
+                    catalog.unavailable_selections.push(id.to_owned());
+                    *pointer = None;
+                }
+            }
+        }
+        catalog.unavailable_selections.sort();
+        catalog.unavailable_selections.dedup();
         catalog.normalize()?;
         Ok(catalog)
     }
@@ -2084,6 +2223,41 @@ pub fn write_json_atomic<T: Serialize>(
     value: &T,
 ) -> io::Result<()> {
     let bytes = encode_json(value).map_err(invalid_data)?;
+    write_atomic_bytes(root, destination, &bytes, false)
+}
+
+pub fn write_private_json_atomic<T: Serialize>(root: &Path, destination: &Path, value: &T) -> io::Result<()> {
+    let bytes = encode_json(value).map_err(invalid_data)?;
+    write_private_bytes_atomic(root, destination, &bytes)
+}
+
+pub fn write_private_bytes_atomic(root: &Path, destination: &Path, bytes: &[u8]) -> io::Result<()> {
+    write_atomic_bytes(root, destination, bytes, true)
+}
+
+/// Read existing ordinary files without following reparse points or allocating
+/// from an untrusted size. Missing files retain their normal optional meaning.
+pub fn read_regular_file_bounded(path: &Path, limit: u64) -> io::Result<Option<Vec<u8>>> {
+    let metadata = match fs::symlink_metadata(path) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => return Err(error),
+    };
+    if !metadata.is_file() || path_is_reparse(&metadata) || metadata.len() > limit {
+        return Err(invalid_data("Configuration or backup must be an ordinary bounded file"));
+    }
+    let mut options = fs::OpenOptions::new(); options.read(true);
+    #[cfg(windows)] { use std::os::windows::fs::OpenOptionsExt; options.custom_flags(0x00200000); }
+    let file = options.open(path)?;
+    let metadata = file.metadata()?;
+    if !metadata.is_file() || path_is_reparse(&metadata) { return Err(invalid_data("Configuration or backup file identity changed")); }
+    use io::Read;
+    let mut bytes = Vec::new(); file.take(limit.saturating_add(1)).read_to_end(&mut bytes)?;
+    if bytes.len() as u64 > limit { return Err(invalid_data("Configuration or backup is too large")); }
+    Ok(Some(bytes))
+}
+
+fn write_atomic_bytes(root: &Path, destination: &Path, bytes: &[u8], private: bool) -> io::Result<()> {
     fs::create_dir_all(root)?;
     let file_name = destination
         .file_name()
@@ -2095,10 +2269,9 @@ pub fn write_json_atomic<T: Serialize>(
         unix_time_nanos()
     ));
     let write_result = (|| {
-        let mut file = fs::OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .open(&temp_path)?;
+        let mut file = if private { nexus_private_file::create_new_private(&temp_path)? } else {
+            fs::OpenOptions::new().write(true).create_new(true).open(&temp_path)?
+        };
         use io::Write;
         file.write_all(&bytes)?;
         file.sync_all()?;
@@ -2743,6 +2916,10 @@ impl DiagnosticsStore {
             if !entry.file_type()?.is_dir() {
                 continue;
             }
+            if let Some(name) = entry.file_name().to_str().filter(|name| is_valid_release_id(name)) {
+                let ownership = maintenance::CleanupOwnership::record_path(&self.paths, "diagnostic", name)?;
+                if fs::symlink_metadata(ownership).is_ok() { continue; }
+            }
             let manifest_path = entry.path().join("diagnostics.json");
             if !manifest_path.exists() {
                 continue;
@@ -2766,7 +2943,13 @@ impl DiagnosticsStore {
     }
 
     pub fn collect(&self, note: Option<String>) -> io::Result<DiagnosticsBundle> {
+        self.collect_with_context(note, None)
+    }
+
+    /// Context must use the public, credential-redacted configuration contract.
+    pub fn collect_with_context(&self, note: Option<String>, context: Option<serde_json::Value>) -> io::Result<DiagnosticsBundle> {
         validate_optional_diagnostics_text(note.as_deref(), "diagnostics note")?;
+        let note = note.map(|value| String::from_utf8_lossy(&redact_diagnostics_payload(value.as_bytes()).0).trim_end().to_owned());
         let _guard = self.lock_gate()?;
         self.paths.ensure_directories()?;
         let id = format!("diag-{}", unix_time_nanos());
@@ -2775,6 +2958,20 @@ impl DiagnosticsStore {
         let files_dir = bundle_dir.join("files");
         fs::create_dir(&bundle_dir)?;
         fs::create_dir(&files_dir)?;
+
+        let mut files = Vec::new();
+        let mut portable_files = serde_json::Map::new();
+        if let Some(context) = context {
+            let bytes = serde_json::to_vec_pretty(&context)?;
+            let (mut payload, mut redacted) = if bytes.len() <= MAX_DIAGNOSTICS_FILE_BYTES {
+                redact_diagnostics_payload(&bytes)
+            } else { (b"Configuration context exceeded the diagnostic bound".to_vec(), true) };
+            let context_truncated = bytes.len() > MAX_DIAGNOSTICS_FILE_BYTES || payload.len() > MAX_DIAGNOSTICS_FILE_BYTES;
+            if payload.len() > MAX_DIAGNOSTICS_FILE_BYTES { payload = b"Redacted configuration exceeded the diagnostic bound".to_vec(); redacted = true; }
+            write_diagnostics_file(&files_dir.join("effective-config.json"), &payload)?;
+            portable_files.insert("effective-config.json".into(), serde_json::json!(String::from_utf8_lossy(&payload)));
+            files.push(DiagnosticsFile { name: "effective-config.json".into(), bytes: payload.len() as u64, redacted, truncated: context_truncated });
+        }
 
         let mut sources = Vec::new();
         for path in [
@@ -2793,7 +2990,19 @@ impl DiagnosticsStore {
                 }
             }
         }
+        for relative in ["install-operation.json", "cold-operation.json", "cold-publication.json", "run/harness-log-session.json", "run/checkpoint-restore.json", "run/harness-recovery.json", "run/harness-effective.json",
+            "run/last-capture.json", "run/cleanup-result.json", "compatibility/latest.json", "run/agent.json", "run/launcher-agent.json"] {
+            let path = self.paths.root.join(relative);
+            if is_regular_diagnostics_file(&path) { sources.push((path, relative.into(), MAX_DIAGNOSTICS_FILE_BYTES)); }
+        }
+        if let Ok(executable) = std::env::current_exe() {
+            if let Some(parent) = executable.parent() {
+                let identity = parent.join("release-identity.json");
+                if is_regular_diagnostics_file(&identity) { sources.push((identity, "release-identity.json".into(), MAX_DIAGNOSTICS_FILE_BYTES)); }
+            }
+        }
         if self.paths.logs_dir.is_dir() {
+            let session = HarnessLogSessionStore::new(self.paths.clone()).read().ok().flatten();
             let mut logs = fs::read_dir(&self.paths.logs_dir)?
                 .filter_map(Result::ok)
                 .filter(|entry| {
@@ -2811,23 +3020,38 @@ impl DiagnosticsStore {
                     ))
                 })
                 .collect::<Vec<_>>();
-            logs.sort_by(|left, right| left.1.cmp(&right.1));
+            let priority = |path: &Path| {
+                let name = path.file_name().and_then(|s| s.to_str()).unwrap_or("");
+                session.as_ref().is_some_and(|s| name == s.stdout_log_name || name == s.stderr_log_name)
+            };
+            logs.sort_by(|left, right| priority(&right.0).cmp(&priority(&left.0))
+                .then_with(|| right.0.metadata().and_then(|m| m.modified()).ok().cmp(&left.0.metadata().and_then(|m| m.modified()).ok()))
+                .then_with(|| left.1.cmp(&right.1)));
             sources.extend(logs);
         }
-        sources.truncate(MAX_DIAGNOSTICS_FILES);
+        sources.truncate(MAX_DIAGNOSTICS_FILES.saturating_sub(files.len()));
 
-        let mut files = Vec::new();
         for (source, relative, limit) in sources {
-            let raw = read_diagnostics_file(&source, limit)?;
-            let truncated = raw.len() > limit;
-            let bounded = if truncated { &raw[..limit] } else { &raw[..] };
-            let (payload, redacted) = redact_diagnostics_payload(bounded);
+            let tail = relative.starts_with("logs");
+            let raw = if tail { read_diagnostics_tail(&source, limit)? } else { read_diagnostics_file(&source, limit)? };
+            let mut truncated = raw.len() > limit;
+            // Drop a partial leading line, then handle known multiline secret
+            // boundaries. Unmarked arbitrary text cannot be classified as secret.
+            let bounded = if truncated && tail { raw.iter().position(|b| *b == b'\n').map_or(&raw[raw.len()..], |i| &raw[i + 1..]) }
+                else if truncated { &raw[..limit] } else { &raw[..] };
+            let (bounded, boundary_redacted) = if truncated && tail {
+                omit_truncated_private_key_prefix(bounded)
+            } else { (bounded, false) };
+            let (mut payload, redacted) = redact_diagnostics_payload(bounded);
+            let mut redacted = redacted || boundary_redacted;
+            if payload.len() > limit { payload = b"Redacted content exceeded the diagnostic bound".to_vec(); redacted = true; truncated = true; }
             let destination = files_dir.join(&relative);
             let Some(parent) = destination.parent() else {
                 continue;
             };
             fs::create_dir_all(parent)?;
             write_diagnostics_file(&destination, &payload)?;
+            portable_files.insert(relative.to_string_lossy().replace('\\', "/"), serde_json::json!(String::from_utf8_lossy(&payload)));
             files.push(DiagnosticsFile {
                 name: relative.to_string_lossy().replace('\\', "/"),
                 bytes: payload.len() as u64,
@@ -2851,6 +3075,11 @@ impl DiagnosticsStore {
             schema_version: DIAGNOSTICS_SCHEMA_VERSION,
             bundle: bundle.clone(),
         };
+        // Export the bytes just collected, never re-read caller-controlled file
+        // paths. This single ordinary JSON file is portable and needs no tools.
+        write_json_atomic(&bundle_dir, &bundle_dir.join("export.json"), &serde_json::json!({
+            "format": "nexus-diagnostics", "schema_version": 1, "bundle": &bundle, "files": portable_files,
+        }))?;
         write_json_atomic(&bundle_dir, &bundle_dir.join("diagnostics.json"), &document)?;
         Ok(bundle)
     }
@@ -2864,6 +3093,7 @@ impl DiagnosticsStore {
         let path = match file {
             None => directory.clone(),
             Some("diagnostics.json") => directory.join("diagnostics.json"),
+            Some("export.json") => directory.join("export.json"),
             Some(name) => {
                 if name.contains(['\\', ':']) || !bundle.files.iter().any(|item| item.name == name) {
                     return Err(invalid_data("file is not in this diagnostic bundle"));
@@ -2941,17 +3171,84 @@ pub fn redact_diagnostics_payload(payload: &[u8]) -> (Vec<u8>, bool) {
     let Ok(text) = std::str::from_utf8(payload) else {
         return (b"[binary diagnostics payload omitted]\n".to_vec(), true);
     };
+    if let Ok(mut value @ (serde_json::Value::Object(_) | serde_json::Value::Array(_))) = serde_json::from_str::<serde_json::Value>(text) {
+        let changed = redact_diagnostic_json(&mut value);
+        if changed { return (serde_json::to_vec_pretty(&value).unwrap_or_else(|_| b"[REDACTED]".to_vec()), true); }
+    }
+    redact_diagnostic_text(text)
+}
+
+fn redact_diagnostic_json(value: &mut serde_json::Value) -> bool {
+    let mut changed = false;
+    match value {
+        serde_json::Value::Object(object) => for (key, value) in object {
+            if diagnostics_line_is_sensitive(&format!("{key}:")) || key.eq_ignore_ascii_case("key") || key == "system_prompt"
+                || matches!(key.as_str(), "args" | "build_args" | "verify_args") {
+                *value = serde_json::json!("[REDACTED]"); changed = true;
+            } else { changed |= redact_diagnostic_json(value); }
+        },
+        serde_json::Value::Array(values) => for value in values { changed |= redact_diagnostic_json(value); },
+        serde_json::Value::String(value) => {
+            let (bytes, redacted) = redact_diagnostic_text(value);
+            if redacted { *value = String::from_utf8_lossy(&bytes).into_owned(); changed = true; }
+        },
+        _ => {},
+    }
+    changed
+}
+
+fn redact_diagnostic_text(text: &str) -> (Vec<u8>, bool) {
     let mut redacted = false;
+    let mut private_key = false;
+    let mut continuation = false;
+    let mut sensitive_depth = 0isize;
     let mut output = String::with_capacity(text.len());
     for line in text.split_inclusive('\n') {
-        if diagnostics_line_is_sensitive(line) {
+        let pem_start = line.contains("-----BEGIN") && line.contains("PRIVATE KEY-----");
+        let sensitive = diagnostics_line_is_sensitive(line);
+        if private_key || pem_start || continuation || sensitive || sensitive_depth > 0 {
             output.push_str("[REDACTED]\n");
             redacted = true;
+            private_key = (private_key || pem_start) && !line.contains("-----END");
+            continuation = sensitive && line.trim_end().ends_with(':');
+            if sensitive_depth > 0 || (sensitive && line.trim_end().ends_with(['{', '['])) {
+                sensitive_depth = (sensitive_depth + diagnostic_container_delta(line)).max(0);
+            }
         } else {
-            output.push_str(line);
+            // Query strings, fragments and URL userinfo are unnecessary for
+            // diagnostics, even when a provider uses an unrecognized key name.
+            for word in line.split_inclusive(char::is_whitespace) {
+                let trimmed = word.trim_end();
+                if let Some(scheme) = trimmed.find("://") {
+                    let end = trimmed[scheme + 3..].find(['?', '#']).map_or(trimmed.len(), |i| scheme + 3 + i);
+                    let base = &trimmed[..end];
+                    let start = scheme + 3;
+                    if start <= base.len() {
+                        let authority_end = base[start..].find('/').map_or(base.len(), |i| start + i);
+                        let authority = &base[start..authority_end];
+                        let host = authority.rsplit_once('@').map_or(authority, |(_, host)| host);
+                        let safe = format!("{}{}{}", &base[..start], host, &base[authority_end..]);
+                        redacted |= safe != trimmed;
+                        output.push_str(&safe); output.push_str(&word[trimmed.len()..]);
+                        continue;
+                    }
+                }
+                output.push_str(word);
+            }
         }
     }
     (output.into_bytes(), redacted)
+}
+
+fn diagnostic_container_delta(line: &str) -> isize {
+    let (mut quoted, mut escaped, mut depth) = (false, false, 0);
+    for c in line.chars() {
+        if escaped { escaped = false; continue; }
+        if quoted && c == '\\' { escaped = true; continue; }
+        if c == '"' { quoted = !quoted; continue; }
+        if !quoted { match c { '{' | '[' => depth += 1, '}' | ']' => depth -= 1, _ => {} } }
+    }
+    depth
 }
 
 fn is_regular_diagnostics_file(path: &Path) -> bool {
@@ -2967,6 +3264,32 @@ fn read_diagnostics_file(path: &Path, limit: usize) -> io::Result<Vec<u8>> {
     file.take((limit as u64).saturating_add(1))
         .read_to_end(&mut bytes)?;
     Ok(bytes)
+}
+
+fn read_diagnostics_tail(path: &Path, limit: usize) -> io::Result<Vec<u8>> {
+    use io::{Read, Seek, SeekFrom};
+    let mut file = fs::File::open(path)?;
+    let start = file.metadata()?.len().saturating_sub(limit as u64 + 1);
+    file.seek(SeekFrom::Start(start))?;
+    let mut bytes = Vec::new();
+    file.take(limit as u64 + 1).read_to_end(&mut bytes)?;
+    Ok(bytes)
+}
+
+/// A tail may start inside a PEM body after its BEGIN marker was discarded.
+/// When its first key boundary is END, omit the entire ambiguous prefix. Other
+/// unlabelled fragments remain outside the guarantees of marker-based redaction.
+fn omit_truncated_private_key_prefix(bytes: &[u8]) -> (&[u8], bool) {
+    let Ok(text) = std::str::from_utf8(bytes) else { return (bytes, false); };
+    let mut offset = 0;
+    for line in text.split_inclusive('\n') {
+        offset += line.len();
+        if line.contains("PRIVATE KEY-----") {
+            if line.contains("-----BEGIN") { return (bytes, false); }
+            if line.contains("-----END") { return (&bytes[offset..], true); }
+        }
+    }
+    (bytes, false)
 }
 
 fn write_diagnostics_file(path: &Path, payload: &[u8]) -> io::Result<()> {
@@ -3464,6 +3787,36 @@ mod tests {
     }
 
     #[test]
+    fn release_removal_protects_all_pending_restore_references() {
+        for index in 0..4 {
+            let root = unique_test_root("release-restore-protection");
+            let paths = NexusPaths::from_root(root.clone());
+            let releases = ReleaseStore::new(paths.clone());
+            releases.register("referenced", "1", None, None).unwrap();
+            let profiles = ProfileStore::new(paths.clone()).load().unwrap();
+            let mut intent = CheckpointRestoreIntent {
+                checkpoint_id: "checkpoint-a".into(), previous_profiles: profiles.clone(),
+                target_profiles: profiles, previous_current_release: None,
+                previous_last_known_good: None, target_current_release: None,
+                target_last_known_good: None, snapshot: None,
+            };
+            let fields = [&mut intent.previous_current_release, &mut intent.previous_last_known_good,
+                &mut intent.target_current_release, &mut intent.target_last_known_good];
+            *fields.into_iter().nth(index).unwrap() = Some("referenced".into());
+            let journal = CheckpointRestoreJournalStore::new(paths.clone());
+            journal.begin(intent.clone()).unwrap();
+            assert_eq!(releases.remove("referenced").unwrap_err().kind(), std::io::ErrorKind::ResourceBusy);
+            assert!(paths.releases_dir.join("referenced").exists());
+            journal.clear(CheckpointRestorePhase::Prepared, &intent).unwrap();
+            fs::write(paths.run_dir.join("checkpoint-restore.json"), "broken").unwrap();
+            assert!(releases.remove("referenced").is_err());
+            fs::remove_file(paths.run_dir.join("checkpoint-restore.json")).unwrap();
+            releases.remove("referenced").unwrap();
+            fs::remove_dir_all(root).unwrap();
+        }
+    }
+
+    #[test]
     fn release_store_registers_promotes_and_rolls_back_atomically() {
         let root = unique_test_root("releases");
         let paths = NexusPaths::from_root(root.clone());
@@ -3517,6 +3870,51 @@ mod tests {
         assert!(store.rollback().is_ok());
         assert!(store.promote("../escape").is_err());
 
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn missing_release_selections_remain_diagnostic_and_allow_reinstallation() {
+        let root = unique_test_root("missing-release-selection");
+        let paths = NexusPaths::from_root(root.clone());
+        let store = super::ReleaseStore::new(paths.clone());
+        store.register("missing-current", "1", None, None).unwrap();
+        store.promote("missing-current").unwrap();
+        let pointer = fs::read(&paths.release_pointers_file).unwrap();
+        let slot = paths.releases_dir.join("missing-current");
+        fs::remove_file(slot.join("manifest.json")).unwrap();
+        fs::create_dir(slot.join("node_modules")).unwrap();
+        let catalog = store.load().unwrap();
+        assert!(catalog.current_release.is_none());
+        assert_eq!(catalog.unavailable_selections, ["missing-current"]);
+        assert_eq!(fs::read(&paths.release_pointers_file).unwrap(), pointer);
+        assert!(slot.join("node_modules").exists());
+        assert!(store.promote("missing-current").is_err());
+        assert!(store.restore_release_pointers(Some("missing-current"), None).is_err());
+        store.register("reinstalled", "1", None, None).unwrap();
+        store.promote("reinstalled").unwrap();
+        let catalog = store.load().unwrap();
+        assert_eq!(catalog.current_release.as_deref(), Some("reinstalled"));
+        assert!(catalog.unavailable_selections.is_empty());
+        assert!(slot.join("node_modules").exists());
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn missing_current_can_promote_the_remaining_last_known_good() {
+        let root = unique_test_root("missing-current-promote-lkg");
+        let paths = NexusPaths::from_root(root.clone());
+        let store = super::ReleaseStore::new(paths.clone());
+        store.register("good", "1", None, None).unwrap();
+        store.promote("good").unwrap();
+        store.register("missing", "2", None, None).unwrap();
+        store.promote("missing").unwrap();
+        fs::remove_file(paths.releases_dir.join("missing/manifest.json")).unwrap();
+        assert_eq!(store.load().unwrap().last_known_good.as_deref(), Some("good"));
+        store.promote("good").unwrap();
+        let catalog = store.load().unwrap();
+        assert_eq!(catalog.current_release.as_deref(), Some("good"));
+        assert!(catalog.last_known_good.is_none());
         let _ = fs::remove_dir_all(root);
     }
 
@@ -4037,6 +4435,118 @@ mod tests {
     }
 
     #[test]
+    fn diagnostics_prioritizes_current_session_and_captures_failure_tail() {
+        let root = unique_test_root("diagnostic-current-tail");
+        let paths = NexusPaths::from_root(root.clone());
+        paths.ensure_directories().unwrap();
+        fs::create_dir_all(root.join("compatibility")).unwrap();
+        fs::write(root.join("compatibility/latest.json"), "{\"status\":\"failed\"}").unwrap();
+        fs::write(root.join("run/checkpoint-restore.json"), "{\"phase\":\"prepared\"}").unwrap();
+        let stdout = "zz-current.stdout.log";
+        let stderr = "zz-current.stderr.log";
+        let session = HarnessLogSession::new("current-run".into(), 1, 0, 0, "out".into(), "err".into(), stdout.into(), stderr.into(), false, 1);
+        HarnessLogSessionStore::new(paths.clone()).write(&session).unwrap();
+        let mut output = "old startup output\n".repeat(super::MAX_DIAGNOSTICS_LOG_BYTES / 10);
+        output.push_str("CURRENT_FAILURE_DETAIL\nAuthorization: Bearer MUST-NOT-LEAK\n");
+        fs::write(paths.logs_dir.join(stdout), output).unwrap();
+        fs::write(paths.logs_dir.join(stderr), "CURRENT_STDERR\n").unwrap();
+        for i in 0..80 { fs::write(paths.logs_dir.join(format!("a-old-{i:03}.log")), "old").unwrap(); }
+        let bundle = DiagnosticsStore::new(paths.clone()).collect_with_context(None, Some(serde_json::json!({"configured":true}))).unwrap();
+        assert!(bundle.files.len() <= super::MAX_DIAGNOSTICS_FILES);
+        let file = bundle.files.iter().find(|f| f.name == format!("logs/{stdout}")).unwrap();
+        assert!(file.truncated);
+        assert!(bundle.files.iter().any(|f| f.name == format!("logs/{stderr}")));
+        let bytes = fs::read_to_string(PathBuf::from(&bundle.directory).join("files").join(&file.name)).unwrap();
+        assert!(bytes.contains("CURRENT_FAILURE_DETAIL"));
+        assert!(!bytes.contains("MUST-NOT-LEAK"));
+        assert!(bundle.files.iter().any(|f| f.name == "effective-config.json"));
+        assert!(bundle.files.iter().any(|f| f.name == "compatibility/latest.json"));
+        assert!(bundle.files.iter().any(|f| f.name == "run/checkpoint-restore.json"));
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn diagnostics_redacts_query_credentials_structured_secrets_and_private_keys() {
+        let json = serde_json::json!({"update":{"source":"https://user:PASS@host/repo?key=QUERY#FRAGMENT"},
+            "password":{"nested":"NESTED"}, "args":["https://host/?custom=ARGSECRET"], "normal":"keep"});
+        let (bytes, changed) = super::redact_diagnostics_payload(&serde_json::to_vec_pretty(&json).unwrap());
+        assert!(changed);
+        let text = String::from_utf8(bytes).unwrap();
+        assert!(serde_json::from_str::<serde_json::Value>(&text).is_ok());
+        assert!(text.contains("https://host/repo") && text.contains("keep"));
+        for secret in ["PASS", "QUERY", "FRAGMENT", "NESTED", "ARGSECRET"] { assert!(!text.contains(secret)); }
+        let log = "failure\n-----BEGIN PRIVATE KEY-----\nPEMBODY\n-----END PRIVATE KEY-----\n\"token\": {\n\"inner\": {\"value\": \"MULTILINE\"}\n}\nAuthorization:\nCONTINUED\nuseful failure\n";
+        let (bytes, _) = super::redact_diagnostics_payload(log.as_bytes());
+        let text = String::from_utf8(bytes).unwrap();
+        for secret in ["PEMBODY", "MULTILINE", "CONTINUED"] { assert!(!text.contains(secret)); }
+        assert!(text.contains("useful failure"));
+    }
+
+    #[test]
+    fn diagnostics_cold_journal_omits_argument_values_without_changing_source() {
+        let root = unique_test_root("diagnostics-cold-journal-arguments");
+        let paths = NexusPaths::from_root(root.clone());
+        paths.ensure_directories().unwrap();
+        let journal = serde_json::json!({"phase":"prepared", "previous_config": {
+            "harness":{"args":["--token", "OPAQUE_ONE"]},
+            "update":{"build_args":["--key", "OPAQUE_TWO"],"verify_args":["--auth", "OPAQUE_THREE"]}
+        }, "target_config":{"harness":{"args":["--credential", "OPAQUE_FOUR"]}}});
+        let original = serde_json::to_vec_pretty(&journal).unwrap();
+        let journal_path = root.join("cold-publication.json");
+        fs::write(&journal_path, &original).unwrap();
+        let bundle = DiagnosticsStore::new(paths).collect(None).unwrap();
+        let exported = fs::read_to_string(PathBuf::from(bundle.directory).join("files/cold-publication.json")).unwrap();
+        for value in ["OPAQUE_ONE", "OPAQUE_TWO", "OPAQUE_THREE", "OPAQUE_FOUR"] { assert!(!exported.contains(value)); }
+        assert_eq!(fs::read(journal_path).unwrap(), original);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn diagnostics_truncated_tail_omits_private_key_body_without_begin_marker() {
+        let root = unique_test_root("diagnostics-pem-boundary");
+        let paths = NexusPaths::from_root(root.clone());
+        paths.ensure_directories().unwrap();
+        for kind in ["PRIVATE KEY", "RSA PRIVATE KEY", "ENCRYPTED PRIVATE KEY"] {
+            let mut log = format!("old context\n-----BEGIN {kind}-----\n");
+            // Force the actual bounded file read to start within the body.
+            while log.len() <= super::MAX_DIAGNOSTICS_LOG_BYTES + 512 {
+                log.push_str("DUMMY_PRIVATE_BODY_0123456789abcdefghijklmnopqrstuvwxyz\n");
+            }
+            log.push_str(&format!("-----END {kind}-----\nCURRENT_FAILURE_AFTER_KEY\n"));
+            fs::write(paths.logs_dir.join("current.stderr.log"), log).unwrap();
+            let bundle = DiagnosticsStore::new(paths.clone()).collect(None).unwrap();
+            let item = bundle.files.iter().find(|item| item.name == "logs/current.stderr.log").unwrap();
+            assert!(item.redacted && item.truncated);
+            let exported = fs::read_to_string(PathBuf::from(&bundle.directory).join("files/logs/current.stderr.log")).unwrap();
+            assert!(!exported.contains("DUMMY_PRIVATE_BODY"));
+            assert!(!exported.contains("PRIVATE KEY"));
+            assert!(exported.contains("CURRENT_FAILURE_AFTER_KEY"));
+        }
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn diagnostic_export_is_portable_redacted_and_excludes_raw_configuration_backup() {
+        let root = unique_test_root("diagnostic-export");
+        let paths = NexusPaths::from_root(root.clone());
+        paths.ensure_directories().unwrap();
+        fs::write(paths.logs_dir.join("current.stderr.log"), "CURRENT_FAILURE\napi_key=LOG_SECRET\n").unwrap();
+        fs::write(paths.root.join(super::PREVIOUS_CONFIG_FILE), "BACKUP_SECRET").unwrap();
+        let store = DiagnosticsStore::new(paths);
+        let bundle = store.collect_with_context(Some("token=NOTE_SECRET".into()), Some(serde_json::json!({"token":"CONFIG_SECRET","runtime":"bundled"}))).unwrap();
+        let path = store.open_path(&bundle.id, Some("export.json")).unwrap();
+        let bytes = fs::read(&path).unwrap();
+        let text = String::from_utf8(bytes.clone()).unwrap();
+        for secret in ["LOG_SECRET", "NOTE_SECRET", "CONFIG_SECRET", "BACKUP_SECRET"] { assert!(!text.contains(secret)); }
+        let value: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(value["format"], "nexus-diagnostics");
+        assert!(value["files"]["logs/current.stderr.log"].as_str().unwrap().contains("CURRENT_FAILURE"));
+        assert_eq!(value["files"].as_object().unwrap().len(), bundle.files.len());
+        assert_eq!(bundle.note.as_deref(), Some("[REDACTED]"));
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
     fn config_store_round_trips_nexus_owned_specs_atomically() {
         let root = unique_test_root("config-store");
         let paths = NexusPaths::from_root(root.clone());
@@ -4047,6 +4557,7 @@ mod tests {
         );
 
         let document = NexusConfigFile {
+            harness_preferences: None,
             harness: Some(HarnessLaunchSpec {
                 mode: Default::default(),
                 program: PathBuf::from("bin/harness"),
@@ -4239,6 +4750,26 @@ mod tests {
     }
 
     #[test]
+    fn module_farm_initializes_a_missing_first_run_home() {
+        let root = unique_test_root("module-farm-first-run");
+        let home = root.join("new parent/another parent/.dsh");
+        let slot = root.join("slot");
+        let package = slot.join("packages/example");
+        fs::create_dir_all(&package).unwrap();
+        fs::write(package.join("package.json"), r#"{"name":"@dsh/example"}"#).unwrap();
+        assert!(!home.exists());
+        let result = ReleaseStore::heal_module_farm(&home, &slot);
+        if let Err(error) = &result {
+            fs::remove_dir_all(&root).unwrap();
+            panic!("first startup could not prepare the missing Harness home: {error}");
+        }
+        assert_eq!(result.unwrap(), 1);
+        assert!(ReleaseStore::same_directory(&home.join("profiles/node_modules/@dsh/example"), &package));
+        assert_eq!(ReleaseStore::heal_module_farm(&home, &slot).unwrap(), 0);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
     fn module_farm_retargets_real_links_and_preserves_user_directories() {
         let root = unique_test_root("module-farm-retarget");
         let home = root.join("home");
@@ -4298,6 +4829,36 @@ mod tests {
         assert!(ReleaseStore::replace_module_link(&link, Path::new("bad\0target")).is_err());
         assert!(ReleaseStore::same_directory(&link, &target));
         ReleaseStore::remove_module_link(&link).unwrap();
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn module_farm_rejects_linked_home_ancestors_before_creating_directories() {
+        let root = unique_test_root("module-farm-home-ancestor");
+        let outside = root.join("outside");
+        fs::create_dir_all(outside.join("existing-home")).unwrap();
+        let alias = root.join("alias");
+        ReleaseStore::create_dir_junction(&alias, &outside).unwrap();
+        for home in [alias.join("new/nested/home"), alias.join("existing-home")] {
+            assert!(ReleaseStore::heal_module_farm(&home, &root.join("slot")).is_err());
+        }
+        assert!(!outside.join("new").exists());
+        assert_eq!(fs::read_dir(outside.join("existing-home")).unwrap().count(), 0);
+        ReleaseStore::remove_module_link(&alias).unwrap();
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn module_farm_junction_preserves_shell_characters_as_literal_paths() {
+        let root = unique_test_root("module-farm-literal");
+        let home = root.join("用户 home & %PATH%/.dsh");
+        let slot = root.join("版本 slot & %TEMP%");
+        let package = slot.join("packages/example");
+        fs::create_dir_all(&package).unwrap();
+        fs::write(package.join("package.json"), r#"{"name":"@dsh/example"}"#).unwrap();
+        assert_eq!(ReleaseStore::heal_module_farm(&home, &slot).unwrap(), 1);
+        assert!(ReleaseStore::same_directory(&home.join("profiles/node_modules/@dsh/example"), &package));
         fs::remove_dir_all(root).unwrap();
     }
 }
@@ -5366,6 +5927,8 @@ fn validate_update_args(args: &[String], label: &str) -> io::Result<()> {
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
 pub struct NexusConfigFile {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub harness_preferences: Option<nexus_protocol::HarnessPreferencesPayload>,
     #[serde(default)]
     pub harness: Option<HarnessLaunchSpec>,
     #[serde(default)]
@@ -5427,13 +5990,15 @@ fn default_max_manual_snapshots() -> u32 {
     DEFAULT_MAX_MANUAL_SNAPSHOTS as u32
 }
 
-/// Nexus-owned configuration writer. It owns only `config.json`; Harness
+/// Nexus-owned configuration writer, previous valid config and home protection. Harness
 /// source, working directories, and `$HOME/.dsh` are never modified here.
 #[derive(Clone)]
 pub struct ConfigStore {
     paths: NexusPaths,
 }
 
+mod config_transaction;
+pub use config_transaction::is_config_transaction_error;
 static CONFIG_WRITE_GATE: Mutex<()> = Mutex::new(());
 
 impl ConfigStore {
@@ -5447,14 +6012,14 @@ impl ConfigStore {
 
     pub fn load(&self) -> io::Result<NexusConfigFile> {
         let _guard = self.lock_gate()?;
+        self.settle_pending_unlocked()?;
         self.load_unlocked()
     }
 
     fn load_unlocked(&self) -> io::Result<NexusConfigFile> {
-        if !self.paths.config_file.exists() {
+        let Some(bytes) = read_regular_file_bounded(&self.paths.config_file, 4 * 1024 * 1024)? else {
             return Ok(NexusConfigFile::default());
-        }
-        let bytes = fs::read(&self.paths.config_file)?;
+        };
         let document: NexusConfigFile = decode_json(&bytes).map_err(invalid_data)?;
         validate_config_document(&self.paths, &document)?;
         Ok(document)
@@ -5466,9 +6031,49 @@ impl ConfigStore {
         self.write_unlocked(document)
     }
 
+    /// Publish only if the configuration still matches the transaction's captured input.
+    pub fn write_if_current(&self, expected: &NexusConfigFile, document: &NexusConfigFile) -> io::Result<bool> {
+        validate_config_document(&self.paths, document)?;
+        let _guard = self.lock_gate()?;
+        self.settle_pending_unlocked()?;
+        if self.load_unlocked()? != *expected { return Ok(false); }
+        self.write_unlocked(document)?;
+        Ok(true)
+    }
+
     fn write_unlocked(&self, document: &NexusConfigFile) -> io::Result<()> {
         self.paths.ensure_directories()?;
-        write_json_atomic(&self.paths.root, &self.paths.config_file, document)
+        self.settle_pending_unlocked()?;
+        let previous = self.load_unlocked().ok();
+        let old_home = configured_harness_home(&self.paths.root)?;
+        let new_home = document.harness_preferences.as_ref().and_then(|p| p.home.as_deref())
+            .map(str::trim).filter(|value| !value.is_empty()).map(PathBuf::from);
+        let inherited = env::var_os("DSH_HOME").filter(|value| !value.is_empty()).map(PathBuf::from);
+        let homes: Vec<_> = old_home.into_iter().chain(new_home).chain(inherited).collect();
+        protect_harness_homes(&self.paths.root, &homes)?;
+        // Only these explicitly Nexus-owned files are tightened. A no-op save
+        // must not rotate or rewrite the previous valid configuration bytes.
+        for path in [&self.paths.config_file, &self.paths.root.join(PREVIOUS_CONFIG_FILE)] {
+            if read_regular_file_bounded(path, 4 * 1024 * 1024)?.is_some() {
+                nexus_private_file::secure_existing_private(path)?;
+            }
+        }
+        if previous.as_ref() == Some(document) && self.paths.config_file.is_file() { return Ok(()); }
+        self.publish_config_unlocked(document, previous.is_some())
+    }
+
+    pub fn restore_previous(&self) -> io::Result<NexusConfigFile> {
+        let _guard = self.lock_gate()?;
+        self.settle_pending_unlocked()?;
+        let path = self.paths.root.join(PREVIOUS_CONFIG_FILE);
+        let bytes = read_regular_file_bounded(&path, 4 * 1024 * 1024)?
+            .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "No previous valid Nexus configuration is available"))?;
+        let previous: NexusConfigFile = decode_json(&bytes).map_err(invalid_data)?;
+        validate_config_document(&self.paths, &previous)?;
+        // write_unlocked checks both old and new Harness homes and preserves
+        // the current valid configuration as the next undo point.
+        self.write_unlocked(&previous)?;
+        Ok(previous)
     }
 
     /// Atomically read, modify, validate, and replace the shared config file.
@@ -5477,6 +6082,7 @@ impl ConfigStore {
         update: impl FnOnce(&mut NexusConfigFile) -> io::Result<T>,
     ) -> io::Result<(NexusConfigFile, T)> {
         let _guard = self.lock_gate()?;
+        self.settle_pending_unlocked()?;
         let mut document = self.load_unlocked()?;
         let result = update(&mut document)?;
         validate_config_document(&self.paths, &document)?;
@@ -5492,6 +6098,9 @@ impl ConfigStore {
 }
 
 fn validate_config_document(paths: &NexusPaths, document: &NexusConfigFile) -> io::Result<()> {
+    if let Some(preferences) = &document.harness_preferences {
+        normalize_harness_preferences(preferences.clone())?;
+    }
     if let Some(harness) = &document.harness {
         harness.validate()?;
     }
@@ -5526,13 +6135,62 @@ fn validate_config_document(paths: &NexusPaths, document: &NexusConfigFile) -> i
     Ok(())
 }
 
+/// Read-only deletion guard; never acquire CONFIG_WRITE_GATE under RELEASE_GATE.
+fn ensure_configuration_paths_preserved(paths: &NexusPaths, target: &Path) -> io::Result<()> {
+    match fs::symlink_metadata(paths.root.join("config-write.pending.json")) {
+        Ok(_) => return Err(io::Error::new(io::ErrorKind::WouldBlock, "Configuration recovery must finish before deleting a release")),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => {},
+        Err(error) => return Err(error),
+    }
+    let bytes = read_regular_file_bounded(&paths.config_file, 4 * 1024 * 1024)?;
+    let config: NexusConfigFile = bytes.as_deref().map(decode_json).transpose().map_err(invalid_data)?.unwrap_or_default();
+    let mut references = Vec::new();
+    if let Some(runtime) = config.runtime {
+        for pin in [runtime.node, runtime.pnpm, runtime.git].into_iter().flatten() { references.push(pin.path); }
+    }
+    let harness = parse_harness_launch_spec(bytes.as_deref())?;
+    if let Some(harness) = harness {
+        let cwd = harness.working_dir.as_ref().filter(|path| path.is_absolute()).cloned()
+            .unwrap_or_else(|| paths.root.join(harness.working_dir.as_deref().unwrap_or(Path::new(""))));
+        if harness_program_is_node_runtime(&harness.program) || harness.mode == HarnessLaunchMode::Node {
+            for argument in &harness.args {
+                let value = if argument.starts_with('-') { argument.split_once('=').map_or(argument.as_str(), |(_, value)| value) } else { argument.as_str() };
+                if value.starts_with('-') || ["{release_root}", "{profile}", "{dsh_home}"].iter().any(|token| value.contains(token)) || value.is_empty() { continue; }
+                let path = PathBuf::from(value);
+                references.push(if path.is_absolute() { path } else { cwd.join(path) });
+            }
+        }
+        if let Some(directory) = &harness.working_dir { references.push(directory.clone()); }
+        if harness.program.is_absolute() { references.push(harness.program); }
+        else if harness.program.components().count() > 1 {
+            references.push(harness.working_dir.unwrap_or(paths.root.clone()).join(harness.program));
+        }
+    }
+    for reference in references {
+        if config_protection::paths_overlap_by_identity(target, &reference)? {
+            return Err(io::Error::new(io::ErrorKind::ResourceBusy, "Release contains a configured runtime or Harness launch path"));
+        }
+    }
+    Ok(())
+}
+
 /// Load the optional external Harness command from Nexus-owned configuration
 /// and then apply explicit environment overrides. A missing program is a
 /// valid, intentional control-plane-only configuration.
 pub fn load_harness_launch_spec(paths: &NexusPaths) -> io::Result<Option<HarnessLaunchSpec>> {
-    let mut spec = if paths.config_file.exists() {
-        let bytes = fs::read(&paths.config_file)?;
-        let document: NexusConfigFile = decode_json(&bytes).map_err(invalid_data)?;
+    let bytes = {
+        let store = ConfigStore::new(paths.clone());
+        let _guard = store.lock_gate()?;
+        store.settle_pending_unlocked()?;
+        read_regular_file_bounded(&paths.config_file, 4 * 1024 * 1024)?
+    };
+    parse_harness_launch_spec(bytes.as_deref())
+}
+
+/// Pure parsing and environment application, shared with deletion protection.
+fn parse_harness_launch_spec(bytes: Option<&[u8]>) -> io::Result<Option<HarnessLaunchSpec>> {
+    let mut spec = if let Some(bytes) = bytes {
+        let document: NexusConfigFile = decode_json(bytes).map_err(invalid_data)?;
         match document.harness {
             Some(spec) => Some(spec),
             None => decode_json::<HarnessLaunchSpec>(&bytes).ok(),
@@ -5609,8 +6267,13 @@ fn is_known_dsh_path(value: &str) -> bool {
 /// apply explicit environment overrides. A missing plan is intentional: the
 /// Agent can still supervise an already configured Harness without updates.
 pub fn load_update_spec(paths: &NexusPaths) -> io::Result<Option<UpdateSpec>> {
-    let mut spec = if paths.config_file.exists() {
-        let bytes = fs::read(&paths.config_file)?;
+    let bytes = {
+        let store = ConfigStore::new(paths.clone());
+        let _guard = store.lock_gate()?;
+        store.settle_pending_unlocked()?;
+        read_regular_file_bounded(&paths.config_file, 4 * 1024 * 1024)?
+    };
+    let mut spec = if let Some(bytes) = bytes {
         let document: NexusConfigFile = decode_json(&bytes).map_err(invalid_data)?;
         match document.update {
             Some(spec) => Some(spec),
@@ -5679,4 +6342,56 @@ fn non_empty_env(name: &str) -> Option<String> {
 fn parse_args_override(value: &str) -> Vec<String> {
     decode_json::<Vec<String>>(value.as_bytes())
         .unwrap_or_else(|_| value.split_whitespace().map(str::to_owned).collect())
+}
+
+#[cfg(test)]
+mod private_config_tests {
+    use super::*;
+    #[test]
+    fn private_config_restore_keeps_undo_and_rejects_unknown_home_or_oversize() {
+        let root = env::temp_dir().join(format!("nexus-private-config-{}", unix_time_nanos_for_update()));
+        let paths = NexusPaths::from_root(root.clone());
+        let store = ConfigStore::new(paths.clone());
+        let a = NexusConfigFile { harness_preferences: Some(nexus_protocol::HarnessPreferencesPayload { telemetry_disabled: Some(true), ..Default::default() }), ..Default::default() };
+        let b = NexusConfigFile { harness_preferences: Some(nexus_protocol::HarnessPreferencesPayload { telemetry_disabled: Some(false), ..Default::default() }), ..Default::default() };
+        store.write(&a).unwrap(); store.write(&b).unwrap();
+        let backup = root.join(PREVIOUS_CONFIG_FILE);
+        let original = fs::read(&backup).unwrap();
+        store.write(&b).unwrap();
+        assert_eq!(fs::read(&backup).unwrap(), original);
+        assert_eq!(store.restore_previous().unwrap(), a);
+        assert_eq!(store.load().unwrap(), a);
+        assert_eq!(store.restore_previous().unwrap(), b);
+        for path in [&paths.config_file, &backup] {
+            nexus_private_file::verify_private(&fs::File::open(path).unwrap()).unwrap();
+        }
+        let saved_backup = fs::read(&backup).unwrap();
+        fs::write(&paths.config_file, b"{").unwrap();
+        assert!(store.restore_previous().is_err());
+        assert_eq!(fs::read(&paths.config_file).unwrap(), b"{");
+        assert_eq!(fs::read(&backup).unwrap(), saved_backup);
+        fs::write(&paths.config_file, vec![b'x'; 4 * 1024 * 1024 + 1]).unwrap();
+        assert!(store.load().is_err());
+        assert!(store.restore_previous().is_err());
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn private_atomic_replacement_preserves_acl_and_old_value_when_locked() {
+        let root = env::temp_dir().join(format!("nexus-private-atomic-{}", unix_time_nanos_for_update()));
+        fs::create_dir_all(&root).unwrap();
+        let path = root.join("config.json");
+        fs::write(&path, b"public old").unwrap();
+        write_private_bytes_atomic(&root, &path, b"private new").unwrap();
+        nexus_private_file::verify_private(&fs::File::open(&path).unwrap()).unwrap();
+        #[cfg(windows)] {
+            use std::os::windows::fs::OpenOptionsExt;
+            let locked = fs::OpenOptions::new().read(true).share_mode(1).open(&path).unwrap();
+            assert!(write_private_bytes_atomic(&root, &path, b"must not publish").is_err());
+            drop(locked);
+            assert_eq!(fs::read(&path).unwrap(), b"private new");
+            assert_eq!(fs::read_dir(&root).unwrap().count(), 1);
+        }
+        fs::remove_dir_all(root).unwrap();
+    }
 }

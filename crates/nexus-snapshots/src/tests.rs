@@ -325,6 +325,138 @@ fn healthy_rotation_recovers_both_publication_rename_crash_cuts() {
 }
 
 #[test]
+fn unpublished_capture_orphans_preserve_data_and_do_not_block_recapture() {
+    for destination_state in ["present", "old", "absent"] {
+        let fixture = Fixture::with_config(SnapshotStoreConfig { healthy_slots: 1, max_manual_snapshots: 2 });
+        let original = fixture.capture_healthy();
+        let base = fixture.data.join("snapshots/demo");
+        let slot = base.join("healthy/slot-1");
+        if destination_state == "old" { fs::rename(&slot, base.join("healthy/.old-slot-1")).unwrap(); }
+        if destination_state == "absent" { fs::remove_dir_all(&slot).unwrap(); }
+        let manual_staging = base.join(".staging-snapshot-1-2-3");
+        fs::create_dir_all(&manual_staging).unwrap();
+        fs::write(manual_staging.join("unknown.txt"), "manual partial").unwrap();
+        let next = base.join("healthy/.next-slot-1");
+        fs::create_dir_all(next.join("files")).unwrap();
+        fs::write(next.join("files/0.bin"), "partial blob").unwrap();
+        fs::write(next.join("unknown.txt"), "retain unknown").unwrap();
+        let recovered = SnapshotStore::with_config(&fixture.data, &fixture.home, "demo", fixture.store.config).unwrap();
+        let list = recovered.list().unwrap();
+        if destination_state == "absent" { assert!(list.is_empty()); }
+        else { assert_eq!(list[0].snapshot_id, original.snapshot_id); }
+        assert!(!next.exists());
+        let quarantine = fs::read_dir(&base).unwrap().map(|entry| entry.unwrap().path())
+            .find(|path| path != &manual_staging && path.join("unknown.txt").is_file()).unwrap();
+        assert_eq!(fs::read_to_string(quarantine.join("unknown.txt")).unwrap(), "retain unknown");
+        assert_eq!(fs::read_to_string(quarantine.join("files/0.bin")).unwrap(), "partial blob");
+        assert_eq!(fs::read_to_string(manual_staging.join("unknown.txt")).unwrap(), "manual partial");
+        recovered.capture_healthy(CaptureRequest { dsh_version: "0.1.2".into() }).unwrap();
+        assert_eq!(recovered.list().unwrap().len(), 1);
+    }
+}
+
+#[test]
+fn unpublished_staging_rejects_unknown_names_and_linked_directories() {
+    let fixture = Fixture::new();
+    fixture.capture_healthy();
+    let base = fixture.data.join("snapshots").join("demo");
+    let unknown = base.join(".staging-snapshot-not-generated");
+    fs::create_dir(&unknown).unwrap();
+    assert!(fixture.store.list().is_err());
+    assert!(unknown.exists());
+    fs::remove_dir(&unknown).unwrap();
+    let outside = fixture.root.join("outside-staging");
+    fs::create_dir(&outside).unwrap();
+    fs::write(outside.join("keep"), "outside").unwrap();
+    for linked in [base.join(".staging-snapshot-1-2-3"), base.join("healthy").join(".next-slot-1")] {
+        create_directory_link(&outside, &linked);
+        assert!(fixture.store.list().is_err());
+        assert_eq!(fs::read_to_string(outside.join("keep")).unwrap(), "outside");
+        remove_directory_link(&linked);
+    }
+}
+
+#[test]
+fn transaction_temporary_writes_do_not_hide_pending_or_prevent_prepare() {
+    let fixture = Fixture::new();
+    let snapshot = fixture.capture_healthy();
+    let root = fixture.store.transaction_root();
+    fs::create_dir_all(root).unwrap();
+    let temporary = root.join(".tmp-write-1-2-3");
+    fs::write(&temporary, "{partial").unwrap();
+    let ticket = fixture.store.prepare_restore(&snapshot.snapshot_id).unwrap();
+    assert_eq!(fixture.store.pending_restores().unwrap().len(), 1);
+    fixture.store.rollback_restore(&ticket).unwrap();
+    assert_eq!(fs::read_to_string(&temporary).unwrap(), "{partial");
+    for name in ["notes.txt", ".tmp-write-invalid"] {
+        let unknown = root.join(name);
+        fs::write(&unknown, "keep").unwrap();
+        assert!(fixture.store.pending_restores().is_err());
+        assert_eq!(fs::read_to_string(&unknown).unwrap(), "keep");
+        fs::remove_file(unknown).unwrap();
+    }
+    let linked = root.join(".tmp-write-4-5-6");
+    create_directory_link(&fixture.home, &linked);
+    assert!(fixture.store.pending_restores().is_err());
+    remove_directory_link(&linked);
+    let next = fixture.store.prepare_restore(&snapshot.snapshot_id).unwrap();
+    fixture.store.apply_restore(&next).unwrap();
+    fixture.store.rollback_restore(&next).unwrap();
+}
+
+#[test]
+fn rollback_new_file_recovers_write_before_applied_record_and_preserves_external_edits() {
+    for state in ["written", "not-written", "changed", "discarded"] {
+        let fixture = Fixture::new();
+        let snapshot = fixture.capture_healthy();
+        let target = fixture.home.join("cordis.patch.yml");
+        fs::remove_file(&target).unwrap();
+        let ticket = fixture.store.prepare_restore(&snapshot.snapshot_id).unwrap();
+        assert!(fixture.store.apply_restore_with_namespace_fault(&ticket, 6).is_err());
+        assert!(target.is_file());
+        if state == "not-written" { fs::remove_file(&target).unwrap(); }
+        if state == "changed" { fs::write(&target, "user: changed\n").unwrap(); }
+        let recovered = SnapshotStore::new(&fixture.data, &fixture.home, "demo").unwrap();
+        if state == "discarded" {
+            assert!(recovered.rollback_restore_with_fault(&ticket, RestoreFault::AfterNamespace(6)).is_err());
+        }
+        let result = recovered.rollback_restore(&ticket);
+        if state == "changed" {
+            assert!(matches!(result, Err(SnapshotError::ConcurrentModification(_))));
+            assert_eq!(fs::read_to_string(target).unwrap(), "user: changed\n");
+        } else {
+            result.unwrap();
+            assert!(!target.exists());
+            recovered.rollback_restore(&ticket).unwrap();
+        }
+    }
+}
+
+#[test]
+fn rollback_does_not_relax_applying_or_confirmed_applied_states() {
+    for applying in [true, false] {
+        let fixture = Fixture::new();
+        let snapshot = fixture.capture_healthy();
+        let target = fixture.home.join("cordis.patch.yml");
+        fs::remove_file(&target).unwrap();
+        let ticket = fixture.store.prepare_restore(&snapshot.snapshot_id).unwrap();
+        if applying {
+            assert!(fixture.store.apply_restore_with_namespace_fault(&ticket, 6).is_err());
+            let path = fixture.store.transaction_root().join(format!("{}.json", ticket.ticket_id));
+            let mut record: serde_json::Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+            record["operations"][6]["status"] = serde_json::json!("applying");
+            fs::write(path, serde_json::to_vec(&record).unwrap()).unwrap();
+            assert!(matches!(fixture.store.rollback_restore(&ticket), Err(SnapshotError::ConcurrentModification(_))));
+            assert!(target.exists());
+        } else {
+            fixture.store.apply_restore(&ticket).unwrap();
+            fs::remove_file(&target).unwrap();
+            assert!(matches!(fixture.store.rollback_restore(&ticket), Err(SnapshotError::Integrity(_))));
+        }
+    }
+}
+
+#[test]
 fn oversized_source_is_rejected_before_parsing() {
     let fixture = Fixture::new();
     fs::write(

@@ -8,10 +8,17 @@
                   BinaryKey="NexusStopBinary"
                   ExeCommand="installer-stop --install-dir &quot;[INSTALLDIR].&quot;"
                   Execute="immediate" Return="check" />
+    <!-- User-profile cleanup remains opt-in. Never prompt on upgrades or
+         unattended removal, and never resolve the elevated system profile. -->
+    <CustomAction Id="NexusAskDataCleanup"
+                  BinaryKey="NexusStopBinary"
+                  ExeCommand="installer-cleanup --data-dir &quot;[LocalAppDataFolder]Nexus&quot; --install-dir &quot;[INSTALLDIR].&quot;"
+                  Execute="immediate" Return="check" />
     <InstallExecuteSequence>
       <!-- CostFinalize has resolved INSTALLDIR. Run before validation and
            Tauri's afterInstallInitialize removal of a previous MSI product. -->
       <Custom Action="NexusStopInstalledAgent" Before="InstallValidate">1</Custom>
+      <Custom Action="NexusAskDataCleanup" Before="RemoveFiles">Installed AND REMOVE="ALL" AND NOT UPGRADINGPRODUCTCODE AND UILevel &gt;= 3</Custom>
     </InstallExecuteSequence>
   </Fragment>
 </Wix>

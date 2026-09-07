@@ -53,6 +53,14 @@ pub(crate) fn validate_identifier(identifier: &str) -> Result<()> {
     Ok(())
 }
 
+/// Exact namespace emitted by new_identifier: timestamp, process, sequence.
+pub(crate) fn is_generated_name(name: &str, prefix: &str) -> bool {
+    let Some(suffix) = name.strip_prefix(prefix) else { return false; };
+    let parts: Vec<_> = suffix.split('-').collect();
+    parts.len() == 3 && parts.iter().all(|part| !part.is_empty()
+        && part.bytes().all(|byte| byte.is_ascii_digit()) && part.parse::<u64>().is_ok())
+}
+
 pub(crate) fn validate_metadata_text(name: &str, value: &str, limit: usize) -> Result<()> {
     if value.is_empty() || value.len() > limit || value.chars().any(char::is_control) {
         return Err(SnapshotError::InvalidManifest(format!(
@@ -1175,17 +1183,13 @@ pub(crate) fn write_durable(path: &Path, bytes: &[u8]) -> Result<()> {
         }
     }
     let temporary = parent.join(format!(".tmp-{}", new_identifier("write")));
-    let mut file = OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .open(&temporary)
+    let mut file = nexus_private_file::create_new_private(&temporary)
         .map_err(|error| {
             SnapshotError::io(
                 format!("create temporary file {}", temporary.display()),
                 error,
             )
         })?;
-    set_private_file_permissions(&temporary)?;
     let result = (|| {
         file.write_all(bytes).map_err(|error| {
             SnapshotError::io(
@@ -1416,18 +1420,6 @@ fn portable_mode(metadata: &fs::Metadata) -> u32 {
     }
 }
 
-fn set_private_file_permissions(path: &Path) -> Result<()> {
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        fs::set_permissions(path, fs::Permissions::from_mode(0o600))
-            .map_err(|error| SnapshotError::io(format!("secure file {}", path.display()), error))?;
-    }
-    #[cfg(not(unix))]
-    let _ = path;
-    Ok(())
-}
-
 fn set_private_directory_permissions(path: &Path) -> Result<()> {
     #[cfg(unix)]
     {
@@ -1441,7 +1433,7 @@ fn set_private_directory_permissions(path: &Path) -> Result<()> {
     Ok(())
 }
 
-fn is_link_or_reparse(metadata: &fs::Metadata) -> bool {
+pub(crate) fn is_link_or_reparse(metadata: &fs::Metadata) -> bool {
     if metadata.file_type().is_symlink() {
         return true;
     }
@@ -1466,4 +1458,21 @@ fn truncate_string(value: &str, max_bytes: usize) -> String {
         boundary -= 1;
     }
     value[..boundary].to_owned()
+}
+
+#[cfg(test)]
+mod private_write_tests {
+    #[test]
+    fn raw_restore_backup_is_private_and_replacement_keeps_permissions() {
+        let root = std::env::temp_dir().join(super::new_identifier("private-rollback-test"));
+        std::fs::create_dir(&root).unwrap();
+        let path = root.join("rollback.json");
+        for bytes in [b"original secret".as_slice(), b"next secret".as_slice()] {
+            super::write_durable(&path, bytes).unwrap();
+            assert_eq!(std::fs::read(&path).unwrap(), bytes);
+            nexus_private_file::verify_private(&std::fs::File::open(&path).unwrap()).unwrap();
+        }
+        assert_eq!(std::fs::read_dir(&root).unwrap().count(), 1);
+        std::fs::remove_dir_all(root).unwrap();
+    }
 }

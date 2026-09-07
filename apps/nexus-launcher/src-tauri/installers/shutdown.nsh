@@ -24,20 +24,34 @@
 
 !macro NSIS_HOOK_PREUNINSTALL
   !insertmacro NexusStopInstalledAgent
-!macroend
-
-; Uninstall experience: the data root (configuration, release slots, cached
-; runtimes) survives by default; offer an explicit cleanup. Harness user data
-; under the user's .dsh home is never touched.
-!macro NexusAskDataCleanup
-  MessageBox MB_YESNO|MB_ICONQUESTION "Also remove version slots and cached runtimes from the default data folder ($LOCALAPPDATA\Nexus)? Custom NEXUS_DATA_DIR locations are not removed. Your Harness data in the .dsh folder is always kept." IDYES NexusCleanupData
-  Goto NexusCleanupDone
-NexusCleanupData:
-  RMDir /r "$LOCALAPPDATA\Nexus\releases"
-  RMDir /r "$LOCALAPPDATA\Nexus\runtimes"
-NexusCleanupDone:
-!macroend
-
-!macro NSIS_HOOK_POSTUNINSTALL
   !insertmacro NexusAskDataCleanup
+!macroend
+
+; The temporary native helper asks explicitly, with Keep as the default.
+; Update/passive/silent uninstall never asks and never deletes user data.
+!macro NexusAskDataCleanup
+  ${If} $UpdateMode = 1
+  ${OrIf} $PassiveMode = 1
+    Goto NexusCleanupDone
+  ${EndIf}
+  IfSilent NexusCleanupDone
+  ; Tauri also invokes an existing uninstaller with _?= during ordinary
+  ; reinstall/upgrade flows, even when /UPDATE was not supplied.
+  Push $R9
+  ClearErrors
+  ${GetOptions} $CMDLINE "_?=" $R9
+  ${IfNot} ${Errors}
+    Pop $R9
+    Goto NexusCleanupDone
+  ${EndIf}
+  Pop $R9
+  Push $0
+  nsExec::ExecToLog '"$PLUGINSDIR\nexus-installer-stop.exe" installer-cleanup --data-dir "$LOCALAPPDATA\Nexus" --install-dir "$INSTDIR"'
+  Pop $0
+  ${If} $0 != 0
+    Pop $0
+    Abort
+  ${EndIf}
+  Pop $0
+NexusCleanupDone:
 !macroend

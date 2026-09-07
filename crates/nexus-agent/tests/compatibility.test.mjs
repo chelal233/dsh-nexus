@@ -36,6 +36,24 @@ function fixture() {
   return {root,home,slot,source,options,write,close:()=>fs.rmSync(root,{recursive:true,force:true})};
 }
 
+test('preference and patch changes invalidate compatibility cache', async()=>{
+  const f=fixture();
+  try {
+    f.write(['good']);
+    const patch=path.join(f.root,'extra.yml');
+    fs.writeFileSync(patch,'[]');
+    const first=await check({...f.options, patches:[patch], preferences_env:{DSH_TOOLS_MODE:'native'}});
+    const changed=await check({...f.options, patches:[patch], preferences_env:{DSH_TOOLS_MODE:'both'}});
+    assert.notEqual(first.effective_profile, changed.effective_profile);
+    fs.writeFileSync(patch,'# changed\n[]');
+    const patched=await check({...f.options, patches:[patch], preferences_env:{DSH_TOOLS_MODE:'both'}});
+    assert.notEqual(changed.effective_profile, patched.effective_profile);
+    const reused=await check({...f.options, patches:[patch], preferences_env:{DSH_TOOLS_MODE:'both'}});
+    assert.equal(reused.effective_profile, patched.effective_profile);
+    assert.equal(reused.cache_reused, true);
+  } finally {f.close();}
+});
+
 test('only specific third-party import/API failures are attributable',()=>{
   assert.deepEqual(incompatibleBundles('failed to apply loader entry include (cordis:include): failed to apply loader entry child (bad): ctx.missing is not a function',['bad']).map(x=>x.package),['bad']);
   assert.deepEqual(incompatibleBundles('failed to apply loader entry child (@deepseek-ai/core): ctx.missing is not a function',['@deepseek-ai/core']),[]);

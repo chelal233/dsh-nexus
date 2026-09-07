@@ -198,7 +198,7 @@ impl SnapshotStore {
     /// Apply a prepared restore. Errors leave the durable transaction pending;
     /// callers choose explicit resume or rollback through [`recover_restore`].
     pub fn apply_restore(&self, ticket: &RestoreTicket) -> Result<RestoreOutcome> {
-        self.apply_restore_inner(ticket, None)
+        self.apply_restore_inner(ticket, None, None)
     }
 
     /// Mark the caller-owned pnpm materialization step successful.
@@ -341,7 +341,10 @@ impl SnapshotStore {
                     &target,
                     policy.max_bytes,
                     &backup_directory,
-                    operation.applied_sha256.as_deref(),
+                    if operation.status == OperationStatus::BackedUp {
+                        operation.desired_sha256.as_deref()
+                    } else { operation.applied_sha256.as_deref() },
+                    operation.status == OperationStatus::Applied,
                 )?;
             }
             maybe_inject_restore_failure(fault, RestoreFault::AfterNamespace(operation.index))?;
@@ -379,6 +382,7 @@ impl SnapshotStore {
         &self,
         ticket: &RestoreTicket,
         fail_after_operations: Option<usize>,
+        namespace_fault: Option<RestoreFault>,
     ) -> Result<RestoreOutcome> {
         let mut record = self.read_matching_transaction(ticket)?;
         match record.status {
@@ -529,6 +533,7 @@ impl SnapshotStore {
                     record.operations[operation_index].applied_sha256 = None;
                 }
             }
+            maybe_inject_restore_failure(namespace_fault, RestoreFault::AfterNamespace(index))?;
             record.operations[operation_index].status = OperationStatus::Applied;
             self.write_transaction(&record)?;
             completed += 1;
@@ -701,6 +706,16 @@ impl SnapshotStore {
                 .map_err(|error| SnapshotError::io("read transaction directory entry", error))?;
             let path = entry.path();
             let name = entry.file_name().to_string_lossy().into_owned();
+            if validation::is_generated_name(&name, ".tmp-write-") {
+                let metadata = fs::symlink_metadata(&path)
+                    .map_err(|error| SnapshotError::io("inspect transaction temporary", error))?;
+                if metadata.is_file() && !validation::is_link_or_reparse(&metadata) {
+                    // An unpublished write is not a transaction. Preserve it,
+                    // even when partial, without interpreting its payload.
+                    continue;
+                }
+                return Err(SnapshotError::UnsafePath(format!("unsafe transaction temporary: {}", path.display())));
+            }
             let ticket_id = name.strip_suffix(".json").ok_or_else(|| {
                 SnapshotError::UnsafePath(format!(
                     "unexpected transaction entry: {}",
@@ -806,6 +821,7 @@ impl SnapshotStore {
         limit: u64,
         backup_directory: &Path,
         expected_applied_sha256: Option<&str>,
+        confirmed_applied: bool,
     ) -> Result<()> {
         let discard = self.rollback_discard_file(ticket_id, index)?;
         let directory_present =
@@ -836,7 +852,7 @@ impl SnapshotStore {
             return Ok(());
         }
         let Some((bytes, _)) = current else {
-            if expected_applied_sha256.is_some() {
+            if confirmed_applied && expected_applied_sha256.is_some() {
                 return Err(SnapshotError::Integrity(format!(
                     "applied target and rollback discard are both unavailable for {}",
                     FILE_POLICY[index].manifest_path
@@ -929,7 +945,12 @@ impl SnapshotStore {
         ticket: &RestoreTicket,
         fail_after_operations: usize,
     ) -> Result<RestoreOutcome> {
-        self.apply_restore_inner(ticket, Some(fail_after_operations))
+        self.apply_restore_inner(ticket, Some(fail_after_operations), None)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn apply_restore_with_namespace_fault(&self, ticket: &RestoreTicket, index: usize) -> Result<RestoreOutcome> {
+        self.apply_restore_inner(ticket, None, Some(RestoreFault::AfterNamespace(index)))
     }
 
     #[cfg(test)]

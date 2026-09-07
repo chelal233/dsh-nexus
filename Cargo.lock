@@ -722,13 +722,14 @@ dependencies = [
 
 [[package]]
 name = "nexus-agent"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "axum",
  "git2",
  "libc",
  "nexus-core",
  "nexus-launcher-core",
+ "nexus-private-file",
  "nexus-protocol",
  "nexus-snapshots",
  "serde",
@@ -741,7 +742,7 @@ dependencies = [
 
 [[package]]
 name = "nexus-cli"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "nexus-core",
  "nexus-protocol",
@@ -752,18 +753,20 @@ dependencies = [
 
 [[package]]
 name = "nexus-core"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
+ "nexus-private-file",
  "nexus-protocol",
  "nexus-snapshots",
  "serde",
  "serde_json",
+ "sha2",
  "windows-sys 0.61.2",
 ]
 
 [[package]]
 name = "nexus-launcher"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "axum",
  "hmac",
@@ -781,7 +784,7 @@ dependencies = [
 
 [[package]]
 name = "nexus-launcher-core"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "futures-util",
  "nexus-core",
@@ -793,8 +796,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "nexus-private-file"
+version = "0.1.1"
+dependencies = [
+ "windows-sys 0.61.2",
+]
+
+[[package]]
 name = "nexus-protocol"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "serde",
  "serde_json",
@@ -802,8 +812,9 @@ dependencies = [
 
 [[package]]
 name = "nexus-snapshots"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
+ "nexus-private-file",
  "serde",
  "serde_json",
  "serde_yaml_ng",

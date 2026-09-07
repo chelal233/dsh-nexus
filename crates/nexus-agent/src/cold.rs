@@ -1,5 +1,8 @@
 //! Persisted cold-install orchestration for upstream Harness tags.
 
+#[path = "offline.rs"]
+pub(crate) mod offline;
+
 use std::{
     ffi::OsString,
     fs, io,
@@ -53,9 +56,25 @@ pub(crate) fn command_owner_quiescent(error: &io::Error) -> bool {
         .map_or(true, |failure| failure.owner_quiescent)
 }
 
+#[derive(Debug)]
+struct PublicationConflict;
+impl std::fmt::Display for PublicationConflict {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("Publication recovery conflicts with externally changed Nexus configuration; preserve the current settings and export diagnostics. No configuration was replaced.")
+    }
+}
+impl std::error::Error for PublicationConflict {}
+pub(crate) fn is_publication_conflict(error: &io::Error) -> bool {
+    error.get_ref().is_some_and(|inner| inner.is::<PublicationConflict>())
+}
+
 #[derive(serde::Serialize, serde::Deserialize)]
 struct PublicationIntent {
     committed: bool,
+    #[serde(default)]
+    preserve_current: bool,
+    #[serde(default)]
+    owned_runtime: Option<String>,
     operation: ColdOperation,
     previous_config: nexus_core::NexusConfigFile,
     target_config: nexus_core::NexusConfigFile,
@@ -87,7 +106,23 @@ impl ColdCoordinator {
         APPROVED_UPSTREAM
     }
 
+    pub(crate) fn try_acquire_maintenance(&self) -> io::Result<tokio::sync::OwnedMutexGuard<()>> {
+        let guard = Arc::clone(&self.gate).try_lock_owned()
+            .map_err(|_| io::Error::new(io::ErrorKind::ResourceBusy, "cold operation is busy"))?;
+        if self.owner_active.load(Ordering::Acquire) || self.publication_pending()
+            || self.load()?.is_some_and(|operation| !operation.phase.is_terminal()
+                || operation.cleanup_pending || !operation.owner_quiescent) {
+            return Err(io::Error::new(io::ErrorKind::ResourceBusy, "cold operation or recovery blocks reset"));
+        }
+        Ok(guard)
+    }
+
     pub(crate) fn recover(&self) -> io::Result<()> {
+        // Startup only: never dismiss a new failure while the user is reading
+        // it, nor discard a transaction that still needs recovery.
+        if let Err(error) = self.prune_uninstalled_history() {
+            tracing::warn!(%error, "Could not clear obsolete installation history; record retained");
+        }
         self.recover_publication()?;
         let Some(mut operation) = self.load()? else {
             return Ok(());
@@ -111,7 +146,7 @@ impl ColdCoordinator {
             // A previous in-memory owner cannot survive Agent restart. Retain
             // the primary terminal result and retry only the owned residue.
             operation.owner_quiescent = true;
-            match remove_owned_directory(&self.paths.downloads_dir, Path::new(&operation.candidate))
+            match offline::cleanup_candidate(&self.paths, &operation)
             {
                 Ok(()) => {
                     operation.cleanup_pending = false;
@@ -124,6 +159,36 @@ impl ColdCoordinator {
             self.write(&operation)?;
         }
         Ok(())
+    }
+
+    fn prune_uninstalled_history(&self) -> io::Result<bool> {
+        if self.publication_pending() || self.owner_active.load(Ordering::Acquire) {
+            return Ok(false);
+        }
+        let Some(operation) = self.load()? else { return Ok(false); };
+        if operation.kind == "offline_export" { return Ok(false); }
+        if !operation.phase.is_terminal() || operation.cleanup_pending || !operation.owner_quiescent {
+            return Ok(false);
+        }
+        // Residual candidate ownership must remain visible even if an old
+        // record incorrectly omitted cleanup_pending.
+        match fs::symlink_metadata(&operation.candidate) {
+            Ok(_) => return Ok(false),
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {},
+            Err(error) => return Err(error),
+        }
+        let catalog = nexus_core::ReleaseStore::new(self.paths.clone()).load()?;
+        if catalog.find(&operation.release_id).is_some() { return Ok(false); }
+        let updates = nexus_core::UpdateStateStore::new(self.paths.clone());
+        let update = updates.load()?;
+        if update.state == UpdateState::Running { return Ok(false); }
+        if update.release_id.as_deref() == Some(&operation.release_id)
+            && update.started_at_unix == Some(operation.started_at_unix) {
+            updates.write(&UpdateRuntimeInfo::idle())?;
+        }
+        fs::remove_file(self.paths.root.join(COLD_STATE_FILE))?;
+        tracing::info!("Cleared finished installation history whose release is no longer installed");
+        Ok(true)
     }
 
     fn intent_path(&self) -> PathBuf {
@@ -140,8 +205,81 @@ impl ColdCoordinator {
             .is_some_and(|operation| operation.cleanup_pending))
     }
 
+    fn read_intent(&self) -> io::Result<PublicationIntent> {
+        let bytes = nexus_core::read_regular_file_bounded(&self.intent_path(), 16 * 1024 * 1024)?
+            .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "No publication recovery is pending"))?;
+        serde_json::from_slice(&bytes).map_err(|_| io::Error::other("Invalid publication recovery record"))
+    }
+
+    pub(crate) fn publication_status(&self) -> io::Result<Option<serde_json::Value>> {
+        if !self.publication_pending() { return Ok(None); }
+        let intent = self.read_intent()?;
+        Ok(Some(serde_json::json!({"operation_id":intent.operation.operation_id,
+            "pending":true,"preserve_current":intent.preserve_current,
+            "reason":"Publication recovery is pending. Retry recovery, or preserve current configuration and all version/candidate files to end this operation."})))
+    }
+
+    fn finish_preserved_publication(&self, intent: &PublicationIntent) -> io::Result<ColdOperation> {
+        use std::io::Write;
+        nexus_core::ConfigStore::new(self.paths.clone()).preserve_current_after(|| Ok(()))?;
+        let id = &intent.operation.operation_id;
+        if id.is_empty() || id.len() > 160 || !id.bytes().all(|v| v.is_ascii_alphanumeric() || v == b'-') {
+            return Err(io::Error::other("Invalid recovery operation identity"));
+        }
+        // Archive contains original credentials, never part of shared diagnostics.
+        let archive = self.paths.root.join(format!("publication-preserved-{id}.json"));
+        let bytes = serde_json::to_vec(intent).map_err(io::Error::other)?;
+        if let Some(existing) = nexus_core::read_regular_file_bounded(&archive, 16 * 1024 * 1024)? {
+            if existing != bytes { return Err(io::Error::other("Recovery archive differs; all files were preserved")); }
+        } else {
+            let temp = self.paths.root.join(format!(".publication-archive-{}.tmp", unix_time_nanos_for_update()));
+            let result = (|| {
+                let mut file = nexus_private_file::create_new_private(&temp)?;
+                file.write_all(&bytes)?;
+                file.sync_all()?;
+                drop(file);
+                // Atomic create-new name without exposing a partially written archive.
+                fs::hard_link(&temp, &archive)
+            })();
+            let _ = fs::remove_file(&temp);
+            result?;
+        }
+        let mut operation = intent.operation.clone();
+        operation.phase = ColdOperationPhase::Cancelled;
+        operation.progress_percent = 100;
+        operation.owner_quiescent = true;
+        operation.cleanup_pending = false;
+        operation.cleanup_error = None;
+        operation.error = Some("Publication recovery ended by keeping current configuration and all existing version/candidate files. Retained candidate files are not automatically cleaned.".into());
+        operation.updated_at_unix = Some(unix_time_seconds());
+        nexus_core::UpdateStateStore::new(self.paths.clone()).write(&UpdateRuntimeInfo {
+            state: UpdateState::Failed, release_id: None, started_at_unix: Some(operation.started_at_unix),
+            finished_at_unix: Some(unix_time_seconds()), exit_code: None, error: operation.error.clone(),
+        })?;
+        Ok(operation)
+    }
+
+    pub(crate) fn recover_explicit(&self, operation_id: &str, preserve_current: bool) -> io::Result<()> {
+        if self.owner_active.load(Ordering::Acquire) { return Err(io::Error::new(io::ErrorKind::ResourceBusy, "Publication owner is still active")); }
+        let mut intent = self.read_intent()?;
+        if intent.operation.operation_id != operation_id {
+            return Err(io::Error::new(io::ErrorKind::InvalidInput, "Stale publication operation ID"));
+        }
+        if preserve_current || intent.preserve_current {
+            nexus_core::ConfigStore::new(self.paths.clone()).preserve_current_after(|| {
+                if !intent.preserve_current { intent.preserve_current=true; self.write_intent(&intent)?; }
+                Ok(())
+            })?;
+        } else { nexus_core::ConfigStore::new(self.paths.clone()).load()?; }
+        self.recover_publication()
+    }
+
+    pub(crate) async fn acquire_recovery(&self) -> io::Result<tokio::sync::OwnedMutexGuard<()>> {
+        self.gate.clone().try_lock_owned().map_err(|_| io::Error::new(io::ErrorKind::ResourceBusy, "Publication owner is busy"))
+    }
+
     fn write_intent(&self, intent: &PublicationIntent) -> io::Result<()> {
-        write_json_atomic(&self.paths.root, &self.intent_path(), intent)
+        nexus_core::write_private_json_atomic(&self.paths.root, &self.intent_path(), intent)
     }
 
     fn prepare_publication(
@@ -159,6 +297,8 @@ impl ColdCoordinator {
         }
         let intent = PublicationIntent {
             committed: false,
+            preserve_current: false,
+            owned_runtime: None,
             target_config,
             operation: operation.clone(),
             previous_config: nexus_core::ConfigStore::new(self.paths.clone()).load()?,
@@ -189,8 +329,12 @@ impl ColdCoordinator {
         if !self.intent_path().exists() {
             return Ok(None);
         }
-        let intent: PublicationIntent =
-            serde_json::from_slice(&fs::read(self.intent_path())?).map_err(io::Error::other)?;
+        let intent = self.read_intent()?;
+        if intent.preserve_current { return self.finish_preserved_publication(&intent).map(Some); }
+        let current = nexus_core::ConfigStore::new(self.paths.clone()).load()?;
+        if current != intent.previous_config && current != intent.target_config {
+            return Err(io::Error::new(io::ErrorKind::WouldBlock, PublicationConflict));
+        }
         let releases = nexus_core::ReleaseStore::new(self.paths.clone());
         let updater = nexus_core::UpdateStateStore::new(self.paths.clone());
         let mut operation = intent.operation;
@@ -233,6 +377,10 @@ impl ColdCoordinator {
                     &self.paths.releases_dir.join(&operation.release_id),
                 )?;
             }
+            if let Some(runtime) = &intent.owned_runtime {
+                if runtime != &format!("offline-{}", operation.operation_id) { return Err(io::Error::other("Invalid owned offline runtime identity")); }
+                remove_owned_directory(&self.paths.runtimes_dir,&self.paths.runtimes_dir.join(runtime))?;
+            }
             operation.phase = ColdOperationPhase::Failed;
             operation.error =
                 Some("publication interrupted before commit; previous selection restored".into());
@@ -240,7 +388,7 @@ impl ColdCoordinator {
             operation.cleanup_pending = false;
             operation.cleanup_error = None;
         }
-        remove_owned_directory(&self.paths.downloads_dir, Path::new(&operation.candidate))?;
+        offline::cleanup_candidate(&self.paths, &operation)?;
         operation.progress_percent = 100;
         operation.updated_at_unix = Some(unix_time_seconds());
         Ok(Some(operation))
@@ -324,12 +472,38 @@ impl ColdCoordinator {
         Ok(operation)
     }
 
+    pub(crate) async fn clear_finished(&self, operation_id: &str) -> io::Result<()> {
+        let _gate = self.gate.lock().await;
+        let operation = self.load()?.ok_or_else(|| {
+            io::Error::new(io::ErrorKind::NotFound, "cold operation not found")
+        })?;
+        if operation.operation_id != operation_id {
+            return Err(io::Error::new(io::ErrorKind::InvalidInput, "cold operation changed"));
+        }
+        if !operation.phase.is_terminal()
+            || operation.cleanup_pending
+            || self.owner_active.load(Ordering::Acquire)
+            || self.intent_path().exists()
+        {
+            return Err(io::Error::new(io::ErrorKind::ResourceBusy,
+                "cold operation or cleanup is still active"));
+        }
+        // Forget only this finished attempt. Slots and runtime state belong to
+        // separate stores and must survive dismissal of a diagnostic record.
+        fs::remove_file(self.paths.root.join(COLD_STATE_FILE))
+    }
+
     pub(crate) async fn begin(
         &self,
         tag: String,
         source: RuntimeSource,
         mode: RuntimeInstallMode,
     ) -> io::Result<ColdOperation> {
+        self.begin_with_details(tag, source, mode, "cold_switch", None, None).await
+    }
+
+    async fn begin_with_details(&self, tag: String, source: RuntimeSource, mode: RuntimeInstallMode,
+        kind: &str, archive_path: Option<String>, selected_release: Option<String>) -> io::Result<ColdOperation> {
         validate_update_ref(&tag)?;
         if self.intent_path().exists() {
             return Err(io::Error::new(
@@ -368,11 +542,13 @@ impl ColdCoordinator {
             .join(format!(".{operation_id}-{release_id}"));
         let operation = ColdOperation {
             operation_id: operation_id.clone(),
+            kind: kind.into(),
+            archive_path,
             phase: ColdOperationPhase::Queued,
             tag,
             source,
             mode,
-            release_id,
+            release_id: selected_release.unwrap_or(release_id),
             candidate: candidate.to_string_lossy().into_owned(),
             candidate_revision: None,
             progress_percent: 0,
@@ -430,10 +606,7 @@ impl ColdCoordinator {
         }
         if operation.phase.is_terminal() {
             if operation.cleanup_pending && operation.owner_quiescent {
-                match remove_owned_directory(
-                    &self.paths.downloads_dir,
-                    Path::new(&operation.candidate),
-                ) {
+                match offline::cleanup_candidate(&self.paths, &operation) {
                     Ok(()) => {
                         operation.cleanup_pending = false;
                         operation.cleanup_error = None;
@@ -459,7 +632,7 @@ impl ColdCoordinator {
             operation.owner_quiescent = true;
             operation.cleanup_pending = true;
             operation.error = Some("cold install cancelled".to_owned());
-            match remove_owned_directory(&self.paths.downloads_dir, Path::new(&operation.candidate))
+            match offline::cleanup_candidate(&self.paths, &operation)
             {
                 Ok(()) => {
                     operation.cleanup_pending = false;
@@ -479,7 +652,9 @@ impl ColdCoordinator {
 }
 
 pub(crate) async fn prepare(state: AppState, operation_id: String) {
-    if let Err(error) = prepare_inner(&state, &operation_id).await {
+    let offline = state.cold.load().ok().flatten().is_some_and(|operation| operation.kind.starts_with("offline_"));
+    let result = if offline { offline::run(&state,&operation_id).await } else { prepare_inner(&state,&operation_id).await };
+    if let Err(error) = result {
         let _ = settle_failure(&state, &operation_id, error).await;
     }
     if state.cold.load().ok().flatten().is_some_and(|operation| {
@@ -619,6 +794,9 @@ async fn build_and_publish(
     let cancellation = state.cold.token(operation_id).await;
     let candidate = PathBuf::from(&operation.candidate);
     let _tail_watcher_guard = TailWatcherStop::spawn(state.clone(), operation_id.to_owned());
+    let revision = operation.candidate_revision.as_deref().ok_or_else(|| {
+        io::Error::new(io::ErrorKind::InvalidData, "cold candidate revision is missing")
+    })?;
     state
         .cold
         .update(operation_id, ColdOperationPhase::Installing, 55, None)
@@ -627,6 +805,7 @@ async fn build_and_publish(
         &runtime,
         ["install", "--frozen-lockfile"],
         &candidate,
+        revision,
         &state.paths.run_dir,
         &cancellation,
     )
@@ -640,6 +819,7 @@ async fn build_and_publish(
         &runtime,
         ["build"],
         &candidate,
+        revision,
         &state.paths.run_dir,
         &cancellation,
     )
@@ -767,7 +947,7 @@ async fn build_and_publish(
     )?;
     crate::compatibility::prepare(
         &state.paths,
-        state.snapshots.configured_dsh_home()?,
+        &state.snapshots.configured_dsh_home()?,
         &state.profiles.load()?.active_profile,
         &operation.release_id,
         &state.releases.release_root(&operation.release_id)?,
@@ -1037,6 +1217,7 @@ async fn run_pnpm(
     runtime: &RuntimeConfig,
     args: impl IntoIterator<Item = &'static str>,
     cwd: &Path,
+    revision: &str,
     diagnostic_dir: &Path,
     cancellation: &CancellationToken,
 ) -> io::Result<()> {
@@ -1048,42 +1229,22 @@ async fn run_pnpm(
         args.push("--reporter=append-only".into());
     }
     let args = build_pnpm_args(runtime, args);
-    run_command(
-        "pnpm",
-        &command.program,
-        command.prefix_args.into_iter().chain(args),
-        Some(cwd),
-        runtime,
-        diagnostic_dir,
-        cancellation,
-    )
-    .await
-}
-
-async fn run_command(
-    phase: &str,
-    program: &Path,
-    args: impl IntoIterator<Item = OsString>,
-    cwd: Option<&Path>,
-    runtime: &RuntimeConfig,
-    diagnostic_dir: &Path,
-    cancellation: &CancellationToken,
-) -> io::Result<()> {
     ensure_not_cancelled(cancellation)?;
-    let mut command = std::process::Command::new(program);
-    command
-        .args(args)
+    let mut child = std::process::Command::new(&command.program);
+    child
+        .args(command.prefix_args.into_iter().chain(args))
+        .current_dir(cwd)
+        // Upstream accepts this metadata without invoking git.exe. Embedded
+        // Git supplies the recorded revision, but is not a Git CLI on PATH.
+        .env("DSH_CLIENT_COMMIT_HASH", revision)
         .stdin(Stdio::null())
         .stdout(Stdio::null());
-    if let Some(cwd) = cwd {
-        command.current_dir(cwd);
-    }
     for (key, value) in build_runtime_child_env(runtime, std::env::var_os("PATH").as_deref())? {
-        command.env(key, value);
+        child.env(key, value);
     }
     run_owned_command_diagnostics(
-        command,
-        phase,
+        child,
+        "pnpm",
         COMMAND_TIMEOUT,
         diagnostic_dir,
         cancellation,
@@ -1141,6 +1302,7 @@ async fn run_owned_command_diagnostics(
         None
     };
     let token = cancellation.clone();
+    if let Some(name) = token.job_name() { command.env("NEXUS_OWNED_JOB_NAME", name); }
     let phase = phase.to_owned();
     let result = tokio::task::spawn_blocking(move || {
         crate::dsh::run_cold_process(&mut command, duration, || token.is_cancelled())
@@ -1368,6 +1530,11 @@ async fn settle_failure(
         }
     };
     let _gate = state.cold.gate.lock().await;
+    if !owner_quiescent {
+        state.cold.write_failure_pending(operation_id, &primary_text, false,
+            "owned process cleanup did not prove quiescence; publication files retained until recovery".into())?;
+        return Err(primary);
+    }
     let reconciled = match state.cold.reconcile_publication() {
         Ok(operation) => operation,
         Err(reconcile_error) => {
@@ -1430,7 +1597,7 @@ async fn settle_failure(
     state.cold.write(&operation)?;
 
     if owner_quiescent {
-        match remove_owned_directory(&state.paths.downloads_dir, Path::new(&operation.candidate)) {
+        match offline::cleanup_candidate(&state.paths, &operation) {
             Ok(()) => {
                 operation.cleanup_pending = false;
                 operation.cleanup_error = None;
@@ -1600,6 +1767,275 @@ mod tests {
     use super::*;
 
     #[tokio::test]
+    async fn maintenance_lease_excludes_begin_and_unresolved_cold_state() {
+        let state = crate::switch_ownership_tests::switch_test_state("maintenance-cold");
+        let cold = &state.cold;
+        let lease = cold.try_acquire_maintenance().unwrap();
+        assert!(tokio::time::timeout(Duration::from_millis(25), cold.begin(
+            "v-new".into(), RuntimeSource::Official, RuntimeInstallMode::Portable)).await.is_err());
+        drop(lease);
+        let mut operation = cold.begin("v-new".into(), RuntimeSource::Official, RuntimeInstallMode::Portable).await.unwrap();
+        assert!(cold.try_acquire_maintenance().is_err());
+        cold.owner_active.store(false, Ordering::Release);
+        assert!(cold.try_acquire_maintenance().is_err());
+        operation.phase = ColdOperationPhase::Failed;
+        operation.owner_quiescent = true;
+        operation.cleanup_pending = true;
+        cold.write(&operation).unwrap();
+        assert!(cold.try_acquire_maintenance().is_err());
+        operation.cleanup_pending = false;
+        cold.write(&operation).unwrap();
+        fs::write(cold.intent_path(), "pending").unwrap();
+        assert!(cold.try_acquire_maintenance().is_err());
+        fs::remove_file(cold.intent_path()).unwrap();
+        drop(cold.try_acquire_maintenance().unwrap());
+        fs::write(state.paths.root.join(COLD_STATE_FILE), "invalid json").unwrap();
+        assert!(cold.try_acquire_maintenance().is_err());
+        fs::remove_dir_all(&state.paths.root).unwrap();
+    }
+
+    #[tokio::test]
+    async fn obsolete_history_is_pruned_without_touching_configuration_or_residue() {
+        let state = crate::switch_ownership_tests::switch_test_state("obsolete-history");
+        let cold = &state.cold;
+        let mut operation = cold.begin("v-old".into(), RuntimeSource::Official,
+            RuntimeInstallMode::Portable).await.unwrap();
+        operation.phase = ColdOperationPhase::Succeeded;
+        operation.owner_quiescent = true;
+        operation.cleanup_pending = false;
+        cold.write(&operation).unwrap();
+        cold.owner_active.store(false, Ordering::Release);
+        let updates = nexus_core::UpdateStateStore::new(state.paths.clone());
+        updates.write(&UpdateRuntimeInfo {
+            state: UpdateState::Succeeded, release_id: Some(operation.release_id.clone()),
+            started_at_unix: Some(operation.started_at_unix), finished_at_unix: Some(unix_time_seconds()),
+            exit_code: Some(0), error: None,
+        }).unwrap();
+        let config = state.config.load().unwrap();
+        let residue = state.paths.releases_dir.join(&operation.release_id).join("node_modules");
+        fs::create_dir_all(&residue).unwrap();
+        cold.recover().unwrap();
+        assert!(cold.load().unwrap().is_none());
+        assert_eq!(updates.load().unwrap().state, UpdateState::Idle);
+        assert_eq!(state.config.load().unwrap(), config);
+        assert!(residue.exists());
+        fs::remove_dir_all(&state.paths.root).unwrap();
+    }
+
+    #[tokio::test]
+    async fn history_pruning_preserves_active_pending_and_installed_records() {
+        let state = crate::switch_ownership_tests::switch_test_state("history-pruning-guards");
+        let cold = &state.cold;
+        let mut operation = cold.begin("v-new".into(), RuntimeSource::Official,
+            RuntimeInstallMode::Portable).await.unwrap();
+        cold.owner_active.store(false, Ordering::Release);
+        assert!(!cold.prune_uninstalled_history().unwrap());
+        operation.phase = ColdOperationPhase::Failed;
+        operation.owner_quiescent = true;
+        operation.cleanup_pending = true;
+        cold.write(&operation).unwrap();
+        assert!(!cold.prune_uninstalled_history().unwrap());
+        operation.cleanup_pending = false;
+        cold.write(&operation).unwrap();
+        fs::write(cold.intent_path(), "pending").unwrap();
+        assert!(!cold.prune_uninstalled_history().unwrap());
+        fs::remove_file(cold.intent_path()).unwrap();
+        fs::create_dir_all(&operation.candidate).unwrap();
+        assert!(!cold.prune_uninstalled_history().unwrap());
+        fs::remove_dir(&operation.candidate).unwrap();
+        state.releases.register(&operation.release_id, "v-new", None, None).unwrap();
+        assert!(!cold.prune_uninstalled_history().unwrap());
+        assert!(cold.load().unwrap().is_some());
+        fs::remove_dir_all(&state.paths.root).unwrap();
+    }
+
+    #[tokio::test]
+    async fn clear_finished_guards_ownership_and_preserves_installed_data() {
+        let state = crate::switch_ownership_tests::switch_test_state("cold-clear");
+        let cold = &state.cold;
+        state.releases.register("kept", "v-kept", None, None).unwrap();
+        let before = serde_json::to_value(state.releases.load().unwrap()).unwrap();
+        let mut operation = cold.begin("v-new".into(), RuntimeSource::Official,
+            RuntimeInstallMode::Portable).await.unwrap();
+        assert!(cold.clear_finished(&operation.operation_id).await.is_err());
+        operation.phase = ColdOperationPhase::Failed;
+        cold.write(&operation).unwrap();
+        assert!(cold.clear_finished(&operation.operation_id).await.is_err());
+        cold.owner_active.store(false, Ordering::Release);
+        operation.cleanup_pending = true;
+        cold.write(&operation).unwrap();
+        assert!(cold.clear_finished(&operation.operation_id).await.is_err());
+        operation.cleanup_pending = false;
+        cold.write(&operation).unwrap();
+        fs::write(cold.intent_path(), "pending").unwrap();
+        assert!(cold.clear_finished(&operation.operation_id).await.is_err());
+        fs::remove_file(cold.intent_path()).unwrap();
+        assert!(cold.clear_finished("stale-operation").await.is_err());
+        assert!(cold.load().unwrap().is_some());
+        cold.clear_finished(&operation.operation_id).await.unwrap();
+        assert!(cold.load().unwrap().is_none());
+        assert_eq!(before, serde_json::to_value(state.releases.load().unwrap()).unwrap());
+        fs::remove_dir_all(&state.paths.root).unwrap();
+    }
+
+    #[cfg(windows)]
+    #[tokio::test]
+    async fn pnpm_receives_candidate_metadata_without_git_on_path() {
+        let root = std::env::temp_dir().join(format!(
+            "nexus-cold-metadata-{}",
+            unix_time_nanos_for_update()
+        ));
+        fs::create_dir_all(&root).unwrap();
+        let revision = "a66e470123456789012345678901234567890123456";
+        let fixture = root.join("pnpm.cmd");
+        fs::write(&fixture, format!(
+            "@echo off\r\nset PATH=\r\ngit --version >nul 2>&1\r\nif not errorlevel 1 exit /b 91\r\nif not \"%DSH_CLIENT_COMMIT_HASH%\"==\"{revision}\" exit /b 92\r\necho %DSH_CLIENT_COMMIT_HASH%>metadata.txt\r\nexit /b 0\r\n"
+        )).unwrap();
+        let runtime = RuntimeConfig {
+            pnpm: Some(nexus_core::RuntimePin {
+                path: fixture,
+                ownership: nexus_protocol::RuntimeOwnership::System,
+            }),
+            ..RuntimeConfig::default()
+        };
+        for phase in ["install", "build"] {
+            run_pnpm(
+                &runtime, [phase], &root, revision, &root.join("run"),
+                &CancellationToken::default(),
+            ).await.unwrap();
+            assert_eq!(fs::read_to_string(root.join("metadata.txt")).unwrap().trim(), revision);
+        }
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[tokio::test]
+    async fn offline_publication_preserves_external_edit_and_unquiet_owner() {
+        let state = crate::switch_ownership_tests::switch_test_state("offline-unquiet");
+        let previous = state.config.load().unwrap();
+        let mut target = previous.clone(); target.runtime = Some(RuntimeConfig::default());
+        let op = state.cold.begin("v-offline".into(), RuntimeSource::Official, RuntimeInstallMode::Portable).await.unwrap();
+        fs::create_dir_all(&op.candidate).unwrap();
+        let runtime = state.paths.runtimes_dir.join(format!("offline-{}",op.operation_id));
+        fs::create_dir_all(&runtime).unwrap();
+        let mut intent = state.cold.prepare_publication(&op,true,target.clone()).unwrap();
+        intent.owned_runtime = Some(runtime.file_name().unwrap().to_string_lossy().into_owned());
+        state.cold.write_intent(&intent).unwrap();
+        state.releases.register(&op.release_id, &op.tag, None, None).unwrap();
+        let error = io::Error::other(ColdCommandFailure { message:"synthetic still-owned child".into(),owner_quiescent:false });
+        assert!(settle_failure(&state,&op.operation_id,error).await.is_err());
+        assert!(runtime.is_dir()); assert!(Path::new(&op.candidate).is_dir());
+        assert!(state.releases.release_root(&op.release_id).unwrap().is_dir());
+        assert!(state.cold.intent_path().is_file());
+        assert!(!state.cold.load().unwrap().unwrap().owner_quiescent);
+        // A finalized candidate must not overwrite configuration edited during its probe.
+        let mut external = previous.clone();
+        external.harness_preferences = Some(nexus_protocol::HarnessPreferencesPayload { telemetry_disabled:Some(true),..Default::default() });
+        state.config.write(&external).unwrap();
+        assert!(!state.config.write_if_current(&previous,&target).unwrap());
+        assert_eq!(state.config.load().unwrap(),external);
+        state.cold.owner_active.store(false,Ordering::Release);
+        state.cold.recover_explicit(&op.operation_id,true).unwrap();
+        assert_eq!(state.config.load().unwrap(),external);
+        assert!(runtime.is_dir()); assert!(Path::new(&op.candidate).is_dir());
+        fs::remove_dir_all(&state.paths.root).unwrap();
+    }
+
+    #[tokio::test]
+    async fn publication_external_configuration_conflict_preserves_outer_record() {
+        let state=crate::switch_ownership_tests::switch_test_state("cold-config-conflict");
+        let previous=state.config.load().unwrap();
+        let mut target=previous.clone(); target.runtime=Some(RuntimeConfig::default());
+        let op=state.cold.begin("v-new".into(),RuntimeSource::Official,RuntimeInstallMode::Portable).await.unwrap();
+        state.cold.prepare_publication(&op,true,target).unwrap();
+        let mut external=previous;
+        external.harness_preferences=Some(nexus_protocol::HarnessPreferencesPayload {telemetry_disabled:Some(true),..Default::default()});
+        state.config.write(&external).unwrap();
+        let error=state.cold.recover().unwrap_err();
+        assert!(is_publication_conflict(&error));
+        assert!(state.cold.intent_path().exists());
+        assert_eq!(state.config.load().unwrap(),external);
+        fs::remove_dir_all(&state.paths.root).unwrap();
+    }
+
+    #[tokio::test]
+    async fn publication_preserve_current_replays_without_touching_files_or_pointers() {
+        for cut in 0..6 {
+            let state=crate::switch_ownership_tests::switch_test_state(&format!("preserve-cut-{cut}"));
+            state.releases.register("existing","v-existing",None,None).unwrap();
+            state.releases.promote("existing").unwrap();
+            let old=state.config.load().unwrap(); let mut target=old.clone();target.runtime=Some(RuntimeConfig::default());
+            let op=state.cold.begin("v-new".into(),RuntimeSource::Official,RuntimeInstallMode::Portable).await.unwrap();
+            fs::create_dir_all(&op.candidate).unwrap();fs::write(Path::new(&op.candidate).join("keep"),b"candidate").unwrap();
+            let mut intent=state.cold.prepare_publication(&op,true,target).unwrap();
+            state.cold.owner_active.store(false, Ordering::Release); // Simulate the vanished publication owner.
+            let mut current=old;current.harness_preferences=Some(nexus_protocol::HarnessPreferencesPayload{telemetry_disabled:Some(true),..Default::default()});
+            if cut < 3 { current=intent.target_config.clone(); }
+            state.config.write(&current).unwrap();
+            let before=fs::read(&state.paths.config_file).unwrap();
+            let pointers=state.releases.load().unwrap();
+            let inner_previous=fs::read(state.paths.root.join("config.previous.json")).unwrap();
+            nexus_core::write_private_json_atomic(&state.paths.root,&state.paths.root.join("config-write.pending.json"),
+                &serde_json::json!({"schema":1,"committed":false,"rotate":true,
+                    "old_current":nexus_protocol::encode_json(&intent.previous_config).unwrap(),
+                    "old_previous":inner_previous,"target":nexus_protocol::encode_json(&intent.target_config).unwrap()})).unwrap();
+            if cut % 3 == 0 { state.cold.recover_explicit(&op.operation_id,true).unwrap(); }
+            else {
+                intent.preserve_current=true;state.cold.write_intent(&intent).unwrap();
+                if cut % 3 == 2 { state.cold.finish_preserved_publication(&intent).unwrap(); }
+                ColdCoordinator::new(state.paths.clone()).recover().unwrap();
+            }
+            assert_eq!(fs::read(&state.paths.config_file).unwrap(),before);
+            assert_eq!(state.releases.load().unwrap(),pointers);
+            assert_eq!(fs::read(Path::new(&op.candidate).join("keep")).unwrap(),b"candidate");
+            assert!(!state.cold.publication_pending());
+            assert!(state.paths.root.join(format!("publication-preserved-{}.json",op.operation_id)).exists());
+            state.config.transaction(|config| {config.harness_preferences=None;Ok(())}).unwrap();
+            fs::remove_dir_all(&state.paths.root).unwrap();
+        }
+    }
+
+    #[tokio::test]
+    async fn publication_recovery_api_enforces_owners_and_operation_identity() {
+        let state=crate::switch_ownership_tests::switch_test_state("publication-api");
+        let mut target=state.config.load().unwrap(); target.runtime=Some(RuntimeConfig::default());
+        let op=state.cold.begin("v-new".into(),RuntimeSource::Official,RuntimeInstallMode::Portable).await.unwrap();
+        state.cold.prepare_publication(&op,true,target).unwrap();
+            state.cold.owner_active.store(false, Ordering::Release); // Simulate the vanished publication owner.
+        let request=|id:String| axum::Json(nexus_protocol::UpdateCommand {action:nexus_protocol::UpdateAction::PublicationAbandon,operation_id:Some(id),..Default::default()});
+        let update=state.updater.try_acquire_gate().unwrap();
+        assert_eq!(crate::update_control(axum::extract::State(state.clone()),request(op.operation_id.clone())).await.status(),axum::http::StatusCode::CONFLICT);
+        drop(update);
+        let snapshots=state.snapshots.try_acquire_configuration().unwrap();
+        assert_eq!(crate::update_control(axum::extract::State(state.clone()),request(op.operation_id.clone())).await.status(),axum::http::StatusCode::CONFLICT);
+        drop(snapshots);
+        assert_ne!(crate::update_control(axum::extract::State(state.clone()),request("stale".into())).await.status(),axum::http::StatusCode::OK);
+        assert!(state.cold.publication_pending());
+        assert_eq!(crate::update_control(axum::extract::State(state.clone()),request(op.operation_id)).await.status(),axum::http::StatusCode::OK);
+        assert!(!state.cold.publication_pending());
+        assert!(crate::ensure_checkpoint_mutation_ready(&state).await.is_ok());
+        fs::remove_dir_all(&state.paths.root).unwrap();
+    }
+
+    #[cfg(windows)]
+    #[tokio::test]
+    async fn publication_retry_after_file_lock_is_released() {
+        use std::os::windows::fs::OpenOptionsExt;
+        let state=crate::switch_ownership_tests::switch_test_state("publication-lock-retry");
+        let previous=state.config.load().unwrap();let mut target=previous.clone();target.runtime=Some(RuntimeConfig::default());
+        let op=state.cold.begin("v-new".into(),RuntimeSource::Official,RuntimeInstallMode::Portable).await.unwrap();
+        state.cold.prepare_publication(&op,true,target.clone()).unwrap();
+            state.cold.owner_active.store(false, Ordering::Release); // Simulate the vanished publication owner.
+        state.config.write(&target).unwrap();
+        let lock=fs::OpenOptions::new().read(true).share_mode(3).open(&state.paths.config_file).unwrap();
+        assert!(state.cold.recover_explicit(&op.operation_id,false).is_err());
+        assert!(state.cold.publication_pending());drop(lock);
+        state.cold.recover_explicit(&op.operation_id,false).unwrap();
+        assert_eq!(state.config.load().unwrap(),previous);
+        assert!(!state.cold.publication_pending());
+        fs::remove_dir_all(&state.paths.root).unwrap();
+    }
+
+    #[tokio::test]
     async fn publication_restart_reconciles_every_durable_cut() {
         for cut in 0..10 {
             let state =
@@ -1680,15 +2116,27 @@ mod tests {
                     .await
                     .unwrap();
             }
+            // Nested config publication cuts must obey the outer decision.
+            if cut == 3 || cut == 7 {
+                let before = nexus_protocol::encode_json(&previous).unwrap();
+                let target_bytes = fs::read(&paths.config_file).unwrap();
+                nexus_core::write_private_json_atomic(&paths.root, &paths.root.join("config-write.pending.json"),
+                    &serde_json::json!({"schema":1,"committed":cut == 7,"rotate":true,
+                        "old_current":before,"old_previous":null,"target":target_bytes})).unwrap();
+            }
             let restarted = ColdCoordinator::new(paths.clone());
             restarted.recover().unwrap();
+            // Recovery must first publish its terminal result. On a later
+            // startup, rolled-back attempts without a slot become obsolete
+            // history; successfully installed releases retain their record.
+            let terminal = restarted.load().unwrap().unwrap();
             restarted.recover().unwrap();
+            assert_eq!(restarted.load().unwrap().is_some(), cut >= 7, "cut {cut}");
             let current = releases.load().unwrap();
             super::super::persist_release_catalog_state(&state, &current, false)
                 .await
                 .unwrap();
             assert_eq!(state.runtime.read().await.release, current.current_release);
-            let terminal = restarted.load().unwrap().unwrap();
             if cut >= 7 {
                 assert_eq!(
                     current.current_release.as_deref(),

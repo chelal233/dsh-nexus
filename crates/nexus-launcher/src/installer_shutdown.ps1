@@ -7,27 +7,9 @@ try {
     # Fresh installation needs no process/data-root discovery.
     if (-not [IO.File]::Exists($agentPath)) { exit 0 }
 
-    Add-Type -AssemblyName System.Net.Http
-    Add-Type -TypeDefinition @'
-using System;
-using System.Runtime.InteropServices;
-public static class NexusInstallerArguments {
-    [DllImport("shell32.dll", CharSet = CharSet.Unicode)]
-    static extern IntPtr CommandLineToArgvW(string command, out int count);
-    [DllImport("kernel32.dll")]
-    static extern IntPtr LocalFree(IntPtr memory);
-    public static string[] Parse(string command) {
-        int count;
-        IntPtr memory = CommandLineToArgvW(command, out count);
-        if (memory == IntPtr.Zero) throw new InvalidOperationException("Cannot read Agent arguments");
-        try {
-            string[] values = new string[count];
-            for (int i = 0; i < count; i++) values[i] = Marshal.PtrToStringUni(Marshal.ReadIntPtr(memory, i * IntPtr.Size));
-            return values;
-        } finally { LocalFree(memory); }
-    }
-}
-'@
+    # Load a shipped system assembly; this does not compile source code.
+    [void][Reflection.Assembly]::Load('System.Net.Http, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b03f5f7f11d50a3a')
+    [Console]::OutputEncoding = [Text.UTF8Encoding]::new($false)
     $handler = New-Object System.Net.Http.HttpClientHandler
     $handler.UseProxy = $false
     $handler.AllowAutoRedirect = $false
@@ -45,7 +27,13 @@ public static class NexusInstallerArguments {
                 $null = $agentProcess.Handle
                 if ($agentProcess.HasExited) { continue }
                 if (-not [StringComparer]::OrdinalIgnoreCase.Equals($agentProcess.MainModule.FileName, $agentPath)) { throw 'Agent process identity changed. Retry installation.' }
-                $arguments = [NexusInstallerArguments]::Parse($candidate.CommandLine)
+                # The command line is data, never interpolated into shell code.
+                $env:NEXUS_INSTALL_STOP_COMMAND_LINE = $candidate.CommandLine
+                try {
+                    $argumentJson = & $env:NEXUS_INSTALL_STOP_HELPER installer-parse-arguments
+                    if ($LASTEXITCODE -ne 0) { throw 'Cannot parse Agent discovery arguments.' }
+                    $arguments = $argumentJson | ConvertFrom-Json
+                } finally { Remove-Item Env:NEXUS_INSTALL_STOP_COMMAND_LINE -ErrorAction SilentlyContinue }
                 $rootIndex = [Array]::IndexOf($arguments, '--data-dir')
                 $instanceIndex = [Array]::IndexOf($arguments, '--instance-id')
                 if ($rootIndex -lt 0 -or $rootIndex + 1 -ge $arguments.Length -or $instanceIndex -lt 0 -or $instanceIndex + 1 -ge $arguments.Length) { throw 'Agent discovery arguments are unavailable. Stop this Agent manually and retry.' }
