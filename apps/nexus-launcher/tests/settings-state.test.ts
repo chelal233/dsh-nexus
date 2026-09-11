@@ -2,6 +2,64 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { refreshEditableDraft, finishDraftSave, replacementArgumentRows, harnessFailureKeys, diagnosticExportResult, homePreferencesPayload, launchInputMatches } from "../src/settings-state.ts";
 import { createFailureNoticeTracker } from "../src/control-state.ts";
+import { cleanupSelectedIds, cleanupGroups, toggleCleanupGroup } from "../src/settings-state.ts";
+import { offlineImportDefaults, offlinePackageCommand, releasePromotionCommand } from "../src/settings-state.ts";
+
+test("manual version recovery requires explicit consent and forwards the bound confirmation", () => {
+  assert.equal(releasePromotionCommand("new", "revision-bound-token", false), null);
+  assert.deepEqual(releasePromotionCommand("new", "revision-bound-token", true), { action: "promote", id: "new", rollback_confirmation: "revision-bound-token" });
+  assert.deepEqual(releasePromotionCommand("new", null, false), { action: "promote", id: "new" });
+});
+
+test("import preview never opts into credentials or replacement on the user's behalf", () => {
+  const available = { runtime: false, profiles: ["web"], configuration: true, plugins: true, environment: true, sessions: true, credentials: true, credential_policy: "replace" };
+  const selected = offlineImportDefaults(available);
+  assert.equal(selected.credentials, false); assert.equal(selected.credential_policy, "preserve");
+  assert.equal(selected.runtime, false); assert.deepEqual(selected.profiles, ["web"]);
+  const optedIn = { ...selected, credentials: true, credential_policy: "replace" };
+  const request = { ...offlinePackageCommand("offline_import", " C:\\import.tar.gz "), offline_contents: optedIn };
+  assert.equal(request.archive_path, "C:\\import.tar.gz");
+  assert.equal(request.offline_contents.credential_policy, "replace");
+  assert.equal(offlineImportDefaults(available).credentials, false, "another preview resets consent");
+});
+
+test("cleanup tree assigns each item once to its nearest directory root", () => {
+  const groups=cleanupGroups([{path:"C:\\Nexus"},{path:"C:\\Nexus\\logs"}], [
+    {id:"log",path:"c:/nexus/logs/a.log"}, {id:"slot",path:"C:/Nexus/releases/a"},
+    {id:"outside",path:"C:/Nexus-extra/a"},
+  ]);
+  assert.deepEqual(groups.map(group=>group.items.map(item=>item.id)), [["slot"],["log"],["outside"]]);
+});
+
+test("category selection excludes protected items and preserves other categories", () => {
+  const items=[{id:"old",eligible:true},{id:"active",eligible:false},{id:"unknown"}];
+  assert.deepEqual(toggleCleanupGroup(["elsewhere"],items,true),["elsewhere","old"]);
+  assert.deepEqual(toggleCleanupGroup(["elsewhere","old"],items,true),["elsewhere","old"]);
+  assert.deepEqual(toggleCleanupGroup(["elsewhere","old"],items,false),["elsewhere"]);
+});
+
+test("cleanup item IDs cannot carry a selection into a different preview", () => {
+  const selection = { previewId: "preview-a", ids: ["item-0"] };
+  // The first item can name a completely different directory after a scan.
+  assert.deepEqual(cleanupSelectedIds(selection, "preview-b"), []);
+  assert.deepEqual(cleanupSelectedIds(selection, undefined), []);
+  assert.deepEqual(cleanupSelectedIds(selection, ""), []);
+  assert.deepEqual(cleanupSelectedIds(selection, "preview-a"), ["item-0"], "refreshing the same preview preserves the choice");
+});
+
+test("cleanup selection stays invalid after a failed preview request loads a newer saved result", async () => {
+  const selection = { previewId: "preview-a", ids: ["item-0"] };
+  let status = { preview: { preview_id: "preview-a", items: [{ id: "item-0", name: "old-slot" }] } };
+  const savedResult = { preview: { preview_id: "preview-b", items: [{ id: "item-0", name: "different-slot" }] } };
+  try {
+    await Promise.reject(new Error("scan wait deadline exceeded"));
+  } catch {
+    status = await Promise.resolve(savedResult);
+  }
+  assert.deepEqual(cleanupSelectedIds(selection, status.preview.preview_id), []);
+  // A deliberate new selection becomes valid only for the newly displayed preview.
+  assert.deepEqual(cleanupSelectedIds({ previewId: status.preview.preview_id, ids: ["item-0"] }, status.preview.preview_id), ["item-0"]);
+});
 
 test("setup home change preserves preferences and empty input inherits", () => {
   const saved = { home: "D:/old", port: 0, open_browser: false };

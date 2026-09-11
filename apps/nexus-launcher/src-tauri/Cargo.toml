@@ -1,6 +1,6 @@
 [package]
 name = "nexus-launcher-app"
-version = "0.1.1"
+version = "0.1.2"
 description = "Native Tauri shell for the Nexus local control plane"
 authors = ["Nexus maintainers"]
 edition = "2021"
@@ -24,7 +24,7 @@ tauri-plugin-autostart = "2"
 tauri-plugin-global-shortcut = "2"
 tauri-plugin-notification = "2"
 tauri-plugin-single-instance = "2"
-windows-sys = { version = "0.61", features = ["Win32_Globalization"] }
+windows-sys = { version = "0.61", features = ["Win32_Globalization", "Win32_System_Registry", "Win32_System_Com", "Win32_UI_Shell", "Win32_UI_Shell_Common", "Win32_UI_Controls_Dialogs"] }
 
 # Keep the GUI crate independent from the headless workspace lockfile.
 [workspace]

@@ -4,7 +4,7 @@ import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { createUiTestLoader } from "./ui-test-loader.ts";
 
-test("guide presents four explicit steps and launch explanation never substitutes stale inputs", async () => {
+test("guide presents three focused steps and launch explanation never substitutes stale inputs", async () => {
   const loader = await createUiTestLoader();
   try {
     const { GuideView, LaunchInputsPanel } = await loader.loadModule("/src/App.tsx");
@@ -25,9 +25,17 @@ test("guide presents four explicit steps and launch explanation never substitute
     const stale = render({ ...snapshot, harnessRuntime: { ...runtime, generation: 4 } });
     assert.match(stale, /NEXT_INPUT/); assert.doesNotMatch(stale, /CURRENT_INPUT|4321/);
     const guide = renderToStaticMarkup(createElement(GuideView, { snapshot: { ...snapshot, harnessRuntime: { harness: { state: "stopped" } } }, busyAction: null, runAction: async () => false, refresh: async () => {}, themeMode: "system", setThemeMode: () => {} }));
-    for (const label of ["1 · Harness data directory", "2 · Harness version", "3 · Basic startup checks", "4 · Start Harness"]) assert.ok(guide.includes(label), label);
-    assert.match(guide, /Existing files are not moved or deleted/);
+    for (const label of ["Prepare", "Install Harness", "Finish setup"]) assert.ok(guide.includes(label), label);
+    assert.doesNotMatch(guide, /Release slots|Start and use|Run basic checks/);
     assert.match(guide, /Inherit upstream default/);
-    assert.match(guide, /Run basic checks/);
+    assert.match(guide, /Open Settings/);
+    assert.match(guide, /<button(?![^>]*disabled)[^>]*>Choose version and install<\/button>/);
+    assert.match(guide, /Use an already built directory/);
+    assert.doesNotMatch(guide, /Data paths and the program source are managed in Settings/);
+    const installing = renderToStaticMarkup(createElement(GuideView, { snapshot: {
+      ...snapshot, config: { ...snapshot.config, external_harness: { root: "C:/prepared", version: "0.1.2-rc.1" } },
+      harnessRuntime: { harness: { state: "stopped" } }, updates: { operation: { operation_id: "installing", phase: "building" } },
+    }, busyAction: null, runAction: async () => false, refresh: async () => {}, themeMode: "system", setThemeMode: () => {} }));
+    assert.match(installing, /<button[^>]*disabled=""[^>]*><span>3 · Finish setup<\/span>/);
   } finally { await loader.close(); }
 });

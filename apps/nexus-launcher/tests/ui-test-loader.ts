@@ -11,7 +11,7 @@ async function compileUi(): Promise<string> {
   try {
     const result = await esbuild.build({
       absWorkingDir: root,
-      stdin: { contents: 'export * from "./src/App.tsx"; export * as __testI18n from "./src/i18n.ts";', resolveDir: root, sourcefile: "ui-test-entry.ts" },
+      stdin: { contents: 'export * from "./src/App.tsx"; export { default as App } from "./src/App.tsx"; export * as __testI18n from "./src/i18n.ts";', resolveDir: root, sourcefile: "ui-test-entry.ts" },
       bundle: true, write: false, platform: "node", format: "esm", jsx: "automatic", logLevel: "silent",
       plugins: [{ name: "external-installed-packages", setup(build: { onResolve: Function }) {
         build.onResolve({ filter: /^[^./]/ }, (args: { kind: string; path: string }) => args.kind === "entry-point" ? undefined : { path: import.meta.resolve(args.path), external: true });

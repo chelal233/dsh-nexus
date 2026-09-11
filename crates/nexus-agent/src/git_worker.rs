@@ -285,6 +285,7 @@ mod tests {
             loop {
                 match listener.accept() {
                     Ok((mut stream, _)) => {
+                        stream.set_nonblocking(false).unwrap();
                         stream.set_read_timeout(Some(Duration::from_secs(2))).unwrap();
                         let mut bytes = [0; 1024];
                         let length = stream.read(&mut bytes).unwrap();

@@ -708,6 +708,7 @@ checksum = "9ed9a281f7bc9b7576e61468ba615a66a5c8cfdff42420a70aa82701a3b1e292"
 dependencies = [
  "block-buffer",
  "crypto-common",
+ "subtle",
 ]
 
 [[package]]
@@ -1272,9 +1273,20 @@ dependencies = [
  "cfg-if",
  "js-sys",
  "libc",
- "r-efi",
+ "r-efi 5.3.0",
  "wasip2",
  "wasm-bindgen",
+]
+
+[[package]]
+name = "getrandom"
+version = "0.4.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "300e883d756b2e4ec94e02791f39b04b522276138852cfc41d9fb7e904106099"
+dependencies = [
+ "cfg-if",
+ "libc",
+ "r-efi 6.0.0",
 ]
 
 [[package]]
@@ -1478,6 +1490,15 @@ name = "hex"
 version = "0.4.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7f24254aa9a54b5c858eaee2f5bccdb46aaf0e486a595ed5fd8f86ba55232a70"
+
+[[package]]
+name = "hmac"
+version = "0.12.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6c49c37c09c17a53d937dfbb742eb3a961d65a994e6bcdcf37e7399d0cc8ab5e"
+dependencies = [
+ "digest",
+]
 
 [[package]]
 name = "html5ever"
@@ -2141,11 +2162,14 @@ checksum = "650eef8c711430f1a879fdd01d4745a7deea475becfb90269c06775983bbf086"
 
 [[package]]
 name = "nexus-core"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
+ "getrandom 0.4.3",
+ "hmac",
  "nexus-private-file",
  "nexus-protocol",
  "nexus-snapshots",
+ "ring",
  "serde",
  "serde_json",
  "sha2",
@@ -2154,7 +2178,7 @@ dependencies = [
 
 [[package]]
 name = "nexus-launcher-app"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "nexus-core",
  "nexus-launcher-core",
@@ -2172,7 +2196,7 @@ dependencies = [
 
 [[package]]
 name = "nexus-launcher-core"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "futures-util",
  "nexus-core",
@@ -2185,14 +2209,14 @@ dependencies = [
 
 [[package]]
 name = "nexus-private-file"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "windows-sys 0.61.2",
 ]
 
 [[package]]
 name = "nexus-protocol"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "serde",
  "serde_json",
@@ -2200,7 +2224,7 @@ dependencies = [
 
 [[package]]
 name = "nexus-snapshots"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "nexus-private-file",
  "serde",
@@ -2842,6 +2866,12 @@ name = "r-efi"
 version = "5.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "69cdb34c158ceb288df11e18b4bd39de994f6657d83847bdffdbd7f346754b0f"
+
+[[package]]
+name = "r-efi"
+version = "6.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f8dcc9c7d52a811697d2151c701e0d08956f92b0e24136cf4cf27b57a6a0d9bf"
 
 [[package]]
 name = "rand"

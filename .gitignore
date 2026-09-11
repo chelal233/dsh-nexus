@@ -1,7 +1,10 @@
 /target/
 /target-rtest/
 /.tmp-ui-audit/
-/diag-1788759841895444900/
+/diag-*/
+/.env
+/.env.*
+!/.env.example
 **/target/
 *.rs.bk
 .DS_Store

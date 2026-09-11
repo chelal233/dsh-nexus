@@ -12,8 +12,9 @@ export function verifyStaticRuntime(binaryPaths) {
   const version = readFileSync(path.join(installation, "VC/Auxiliary/Build/Microsoft.VCToolsVersion.default.txt"), "utf8").trim();
   const dumpbin = path.join(installation, "VC/Tools/MSVC", version, "bin/Hostx64/x64/dumpbin.exe");
   // shell32 supplies CommandLineToArgvW; user32 supplies the native uninstall
-  // data-choice dialog. Both are Windows APIs used by the compiled helper.
-  const systemImports = new Set(["kernel32.dll", "ntdll.dll", "ws2_32.dll", "bcrypt.dll", "bcryptprimitives.dll", "advapi32.dll", "userenv.dll", "winhttp.dll", "rpcrt4.dll", "ole32.dll", "crypt32.dll", "shell32.dll", "user32.dll"]);
+  // data-choice dialog. iphlpapi supplies GetExtendedTcpTable for verifying
+  // that the Harness process owns its advertised listener. All ship with Windows.
+  const systemImports = new Set(["kernel32.dll", "ntdll.dll", "ws2_32.dll", "bcrypt.dll", "bcryptprimitives.dll", "advapi32.dll", "userenv.dll", "winhttp.dll", "rpcrt4.dll", "ole32.dll", "crypt32.dll", "shell32.dll", "user32.dll", "iphlpapi.dll"]);
   for (const binary of binaryPaths) {
     const output = execFileSync(dumpbin, ["/DEPENDENTS", binary], { encoding: "utf8", windowsHide: true });
     const imports = [...new Set([...output.matchAll(/^\s+([\w.-]+\.dll)\s*$/gmi)].map(match => match[1].toLowerCase()))];

@@ -397,6 +397,21 @@ impl SnapshotStore {
         let manifest = self.revalidate_ticket_snapshot(&record.ticket)?;
         if record.status == RestoreStatus::Prepared {
             self.preflight_originals(&record)?;
+            // Only a new apply is budget-gated. Resume and rollback of an
+            // already-started transaction must remain possible on a full disk.
+            let mut targets = Vec::new();
+            for (index, policy) in FILE_POLICY.iter().enumerate() {
+                let target = self.target_path(policy)?;
+                let current = validation::read_regular_bounded(&target, policy.max_bytes)?;
+                let desired = self.desired_file(&manifest, index, current.as_ref().map(|entry| entry.0.as_slice()))?;
+                if let Some(bytes) = desired.bytes { targets.push((target, bytes.len() as u64 + 65536)); }
+            }
+            // Existing originals become in-home rename backups; only the new
+            // contents and an atomic journal replacement need extra allocation.
+            targets.push((self.transaction_root().to_path_buf(), 2 * MAX_TRANSACTION_BYTES));
+            let budget: Vec<_> = targets.iter().map(|(path, bytes)| (path.as_path(), *bytes)).collect();
+            nexus_private_file::ensure_space_budget(&budget)
+                .map_err(|error| SnapshotError::io("restore target-volume space", error))?;
             record.status = RestoreStatus::Applying;
             self.write_transaction(&record)?;
         }

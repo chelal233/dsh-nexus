@@ -431,6 +431,7 @@ impl SnapshotStore {
             let files_dir = staging.join("files");
             validation::ensure_new_directory(&self.data_root, &files_dir)?;
             let mut files = Vec::with_capacity(FILE_POLICY.len());
+            let mut payloads = Vec::with_capacity(FILE_POLICY.len());
             let mut total_bytes = 0_u64;
             let mut plugin_count = 0_u64;
             for (index, policy) in FILE_POLICY.iter().enumerate() {
@@ -471,7 +472,7 @@ impl SnapshotStore {
                     });
                 }
                 if let Some(bytes) = captured.bytes {
-                    validation::write_durable(&files_dir.join(index.to_string()), &bytes)?;
+                    payloads.push((index, bytes));
                 }
                 files.push(captured.record);
             }
@@ -494,6 +495,12 @@ impl SnapshotStore {
             let encoded = serde_json::to_vec_pretty(&manifest).map_err(|error| {
                 SnapshotError::InvalidManifest(format!("cannot encode new manifest: {error}"))
             })?;
+            // The captured bytes are held once in bounded memory, then written
+            // once to staging. Publication/old-ring rollback are renames.
+            let required = total_bytes.saturating_add(encoded.len() as u64).saturating_add(1024 * 1024);
+            nexus_private_file::ensure_space_budget(&[(&staging, required)])
+                .map_err(|error| SnapshotError::io("snapshot target-volume space", error))?;
+            for (index, bytes) in payloads { validation::write_durable(&files_dir.join(index.to_string()), &bytes)?; }
             validation::write_durable(&staging.join("manifest.json"), &encoded)?;
             validation::sync_directory(&staging)?;
             match kind {

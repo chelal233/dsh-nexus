@@ -1,7 +1,7 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "Nexus Launcher",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "identifier": "com.nexus.launcher",
   "build": {
     "beforeDevCommand": "pnpm dev",
@@ -45,14 +45,17 @@
     "longDescription": "A native operator shell for the independent Nexus Agent and immutable Harness runtime.",
     "windows": {
       "nsis": {
+        "languages": ["English", "SimpChinese"],
+        "displayLanguageSelector": true,
         "installerHooks": "installers/shutdown.nsh"
       },
       "wix": {
+        "language": ["en-US", "zh-CN"],
         "fragmentPaths": ["installers/shutdown.wxs"],
         "componentGroupRefs": ["NexusInstallerShutdown"]
       },
       "webviewInstallMode": {
-        "type": "embedBootstrapper"
+        "type": "offlineInstaller"
       }
     },
     "icon": [

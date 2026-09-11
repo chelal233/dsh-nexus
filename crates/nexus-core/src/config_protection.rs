@@ -68,6 +68,14 @@ pub fn ensure_harness_homes_preserved(root: &Path, target: &Path) -> io::Result<
     validate_path(target)?;
     let mut homes = read_protected_harness_homes(root)?;
     homes.extend(configured_harness_home(root)?);
+    homes.extend(crate::external_harness::protected_locations(&NexusPaths::from_root(root.to_owned()))?);
+    if let Some(bytes)=crate::read_regular_file_bounded(&root.join("config.json"),4*1024*1024)? {
+        let config:serde_json::Value=serde_json::from_slice(&bytes)?;
+        if let Some(source)=config.get("external_harness").filter(|s|!s.is_null()) {
+            let path=source.get("root").and_then(|v|v.as_str()).ok_or_else(||invalid("Invalid external source protection"))?;
+            homes.push(path.into());
+        }
+    }
     if let Some(home) = std::env::var_os("DSH_HOME").filter(|value| !value.is_empty()) {
         homes.push(home.into());
     }
@@ -89,7 +97,7 @@ pub fn ensure_harness_homes_preserved(root: &Path, target: &Path) -> io::Result<
     Ok(())
 }
 
-pub(crate) fn paths_overlap_by_identity(left: &Path, right: &Path) -> io::Result<bool> {
+pub fn paths_overlap_by_identity(left: &Path, right: &Path) -> io::Result<bool> {
     fn existing_identity(path: &Path) -> io::Result<Option<String>> {
         match identity(path) {
             Ok(value) => Ok(Some(value)),
@@ -175,7 +183,7 @@ mod tests {
         (root.clone(), ConfigStore::new(NexusPaths::from_root(root)))
     }
     fn config(home: &Path) -> NexusConfigFile {
-        NexusConfigFile { harness_preferences: Some(nexus_protocol::HarnessPreferencesPayload {
+        NexusConfigFile { external_harness: None, harness_preferences: Some(nexus_protocol::HarnessPreferencesPayload {
             home: Some(home.to_string_lossy().into_owned()), ..Default::default()
         }), ..Default::default() }
     }
@@ -207,7 +215,9 @@ mod tests {
         assert_eq!(fs::read(root.join(PREVIOUS_CONFIG_FILE)).unwrap(), backup);
         // Valid JSON but invalid config is never adopted as the valid backup.
         fs::write(root.join("config.json"), r#"{"snapshots":{"healthy_slots":0,"max_manual_snapshots":1}}"#).unwrap();
-        store.write(&second).unwrap();
+        let invalid=fs::read(root.join("config.json")).unwrap();
+        assert!(store.write(&second).is_err());
+        assert_eq!(fs::read(root.join("config.json")).unwrap(),invalid);
         assert_eq!(fs::read(root.join(PREVIOUS_CONFIG_FILE)).unwrap(), backup);
         fs::write(root.join("config.json"), "broken json").unwrap();
         assert!(store.write(&second).is_err());

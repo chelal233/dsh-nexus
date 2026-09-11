@@ -41,12 +41,24 @@ another UI consumes the same API rather than linking the Rust crate directly;
 
 ## Development
 
-Install the frontend dependencies and run a native development window:
+Developers need Rust/MSVC Windows build tools, Node and pnpm. End users install
+the prebuilt package and do not need these development tools. From the repository
+root, install locked frontend dependencies and run a native development window:
 
-```text
-pnpm install
+```powershell
+cd apps/nexus-launcher
+pnpm install --frozen-lockfile
+$env:NEXUS_BUILD_ID = 'dev-' + (Get-Date -Format 'yyyyMMddHHmmss')
+pnpm prepare:agent
+pnpm prepare:runtime
+pnpm prepare:release
 pnpm tauri dev
 ```
+
+Keep the same build ID for all three preparation steps. Tauri debug builds and
+native tests also copy these ignored resources, so a fresh clone must prepare
+them first. Before `pnpm release:gate`, clear the development override with
+`Remove-Item Env:NEXUS_BUILD_ID -ErrorAction SilentlyContinue`.
 
 Useful checks:
 
@@ -83,14 +95,10 @@ $env:NEXUS_AGENT_PORT = '3090'
 
 ## Native behavior
 
-- Closing the main window hides it to the system tray. The tray menu can show
-  the window or quit the native shell.
-- The single-instance plugin focuses the existing window when a second launch
-  is attempted.
+- Closing the main window hides it to the system tray. The tray exposes Harness
+  status and controls, the Web and DSH terminal entrypoints, and distinct exits
+  that retain or stop services.
 - Desktop notifications are used for close-to-tray feedback.
-- The official global-shortcut plugin registers Ctrl+Shift+N to restore the
-  window. If a platform cannot register that shortcut, the native window and
-  tray menu remain usable.
 - Settings offers System, Light, and Dark themes. The selected mode is stored
   in local storage and System follows operating-system preference changes.
 

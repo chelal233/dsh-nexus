@@ -1,11 +1,13 @@
 {
   "name": "nexus-launcher",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "private": true,
   "type": "module",
   "scripts": {
+    "release:gate": "node src-tauri/scripts/release-gate.mjs",
     "dev": "vite",
-    "test": "node --experimental-strip-types --test tests/*.test.ts",
+    "test": "node --experimental-strip-types --test --test-concurrency=4 tests/*.test.ts",
+    "test:rust": "cargo test --manifest-path ../../Cargo.toml --workspace -j 2 -- --test-threads=4",
     "build": "tsc --noEmit && vite build",
     "prepare:agent": "node src-tauri/scripts/prepare-agent.mjs",
     "prepare:runtime": "node src-tauri/scripts/prepare-runtime.mjs",
@@ -29,6 +31,7 @@
     "@types/react": "^19.1.10",
     "@types/react-dom": "^19.1.7",
     "@vitejs/plugin-react": "^4.7.0",
+    "jsdom": "26.1.0",
     "typescript": "^5.9.2",
     "vite": "^7.1.3"
   }

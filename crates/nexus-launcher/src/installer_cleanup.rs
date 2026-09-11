@@ -4,17 +4,20 @@ use std::{ffi::OsString, fs, io, path::{Path, PathBuf}};
 
 const OWNED: &[&str] = &[
     "config.json", nexus_core::PREVIOUS_CONFIG_FILE, "state.json", "profiles.json", "release-pointers.json",
-    "update-state.json", "install-operation.json", "cold-operation.json", "cold-publication.json",
+    "update-state.json", "install-operation.json", "cold-operation.json", "cold-publication.json", "request-receipts.json",
     "logs", "checkpoints", "releases", "runtimes", "downloads", "diagnostics", "run",
-    "compatibility", "snapshots", "snapshot-transactions",
+    "compatibility", "snapshots", "snapshot-transactions", "canary",
 ];
 
 #[cfg(test)]
 const PROTECTED_HOMES: &str = nexus_core::PROTECTED_HARNESS_HOMES_FILE;
 
 fn root_argument(args: &[OsString]) -> Result<PathBuf, String> {
-    if args.len() != 4 || args[0] != "--data-dir" || args[2] != "--install-dir" {
-        return Err("expected installer-cleanup --data-dir PATH --install-dir PATH".into());
+    if !matches!(args.len(), 4 | 6) || args[0] != "--data-dir" || args[2] != "--install-dir" {
+        return Err("expected installer-cleanup --data-dir PATH --install-dir PATH [--locale LANGID]".into());
+    }
+    if args.len() == 6 && (args[4] != "--locale" || !matches!(args[5].to_str(), Some("1033" | "2052" | "4100" | "1028" | "3076" | "5124"))) {
+        return Err("unsupported installer locale; expected an English or Chinese LANGID".into());
     }
     let root = PathBuf::from(&args[1]);
     if !root.is_absolute() || root.file_name() != Some(std::ffi::OsStr::new("Nexus"))
@@ -114,10 +117,10 @@ fn cleanup(root: &Path, home: Option<&Path>) -> io::Result<()> {
 }
 
 #[cfg(windows)]
-fn message(text: &str, flags: u32) -> i32 {
+fn message(text: &str, flags: u32, chinese: bool) -> i32 {
     use windows_sys::Win32::UI::WindowsAndMessaging::MessageBoxW;
     let text: Vec<u16> = text.encode_utf16().chain(Some(0)).collect();
-    let title: Vec<u16> = "Nexus Launcher Uninstall".encode_utf16().chain(Some(0)).collect();
+    let title: Vec<u16> = (if chinese { "卸载 Nexus Launcher" } else { "Nexus Launcher Uninstall" }).encode_utf16().chain(Some(0)).collect();
     unsafe { MessageBoxW(std::ptr::null_mut(), text.as_ptr(), title.as_ptr(), flags) }
 }
 
@@ -127,23 +130,40 @@ pub fn run(args: Vec<OsString>) -> Result<(), String> {
     {
         use windows_sys::Win32::UI::WindowsAndMessaging::{IDYES, MB_YESNO, MB_ICONQUESTION, MB_DEFBUTTON2, MB_OK, MB_ICONWARNING};
         if !root.exists() { return Ok(()); }
-        let question = format!("Remove Nexus data from {}?\n\nYes: remove Nexus settings, installation history, logs, snapshots, downloaded versions and cached runtimes.\nNo (default): keep this data for reinstallation.\n\nHarness sessions and plugins in .dsh, custom NEXUS_DATA_DIR locations, links and unrecognized files are kept.", root.display());
-        if message(&question, MB_YESNO | MB_ICONQUESTION | MB_DEFBUTTON2) != IDYES { return Ok(()); }
+        let chinese = installer_chinese(args.get(5).and_then(|v| v.to_str()), unsafe { windows_sys::Win32::Globalization::GetUserDefaultUILanguage() });
+        let question = if chinese {
+            format!("是否删除 {} 中的 Nexus 数据？\n\n是：删除 Nexus 设置、安装历史、日志、快照、已下载版本和缓存的运行时。\n否（默认）：保留这些数据，以便重新安装。\n\n保留 .dsh 中的 Harness 会话和插件、自定义 NEXUS_DATA_DIR 位置、链接及无法识别的文件。", root.display())
+        } else {
+            format!("Remove Nexus data from {}?\n\nYes: remove Nexus settings, installation history, logs, snapshots, downloaded versions and cached runtimes.\nNo (default): keep this data for reinstallation.\n\nHarness sessions and plugins in .dsh, custom NEXUS_DATA_DIR locations, links and unrecognized files are kept.", root.display())
+        };
+        if message(&question, MB_YESNO | MB_ICONQUESTION | MB_DEFBUTTON2, chinese) != IDYES { return Ok(()); }
         let home = std::env::var_os("DSH_HOME").filter(|value| !value.is_empty()).map(PathBuf::from);
-        let result = crate::installer_shutdown::run(args[2..].to_vec())
+        let result = crate::installer_shutdown::run(args[2..4].to_vec())
             .and_then(|()| ensure_agent_stopped(&root))
             .and_then(|()| cleanup(&root, home.as_deref()).map_err(|error| error.to_string()));
         if let Err(error) = result {
-            message(&format!("Some Nexus data could not be removed: {error}\n\nRemaining data: {}", root.display()), MB_OK | MB_ICONWARNING);
+            let detail = if chinese { format!("部分 Nexus 数据未能删除。\n\n原始错误：{error}\n\n剩余数据：{}", root.display()) }
+                else { format!("Some Nexus data could not be removed: {error}\n\nRemaining data: {}", root.display()) };
+            message(&detail, MB_OK | MB_ICONWARNING, chinese);
             return Err(error.to_string());
         }
         if root.exists() {
-            message(&format!("Nexus settings and removable caches were cleared. Protected Harness data, links or unrecognized files remain in {}.", root.display()), MB_OK);
+            let detail = if chinese { format!("Nexus 设置和可删除缓存已清理。受保护的 Harness 数据、链接或无法识别的文件仍保留在 {}。", root.display()) }
+                else { format!("Nexus settings and removable caches were cleared. Protected Harness data, links or unrecognized files remain in {}.", root.display()) };
+            message(&detail, MB_OK, chinese);
         }
         Ok(())
     }
     #[cfg(not(windows))]
     { let _ = root; Err("installer-cleanup is supported only on Windows".into()) }
+}
+
+fn installer_chinese(explicit: Option<&str>, system_lang: u16) -> bool {
+    match explicit {
+        Some("2052" | "4100") => true,
+        Some("1033" | "1028" | "3076" | "5124") => false,
+        _ => matches!(system_lang, 0x0804 | 0x1004),
+    }
 }
 
 #[cfg(windows)]
@@ -175,7 +195,9 @@ fn ensure_agent_stopped(root: &Path) -> Result<(), String> {
 mod tests {
     use super::*;
     fn fixture() -> PathBuf {
-        let root = std::env::temp_dir().join(format!("nexus-cleanup-{}-{}", std::process::id(), std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos())).join("Nexus");
+        static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        let sequence = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let root = std::env::temp_dir().join(format!("nexus-cleanup-{}-{}-{sequence}", std::process::id(), std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos())).join("Nexus");
         fs::create_dir_all(&root).unwrap(); root
     }
     #[test]
@@ -186,8 +208,14 @@ mod tests {
             fs::write(root.join(directory).join("keep.txt"), "data").unwrap();
         }
         fs::write(root.join("cold-operation.json"), "old failure").unwrap();
+        fs::write(root.join("request-receipts.json"), "old operation receipt").unwrap();
+        fs::create_dir_all(root.join("canary")).unwrap();
+        fs::write(root.join("canary/latest.json"), "old Canary failure").unwrap();
+        fs::write(root.join("canary/history-previous.json"), "old Canary history").unwrap();
         cleanup(&root, Some(&root.join("runtimes/custom-home"))).unwrap();
         assert!(!root.join("cold-operation.json").exists());
+        assert!(!root.join("request-receipts.json").exists());
+        assert!(!root.join("canary").exists());
         assert!(!root.join("downloads").exists());
         for directory in ["releases/.dsh", "runtimes/custom-home", ".dsh", "my-files"] {
             assert!(root.join(directory).join("keep.txt").exists());
@@ -229,6 +257,26 @@ mod tests {
         assert!(root_argument(&args(std::env::temp_dir().join("../Nexus"))).is_err());
         let root = std::env::temp_dir().join("Nexus");
         assert_eq!(root_argument(&args(root.clone())).unwrap(), root);
+    }
+    #[test]
+    fn installer_language_is_explicit_and_does_not_change_cleanup_paths() {
+        for id in [1028,3076,5124] {
+            assert!(!installer_chinese(None,id));
+            assert!(!installer_chinese(Some(&id.to_string()),2052));
+        }
+        assert!(installer_chinese(None,4100));
+        let root = std::env::temp_dir().join("Nexus");
+        let mut args = vec!["--data-dir".into(), root.clone().into_os_string(), "--install-dir".into(), "C:/Nexus".into(), "--locale".into(), "2052".into()];
+        assert_eq!(root_argument(&args).unwrap(), root);
+        assert!(installer_chinese(Some("2052"), 1033));
+        assert!(!installer_chinese(Some("1033"), 2052));
+        assert!(installer_chinese(None, 2052));
+        assert!(!installer_chinese(None, 1033));
+        args[5] = "invalid".into();
+        assert!(root_argument(&args).is_err());
+        args[5] = "1033".into();
+        args[4] = "--unexpected".into();
+        assert!(root_argument(&args).is_err());
     }
     #[test]
     fn preserves_persisted_and_environment_homes_before_removing_config() {

@@ -64,22 +64,36 @@ impl std::fmt::Display for PublicationConflict {
     }
 }
 impl std::error::Error for PublicationConflict {}
-pub(crate) fn is_publication_conflict(error: &io::Error) -> bool {
+#[cfg(test)]
+fn is_publication_conflict(error: &io::Error) -> bool {
     error.get_ref().is_some_and(|inner| inner.is::<PublicationConflict>())
 }
 
 #[derive(serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
 struct PublicationIntent {
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    prepare_only: bool,
+    #[serde(default)]
+    previous_profiles: Option<nexus_core::ProfileCatalog>,
+    #[serde(default)]
+    target_profiles: Option<nexus_core::ProfileCatalog>,
     committed: bool,
     #[serde(default)]
     preserve_current: bool,
     #[serde(default)]
     owned_runtime: Option<String>,
+    #[serde(default)]
+    owned_environment: bool,
+    #[serde(default)]
+    preserve_release: bool,
     operation: ColdOperation,
     previous_config: nexus_core::NexusConfigFile,
     target_config: nexus_core::NexusConfigFile,
     previous_current: Option<String>,
     previous_lkg: Option<String>,
+    #[serde(default)]
+    target_lkg: Option<String>,
     previous_update: UpdateRuntimeInfo,
     new_slot: bool,
 }
@@ -133,10 +147,12 @@ impl ColdCoordinator {
             operation.phase = ColdOperationPhase::Failed;
             operation.progress_percent = 100;
             operation.updated_at_unix = Some(unix_time_seconds());
-            operation.error = Some(
-                "previous cold-install owner was not attached; start the tag switch again"
-                    .to_owned(),
-            );
+            let next = match operation.kind.as_str() {
+                "offline_import" => "retry the offline import",
+                "offline_export" => "retry the offline export",
+                _ => "start the tag switch again",
+            };
+            operation.error = Some(format!("previous cold-install owner was not attached; {next}"));
             operation.owner_quiescent = true;
             operation.cleanup_pending = true;
             operation.cleanup_error = None;
@@ -202,16 +218,28 @@ impl ColdCoordinator {
     pub(crate) fn cleanup_pending(&self) -> io::Result<bool> {
         Ok(self
             .load()?
-            .is_some_and(|operation| operation.cleanup_pending))
+            .is_some_and(|operation| operation.cleanup_pending || !operation.owner_quiescent
+                || (!operation.phase.is_terminal() && operation.phase != ColdOperationPhase::AwaitingConfirmation)))
+    }
+
+    // Only the live owner may pass its own busy-operation guard at publication.
+    // Other mutations must continue to treat this operation as busy.
+    pub(crate) async fn owns_verifying_publication(&self, id: &str) -> io::Result<bool> {
+        if !self.owner_active.load(Ordering::Acquire) || !self.load()?.is_some_and(|operation|
+            operation.operation_id == id && operation.phase == ColdOperationPhase::Verifying
+                && !operation.cleanup_pending) { return Ok(false); }
+        Ok(self.cancellation.lock().await.as_ref().is_some_and(|(owner, token)| owner == id && !token.is_cancelled()))
     }
 
     fn read_intent(&self) -> io::Result<PublicationIntent> {
         let bytes = nexus_core::read_regular_file_bounded(&self.intent_path(), 16 * 1024 * 1024)?
             .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "No publication recovery is pending"))?;
-        serde_json::from_slice(&bytes).map_err(|_| io::Error::other("Invalid publication recovery record"))
+        nexus_core::decode_versioned_record(&bytes)
     }
 
     pub(crate) fn publication_status(&self) -> io::Result<Option<serde_json::Value>> {
+        // A live transaction's journal is normal progress, not interrupted recovery.
+        if self.owner_active.load(Ordering::Acquire) { return Ok(None); }
         if !self.publication_pending() { return Ok(None); }
         let intent = self.read_intent()?;
         Ok(Some(serde_json::json!({"operation_id":intent.operation.operation_id,
@@ -279,7 +307,7 @@ impl ColdCoordinator {
     }
 
     fn write_intent(&self, intent: &PublicationIntent) -> io::Result<()> {
-        nexus_core::write_private_json_atomic(&self.paths.root, &self.intent_path(), intent)
+        nexus_core::write_versioned_record(&self.paths.root, &self.intent_path(), intent)
     }
 
     fn prepare_publication(
@@ -288,6 +316,12 @@ impl ColdCoordinator {
         new_slot: bool,
         target_config: nexus_core::NexusConfigFile,
     ) -> io::Result<PublicationIntent> {
+        self.prepare_publication_inner(operation, new_slot, target_config, false)
+    }
+
+    fn prepare_publication_inner(&self, operation: &ColdOperation, new_slot: bool,
+        mut target_config: nexus_core::NexusConfigFile, prepare_only: bool) -> io::Result<PublicationIntent> {
+        if !prepare_only { target_config.update_attempt_id = None; }
         let catalog = nexus_core::ReleaseStore::new(self.paths.clone()).load()?;
         if new_slot && self.paths.releases_dir.join(&operation.release_id).exists() {
             return Err(io::Error::new(
@@ -296,14 +330,20 @@ impl ColdCoordinator {
             ));
         }
         let intent = PublicationIntent {
+            prepare_only,
+            previous_profiles: None,
+            target_profiles: None,
             committed: false,
             preserve_current: false,
             owned_runtime: None,
+            owned_environment: false,
+            preserve_release: false,
             target_config,
             operation: operation.clone(),
             previous_config: nexus_core::ConfigStore::new(self.paths.clone()).load()?,
             previous_current: catalog.current_release,
             previous_lkg: catalog.last_known_good,
+            target_lkg: nexus_core::ReleaseStore::new(self.paths.clone()).verified_fallback(Some(&operation.release_id))?,
             previous_update: nexus_core::UpdateStateStore::new(self.paths.clone()).load()?,
             new_slot,
         };
@@ -335,39 +375,42 @@ impl ColdCoordinator {
         if current != intent.previous_config && current != intent.target_config {
             return Err(io::Error::new(io::ErrorKind::WouldBlock, PublicationConflict));
         }
+        if let (Some(previous), Some(target)) = (&intent.previous_profiles, &intent.target_profiles) {
+            let store = nexus_core::ProfileStore::new(self.paths.clone());
+            let current = store.load()?;
+            if &current != previous && &current != target { return Err(io::Error::other("Imported profile selection conflicts with a later change")); }
+            store.write(if intent.committed { target } else { previous })?;
+        }
         let releases = nexus_core::ReleaseStore::new(self.paths.clone());
         let updater = nexus_core::UpdateStateStore::new(self.paths.clone());
         let mut operation = intent.operation;
         if intent.committed {
-            nexus_core::ConfigStore::new(self.paths.clone()).write(&intent.target_config)?;
-            let lkg = if intent.previous_current.as_deref() == Some(&operation.release_id) {
-                intent.previous_lkg.as_deref()
-            } else {
-                intent
-                    .previous_current
-                    .as_deref()
-                    .or(intent.previous_lkg.as_deref())
-            };
-            releases.restore_release_pointers(Some(&operation.release_id), lkg)?;
+            if !intent.prepare_only {
+            nexus_core::ConfigStore::new(self.paths.clone()).write_recovery_document(&intent.target_config)?;
+            let lkg = intent.target_lkg.as_deref();
+            releases.restore_release_pointers(if intent.preserve_release { intent.previous_current.as_deref() } else { Some(&operation.release_id) }, if intent.preserve_release { intent.previous_lkg.as_deref() } else { lkg })?;
+            }
             updater.write(&UpdateRuntimeInfo {
-                state: UpdateState::Succeeded,
+                state: if intent.prepare_only { UpdateState::Prepared } else { UpdateState::Succeeded },
                 release_id: Some(operation.release_id.clone()),
                 started_at_unix: Some(operation.started_at_unix),
                 finished_at_unix: Some(unix_time_seconds()),
                 exit_code: Some(0),
                 error: None,
             })?;
-            operation.phase = ColdOperationPhase::Succeeded;
+            operation.phase = if intent.prepare_only { ColdOperationPhase::Prepared } else { ColdOperationPhase::Succeeded };
             operation.error = None;
             operation.owner_quiescent = true;
             operation.cleanup_pending = false;
             operation.cleanup_error = None;
         } else {
-            nexus_core::ConfigStore::new(self.paths.clone()).write(&intent.previous_config)?;
+            if !intent.prepare_only {
+            nexus_core::ConfigStore::new(self.paths.clone()).write_recovery_document(&intent.previous_config)?;
             releases.restore_release_pointers(
                 intent.previous_current.as_deref(),
                 intent.previous_lkg.as_deref(),
             )?;
+            }
             updater.write(&intent.previous_update)?;
             if intent.new_slot {
                 // Includes rename-before-manifest cuts; slot id is server generated.
@@ -380,6 +423,10 @@ impl ColdCoordinator {
             if let Some(runtime) = &intent.owned_runtime {
                 if runtime != &format!("offline-{}", operation.operation_id) { return Err(io::Error::other("Invalid owned offline runtime identity")); }
                 remove_owned_directory(&self.paths.runtimes_dir,&self.paths.runtimes_dir.join(runtime))?;
+            }
+            if intent.owned_environment {
+                let root = offline::environment_root(&self.paths, &operation.operation_id)?;
+                remove_owned_directory(root.parent().ok_or_else(|| io::Error::other("Environment parent missing"))?, &root)?;
             }
             operation.phase = ColdOperationPhase::Failed;
             operation.error =
@@ -400,15 +447,13 @@ impl ColdCoordinator {
             return Ok(None);
         }
         let bytes = fs::read(path)?;
-        serde_json::from_slice(&bytes)
-            .map(Some)
-            .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))
+        nexus_core::decode_versioned_record(&bytes).map(Some)
     }
 
     fn write(&self, operation: &ColdOperation) -> io::Result<()> {
         self.paths.ensure_directories()?;
         let path = self.paths.root.join(COLD_STATE_FILE);
-        write_json_atomic(&self.paths.root, &path, operation)
+        nexus_core::write_versioned_record(&self.paths.root, &path, operation)
     }
 
     fn write_failure_pending(
@@ -541,6 +586,8 @@ impl ColdCoordinator {
             .downloads_dir
             .join(format!(".{operation_id}-{release_id}"));
         let operation = ColdOperation {
+            credential_recovery_path: None,
+            offline_contents: None,
             operation_id: operation_id.clone(),
             kind: kind.into(),
             archive_path,
@@ -687,7 +734,7 @@ async fn prepare_inner(state: &AppState, operation_id: &str) -> io::Result<()> {
     // Disk preflight: the clone plus pnpm build needs several GiB on the
     // data-root volume; fail before the clone instead of mid-install.
     nexus_core::disk::ensure_free_space(
-        &state.paths.downloads_dir,
+        Path::new(&operation.candidate),
         nexus_core::disk::MIN_INSTALL_FREE_BYTES,
     )?;
     state
@@ -782,6 +829,19 @@ async fn prepare_inner(state: &AppState, operation_id: &str) -> io::Result<()> {
     ))
 }
 
+async fn ensure_publication_admission(state: &AppState, operation_id: &str) -> io::Result<()> {
+    if let Err(response) = super::ensure_mutation_ready_for_owner(state, Some(operation_id)).await {
+        let status = response.status();
+        let bytes = axum::body::to_bytes(response.into_body(), 64 * 1024).await.map_err(io::Error::other)?;
+        let value: serde_json::Value = serde_json::from_slice(&bytes).map_err(io::Error::other)?;
+        return Err(io::Error::new(io::ErrorKind::ResourceBusy, format!(
+            "Cold installation publication blocked ({}; HTTP {}): {}",
+            value["code"].as_str().unwrap_or("mutation_blocked"), status.as_u16(),
+            value["message"].as_str().unwrap_or("Inspect recovery status before retrying"))));
+    }
+    Ok(())
+}
+
 async fn build_and_publish(
     state: &AppState,
     operation_id: &str,
@@ -852,14 +912,7 @@ async fn build_and_publish(
     }
 
     let lifecycle = state.supervisor.acquire_lifecycle().await;
-    super::ensure_checkpoint_mutation_ready(state)
-        .await
-        .map_err(|_| {
-            io::Error::new(
-                io::ErrorKind::ResourceBusy,
-                "checkpoint recovery blocks cold install",
-            )
-        })?;
+    ensure_publication_admission(state, operation_id).await?;
     let _updater = state
         .updater
         .try_acquire_gate()
@@ -884,10 +937,11 @@ async fn build_and_publish(
         .cold
         .load()?
         .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "cold operation not found"))?;
-    if final_operation.operation_id != operation_id || final_operation.phase.is_terminal() {
+    if final_operation.operation_id != operation_id || final_operation.phase != ColdOperationPhase::Verifying
+        || final_operation.cleanup_pending {
         return Err(io::Error::new(
             io::ErrorKind::Interrupted,
-            "cold operation cannot be committed",
+                "cold operation cannot be committed",
         ));
     }
     final_operation.phase = ColdOperationPhase::Registering;
@@ -935,6 +989,12 @@ async fn build_and_publish(
         verify_args: Vec::new(),
         timeout_secs: Some(COMMAND_TIMEOUT.as_secs()),
     });
+    if config.external_harness.is_none() {
+        if let Err(error) = state.releases.ensure_rollback_protection(&operation.release_id) {
+            if error.kind() != io::ErrorKind::WouldBlock { return Err(error); }
+            return prepare_repair_slot(state, &final_operation, &candidate);
+        }
+    }
     let mut intent = state
         .cold
         .prepare_publication(&final_operation, true, config.clone())?;
@@ -963,10 +1023,10 @@ async fn build_and_publish(
     final_operation.updated_at_unix = Some(unix_time_seconds());
     state.cold.write(&final_operation)?;
     let before = state.releases.load()?;
-    let promoted = match state.releases.promote(&operation.release_id) {
+    let promoted = match if config.external_harness.is_some() { state.releases.promote(&operation.release_id) } else { state.releases.promote_with_rollback(&operation.release_id) } {
         Ok(catalog) => catalog,
         Err(error) => {
-            let _ = state.config.write(&previous_config);
+            let _ = state.config.write_recovery_document(&previous_config);
             let _ = state.releases.remove(&operation.release_id);
             return Err(error);
         }
@@ -976,7 +1036,7 @@ async fn build_and_publish(
             before.current_release.as_deref(),
             before.last_known_good.as_deref(),
         );
-        let _ = state.config.write(&previous_config);
+        let _ = state.config.write_recovery_document(&previous_config);
         return Err(io::Error::other(format!(
             "failed to persist Agent current release: {error}"
         )));
@@ -1002,6 +1062,16 @@ async fn build_and_publish(
     state.cold.write(&final_operation)?;
     fs::remove_file(state.cold.intent_path())?;
     Ok(())
+}
+
+fn prepare_repair_slot(state: &AppState, operation: &ColdOperation, candidate: &Path) -> io::Result<()> {
+    let mut prepared = operation.clone();
+    prepared.warning = Some("rollback_health_required: Version prepared only. Select it in Release slots and confirm a manual switch; the current selection and configuration are unchanged.".into());
+    let mut intent = state.cold.prepare_publication_inner(&prepared, true, state.config.load()?, true)?;
+    state.releases.register_prepared(candidate, &prepared.release_id, &prepared.tag, Some(APPROVED_UPSTREAM.into()), Some("Prepared for explicit manual recovery".into()))?;
+    intent.committed = true;
+    state.cold.write_intent(&intent)?;
+    state.cold.recover_publication()
 }
 
 async fn promote_existing(state: &AppState, operation_id: &str, tag: &str) -> io::Result<()> {
@@ -1047,12 +1117,14 @@ async fn promote_existing(state: &AppState, operation_id: &str, tag: &str) -> io
     crate::compatibility::for_release(state, &release.id, true, &cancellation).await?;
     ensure_not_cancelled(&cancellation)?;
     final_operation.release_id = release.id.clone();
+    let external = state.config.load()?.external_harness.is_some();
+    if !external { state.releases.ensure_rollback_protection(&release.id)?; }
     let mut intent =
         state
             .cold
             .prepare_publication(&final_operation, false, state.config.load()?)?;
     let before = state.releases.load()?;
-    let catalog = state.releases.promote(&release.id)?;
+    let catalog = if external { state.releases.promote(&release.id) } else { state.releases.promote_with_rollback(&release.id) }?;
     if let Err(error) = super::persist_release_catalog_state(state, &catalog, true).await {
         let _ = state.releases.restore_release_pointers(
             before.current_release.as_deref(),
@@ -1568,7 +1640,7 @@ async fn settle_failure(
             )?;
             return Err(error);
         }
-        if operation.phase == ColdOperationPhase::Succeeded {
+        if matches!(operation.phase, ColdOperationPhase::Succeeded | ColdOperationPhase::Prepared) {
             return Ok(());
         }
     }
@@ -1767,6 +1839,41 @@ mod tests {
     use super::*;
 
     #[tokio::test]
+    async fn interrupted_operation_recovery_guidance_matches_operation_kind() {
+        for (kind, next) in [("offline_import", "retry the offline import"),
+            ("offline_export", "retry the offline export"), ("install", "start the tag switch again")] {
+            let state = crate::switch_ownership_tests::switch_test_state(&format!("cold-guidance-{kind}"));
+            let mut operation = state.cold.begin("v-interrupted".into(), RuntimeSource::Official,
+                RuntimeInstallMode::Portable).await.unwrap();
+            operation.kind = kind.into();
+            operation.phase = ColdOperationPhase::Verifying;
+            state.cold.write(&operation).unwrap();
+            state.cold.owner_active.store(false, Ordering::Release);
+            ColdCoordinator::new(state.paths.clone()).recover().unwrap();
+            let recovered = state.cold.load().unwrap().unwrap();
+            assert_eq!(recovered.phase, ColdOperationPhase::Failed);
+            assert_eq!(recovered.operation_id, operation.operation_id);
+            assert_eq!(recovered.error.as_deref(), Some(format!("previous cold-install owner was not attached; {next}").as_str()));
+            assert!(recovered.owner_quiescent);
+            fs::remove_dir_all(&state.paths.root).unwrap();
+        }
+    }
+
+    #[tokio::test]
+    async fn cold_future_schema_and_unknown_fields_preserve_records() {
+        let state=crate::switch_ownership_tests::switch_test_state("cold-format-guard");
+        let operation=state.cold.begin("v-new".into(),RuntimeSource::Official,RuntimeInstallMode::Portable).await.unwrap();
+        let path=state.paths.root.join(COLD_STATE_FILE);
+        for future_version in [true,false] {
+            let mut value=serde_json::to_value(&operation).unwrap();
+            if future_version {value["schema_version"]=2.into();}else{value["future"]=true.into();}
+            let bytes=serde_json::to_vec(&value).unwrap();fs::write(&path,&bytes).unwrap();
+            assert!(state.cold.load().is_err());assert!(state.cold.write(&operation).is_err());
+            assert_eq!(fs::read(&path).unwrap(),bytes);
+        }
+        fs::remove_dir_all(&state.paths.root).unwrap();
+    }
+    #[tokio::test]
     async fn maintenance_lease_excludes_begin_and_unresolved_cold_state() {
         let state = crate::switch_ownership_tests::switch_test_state("maintenance-cold");
         let cold = &state.cold;
@@ -1791,6 +1898,54 @@ mod tests {
         drop(cold.try_acquire_maintenance().unwrap());
         fs::write(state.paths.root.join(COLD_STATE_FILE), "invalid json").unwrap();
         assert!(cold.try_acquire_maintenance().is_err());
+        fs::remove_dir_all(&state.paths.root).unwrap();
+    }
+
+    #[tokio::test]
+    async fn publication_admission_allows_only_its_live_verifying_owner() {
+        let state = crate::switch_ownership_tests::switch_test_state("publication-admission");
+        let cold = &state.cold;
+        let mut operation = cold.begin("v-new".into(), RuntimeSource::Official,
+            RuntimeInstallMode::Portable).await.unwrap();
+        let id = operation.operation_id.clone();
+        assert!(ensure_publication_admission(&state, &id).await.is_err());
+        operation.phase = ColdOperationPhase::Verifying;
+        cold.write(&operation).unwrap();
+        assert!(super::super::ensure_checkpoint_mutation_ready(&state).await.is_err());
+        ensure_publication_admission(&state, &id).await.unwrap();
+        assert!(ensure_publication_admission(&state, "another-operation").await.is_err());
+        operation.cleanup_pending = true;
+        cold.write(&operation).unwrap();
+        assert!(ensure_publication_admission(&state, &id).await.is_err());
+        operation.cleanup_pending = false;
+        cold.write(&operation).unwrap();
+        cold.owner_active.store(false, Ordering::Release);
+        assert!(ensure_publication_admission(&state, &id).await.is_err());
+        cold.owner_active.store(true, Ordering::Release);
+        fs::write(cold.intent_path(), "pending").unwrap();
+        let error = ensure_publication_admission(&state, &id).await.unwrap_err().to_string();
+        assert!(error.contains("cold_publication_pending"), "{error}");
+        fs::remove_file(cold.intent_path()).unwrap();
+        ensure_publication_admission(&state, &id).await.unwrap();
+        let journal = state.paths.run_dir.join("checkpoint-restore.json");
+        fs::write(&journal, "broken recovery record").unwrap();
+        let error = ensure_publication_admission(&state, &id).await.unwrap_err().to_string();
+        assert!(error.contains("checkpoint_recovery_failed"), "{error}");
+        assert_eq!(fs::read_to_string(&journal).unwrap(), "broken recovery record");
+        fs::remove_file(journal).unwrap();
+        let canary_dir = state.paths.root.join("canary");
+        fs::create_dir_all(&canary_dir).unwrap();
+        let canary_record = canary_dir.join("latest.json");
+        fs::write(&canary_record, serde_json::to_vec(&serde_json::json!({
+            "format_version": 1, "operation_id": "a".repeat(64), "phase": "running"
+        })).unwrap()).unwrap();
+        let error = ensure_publication_admission(&state, &id).await.unwrap_err().to_string();
+        assert!(error.contains("canary_pending"), "{error}");
+        fs::remove_file(canary_record).unwrap();
+        ensure_publication_admission(&state, &id).await.unwrap();
+        cold.cancellation.lock().await.as_ref().unwrap().1.cancel();
+        let error = ensure_publication_admission(&state, &id).await.unwrap_err().to_string();
+        assert!(error.contains("cold_install_owner_conflict"), "{error}");
         fs::remove_dir_all(&state.paths.root).unwrap();
     }
 
@@ -1941,6 +2096,98 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn offline_profile_selection_replays_with_its_configuration() {
+        for committed in [false, true] {
+            let state = crate::switch_ownership_tests::switch_test_state(if committed { "offline-profile-commit" } else { "offline-profile-rollback" });
+            let previous = state.profiles.load().unwrap();
+            let target = nexus_core::ProfileCatalog::new("imported", vec!["imported".into()]).unwrap();
+            let op = state.cold.begin("v-offline".into(), RuntimeSource::Official, RuntimeInstallMode::Portable).await.unwrap();
+            fs::create_dir_all(&op.candidate).unwrap();
+            let mut intent = state.cold.prepare_publication(&op, true, state.config.load().unwrap()).unwrap();
+            state.releases.register(&op.release_id, &op.tag, None, None).unwrap();
+            intent.previous_profiles = Some(previous.clone()); intent.target_profiles = Some(target.clone()); intent.committed = committed;
+            state.cold.write_intent(&intent).unwrap();
+            // Simulate a cut after writing the opposite side of the tuple.
+            state.profiles.write(if committed { &previous } else { &target }).unwrap();
+            state.cold.recover_publication().unwrap();
+            assert_eq!(state.profiles.load().unwrap(), if committed { target } else { previous });
+            assert!(!state.cold.publication_pending());
+        }
+    }
+
+    #[tokio::test]
+    async fn repair_slot_preparation_preserves_broken_legacy_selection_and_recovers_interruption() {
+        for committed in [false, true] {
+            let state = crate::switch_ownership_tests::switch_test_state(if committed { "repair-prepare" } else { "repair-interrupted" });
+            let pointer_bytes = br#"{"schema_version":1,"current_release":"missing-old","last_known_good":null}"#;
+            fs::write(&state.paths.release_pointers_file, pointer_bytes).unwrap();
+            let config = state.config.load().unwrap();
+            let op = state.cold.begin("v-repair".into(), RuntimeSource::Official, RuntimeInstallMode::Portable).await.unwrap();
+            let candidate = Path::new(&op.candidate);
+            fs::create_dir_all(candidate).unwrap(); fs::write(candidate.join("prepared-marker"), b"built release").unwrap();
+            if committed { prepare_repair_slot(&state, &op, candidate).unwrap(); }
+            else {
+                state.cold.prepare_publication_inner(&op, true, config.clone(), true).unwrap();
+                state.releases.register_prepared(candidate, &op.release_id, &op.tag, None, None).unwrap();
+                state.cold.recover_publication().unwrap();
+            }
+            assert_eq!(fs::read(&state.paths.release_pointers_file).unwrap(), pointer_bytes);
+            assert_eq!(state.config.load().unwrap(), config);
+            assert_eq!(state.releases.get(&op.release_id).is_ok(), committed);
+            if committed {
+                let finished = state.cold.load().unwrap().unwrap();
+                assert_eq!(finished.phase, ColdOperationPhase::Prepared);
+                assert!(finished.phase.is_terminal());
+                assert!(finished.owner_quiescent && !finished.cleanup_pending);
+                assert!(finished.warning.unwrap().contains("Version prepared only"));
+                let status = state.updater.status().unwrap();
+                assert_eq!(status.state, UpdateState::Prepared);
+                assert_eq!(status.release_id.as_deref(), Some(op.release_id.as_str()));
+                assert_eq!(serde_json::to_value(status).unwrap()["state"], "prepared");
+                assert!(state.releases.promotion_risk_confirmation(&op.release_id).unwrap().is_some());
+            }
+            assert!(!state.cold.intent_path().exists());
+            fs::remove_dir_all(&state.paths.root).unwrap();
+        }
+    }
+
+    #[tokio::test]
+    async fn data_only_publication_preserves_release_and_rolls_back_owned_home() {
+        for committed in [false, true] {
+            let state = crate::switch_ownership_tests::switch_test_state(if committed { "data-only-commit" } else { "data-only-rollback" });
+            state.config.transaction(|config| {config.update_attempt_id=Some(nexus_core::agent_auth::random_hex()?);Ok(())}).unwrap();
+            let previous_releases = state.releases.load().unwrap();
+            let previous_config = state.config.load().unwrap();
+            let mut op = state.cold.begin_with_details("data-only".into(), RuntimeSource::Official, RuntimeInstallMode::Portable, "offline_import", None, None).await.unwrap();
+            op.credential_recovery_path = Some(state.paths.run_dir.join("credential-recovery.json").to_string_lossy().into_owned());
+            fs::create_dir_all(&op.candidate).unwrap();
+            let home = offline::environment_root(&state.paths, &op.operation_id).unwrap();
+            fs::create_dir(&home).unwrap();
+            fs::write(home.join("retained.txt"), "copied data").unwrap();
+            let mut target = previous_config.clone();
+            target.harness_preferences.get_or_insert_with(Default::default).home = Some(home.to_string_lossy().into_owned());
+            let mut intent = state.cold.prepare_publication(&op, false, target.clone()).unwrap();
+            assert!(intent.target_config.update_attempt_id.is_none());
+            target = intent.target_config.clone();
+            intent.preserve_release = true; intent.owned_environment = true; intent.committed = committed;
+            state.cold.write_intent(&intent).unwrap();
+            state.config.write(&target).unwrap();
+            if !committed {
+                // The synchronous failure path restores the exact journal
+                // input, including an earlier attempt ID, before replay.
+                state.config.write_recovery_document(&previous_config).unwrap();
+            }
+            state.cold.recover_publication().unwrap();
+            assert_eq!(state.config.load().unwrap(), if committed { target } else { previous_config });
+            assert_eq!(state.releases.load().unwrap().current_release, previous_releases.current_release);
+            assert_eq!(home.exists(), committed);
+            assert_eq!(state.cold.load().unwrap().unwrap().credential_recovery_path, op.credential_recovery_path);
+            if committed { remove_owned_directory(home.parent().unwrap(), &home).unwrap(); }
+            fs::remove_dir_all(&state.paths.root).unwrap();
+        }
+    }
+
+    #[tokio::test]
     async fn publication_external_configuration_conflict_preserves_outer_record() {
         let state=crate::switch_ownership_tests::switch_test_state("cold-config-conflict");
         let previous=state.config.load().unwrap();
@@ -2045,6 +2292,9 @@ mod tests {
             let releases = &state.releases;
             releases.register("old", "v-old", None, None).unwrap();
             releases.promote("old").unwrap();
+            let entry = paths.releases_dir.join("old/health-entry.js"); fs::write(&entry, "fixture").unwrap();
+            let mut evidence = releases.healthy_launch_candidate("old", &entry, "web", "fixture-config".into()).unwrap();
+            evidence.run_id = "old-run".into(); evidence.generation = 1; releases.record_healthy_release(evidence).unwrap();
             let previous = state.config.load().unwrap();
             let mut target = previous.clone();
             target.runtime = Some(RuntimeConfig::default());

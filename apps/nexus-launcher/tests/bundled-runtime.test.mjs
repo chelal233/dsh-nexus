@@ -8,7 +8,7 @@ import { spawnSync } from 'node:child_process';
 
 // Run after prepare:runtime. No system Node/npm/pnpm or developer tools may
 // satisfy the nested build commands that failed on a clean Windows machine.
-test('bundled pnpm -> npm -> node and nested pnpm work without system tools', {
+for (const systemRootKey of ['SystemRoot', 'SYSTEMROOT']) test(`bundled pnpm -> npm -> node works without system tools (${systemRootKey})`, {
   skip: process.platform !== 'win32',
 }, () => {
   const runtime = process.env.NEXUS_TEST_RUNTIME_DIR
@@ -17,8 +17,11 @@ test('bundled pnpm -> npm -> node and nested pnpm work without system tools', {
   const pnpm = path.join(runtime, 'pnpm/bin/pnpm.cjs');
   const fixture = mkdtempSync(path.join(tmpdir(), 'nexus runtime 用户 '));
   const env = Object.fromEntries(Object.entries(process.env).filter(([key]) =>
-    key.toUpperCase() !== 'PATH' && !/^(npm_|pnpm_)/i.test(key)));
-  env.PATH = [path.dirname(node), path.dirname(pnpm), path.join(env.SystemRoot, 'System32')].join(';');
+    !['PATH', 'SYSTEMROOT'].includes(key.toUpperCase()) && !/^(npm_|pnpm_)/i.test(key)));
+  env[systemRootKey] = Object.entries(process.env).find(([key]) => key.toUpperCase() === 'SYSTEMROOT')?.[1];
+  const systemRoot = Object.entries(env).find(([key]) => key.toUpperCase() === 'SYSTEMROOT')?.[1];
+  assert.ok(systemRoot, 'Windows SystemRoot is required for the isolated runtime test');
+  env.PATH = [path.dirname(node), path.dirname(pnpm), path.join(systemRoot, 'System32')].join(';');
   env.EXPECTED_NODE = node;
   try {
     writeFileSync(path.join(fixture, 'package.json'), JSON.stringify({

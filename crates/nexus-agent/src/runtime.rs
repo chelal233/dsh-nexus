@@ -89,6 +89,8 @@ struct ProbeConfig {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum BlockingStage {
+    Diagnostics,
+    Maintenance,
     ConfigFile,
     ReleaseRoot,
     Requirements,
@@ -124,6 +126,10 @@ impl RuntimeRequestContext {
             production_blocking_fs(),
             BlockingHooks::default(),
         )
+    }
+
+    pub(crate) fn preflight() -> Self {
+        let mut request=Self::production(); request.deadline=Instant::now()+Duration::from_secs(40); request
     }
 
     fn with_budget(
@@ -168,7 +174,7 @@ impl RuntimeRequestContext {
 fn runtime_request_timeout() -> io::Error {
     io::Error::new(
         io::ErrorKind::TimedOut,
-        "runtime request exceeded its absolute deadline",
+        "File operation exceeded its absolute wait deadline; background work may still finish. Refresh its status before retrying",
     )
 }
 
@@ -1264,15 +1270,6 @@ fn system_command_processor() -> Option<PathBuf> {
     canonical_file(&PathBuf::from(system_root).join("System32").join("cmd.exe"))
 }
 
-#[cfg(test)]
-async fn run_version_probe(
-    command: Command,
-    deadline: Instant,
-    budget: ProbeBudget,
-) -> ProbeResult {
-    run_version_probe_observed(command, deadline, budget, ProbeLifecycle::default()).await
-}
-
 async fn run_version_probe_observed(
     command: Command,
     deadline: Instant,
@@ -2179,6 +2176,55 @@ mod tests {
         let _ = fs::remove_dir_all(root);
     }
 
+    #[tokio::test(flavor = "current_thread")]
+    async fn diagnostics_and_preview_budget_keep_health_live_and_hold_worker_permits() {
+        for stage in [BlockingStage::Diagnostics, BlockingStage::Maintenance] {
+            let state=crate::switch_ownership_tests::switch_test_state(&format!("bounded-{stage:?}"));
+            let root=state.paths.root.clone();
+            if stage == BlockingStage::Maintenance { fs::write(state.paths.run_dir.join("harness-log-session.json"), b"invalid-budget-fixture").unwrap(); }
+            let (hooks,entered_rx,gate)=blocking_stage_hook(stage,0);
+            struct ReleaseOnExit(BlockingGate);
+            impl Drop for ReleaseOnExit { fn drop(&mut self) { self.0.release(); } }
+            let _release_on_exit = ReleaseOnExit(gate.clone());
+            let request=RuntimeRequestContext::with_budget(ProbeBudget{round:Duration::from_millis(100),child:Duration::from_millis(25),cleanup:Duration::from_millis(10)},BlockingFs::new(1),hooks);
+            let inspector=request.clone();let owned=state.clone();
+            let task=tokio::spawn(async move {
+                match stage {
+                    BlockingStage::Diagnostics=>crate::diagnostics_status_with_budget(owned,request).await,
+                    BlockingStage::Maintenance=>crate::maintenance_preview_with_budget(owned,30,request).await,
+                    _=>unreachable!(),
+                }
+            });
+            tokio::time::timeout(Duration::from_millis(200),entered_rx).await.unwrap().unwrap();
+            let _ = tokio::time::timeout(Duration::from_millis(30),crate::health(axum::extract::State(state.clone()))).await.expect("health remains live on the single async worker");
+            let response=tokio::time::timeout(Duration::from_millis(250),task).await.unwrap().unwrap();
+            assert_eq!(response.status(),if stage == BlockingStage::Maintenance { axum::http::StatusCode::ACCEPTED } else { axum::http::StatusCode::GATEWAY_TIMEOUT });
+            assert_eq!(inspector.available_blocking_permits(),0,"timed-out disk work still owns its permit");
+            let scan_id = crate::maintenance_preview_snapshot(&state).operation_id;
+            if stage == BlockingStage::Maintenance {
+                let duplicate = crate::maintenance_preview_with_budget(state.clone(), 45, inspector.clone()).await;
+                assert_eq!(duplicate.status(), axum::http::StatusCode::ACCEPTED);
+                let scan = crate::maintenance_preview_snapshot(&state);
+                assert_eq!(scan.operation_id, scan_id, "duplicate joins the original scan rather than creating another worker");
+                assert_eq!(scan.retention_days, 30, "the active scan keeps its original inputs");
+                assert!(scan.wait_message.as_deref().is_some_and(|m| m.contains("absolute wait deadline")));
+                let status = tokio::time::timeout(Duration::from_millis(30), crate::maintenance_status(axum::extract::State(state.clone()))).await.expect("scan status does not wait behind the blocked disk worker");
+                assert_eq!(status.status(), axum::http::StatusCode::OK);
+            }
+            gate.release();
+            tokio::time::timeout(Duration::from_secs(2),async {while inspector.available_blocking_permits()!=1 {tokio::task::yield_now().await;}}).await.unwrap();
+            if stage == BlockingStage::Maintenance {
+                let scan = crate::maintenance_preview_snapshot(&state);
+                assert!(matches!(scan.state, crate::MaintenancePreviewPhase::Failed));
+                assert!(scan.error.as_deref().is_some_and(|m| m.contains("line 1 column 1")), "the original JSON error remains available after the foreground wait timed out");
+                let retry = crate::maintenance_preview_with_budget(state.clone(), 30, RuntimeRequestContext::production()).await;
+                assert_eq!(retry.status(), axum::http::StatusCode::BAD_REQUEST);
+                assert_ne!(crate::maintenance_preview_snapshot(&state).operation_id, scan_id, "failed workers release the reservation for retry");
+            }
+            let _=fs::remove_dir_all(root);
+        }
+    }
+
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn slow_runtime_config_load_is_inside_the_get_request_budget() {
         let root = fixture_root("slow-route-config");
@@ -2212,7 +2258,7 @@ mod tests {
         gate.release();
         assert_eq!(
             bounded.status(),
-            axum::http::StatusCode::INTERNAL_SERVER_ERROR
+            axum::http::StatusCode::GATEWAY_TIMEOUT
         );
         tokio::time::timeout(Duration::from_secs(1), async {
             while inspector.available_blocking_permits() != 1 {
@@ -2406,9 +2452,9 @@ mod tests {
         };
         let request = RuntimeRequestContext::with_budget(
             ProbeBudget {
-                round: Duration::from_millis(800),
-                child: Duration::from_millis(600),
-                cleanup: Duration::from_millis(100),
+                round: Duration::from_secs(6),
+                child: Duration::from_secs(5),
+                cleanup: Duration::from_millis(500),
             },
             BlockingFs::new(MAX_BLOCKING_FS_OPERATIONS),
             BlockingHooks::default(),
@@ -2416,18 +2462,22 @@ mod tests {
         let started = Instant::now();
         request
             .run_blocking_io(BlockingStage::ConfigFile, paths.config_file.clone(), || {
-                std::thread::sleep(Duration::from_millis(500));
+                std::thread::sleep(Duration::from_secs(4));
                 Ok(())
             })
             .await
             .expect("preparation completes inside request deadline");
+        // Keep the regression discriminatory without relying on sub-second
+        // Windows process startup/reaping under the full parallel test suite.
+        // Correct code has at most two seconds left; restarting the six-second
+        // round would let the hanging child probe run for five more seconds.
         let observed = tokio::time::timeout(
-            Duration::from_millis(450),
+            Duration::from_secs(3),
             observe_runtime_selection_until(&paths, Some(&runtime), &request),
         )
         .await
         .expect("child probes consume only the original request remainder");
-        assert!(started.elapsed() < Duration::from_millis(950));
+        assert!(started.elapsed() < Duration::from_secs(7));
         assert!(observed.tools.iter().all(|tool| !tool.available));
         let _ = fs::remove_dir_all(root);
     }
@@ -2757,12 +2807,18 @@ mod tests {
             .kill_on_drop(true);
         apply_probe_environment(&mut command);
 
-        let result = run_version_probe(
+        // This test proves child reaping, not a 25 ms OS scheduling bound.
+        // Keep the probe short but give cleanup its production allowance.
+        let budget = ProbeBudget { cleanup: CHILD_CLEANUP_TIMEOUT, ..short_probe_budget() };
+        let (events_tx, mut events_rx) = tokio::sync::mpsc::unbounded_channel();
+        let result = run_version_probe_observed(
             command,
-            Instant::now() + Duration::from_secs(1),
-            short_probe_budget(),
+            Instant::now() + Duration::from_secs(3),
+            budget,
+            ProbeLifecycle { sender: Some(events_tx) },
         )
         .await;
+        assert_eq!(events_rx.try_recv().unwrap(), ProbeLifecycleEvent::Started);
         assert!(result.output.is_none());
         assert!(result.reaped, "timed-out probe must wait for its child");
         let _ = fs::remove_dir_all(root);

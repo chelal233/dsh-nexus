@@ -1,0 +1,56 @@
+name: Windows checks
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  verify:
+    runs-on: windows-latest
+    timeout-minutes: 45
+    env:
+      CARGO_BUILD_JOBS: '2'
+      CARGO_TARGET_DIR: ${{ github.workspace }}/target-rtest
+      NEXUS_BUILD_ID: ci-${{ github.run_id }}-${{ github.run_attempt }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '24.20.0'
+          package-manager-cache: false
+      - name: Prepare development tools
+        shell: pwsh
+        run: |
+          npm install --global pnpm@11.7.0
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          rustup update stable --no-self-update
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          rustup default stable
+      - name: Install locked frontend dependencies
+        working-directory: apps/nexus-launcher
+        run: pnpm install --frozen-lockfile
+      - name: TypeScript
+        working-directory: apps/nexus-launcher
+        run: pnpm typecheck
+      - name: Frontend regression tests
+        working-directory: apps/nexus-launcher
+        run: pnpm test
+      - name: Rust workspace regression tests
+        run: cargo test --workspace --locked -j 2 -- --test-threads=4
+      - name: Stage native resources for a clean checkout
+        working-directory: apps/nexus-launcher
+        shell: pwsh
+        run: |
+          node src-tauri/scripts/prepare-agent.mjs
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          node src-tauri/scripts/prepare-runtime.mjs
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          node src-tauri/scripts/prepare-release.mjs
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Native bridge regression tests
+        run: cargo test --manifest-path apps/nexus-launcher/src-tauri/Cargo.toml --locked -j 2 -- --test-threads=4
+      - name: Compatibility checker regression tests
+        run: node --test --test-concurrency=4 crates/nexus-agent/tests/compatibility.test.mjs

@@ -728,7 +728,7 @@ mod tests {
     async fn configured_healthy_ring_is_independent_from_manual_snapshots() {
         let fixture = Fixture::new("rotation");
         ConfigStore::new(fixture.paths.clone())
-            .write(&NexusConfigFile {
+            .write(&NexusConfigFile { external_harness: None,
                 snapshots: Some(SnapshotsConfig {
                     healthy_slots: 2,
                     max_manual_snapshots: 4,

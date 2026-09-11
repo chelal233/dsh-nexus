@@ -487,7 +487,7 @@ mod tests {
         let missing = paths.runtimes_dir.join("missing");
         let config = ConfigStore::new(paths.clone());
         config
-            .write(&NexusConfigFile {
+            .write(&NexusConfigFile { external_harness: None,
                 runtime: Some(RuntimeConfig {
                     node: Some(RuntimePin {
                         path: missing.join("node.exe"),

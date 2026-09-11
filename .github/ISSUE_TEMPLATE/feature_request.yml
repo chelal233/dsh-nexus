@@ -1,0 +1,16 @@
+name: 使用改进 / Feature request
+description: 描述具体使用场景，保持标准 Harness 启动器边界。
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: 当前哪里不顺畅？ / What is difficult today?
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: 希望怎样操作？ / Desired behavior
+      description: 请说明目标、已有替代办法，以及是否会修改外部 Harness 或用户数据。
+    validations:
+      required: true

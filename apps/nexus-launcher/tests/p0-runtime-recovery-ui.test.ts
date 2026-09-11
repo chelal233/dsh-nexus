@@ -6,6 +6,20 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { createUiTestLoader } from "./ui-test-loader.ts";
 
 const startup = { available: true, running: true };
+
+test("read-only recovery omits duplicate endpoint rejection text but retains unrelated failures", async () => {
+  const loader = await createUiTestLoader();
+  try {
+    const { DegradedNotice } = await loader.loadModule("/src/App.tsx");
+    const errors = { "/v1/config": "Backend error: Read-only recovery: damaged profiles", "/v1/state": "Read-only recovery: damaged profiles" };
+    const render = (value: Record<string, string>, readOnlyRecovery: boolean) => renderToStaticMarkup(createElement(DegradedNotice, { errors: value, readOnlyRecovery }));
+    assert.equal(render(errors, true), "");
+    assert.match(render(errors, false), /damaged profiles/);
+    const mixed = render({ ...errors, "/v1/diagnostics": "Independent export failure" }, true);
+    assert.match(mixed, /Independent export failure/);
+    assert.doesNotMatch(mixed, /damaged profiles/);
+  } finally { await loader.close(); }
+});
 const baseSnapshot = {
   startup,
   endpointErrors: {},
@@ -293,16 +307,16 @@ test("update progress keeps stage and terminal errors visible without ownership 
 });
 
 
-test("guide joins environment, installation and start without enabling an empty setup", async () => {
+test("guide limits onboarding to three steps and gates completion on an installed source", async () => {
   const { loader, GuideView } = await loadViews();
   try {
     const snapshot = { ...baseSnapshot, harnessRuntime: {state: "detached"}, releases: {releases: []} };
     const markup = renderToStaticMarkup(createElement(GuideView, { ...props, snapshot }));
-    assert.ok(markup.indexOf("Runtime environment") < markup.indexOf("Upstream tags &amp; cold switch"));
-    assert.ok(markup.indexOf("Upstream tags &amp; cold switch") < markup.indexOf("Start and use"));
-    assert.match(markup, /Embedded Git available/);
-    assert.match(markup, /Install a version above before starting Harness/);
-    assert.match(markup, /disabled=""[^>]*>[^]*?Start<\/button>/);
+    assert.match(markup, /Prepare/);
+    assert.match(markup, /Install Harness/);
+    assert.match(markup, /Finish setup/);
+    assert.doesNotMatch(markup, /Start and use|Release slots|Offline runtime bundle|Run basic checks/);
+    assert.match(markup, /disabled=""[^>]*><span>3 · Finish setup<\/span><\/button>/);
     assert.doesNotMatch(markup, /role="dialog"/);
   } finally { await loader.close(); }
 });
@@ -331,10 +345,26 @@ test("recovery mode explains persistent pause and never labels leaving as startu
       snapshot: { ...baseSnapshot, recovery: { paused: true } } }));
     assert.match(html, /Harness startup is paused/);
     assert.match(html, /Leaving does not start Harness/);
-    assert.match(html, /Leave recovery mode/);
-    const invalid = renderToStaticMarkup(createElement(RecoveryModePanel, { ...props,
+    const control = renderToStaticMarkup(createElement(RecoveryModePanel, { ...props, compact: true, snapshot: { ...baseSnapshot, recovery: { paused: true } } }));
+    assert.match(control, /Leave recovery mode/);
+    const invalid = renderToStaticMarkup(createElement(RecoveryModePanel, { ...props, compact: true,
       snapshot: { ...baseSnapshot, recovery: { paused: true, pause_error: "invalid JSON" } } }));
     assert.match(invalid, /Repair and enter recovery mode/);
     assert.doesNotMatch(invalid, /Leave recovery mode/);
+  } finally { await loader.close(); }
+});
+
+
+test("Nexus record recovery offers time selection without manual repair fields", async () => {
+  const loader = await createUiTestLoader();
+  try {
+    const { RecoveryRecordWizard } = await loader.loadModule("/src/App.tsx");
+    const markup = renderToStaticMarkup(createElement(RecoveryRecordWizard, { disabled: false }));
+    assert.match(markup, /Restore Nexus records/);
+    assert.match(markup, /Choose a recovery time/);
+    assert.match(markup, /Restore with one click/);
+    assert.match(markup, /<select[^>]*disabled/);
+    assert.doesNotMatch(markup, /<input|<textarea|SHA256|Active profile name|Manual final step/);
+    assert.match(markup, /Harness files, plugins and conversations are not changed/);
   } finally { await loader.close(); }
 });

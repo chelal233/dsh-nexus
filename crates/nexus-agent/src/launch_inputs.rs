@@ -30,7 +30,7 @@ pub(crate) fn describe(profile: &str, home: &Path, program: &Path, cwd: Option<&
         else if std::env::var_os("DSH_HOME").is_some_and(|value| !value.is_empty()) { "DSH_HOME environment" } else { "User-home default" });
     add("Profile", profile.into(), "Selected or compatibility profile");
     if let Some(root) = root {
-        add("Release directory", root.display().to_string(), "Selected release slot");
+        add("Release directory", root.display().to_string(), "Selected Harness program source");
         if let Ok(evidence) = crate::preference_capabilities::inspect(root, home, profile) {
             add("Verified Harness version", evidence.version, "Installed package manifest");
         } else { add("Verified Harness version", "Not verified".into(), "Installed package manifest"); }
@@ -90,11 +90,12 @@ pub(crate) fn next(paths: &NexusPaths) -> io::Result<LaunchInputs> {
     let home = crate::dsh::resolve_dsh_home_for_paths(paths)?;
     let profile = nexus_core::ProfileStore::new(paths.clone()).load()?.active_profile;
     let releases = nexus_core::ReleaseStore::new(paths.clone());
-    let catalog = releases.load()?;
-    let id = catalog.current_release.as_deref();
-    let root = id.map(|id| releases.release_root(id)).transpose()?;
+    let external=nexus_core::ConfigStore::new(paths.clone()).load()?.external_harness;
+    let catalog=if external.is_none(){Some(releases.load()?)}else{None};
+    let id=catalog.as_ref().and_then(|c|c.current_release.as_deref());
+    let root = external.map(|s|s.root).or(id.map(|id| releases.release_root(id)).transpose()?);
     let mut spec: HarnessLaunchSpec = nexus_core::load_harness_launch_spec(paths)?.ok_or_else(|| io::Error::other("No launch configuration"))?;
-    crate::supervisor::normalize_managed_launch(&mut spec, &releases)?;
+    crate::supervisor::normalize_selected_launch(&mut spec, paths, &releases)?;
     let runtime = nexus_core::ConfigStore::new(paths.clone()).load()?.runtime.unwrap_or_default();
     crate::runtime::runtime_for_launch(&mut spec, runtime, nexus_core::bundled_runtime_dir().as_deref());
     let program = spec.render_path_for_context(&spec.program, &profile, id, root.as_deref())?;

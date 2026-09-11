@@ -1,6 +1,8 @@
 ; Run this package's CLI from temporary storage, never the old installed binary.
 ; Both upgrade and uninstall must stop Agent before changing installed files.
 !define NEXUS_INSTALLER_STOP_BINARY "${__FILEDIR__}\..\resources\nexus-launcher.exe"
+LangString NexusStopFailed 1033 "Nexus Agent could not be stopped safely. Close Nexus and retry. No application files have been replaced or removed."
+LangString NexusStopFailed 2052 "无法安全停止 Nexus Agent。请关闭 Nexus 后重试。尚未替换或删除任何程序文件。"
 !macro NexusStopInstalledAgent
   Push $0
   Push $OUTDIR
@@ -10,7 +12,7 @@
   nsExec::ExecToLog '"$PLUGINSDIR\nexus-installer-stop.exe" installer-stop --install-dir "$INSTDIR"'
   Pop $0
   ${If} $0 != 0
-    MessageBox MB_OK|MB_ICONSTOP "Nexus Agent could not be stopped safely. Close Nexus and retry. No application files have been replaced or removed." /SD IDOK
+    MessageBox MB_OK|MB_ICONSTOP "$(NexusStopFailed)" /SD IDOK
     Abort
   ${EndIf}
   Pop $0
@@ -46,7 +48,7 @@
   ${EndIf}
   Pop $R9
   Push $0
-  nsExec::ExecToLog '"$PLUGINSDIR\nexus-installer-stop.exe" installer-cleanup --data-dir "$LOCALAPPDATA\Nexus" --install-dir "$INSTDIR"'
+  nsExec::ExecToLog '"$PLUGINSDIR\nexus-installer-stop.exe" installer-cleanup --data-dir "$LOCALAPPDATA\Nexus" --install-dir "$INSTDIR" --locale "$LANGUAGE"'
   Pop $0
   ${If} $0 != 0
     Pop $0

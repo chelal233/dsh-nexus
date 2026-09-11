@@ -1092,14 +1092,26 @@ pub(crate) fn named_operation_job_is_empty(name: &str) -> io::Result<bool> {
 
 #[cfg(windows)]
 impl WindowsJob {
+    pub(crate) fn contains_pid(&self, pid: u32) -> io::Result<bool> {
+        use windows_sys::Win32::{Foundation::CloseHandle, System::{Threading::{OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION}, JobObjects::IsProcessInJob}};
+        unsafe {
+            let process = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid);
+            if process.is_null() { return Err(io::Error::last_os_error()); }
+            let mut belongs = 0;
+            let result = IsProcessInJob(process, self.0 as _, &mut belongs);
+            let error = io::Error::last_os_error();
+            CloseHandle(process);
+            if result == 0 { Err(error) } else { Ok(belongs != 0) }
+        }
+    }
+
     pub(crate) fn new() -> io::Result<Self> {
         create_kill_on_close_job().map(|job| Self(job as usize))
     }
 
-    pub(crate) fn assign_and_resume(&self, child: &tokio::process::Child) -> io::Result<()> {
-        let handle = child.raw_handle().ok_or_else(|| io::Error::other("Harness process handle is unavailable"))?;
+    pub(crate) fn assign_native_and_resume(&self, handle: std::os::windows::io::RawHandle, pid: u32) -> io::Result<()> {
         assign_process_to_job(handle.cast(), self.0 as _)?;
-        resume_process_primary_thread(child.id().ok_or_else(|| io::Error::other("Harness process id is unavailable"))?)
+        resume_process_primary_thread(pid)
     }
 
     pub(crate) fn terminate(&self) -> io::Result<()> { terminate_job_tree(self.0) }
@@ -1272,7 +1284,7 @@ mod tests {
         let node = root.join(if cfg!(windows) { "node.exe" } else { "node" });
         fs::write(&node, "fixture").expect("node fixture writes");
         ConfigStore::new(paths.clone())
-            .write(&NexusConfigFile {
+            .write(&NexusConfigFile { external_harness: None,
                 runtime: Some(RuntimeConfig {
                     node: Some(RuntimePin {
                         path: node,
@@ -1521,7 +1533,7 @@ fs.writeFileSync(path.join(process.cwd(), 'materialized.json'), JSON.stringify({
         let node = executable_on_path(if cfg!(windows) { "node.exe" } else { "node" })
             .expect("test host provides Node required by the DSH runtime contract");
         ConfigStore::new(paths.clone())
-            .write(&NexusConfigFile {
+            .write(&NexusConfigFile { external_harness: None,
                 runtime: Some(RuntimeConfig {
                     node: Some(RuntimePin {
                         path: node,

@@ -18,6 +18,17 @@ pub enum NativeLocale {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum NativeText {
     TrayShow,
+    HarnessRunning,
+    HarnessStopped,
+    HarnessStarting,
+    HarnessStopping,
+    HarnessFailed,
+    HarnessUnknown,
+    HarnessStart,
+    HarnessStop,
+    HarnessWeb,
+    DshTerminal,
+
     TrayQuit,
     TrayStopQuit,
     TrayTooltip,
@@ -30,7 +41,9 @@ static ACTIVE_LOCALE: OnceLock<Mutex<NativeLocale>> = OnceLock::new();
 impl NativeLocale {
     pub fn from_code(value: &str) -> Option<Self> {
         let normalized = value.trim().to_ascii_lowercase();
-        if normalized.starts_with("zh") || normalized.contains("chinese") {
+        if ["zh-tw", "zh-hk", "zh-mo", "zh-hant", "zh_tw", "zh_hk", "zh_mo"].iter().any(|prefix| normalized.starts_with(prefix)) || normalized.contains("traditional") {
+            Some(Self::English)
+        } else if normalized.starts_with("zh") || normalized.contains("chinese") {
             Some(Self::SimplifiedChinese)
         } else if normalized.starts_with("en") || normalized.contains("english") {
             Some(Self::English)
@@ -87,12 +100,13 @@ pub fn set_active_locale(locale: NativeLocale) {
 }
 
 /// Maps a Windows LANGID to the small locale set supported by the Launcher.
-/// The low ten bits contain the primary language, so region-specific values
-/// such as zh-CN (0x0804) and en-US (0x0409) remain stable inputs for tests.
+/// Chinese sublanguages are distinct: unsupported Traditional Chinese falls
+/// back to English instead of silently selecting Simplified Chinese.
 pub fn locale_from_windows_langid(lang_id: u16) -> Option<NativeLocale> {
-    match lang_id & 0x03ff {
-        0x0004 => Some(NativeLocale::SimplifiedChinese),
-        0x0009 => Some(NativeLocale::English),
+    match lang_id {
+        0x0804 | 0x1004 => Some(NativeLocale::SimplifiedChinese),
+        0x0404 | 0x0c04 | 0x1404 => Some(NativeLocale::English),
+        value if value & 0x03ff == 0x0009 => Some(NativeLocale::English),
         _ => None,
     }
 }
@@ -106,6 +120,27 @@ fn windows_ui_locale() -> Option<NativeLocale> {
 
 pub const fn text(locale: NativeLocale, key: NativeText) -> &'static str {
     match (locale, key) {
+        (NativeLocale::English, NativeText::HarnessRunning) => "Harness: running",
+        (NativeLocale::SimplifiedChinese, NativeText::HarnessRunning) => "Harness：运行中",
+        (NativeLocale::English, NativeText::HarnessStopped) => "Harness: stopped",
+        (NativeLocale::SimplifiedChinese, NativeText::HarnessStopped) => "Harness：已停止",
+        (NativeLocale::English, NativeText::HarnessStarting) => "Harness: starting",
+        (NativeLocale::SimplifiedChinese, NativeText::HarnessStarting) => "Harness：启动中",
+        (NativeLocale::English, NativeText::HarnessStopping) => "Harness: stopping",
+        (NativeLocale::SimplifiedChinese, NativeText::HarnessStopping) => "Harness：停止中",
+        (NativeLocale::English, NativeText::HarnessFailed) => "Harness: failed",
+        (NativeLocale::SimplifiedChinese, NativeText::HarnessFailed) => "Harness：运行失败",
+        (NativeLocale::English, NativeText::HarnessUnknown) => "Harness: status unavailable",
+        (NativeLocale::SimplifiedChinese, NativeText::HarnessUnknown) => "Harness：状态不可用",
+        (NativeLocale::English, NativeText::HarnessStart) => "Start Harness",
+        (NativeLocale::SimplifiedChinese, NativeText::HarnessStart) => "启动 Harness",
+        (NativeLocale::English, NativeText::HarnessStop) => "Stop Harness",
+        (NativeLocale::SimplifiedChinese, NativeText::HarnessStop) => "停止 Harness",
+        (NativeLocale::English, NativeText::HarnessWeb) => "Open Harness Web",
+        (NativeLocale::SimplifiedChinese, NativeText::HarnessWeb) => "打开 Harness Web",
+        (NativeLocale::English, NativeText::DshTerminal) => "Open DSH terminal",
+        (NativeLocale::SimplifiedChinese, NativeText::DshTerminal) => "打开 DSH 终端",
+
         (NativeLocale::English, NativeText::TrayShow) => "Show launcher",
         (NativeLocale::English, NativeText::TrayQuit) => "Exit launcher (keep services running)",
         (NativeLocale::English, NativeText::TrayStopQuit) => "Stop services and exit",
@@ -145,6 +180,9 @@ mod tests {
 
     #[test]
     fn locale_codes_are_normalized_for_webview_sync_and_platform_detection() {
+        for code in ["zh-TW","zh-HK","zh-MO","zh-Hant","zh_HK"] { assert_eq!(NativeLocale::from_code(code),Some(NativeLocale::English)); }
+        for id in [0x0404,0x0c04,0x1404] { assert_eq!(locale_from_windows_langid(id),Some(NativeLocale::English)); }
+        assert_eq!(locale_from_windows_langid(0x1004),Some(NativeLocale::SimplifiedChinese));
         assert_eq!(
             NativeLocale::from_code("zh-CN"),
             Some(NativeLocale::SimplifiedChinese)

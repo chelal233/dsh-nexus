@@ -19,6 +19,11 @@ use reqwest::Url;
 use serde::{Deserialize, Serialize};
 
 pub const HARNESS_LOG_TAIL_BYTES: u64 = 64 * 1024;
+// Shared by readiness observers, the API observer and the retention worker.
+// A single bounded critical section prevents punching out evidence another
+// observer is in the process of validating/publishing.
+static LOG_EVIDENCE_GATE: std::sync::Mutex<()> = std::sync::Mutex::new(());
+const EVIDENCE_LIMIT: u64 = 256 * 1024;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct HarnessUiInfo {
@@ -68,10 +73,25 @@ pub fn read_harness_ui_info_with_observer(
     observer: &mut HarnessLogObserver,
     session: Option<&HarnessLogSession>,
 ) -> HarnessUiInfo {
+    let Ok(_guard) = LOG_EVIDENCE_GATE.lock() else { return unavailable_harness_ui_info("Log evidence lock unavailable"); };
+    let _file_guard = match acquire_evidence_lock(paths) {
+        Ok(file) => Some(file),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => None,
+        Err(_) => return unavailable_harness_ui_info("Log evidence is busy or unavailable; retry shortly"),
+    };
+    let info = observe_harness_ui(paths, observer, session);
+    // Persistence failure must not invalidate still-verifiable live evidence;
+    // the retention worker reports it and does not reclaim Harness logs.
+    if let Some(session) = session { let _ = persist_evidence(paths, observer, session); }
+    info
+}
+
+fn observe_harness_ui(paths: &NexusPaths, observer: &mut HarnessLogObserver, session: Option<&HarnessLogSession>) -> HarnessUiInfo {
     observer.select_session(session);
     let Some(session) = session else {
         return unavailable_harness_ui_info("Harness log session marker is not available");
     };
+    restore_evidence(paths, observer, session);
     let log_paths = harness_log_paths(paths, session);
     let boundaries = [
         (
@@ -164,6 +184,7 @@ pub struct HarnessLogObserver {
     sequence: u64,
     session: Option<(String, u64, u64, u64, String, String, String, String, bool)>,
     session_initialized: bool,
+    scanned: HashMap<PathBuf, u64>,
 }
 
 #[derive(Debug, Clone)]
@@ -174,7 +195,8 @@ pub struct HarnessLogCursor {
     evidence: Option<TokenEvidence>,
 }
 
-#[derive(Clone)]
+#[derive(Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 struct TokenEvidence { start: u64, bytes: Vec<u8> }
 impl std::fmt::Debug for TokenEvidence {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -211,7 +233,8 @@ pub struct HarnessLogSnapshot {
     pub right_delimited: bool,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct HarnessUrlCandidate {
     pub url: String,
     pub token: Option<String>,
@@ -225,6 +248,7 @@ pub struct HarnessUrlCandidate {
 impl HarnessLogObserver {
     pub fn invalidate(&mut self) {
         self.files.clear();
+        self.scanned.clear();
         self.session = None;
         self.session_initialized = false;
     }
@@ -245,6 +269,7 @@ impl HarnessLogObserver {
         });
         if !self.session_initialized || self.session != selected {
             self.files.clear();
+            self.scanned.clear();
             self.sequence = 0;
             self.session = selected;
             self.session_initialized = true;
@@ -257,15 +282,20 @@ impl HarnessLogObserver {
         session_watermark: u64,
         expected_file_identity: Option<&str>,
     ) -> io::Result<Option<HarnessUrlCandidate>> {
-        let previous = self.files.remove(path);
         let mut file = fs::File::open(path)?;
         let snapshot = read_log_snapshot(&mut file)?;
+        self.observe_snapshot(path, &mut file, snapshot, session_watermark, expected_file_identity)
+    }
+
+    fn observe_snapshot(&mut self, path: &Path, file: &mut fs::File, snapshot: HarnessLogSnapshot,
+        session_watermark: u64, expected_file_identity: Option<&str>) -> io::Result<Option<HarnessUrlCandidate>> {
+        let previous = self.files.remove(path);
         if expected_file_identity.is_some_and(|expected| expected != snapshot.file_identity)
             || snapshot.length < session_watermark { return Ok(None); }
         // Re-read the original bytes and both boundaries on this SAME handle,
         // even when length, timestamps and the bounded tail have not changed.
         let verified = previous.as_ref().and_then(|previous| previous.evidence.as_ref())
-            .map(|evidence| verify_evidence(&mut file, evidence, session_watermark, snapshot.length))
+            .map(|evidence| verify_evidence(file, evidence, session_watermark, snapshot.length))
             .transpose()?.unwrap_or(false);
         let mut candidate = if verified { previous.as_ref().and_then(|old| old.candidate.clone()) } else { None };
         let mut evidence = if verified { previous.and_then(|old| old.evidence) } else { None };
@@ -329,6 +359,283 @@ impl HarnessLogObserver {
     }
 }
 
+#[derive(Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct DurableEvidence {
+    schema_version: u32,
+    session: HarnessLogSession,
+    streams: Vec<StreamEvidence>,
+}
+#[derive(Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct StreamEvidence {
+    scanned: u64,
+    candidate: Option<HarnessUrlCandidate>,
+    evidence: Option<TokenEvidence>,
+}
+
+fn same_evidence_session(left: &HarnessLogSession, right: &HarnessLogSession) -> bool {
+    // This latch records backup bookkeeping, not a new log writer. All run,
+    // generation, file, watermark, launch-state and schema fields still bind.
+    let mut left = left.clone(); let mut right = right.clone();
+    left.healthy_snapshot_attempted = false; right.healthy_snapshot_attempted = false;
+    left == right
+}
+
+fn evidence_path(paths: &NexusPaths) -> io::Result<PathBuf> {
+    for directory in [&paths.root, &paths.run_dir] {
+        let metadata = fs::symlink_metadata(directory)?;
+        if !metadata.is_dir() || nexus_core::path_is_reparse(&metadata) { return Err(io::Error::other("Evidence directory is not ordinary")); }
+    }
+    Ok(paths.run_dir.join("harness-token-evidence.json"))
+}
+
+fn acquire_evidence_lock(paths: &NexusPaths) -> io::Result<fs::File> {
+    // The compatibility launcher is a separate process: a Rust mutex alone
+    // cannot protect its index writes against the Agent's sparse reclamation.
+    let _ = evidence_path(paths)?;
+    let path = paths.run_dir.join("harness-evidence.lock");
+    let mut options = fs::OpenOptions::new(); options.read(true).write(true).create(true).truncate(false);
+    #[cfg(windows)] { use std::os::windows::fs::OpenOptionsExt; options.custom_flags(0x00200000); }
+    let file = options.open(path)?;
+    let metadata = file.metadata()?;
+    if !metadata.is_file() || nexus_core::path_is_reparse(&metadata) { return Err(io::Error::other("Evidence lock is not ordinary")); }
+    file.try_lock().map_err(|error| match error {
+        fs::TryLockError::WouldBlock => io::Error::new(io::ErrorKind::WouldBlock, "Evidence is being maintained"),
+        fs::TryLockError::Error(error) => error,
+    })?;
+    Ok(file)
+}
+
+fn read_evidence(paths: &NexusPaths) -> io::Result<Option<Vec<u8>>> {
+    let path = evidence_path(paths)?;
+    let metadata = match fs::symlink_metadata(&path) {
+        Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(None), other => other?,
+    };
+    if !metadata.is_file() || nexus_core::path_is_reparse(&metadata) || metadata.len() > EVIDENCE_LIMIT { return Err(io::Error::other("Unsafe evidence index")); }
+    let mut options = fs::OpenOptions::new(); options.read(true);
+    #[cfg(windows)] { use std::os::windows::fs::OpenOptionsExt; options.custom_flags(0x00200000); }
+    let file = options.open(path)?;
+    if !file.metadata()?.is_file() || nexus_core::path_is_reparse(&file.metadata()?) { return Err(io::Error::other("Evidence identity changed")); }
+    nexus_private_evidence_check(&file)?;
+    let mut bytes = Vec::new(); file.take(EVIDENCE_LIMIT + 1).read_to_end(&mut bytes)?;
+    if bytes.len() as u64 > EVIDENCE_LIMIT { return Err(io::Error::other("Evidence index exceeds budget")); }
+    Ok(Some(bytes))
+}
+
+// Core exposes the same private-file verifier used for Agent credentials.
+fn nexus_private_evidence_check(file: &fs::File) -> io::Result<()> { nexus_core::verify_private_file(file) }
+
+fn restore_evidence(paths: &NexusPaths, observer: &mut HarnessLogObserver, session: &HarnessLogSession) {
+    let Ok(Some(bytes)) = read_evidence(paths) else { return; };
+    let Ok(index) = serde_json::from_slice::<DurableEvidence>(&bytes) else { return; };
+    if index.schema_version != 1 || !same_evidence_session(&index.session, session) || index.streams.len() != 2 { return; }
+    for (i, (path, saved)) in harness_log_paths(paths, session).into_iter().zip(index.streams).enumerate() {
+        let (identity, watermark) = if i == 0 { (&session.stdout_file_identity, session.stdout_watermark) } else { (&session.stderr_file_identity, session.stderr_watermark) };
+        let Ok(mut file) = fs::File::open(&path) else { continue; };
+        let Ok(metadata) = file.metadata() else { continue; };
+        if log_file_identity(&file).ok().as_ref() != Some(identity) || saved.scanned < watermark || saved.scanned > metadata.len() { continue; }
+        observer.scanned.entry(path.clone()).and_modify(|old| *old = (*old).max(saved.scanned)).or_insert(saved.scanned);
+        let (Some(candidate), Some(evidence)) = (saved.candidate, saved.evidence) else { continue; };
+        if evidence.bytes.len() as u64 > HARNESS_LOG_TAIL_BYTES
+            || !verify_evidence(&mut file, &evidence, watermark, metadata.len()).unwrap_or(false)
+            || candidate.offset != evidence.start.saturating_add(evidence.bytes.len() as u64)
+            || candidate.source != path.display().to_string() { continue; }
+        let Ok(word) = std::str::from_utf8(&evidence.bytes) else { continue; };
+        if parse_loopback_harness_url(trim_log_url(word)) != Some((candidate.url.clone(), candidate.token.clone())) { continue; }
+        let replace = observer.files.get(&path).and_then(|c| c.candidate.as_ref())
+            .is_none_or(|old| old.offset < candidate.offset);
+        if replace {
+            observer.sequence = observer.sequence.max(candidate.sequence.saturating_add(1));
+            observer.files.insert(path, HarnessLogCursor { offset: metadata.len(), fingerprint: 0, candidate: Some(candidate), evidence: Some(evidence) });
+        }
+    }
+}
+
+fn persist_evidence(paths: &NexusPaths, observer: &HarnessLogObserver, session: &HarnessLogSession) -> io::Result<()> {
+    if !matches!(HarnessLogSessionStore::new(paths.clone()).read(), Ok(Some(ref current)) if current == session) {
+        return Err(io::Error::other("Log session changed before evidence publication"));
+    }
+    let streams = harness_log_paths(paths, session).into_iter().enumerate().map(|(i, path)| {
+        let cursor = observer.files.get(&path);
+        StreamEvidence { scanned: observer.scanned.get(&path).copied().unwrap_or(if i == 0 { session.stdout_watermark } else { session.stderr_watermark }),
+            candidate: cursor.and_then(|c| c.candidate.clone()), evidence: cursor.and_then(|c| c.evidence.clone()) }
+    }).collect();
+    let bytes = serde_json::to_vec(&DurableEvidence { schema_version: 1, session: session.clone(), streams })?;
+    if bytes.len() as u64 > EVIDENCE_LIMIT { return Err(io::Error::other("Evidence index exceeds budget")); }
+    if read_evidence(paths)?.as_deref() == Some(bytes.as_slice()) { return Ok(()); }
+    nexus_core::write_private_bytes_atomic(&paths.run_dir, &evidence_path(paths)?, &bytes)
+}
+
+/// At most 512 KiB scanned per stream per cycle. Unscanned bytes are never
+/// reclaimed, so high-volume writers produce visible backlog, not lost tokens.
+pub fn retain_harness_logs(paths: &NexusPaths, observer: &mut HarnessLogObserver, session: &HarnessLogSession)
+    -> io::Result<Vec<(String, nexus_core::log_retention::FileStatus, u64)>> {
+    let _guard = LOG_EVIDENCE_GATE.lock().map_err(|_| io::Error::other("Log evidence lock unavailable"))?;
+    let _file_guard = acquire_evidence_lock(paths)?;
+    observe_harness_ui(paths, observer, Some(session));
+    for (i, path) in harness_log_paths(paths, session).into_iter().enumerate() {
+        let (identity, watermark) = if i == 0 { (&session.stdout_file_identity, session.stdout_watermark) } else { (&session.stderr_file_identity, session.stderr_watermark) };
+        let mut file = fs::File::open(&path)?;
+        let length = file.metadata()?.len();
+        let mut start = observer.scanned.get(&path).copied().unwrap_or(watermark);
+        if start > length || log_file_identity(&file)? != *identity { return Err(io::Error::other("Log identity or scan boundary changed")); }
+        for _ in 0..8 {
+            if start >= length { break; }
+            let end = start.saturating_add(HARNESS_LOG_TAIL_BYTES).min(length);
+            let mut snapshot = read_log_window(&mut file, start, end)?;
+            // Leave a partial final word to the next scan, preserving its left delimiter.
+            let advance = snapshot.bytes.iter().rposition(u8::is_ascii_whitespace).map(|p| p + 1);
+            let next = match advance {
+                Some(count) => { snapshot.bytes.truncate(count); snapshot.right_delimited = true; start + count as u64 },
+                None if end - start == HARNESS_LOG_TAIL_BYTES => end,
+                None => break,
+            };
+            observer.observe_snapshot(&path, &mut file, snapshot, watermark, Some(identity))?;
+            start = next;
+        }
+        observer.scanned.insert(path, start);
+    }
+    // No irreversible reclamation until the complete index is privately durable.
+    persist_evidence(paths, observer, session)?;
+    let mut status = Vec::new();
+    for (i, path) in harness_log_paths(paths, session).into_iter().enumerate() {
+        let identity = if i == 0 { &session.stdout_file_identity } else { &session.stderr_file_identity };
+        let protected: Vec<_> = observer.files.get(&path).and_then(|c| c.evidence.as_ref())
+            .map(|e| vec![e.start.saturating_sub(1)..e.start + e.bytes.len() as u64 + 1]).unwrap_or_default();
+        let scanned = observer.scanned.get(&path).copied().unwrap_or(0);
+        // Keep the delimiter immediately before the next scan window intact.
+        let result = nexus_core::log_retention::maintain(&path, Some(identity), &protected, Some(scanned.saturating_sub(1)))?;
+        let backlog = result.logical_bytes.saturating_sub(nexus_core::log_retention::TAIL_BYTES).saturating_sub(scanned);
+        status.push((path.file_name().unwrap().to_string_lossy().into_owned(), result, backlog));
+    }
+    Ok(status)
+}
+
+#[cfg(test)]
+mod retention_tests {
+    use super::*;
+    use std::io::Write;
+    fn fixture() -> (NexusPaths, HarnessLogSession) {
+        let root = std::env::temp_dir().join(format!("nexus-evidence-retention-{}", nexus_core::agent_auth::random_hex().unwrap()));
+        let paths = NexusPaths::from_root(root); paths.ensure_directories().unwrap();
+        let out = fs::OpenOptions::new().create_new(true).append(true).open(paths.logs_dir.join("harness-test.stdout.log")).unwrap();
+        let err = fs::OpenOptions::new().create_new(true).append(true).open(paths.logs_dir.join("harness-test.stderr.log")).unwrap();
+        let session = HarnessLogSession::new("retention-test".into(), 1, 0, 0,
+            log_file_identity(&out).unwrap(), log_file_identity(&err).unwrap(),
+            "harness-test.stdout.log".into(), "harness-test.stderr.log".into(), true, 1);
+        HarnessLogSessionStore::new(paths.clone()).write(&session).unwrap();
+        (paths, session)
+    }
+    #[test]
+    fn restart_restores_only_private_same_session_original_bytes() {
+        let (paths, session) = fixture();
+        let path = paths.logs_dir.join(&session.stdout_log_name);
+        fs::write(&path, b"http://127.0.0.1:3080/?token=PRIVATE_SENTINEL\n").unwrap();
+        let mut observer = HarnessLogObserver::default();
+        assert!(read_harness_ui_info_with_observer(&paths, &mut observer, Some(&session)).available);
+        let index = evidence_path(&paths).unwrap();
+        nexus_core::verify_private_file(&fs::File::open(&index).unwrap()).unwrap();
+        fs::OpenOptions::new().append(true).open(&path).unwrap().write_all(&vec![b'x'; 128 * 1024]).unwrap();
+        let mut restarted = HarnessLogObserver::default();
+        assert_eq!(read_harness_ui_info_with_observer(&paths, &mut restarted, Some(&session)).token.as_deref(), Some("PRIVATE_SENTINEL"));
+        let mut healthy = session.clone(); healthy.healthy_snapshot_attempted = true;
+        assert_eq!(read_harness_ui_info_with_observer(&paths, &mut HarnessLogObserver::default(), Some(&healthy)).token.as_deref(), Some("PRIVATE_SENTINEL"));
+        // No new URL in the tail can rescue a changed generation.
+        let mut other = session.clone(); other.generation += 1;
+        assert!(!read_harness_ui_info_with_observer(&paths, &mut HarnessLogObserver::default(), Some(&other)).available);
+        // A same-length edit at the original evidence offset is rejected.
+        let mut writer = fs::OpenOptions::new().write(true).open(&path).unwrap();
+        writer.seek(SeekFrom::Start(0)).unwrap(); writer.write_all(b"X").unwrap(); drop(writer);
+        assert!(!read_harness_ui_info_with_observer(&paths, &mut HarnessLogObserver::default(), Some(&session)).available);
+        fs::remove_dir_all(paths.root).unwrap();
+    }
+    #[test]
+    fn separate_handles_cannot_race_evidence_publication_and_reclamation() {
+        let (paths, session) = fixture();
+        let held = acquire_evidence_lock(&paths).unwrap();
+        assert_eq!(acquire_evidence_lock(&paths).unwrap_err().kind(), io::ErrorKind::WouldBlock);
+        assert!(!read_harness_ui_info_with_observer(&paths, &mut HarnessLogObserver::default(), Some(&session)).available);
+        assert!(retain_harness_logs(&paths, &mut HarnessLogObserver::default(), &session).is_err());
+        drop(held);
+        drop(acquire_evidence_lock(&paths).unwrap());
+        fs::remove_dir_all(paths.root).unwrap();
+    }
+    #[cfg(windows)]
+    #[test]
+    fn retention_preserves_old_token_and_refuses_reclaim_without_private_index() {
+        let (paths, session) = fixture();
+        let path = paths.logs_dir.join(&session.stdout_log_name);
+        let mut writer = fs::OpenOptions::new().append(true).open(&path).unwrap();
+        writer.write_all(b"http://127.0.0.1:3080/?token=KEEP_ME\n").unwrap();
+        let mut observer = HarnessLogObserver::default();
+        read_harness_ui_info_with_observer(&paths, &mut observer, Some(&session));
+        let mut chunk = vec![b'x'; 64 * 1024]; *chunk.last_mut().unwrap() = b'\n';
+        for _ in 0..160 { writer.write_all(&chunk).unwrap(); }
+        let before = writer.metadata().unwrap().len();
+        for _ in 0..6 { retain_harness_logs(&paths, &mut observer, &session).unwrap(); }
+        assert_eq!(writer.metadata().unwrap().len(), before);
+        assert_eq!(read_harness_ui_info_with_observer(&paths, &mut HarnessLogObserver::default(), Some(&session)).token.as_deref(), Some("KEEP_ME"));
+        assert_eq!(log_file_identity(&writer).unwrap(), session.stdout_file_identity);
+        let index = evidence_path(&paths).unwrap(); fs::remove_file(&index).unwrap(); fs::create_dir(&index).unwrap();
+        let identity = log_file_identity(&writer).unwrap();
+        assert!(retain_harness_logs(&paths, &mut observer, &session).is_err());
+        assert_eq!(log_file_identity(&writer).unwrap(), identity);
+        drop(writer); fs::remove_dir_all(paths.root).unwrap();
+    }
+    #[cfg(windows)]
+    #[test]
+    fn scanner_finds_unobserved_token_before_reclaim_and_stale_observers_cannot_rollback() {
+        let (paths, session) = fixture();
+        let path = paths.logs_dir.join(&session.stdout_log_name);
+        let mut writer = fs::OpenOptions::new().append(true).open(&path).unwrap();
+        let mut chunk = vec![b'x'; 64 * 1024]; *chunk.last_mut().unwrap() = b'\n';
+        for _ in 0..12 { writer.write_all(&chunk).unwrap(); }
+        writer.write_all(b"http://127.0.0.1:3080/?token=MIDDLE\n").unwrap();
+        for _ in 0..160 { writer.write_all(&chunk).unwrap(); }
+        let mut scanner = HarnessLogObserver::default();
+        retain_harness_logs(&paths, &mut scanner, &session).unwrap();
+        retain_harness_logs(&paths, &mut scanner, &session).unwrap();
+        let mut stale = HarnessLogObserver::default();
+        assert_eq!(read_harness_ui_info_with_observer(&paths, &mut stale, Some(&session)).token.as_deref(), Some("MIDDLE"));
+        writer.write_all(b"http://127.0.0.1:3080/?token=NEWEST\n").unwrap();
+        read_harness_ui_info_with_observer(&paths, &mut HarnessLogObserver::default(), Some(&session));
+        for _ in 0..2 { writer.write_all(&chunk).unwrap(); }
+        assert_eq!(read_harness_ui_info_with_observer(&paths, &mut stale, Some(&session)).token.as_deref(), Some("NEWEST"));
+        assert_eq!(read_harness_ui_info_with_observer(&paths, &mut HarnessLogObserver::default(), Some(&session)).token.as_deref(), Some("NEWEST"));
+        drop(writer); fs::remove_dir_all(paths.root).unwrap();
+    }
+    #[cfg(windows)]
+    #[test]
+    fn short_slices_catch_up_with_continuous_writes_above_old_scan_rate() {
+        let (paths, session) = fixture();
+        let path = paths.logs_dir.join(&session.stdout_log_name);
+        let mut writer = fs::OpenOptions::new().append(true).open(&path).unwrap();
+        writer.write_all(b"http://127.0.0.1:3080/?token=LIVE_TOKEN\n").unwrap();
+        let mut observer = HarnessLogObserver::default();
+        read_harness_ui_info_with_observer(&paths, &mut observer, Some(&session));
+        let mut chunk = vec![b'x'; 256 * 1024];
+        for line in chunk.chunks_mut(128) { *line.last_mut().unwrap() = b'\n'; }
+        for _ in 0..40 { writer.write_all(&chunk).unwrap(); }
+        let first = retain_harness_logs(&paths, &mut observer, &session).unwrap();
+        assert!(first[0].2 > 0);
+        let mut last = first;
+        let started = std::time::Instant::now();
+        for _ in 0..16 {
+            // Bounded live writer: 256 KiB every 100 ms, far above the old
+            // 512 KiB / 5 s scanner. Each maintenance call is still one slice.
+            std::thread::sleep(std::time::Duration::from_millis(100));
+            writer.write_all(&chunk).unwrap();
+            last = retain_harness_logs(&paths, &mut observer, &session).unwrap();
+        }
+        assert_eq!(last[0].2, 0);
+        assert!(last[0].1.allocated_bytes <= nexus_core::log_retention::TAIL_BYTES + 256 * 1024);
+        assert!(started.elapsed() < std::time::Duration::from_secs(15), "bounded workload should not stall controls");
+        assert_eq!(read_harness_ui_info_with_observer(&paths, &mut HarnessLogObserver::default(), Some(&session)).token.as_deref(), Some("LIVE_TOKEN"));
+        drop(writer); fs::remove_dir_all(paths.root).unwrap();
+    }
+}
+
 fn harness_log_paths(paths: &NexusPaths, session: &HarnessLogSession) -> [PathBuf; 2] {
     [
         paths.logs_dir.join(&session.stdout_log_name),
@@ -357,6 +664,11 @@ fn harness_candidate_cmp(
 }
 
 fn read_log_snapshot(file: &mut fs::File) -> io::Result<HarnessLogSnapshot> {
+    let length = file.metadata()?.len();
+    read_log_window(file, length.saturating_sub(HARNESS_LOG_TAIL_BYTES), length)
+}
+
+fn read_log_window(file: &mut fs::File, start: u64, end: u64) -> io::Result<HarnessLogSnapshot> {
     let metadata = file.metadata()?;
     let modified_at_nanos = metadata
         .modified()
@@ -366,11 +678,11 @@ fn read_log_snapshot(file: &mut fs::File) -> io::Result<HarnessLogSnapshot> {
         .unwrap_or(0);
     let length = metadata.len();
     let file_identity = log_file_identity(&file)?;
-    let start = length.saturating_sub(HARNESS_LOG_TAIL_BYTES);
+    if end > length || start > end || end - start > HARNESS_LOG_TAIL_BYTES { return Err(io::Error::other("Invalid log scan window")); }
     let read_start = start.saturating_sub(1);
     file.seek(SeekFrom::Start(read_start))?;
     let mut bytes = Vec::new();
-    let expected_len = length.saturating_sub(read_start);
+    let expected_len = end.saturating_sub(read_start);
     (&mut *file).take(expected_len).read_to_end(&mut bytes)?;
     if bytes.len() as u64 != expected_len {
         return Err(io::Error::new(

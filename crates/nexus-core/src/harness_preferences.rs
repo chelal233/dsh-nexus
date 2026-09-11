@@ -26,6 +26,31 @@ pub fn normalize_harness_preferences(mut p: HarnessPreferencesPayload) -> io::Re
         if let Some(value) = value { validate_path(name, value)?; }
     }
     for path in p.patches.iter().flatten() { validate_path("patch", path)?; }
+    if p.patch_entries.as_ref().map_or(0, Vec::len) > 32 { return Err(invalid("At most 32 additional patches are supported")); }
+    if let Some(entries) = &mut p.patch_entries {
+        entries.retain(|entry| !entry.source.trim().is_empty());
+        for entry in entries.iter_mut() {
+            entry.source = entry.source.trim().to_owned();
+            if entry.source.starts_with("https://") {
+                let authority = entry.source.trim_start_matches("https://").split('/').next().unwrap_or("");
+                if authority.is_empty() || entry.source.len() > 4096 || entry.source.chars().any(char::is_whitespace) || entry.source.contains(['@', '?', '#', '\\', '\0']) {
+                    return Err(invalid("Patch URL must use HTTPS without credentials, query or fragment"));
+                }
+            } else { validate_path("patch", &entry.source)?; }
+            if entry.sha256.as_ref().is_some_and(|s| s.len() != 64 || !s.bytes().all(|b| b.is_ascii_hexdigit() && !b.is_ascii_uppercase())) { return Err(invalid("Invalid patch SHA256")); }
+            if entry.github_ref_kind.is_some() || entry.github_ref_name.is_some() {
+                if !entry.source.starts_with("https://github.com/") || !matches!(entry.github_ref_kind.as_deref(), Some("branch" | "tag" | "commit"))
+                    || entry.github_ref_name.as_deref().is_none_or(|name| name.is_empty() || name.len() > 256 || name.contains(['\\', '\0', '\r', '\n', '?', '#']) || name.chars().any(char::is_whitespace)) {
+                    return Err(invalid("A GitHub patch requires a branch, tag or commit and a nonempty ref name"));
+                }
+                if entry.github_ref_kind.as_deref() == Some("commit") && entry.github_ref_name.as_deref().is_none_or(|name| name.len() != 40 || !name.bytes().all(|b| b.is_ascii_hexdigit())) { return Err(invalid("GitHub commit must be a complete 40-character hexadecimal SHA")); }
+            }
+            if entry.github_file_path.as_deref().is_some_and(|path| path.is_empty() || path.len() > 4096 || path.starts_with('/') || path.contains(['\\', '\0', '\r', '\n', '?', '#']) || path.split('/').any(|segment| matches!(segment, ".." | "." | ""))) {
+                return Err(invalid("GitHub file path must be a repository-relative file path"));
+            }
+        }
+        if entries.is_empty() { p.patch_entries = None; }
+    }
     for (name, value) in [("deepseek_base_url", &p.deepseek_base_url), ("search_base_url", &p.search_base_url)] {
         if let Some(value) = value {
             let authority = value.strip_prefix("https://").or_else(|| value.strip_prefix("http://"))
@@ -61,7 +86,26 @@ fn validate_path(name: &str, value: &str) -> io::Result<()> {
 }
 
 pub fn load_harness_preferences(paths: &NexusPaths) -> io::Result<HarnessPreferencesPayload> {
-    normalize_harness_preferences(ConfigStore::new(paths.clone()).load()?.harness_preferences.unwrap_or_default())
+    let mut p = normalize_harness_preferences(ConfigStore::new(paths.clone()).load()?.harness_preferences.unwrap_or_default())?;
+    let mut patches = p.patches.take().unwrap_or_default();
+    for entry in p.patch_entries.iter().flatten().filter(|entry| entry.enabled) {
+        patches.push(if entry.source.starts_with("https://") {
+            if entry.cache_identity.as_ref().is_some_and(|identity| identity != &patch_identity(entry))
+                || ((entry.sha256.is_some() || entry.github_ref_kind.is_some()) && entry.cache_identity.is_none()) {
+                return Err(invalid("Patch source or ref changed; explicitly download the selected version before launch"));
+            }
+            // Missing downloads remain a blocked launch, not an implicit network operation.
+            paths.root.join("patches").join(format!("{}.yml", entry.sha256.as_deref().unwrap_or("not-downloaded"))).to_string_lossy().into_owned()
+        } else { entry.source.clone() });
+    }
+    if patches.len() > 32 { return Err(invalid("At most 32 enabled additional patches are supported")); }
+    p.patches = (!patches.is_empty()).then_some(patches);
+    Ok(p)
+}
+
+pub fn patch_identity(entry: &nexus_protocol::HarnessPatchEntry) -> String {
+    use sha2::{Digest, Sha256};
+    format!("{:x}", Sha256::digest(serde_json::to_vec(&(&entry.source, &entry.github_ref_kind, &entry.github_ref_name, &entry.github_file_path)).expect("patch identity serializes")))
 }
 
 /// Capability evidence is resolved from the installed release and actual bundle list.
@@ -144,6 +188,10 @@ pub fn apply_harness_preferences(spec: &mut HarnessLaunchSpec, p: &HarnessPrefer
     if !harness_preferences_cli_supported(spec) { return; }
     let node = spec.mode == nexus_protocol::HarnessLaunchMode::Node;
     let start = usize::from(node);
+    // Upstream rejects parent --patch flags before its web subcommand.
+    if spec.args.get(start).is_some_and(|arg| arg == "web") {
+        spec.args.splice(start..start + 1, ["--profile".to_owned(), "web".to_owned()]);
+    }
     let mut args = spec.args[..start.min(spec.args.len())].to_vec();
     if let Some(patches) = &p.patches {
         for patch in patches { args.extend(["--patch".to_owned(), patch.clone()]); }
@@ -163,7 +211,9 @@ pub fn apply_harness_preferences(spec: &mut HarnessLaunchSpec, p: &HarnessPrefer
             // Port zero has no static endpoint. The Workbench reads the emitted URL.
             spec.readiness_url = if port == 0 { None } else { Some(format!("tcp://127.0.0.1:{port}")) };
         }
-        if p.open_browser == Some(false) { args.push("--no-open".into()); }
+        // A patch may fail after emitting a URL. Let Nexus expose the Web entry
+        // only after its owned health check, never let upstream open it early.
+        if p.open_browser == Some(false) || p.patches.as_ref().is_some_and(|patches| !patches.is_empty()) { args.push("--no-open".into()); }
     }
     spec.args = args;
 }
@@ -199,12 +249,43 @@ mod tests {
         apply_harness_preferences(&mut launch, &HarnessPreferencesPayload {
             port: Some(0), open_browser: Some(true), patches: Some(vec!["patch.yml".into()]), ..Default::default()
         }, &capabilities("web"));
-        assert_eq!(launch.args, vec!["{release_root}/apps/cli/lib/bin.js", "--patch", "patch.yml", "--profile", "{profile}", "--port", "0"]);
+        assert_eq!(launch.args, vec!["{release_root}/apps/cli/lib/bin.js", "--patch", "patch.yml", "--profile", "{profile}", "--port", "0", "--no-open"]);
         assert!(launch.readiness_url.is_none());
         assert_eq!(launch.working_dir, before.working_dir);
         assert_eq!(base, before);
         apply_harness_preferences(&mut base, &HarnessPreferencesPayload::default(), &capabilities("web"));
         assert_eq!(base, before);
+    }
+    #[test]
+    fn web_alias_with_patches_uses_root_flags_and_suppresses_early_browser() {
+        let mut spec = HarnessLaunchSpec::new("node".into()); spec.mode = nexus_protocol::HarnessLaunchMode::Node;
+        spec.args = vec!["{release_root}/apps/cli/lib/bin.js".into(), "web".into()];
+        let p = HarnessPreferencesPayload { patches: Some(vec!["a.yml".into(), "b.yml".into()]), ..Default::default() };
+        apply_harness_preferences(&mut spec, &p, &capabilities("web"));
+        assert_eq!(spec.args, ["{release_root}/apps/cli/lib/bin.js", "--patch", "a.yml", "--patch", "b.yml", "--profile", "web", "--no-open"]);
+    }
+    #[test]
+    fn changed_github_ref_cannot_reuse_cached_content() {
+        let root = std::env::temp_dir().join(format!("nexus-patch-ref-{}", crate::unix_time_nanos_for_update()));
+        let paths = NexusPaths::from_root(root.clone());
+        let mut entry = nexus_protocol::HarnessPatchEntry { source: "https://github.com/a/b/blob/main/config.yml".into(), enabled: true,
+            github_ref_kind: Some("branch".into()), github_ref_name: Some("feature/x".into()), github_file_path: Some("config.yml".into()), sha256: Some("a".repeat(64)), ..Default::default() };
+        entry.cache_identity = Some(patch_identity(&entry));
+        ConfigStore::new(paths.clone()).transaction(|document| { document.harness_preferences = Some(HarnessPreferencesPayload { patch_entries: Some(vec![entry.clone()]), ..Default::default() }); Ok(()) }).unwrap();
+        assert!(load_harness_preferences(&paths).is_ok());
+        entry.github_ref_name = Some("release/v2".into());
+        ConfigStore::new(paths.clone()).transaction(|document| { document.harness_preferences.as_mut().unwrap().patch_entries = Some(vec![entry]); Ok(()) }).unwrap();
+        assert!(load_harness_preferences(&paths).is_err());
+        std::fs::remove_dir_all(root).unwrap();
+    }
+    #[test]
+    fn cached_remote_without_source_identity_requires_explicit_download() {
+        let root = std::env::temp_dir().join(format!("nexus-patch-legacy-{}", crate::unix_time_nanos_for_update()));
+        let paths = NexusPaths::from_root(root.clone());
+        let entry = nexus_protocol::HarnessPatchEntry { source: "https://example.com/new.yml".into(), enabled: true, sha256: Some("a".repeat(64)), ..Default::default() };
+        ConfigStore::new(paths.clone()).transaction(|document| { document.harness_preferences = Some(HarnessPreferencesPayload { patch_entries: Some(vec![entry]), ..Default::default() }); Ok(()) }).unwrap();
+        assert!(load_harness_preferences(&paths).unwrap_err().to_string().contains("explicitly download"));
+        std::fs::remove_dir_all(root).unwrap();
     }
     #[test]
     fn sdk_settings_do_not_leak_into_web_profiles() {
@@ -222,5 +303,25 @@ mod tests {
             assert!(normalize_harness_preferences(HarnessPreferencesPayload { home: Some(home.into()), ..Default::default() }).is_err());
         }
         assert!(normalize_harness_preferences(HarnessPreferencesPayload { deepseek_base_url: Some("https://user:key@example.com".into()), ..Default::default() }).is_err());
+    }
+    #[test]
+    fn ordered_patch_entries_resolve_offline_and_disabled_missing_sources_are_omitted() {
+        let root = std::env::temp_dir().join(format!("nexus-patches-{}", crate::unix_time_nanos_for_update()));
+        let paths = NexusPaths::from_root(root.clone());
+        paths.ensure_directories().unwrap();
+        let hash = "a".repeat(64);
+        let local = root.join("local.yml").to_string_lossy().into_owned();
+        let mut remote = nexus_protocol::HarnessPatchEntry { source: "https://example.com/patch.yml".into(), enabled: true, sha256: Some(hash.clone()), ..Default::default() };
+        remote.cache_identity = Some(patch_identity(&remote));
+        let saved = HarnessPreferencesPayload { patch_entries: Some(vec![
+            nexus_protocol::HarnessPatchEntry { source: root.join("missing.yml").to_string_lossy().into_owned(), enabled: false, sha256: None, ..Default::default() },
+            remote,
+            nexus_protocol::HarnessPatchEntry { source: local.clone(), enabled: true, sha256: None, ..Default::default() },
+        ]), ..Default::default() };
+        ConfigStore::new(paths.clone()).transaction(|document| { document.harness_preferences = Some(saved.clone()); Ok(()) }).unwrap();
+        let loaded = load_harness_preferences(&paths).unwrap();
+        assert_eq!(loaded.patches.as_ref().unwrap(), &vec![root.join("patches").join(format!("{hash}.yml")).to_string_lossy().into_owned(), local]);
+        assert_eq!(ConfigStore::new(paths.clone()).load().unwrap().harness_preferences, Some(saved));
+        std::fs::remove_dir_all(root).unwrap();
     }
 }

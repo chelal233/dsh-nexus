@@ -7,6 +7,8 @@ import {
   needsHarnessInstall,
   isMissingHarnessError,
   pluginMoveTarget,
+  pluginIsolationChoice,
+  pluginPolicyVerified,
   isLifecycleBusyError,
   lifecycleBusySnapshot,
   coldOperationIsTerminal,
@@ -19,6 +21,51 @@ import {
   runtimeSettingsGate,
   validStartupCheck,
 } from "../src/control-state.ts";
+
+test("plugin isolation binds the policy to the selected original profile", () => {
+  const source = { name: "web", bundles: ["a", "@deepseek-ai/dsh-base"] };
+  const profiles = { api_version: "v1", active_profile: "web", manifests: [source, { name: "other", bundles: ["a"] }], disabled_plugins: [] };
+  assert.deepEqual(pluginIsolationChoice(profiles, "web", "a", false).command,
+    { action: "plugin_disable", profile: "web", package: "a" });
+  assert.deepEqual(pluginIsolationChoice({ ...profiles, disabled_plugins: ["a"] }, "web", "a", false).command,
+    { action: "plugin_enable", profile: "web", package: "a" });
+  for (const packageName of ["@deepseek-ai/dsh-base", "dependency-only"]) {
+    assert.equal(pluginIsolationChoice(profiles, "web", packageName, false).eligible, false);
+  }
+  assert.equal(pluginIsolationChoice(profiles, "web", "a", true).command, null);
+  assert.equal(pluginIsolationChoice(profiles, "other", "a", false).disabled, null);
+  assert.equal(pluginIsolationChoice({ ...profiles, compatibility: { source_profile: "other" } }, "web", "a", false).command, null);
+  assert.equal(pluginIsolationChoice({ ...profiles, disabled_plugins: undefined }, "web", "a", false).disabled, null);
+  const isolated = { ...profiles, active_profile: "generated", compatibility: { source_profile: "web" },
+    manifests: [...profiles.manifests, { name: "generated", source_profile: "web", bundles: ["a"] }] };
+  assert.equal(pluginIsolationChoice(isolated, "web", "a", false).command?.profile, "web");
+  assert.equal(pluginIsolationChoice(isolated, "generated", "a", false).command, null);
+});
+
+test("v1 omitted empty plugin policy permits first disable without accepting malformed responses", () => {
+  // The Rust response skips disabled_plugins when empty; exercise the JSON
+  // shape seen after selecting a profile while recovery mode is paused.
+  const profiles = JSON.parse('{"api_version":"v1","active_profile":"repair","profiles":["repair"],"manifests":[{"name":"repair","bundles":["third-party"]}]}');
+  assert.deepEqual(pluginIsolationChoice(profiles, "repair", "third-party", false).command,
+    { action: "plugin_disable", profile: "repair", package: "third-party" });
+  assert.equal(pluginIsolationChoice(profiles, "repair", "third-party", true).command, null);
+  for (const disabled_plugins of [null, undefined, {}, "", [1]]) {
+    assert.equal(pluginIsolationChoice({ ...profiles, disabled_plugins }, "repair", "third-party", false).known, false);
+  }
+  for (const api_version of [undefined, "v2"]) {
+    assert.equal(pluginIsolationChoice({ ...profiles, api_version }, "repair", "third-party", false).command, null);
+  }
+  assert.equal(pluginIsolationChoice({ ...profiles, manifests: [] }, "repair", "third-party", false).command, null);
+});
+
+test("saved plugin choices only match a report that recorded the same policy", () => {
+  const profiles = { api_version: "v1", compatibility: { checked_disabled_plugins: [] } };
+  assert.equal(pluginPolicyVerified(profiles), true);
+  assert.equal(pluginPolicyVerified({ ...profiles, disabled_plugins: ["a"] }), false);
+  assert.equal(pluginPolicyVerified({ ...profiles, compatibility: {} }), false);
+  assert.equal(pluginPolicyVerified({ ...profiles, disabled_plugins: ["b", "a"], compatibility: { checked_disabled_plugins: ["a", "b"] } }), true);
+  assert.equal(pluginPolicyVerified({ ...profiles, disabled_plugins: null }), false);
+});
 
 test("startup authorization rejects missing, malformed and contradictory check reports", () => {
   const report = { api_version: "v1", ready: true, paused: false, checked_at_unix: 1,
@@ -178,6 +225,10 @@ test("compatibility failures notify once, excluding historical and successful re
 
 
 test("asynchronous install acceptance never announces completion", () => {
+  for (const action of ["start", "restart"]) {
+    assert.match(actionNoticeKey("/v1/harness", action), /startup requested/);
+    assert.notEqual(actionNoticeKey("/v1/harness", action), "complete");
+  }
   for (const action of ["switch", "confirm"]) {
     assert.match(actionNoticeKey("/v1/updates", action), /request accepted/);
     assert.notEqual(actionNoticeKey("/v1/updates", action), "complete");

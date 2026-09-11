@@ -129,6 +129,7 @@ mod imp {
         classify_volume(drive_type, name)
     }
 
+    #[allow(dead_code)]
     pub fn free_bytes(path: &Path) -> io::Result<u64> {
         use windows_sys::Win32::Storage::FileSystem::GetDiskFreeSpaceExW;
         let root = volume_root_for(path)?;
@@ -137,9 +138,9 @@ mod imp {
         let ok = unsafe {
             GetDiskFreeSpaceExW(
                 root_wide.as_ptr(),
-                std::ptr::null_mut(),
-                std::ptr::null_mut(),
                 &mut free,
+                std::ptr::null_mut(),
+                std::ptr::null_mut(),
             )
         };
         if ok == 0 {
@@ -149,18 +150,7 @@ mod imp {
     }
 
     pub fn ensure_free_space(path: &Path, required_bytes: u64) -> io::Result<()> {
-        let free = free_bytes(path)?;
-        if free < required_bytes {
-            return Err(io::Error::new(
-                io::ErrorKind::StorageFull,
-                format!(
-                    "insufficient disk space: {:.1} GiB available, at least {:.1} GiB required",
-                    free as f64 / (1024.0 * 1024.0 * 1024.0),
-                    required_bytes as f64 / (1024.0 * 1024.0 * 1024.0),
-                ),
-            ));
-        }
-        Ok(())
+        nexus_private_file::ensure_space_budget(&[(path, required_bytes)])
     }
 
     pub fn default_preflight_free_bytes() -> u64 {

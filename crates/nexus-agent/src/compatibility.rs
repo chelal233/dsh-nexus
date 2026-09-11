@@ -131,12 +131,44 @@ pub(crate) async fn for_release(
 }
 
 pub(crate) async fn for_profile_selection(state: &crate::AppState, profile: &str) -> io::Result<()> {
-    let Some(spec) = state.config.load()?.harness else { return Ok(()); };
-    if spec.mode != HarnessLaunchMode::Node { return Ok(()); }
-    let Some(release) = state.releases.load()?.current_release else { return Ok(()); };
+    let Some(mut spec)=nexus_core::load_harness_launch_spec(&state.paths)? else{return Ok(())};
+    if spec.mode!=HarnessLaunchMode::Node{return Ok(())}
+    let source=crate::source_context::resolve_async(&state.paths,&state.releases).await?;
+    let Some(slot)=source.root else{return Ok(())};
+    let release=crate::source_context::compatibility_id(&state.paths,&state.releases)?.ok_or_else(||io::Error::other("Select a Harness source"))?;
+    crate::supervisor::normalize_selected_launch(&mut spec,&state.paths,&state.releases)?;
+    let runtime=crate::runtime::runtime_for_launch(&mut spec,state.config.load()?.runtime.unwrap_or_default(),nexus_core::bundled_runtime_dir().as_deref());
+    let runtime_env=nexus_core::build_runtime_child_env(&runtime,std::env::var_os("PATH").as_deref())?;
+    let node=spec.render_path_for_context(&spec.program,profile,Some(&release),Some(&slot))?;
     prepare_with_trigger(&state.paths, &state.snapshots.configured_dsh_home()?, profile,
-        &release, &state.releases.release_root(&release)?, &spec.program, true,
-        &CancellationToken::default(), "profile_switch").await?;
+        &release, &slot, &node, true,
+        &CancellationToken::default(), "profile_switch", &runtime_env).await?;
+    Ok(())
+}
+
+pub(crate) async fn check_selected(state: &crate::AppState, profile: &str) -> io::Result<()> {
+    let mut spec = nexus_core::load_harness_launch_spec(&state.paths)?.ok_or_else(|| io::Error::other("Configure a Node Harness before verifying plugins"))?;
+    if spec.mode != HarnessLaunchMode::Node { return Err(io::Error::other("Plugin verification requires a Node Harness")); }
+    let source=crate::source_context::resolve_async(&state.paths,&state.releases).await?;
+    let release=crate::source_context::compatibility_id(&state.paths,&state.releases)?.ok_or_else(||io::Error::other("Select a Harness source"))?;
+    let slot=source.root.ok_or_else(||io::Error::other("Select a Harness source before verifying plugins"))?;
+    crate::supervisor::normalize_selected_launch(&mut spec, &state.paths, &state.releases)?;
+    let runtime = crate::runtime::runtime_for_launch(&mut spec, state.config.load()?.runtime.unwrap_or_default(), nexus_core::bundled_runtime_dir().as_deref());
+    let runtime_env = nexus_core::build_runtime_child_env(&runtime, std::env::var_os("PATH").as_deref())?;
+    let node = spec.render_path_for_context(&spec.program, profile, Some(&release), Some(&slot))?;
+    if node.is_relative() && node.components().count() > 1 {
+        return Err(io::Error::other("Independent plugin verification requires an absolute Node path or a runtime selected in settings"));
+    }
+    let args = spec.render_args_for_context(profile, Some(&release), Some(&slot))?;
+    let expected_entry = fs::canonicalize(slot.join("apps/cli/lib/bin.js"))?;
+    let managed_entry = args.first().and_then(|path| fs::canonicalize(path).ok()).as_ref() == Some(&expected_entry);
+    if args.is_empty() || !managed_entry || !(args.len() == 3 && args[1] == "--profile" && args[2] == profile) {
+        return Err(io::Error::other("Independent plugin verification requires the managed Harness entry and selected profile arguments; custom launch commands are not supported"));
+    }
+    prepare_with_trigger(&state.paths, &state.snapshots.configured_dsh_home()?, profile,
+        &release, &slot, &node, true,
+        &CancellationToken::default(), "manual_check", &runtime_env).await?
+        .ok_or_else(|| io::Error::other("Selected profile has no native manifest to verify"))?;
     Ok(())
 }
 
@@ -145,12 +177,13 @@ pub(crate) async fn prepare(
     slot: &Path, node: &Path, force: bool, cancellation: &CancellationToken,
 ) -> io::Result<Option<CompatibilityReport>> {
     prepare_with_trigger(paths, home, profile, release, slot, node, force, cancellation,
-        if force { "version_switch" } else { "startup" }).await
+        if force { "version_switch" } else { "startup" }, &[]).await
 }
 
 async fn prepare_with_trigger(
     paths: &NexusPaths, home: &Path, profile: &str, release: &str,
     slot: &Path, node: &Path, force: bool, cancellation: &CancellationToken, trigger: &str,
+    runtime_env: &[(std::ffi::OsString, std::ffi::OsString)],
 ) -> io::Result<Option<CompatibilityReport>> {
     validate_profile_name(profile)?;
     let root = paths.root.join("compatibility");
@@ -165,6 +198,7 @@ async fn prepare_with_trigger(
         return Err(io::Error::other("Compatibility process cleanup is pending; reconcile the owned probe before retrying"));
     }
     let preferences = nexus_core::load_harness_preferences(paths)?;
+    crate::runtime_patches::validate_for_paths(paths, &preferences)?;
     let capabilities = crate::preference_capabilities::resolve(Some(slot), home, profile, &preferences)?;
     let preferences_env = nexus_core::harness_preferences_environment(&preferences, &capabilities);
     // A first-run installation may not have created a native profile yet.
@@ -177,15 +211,15 @@ async fn prepare_with_trigger(
     ensure_work_directory(&work_root)?;
     let nonce = nexus_core::unix_time_nanos_for_update();
     let work = work_root.join(format!("run-{nonce}"));
-    fs::create_dir(&work)?;
-    let input = root.join(format!("request-{nonce}.json"));
-    let output = root.join(format!("result-{nonce}.json"));
+    nexus_core::create_new_private_directory(&work)?;
+    let input = work.join("request.json");
+    let output = work.join("result.json");
     let script = root.join("checker.mjs");
     fs::write(&script, include_bytes!("compatibility.mjs"))?;
-    write_json_atomic(&root, &input, &serde_json::json!({
+    nexus_core::write_private_json_atomic(&work, &input, &serde_json::json!({
         "home":home,"selected":profile,"release_id":release,"slot":slot,
         "node":node,"work":work,"output":output,"force":force,
-        "trigger": trigger,
+        "trigger": trigger, "owned_round": true,
         "preference_capabilities": { "adapter_version": crate::preference_capabilities::VERIFIED_VERSION, "capabilities": capabilities },
         "patches": preferences.patches.as_deref().unwrap_or(&[]),
         "preferences_env": preferences_env.iter().filter(|(key, _)| key != "DSH_HOME")
@@ -193,26 +227,39 @@ async fn prepare_with_trigger(
             .collect::<std::collections::BTreeMap<_, _>>(),
     }))?;
     let mut command = std::process::Command::new(node);
+    command.envs(runtime_env.iter().cloned());
     command.envs(preferences_env);
     command.arg(&script).arg(&input).current_dir(&root).stdin(Stdio::null()).stdout(Stdio::null());
     tracing::info!(release, profile, "checking target release plugin startup compatibility");
     write_json_atomic(&root, &pending, &serde_json::json!({"work":work,"release":release,"profile":profile}))?;
-    let result = crate::cold::run_owned_command(command, "plugin compatibility check", Duration::from_secs(600), &root, cancellation).await;
+    let mut result = crate::cold::run_owned_command(command, "plugin compatibility check", Duration::from_secs(600), &work, cancellation).await;
     if result.as_ref().err().is_some_and(|error| !crate::cold::command_owner_quiescent(error)) {
         // Keep the durable marker and all paths while process ownership is
         // unresolved. A subsequent launch must not reuse or delete this tree.
         return result.map(|_| None);
+    }
+    if result.is_ok() && work.join("publication.json").is_file() {
+        let mut request: serde_json::Value = serde_json::from_slice(&fs::read(&input)?).map_err(io::Error::other)?;
+        request["finalize"] = serde_json::json!(true);
+        nexus_core::write_private_json_atomic(&work, &input, &request)?;
+        let mut command = std::process::Command::new(node);
+        command.arg(&script).arg(&input).current_dir(&root).stdin(Stdio::null()).stdout(Stdio::null());
+        result = crate::cold::run_owned_command(command, "publish verified compatibility profile", Duration::from_secs(60), &work, cancellation).await;
+        if result.as_ref().err().is_some_and(|error| !crate::cold::command_owner_quiescent(error)) { return result.map(|_| None); }
     }
     let bytes = fs::read(&output);
     let _ = fs::remove_file(&input);
     let _ = fs::remove_file(&output);
     crate::cold::remove_owned_directory(&work_root, &work)?;
     fs::remove_file(&pending)?;
+    if cancellation.is_cancelled() { return Err(io::Error::new(io::ErrorKind::Interrupted,"Harness startup was cancelled")); }
     let bytes = match bytes {
         Ok(bytes) => bytes,
         Err(error) => { result?; return Err(error); }
     };
     if bytes.len() > 64 * 1024 { return Err(io::Error::other("Compatibility report exceeds limit")); }
+    let (bytes, _) = nexus_core::redact_diagnostics_payload(&bytes);
+    if result.is_err() && serde_json::from_slice::<serde_json::Value>(&bytes).ok().is_some_and(|v| v["publication_pending"] == true) { return result.map(|_| None); }
     let report: CompatibilityReport = serde_json::from_slice(&bytes).map_err(io::Error::other)?;
     validate_profile_name(&report.source_profile)?;
     validate_profile_name(&report.effective_profile)?;
@@ -221,8 +268,11 @@ async fn prepare_with_trigger(
         return Err(io::Error::other("Compatibility report does not match target release"));
     }
     if report.status == "needs_choice" {
+        if preferences.patches.as_ref().is_some_and(|patches| !patches.is_empty()) {
+            crate::runtime_patches::record_failure(paths, &preferences, "compatibility_combination")?;
+        }
         write_json_atomic(&root, &root.join("latest.json"), &report)?;
-        return Err(io::Error::other("Plugin compatibility needs a choice; disable selected third-party plugins and retry the target release"));
+        return Err(io::Error::other(format!("Plugin compatibility needs a choice; disable selected third-party plugins and retry the target release. {}", report.error.as_deref().unwrap_or(""))));
     }
     result?;
     write_json_atomic(&root, &root.join("latest.json"), &report)?;
@@ -249,7 +299,7 @@ mod tests {
         let report = CompatibilityReport {
             checker_version: 1, status: "passed".to_owned(), source_profile: "original".to_owned(),
             effective_profile: "nexus-projection".to_owned(), release_id: "release-a".to_owned(),
-            fingerprint: "fixture".to_owned(), checked_at_unix: 1, disabled: Vec::new(), error: None, candidates: Vec::new(),
+            fingerprint: "fixture".to_owned(), checked_at_unix: 1, checked_disabled_plugins: None, disabled: Vec::new(), error: None, candidates: Vec::new(),
             trigger: None, last_trigger: None, last_used_at_unix: None, cache_reused: false,
         };
         write_json_atomic(&root.join("compatibility"), &root.join("compatibility/latest.json"), &report).unwrap();

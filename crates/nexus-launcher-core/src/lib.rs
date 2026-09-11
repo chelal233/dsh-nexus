@@ -31,6 +31,7 @@ use tokio::{
 };
 
 pub mod harness_ui;
+pub mod startup_diagnostics;
 
 pub use harness_ui::{
     harness_observation_matches_session, parse_loopback_harness_url, read_harness_ui_info,
@@ -49,14 +50,17 @@ pub const AGENT_INSTANCE_HEADER: &str = "x-nexus-instance-id";
 
 const DEFAULT_CONNECT_TIMEOUT: Duration = Duration::from_secs(2);
 const DEFAULT_REQUEST_TIMEOUT: Duration = Duration::from_secs(8);
+const OFFLINE_PREVIEW_TIMEOUT: Duration = Duration::from_secs(1830);
 const AGENT_ROUTES: &[&str] = &[
     "/v1/health",
     "/v1/state",
     "/v1/harness",
+    "/v1/harness/startup",
     "/v1/harness/ui",
     "/v1/harness/discover",
     "/v1/profiles",
     "/v1/recovery",
+    "/v1/recovery/records",
     "/v1/preflight",
     "/v1/checkpoints",
     "/v1/releases",
@@ -64,6 +68,8 @@ const AGENT_ROUTES: &[&str] = &[
     "/v1/runtime",
     "/v1/runtime/plan",
     "/v1/updates",
+    "/v1/requests",
+    "/v1/canary",
     "/v1/diagnostics",
     "/v1/config",
     "/v1/maintenance",
@@ -155,6 +161,7 @@ pub struct AgentClient {
     http: reqwest::Client,
     base_url: Url,
     expected_identity: Option<AgentIdentity>,
+    credential_paths: Option<NexusPaths>,
 }
 
 /// A bounded Agent response with its HTTP status retained for compatibility
@@ -194,6 +201,7 @@ impl AgentClient {
             http,
             base_url,
             expected_identity: None,
+            credential_paths: None,
         })
     }
 
@@ -211,6 +219,7 @@ impl AgentClient {
             http,
             base_url,
             expected_identity: None,
+            credential_paths: None,
         })
     }
 
@@ -225,6 +234,11 @@ impl AgentClient {
 
     pub fn expected_identity(&self) -> Option<&AgentIdentity> {
         self.expected_identity.as_ref()
+    }
+
+    pub fn with_credential_paths(mut self, paths: NexusPaths) -> Self {
+        self.credential_paths = Some(paths);
+        self
     }
 
     pub async fn get_json<T: DeserializeOwned>(&self, path: &str) -> Result<T, AgentClientError> {
@@ -341,14 +355,36 @@ impl AgentClient {
         body: Option<Vec<u8>>,
     ) -> Result<AgentResponse<Vec<u8>>, AgentClientError> {
         validate_agent_request(path, &method, body.as_deref())?;
+        let mut body = body;
         let url = self
             .base_url
             .join(path)
             .map_err(|error| AgentClientError::InvalidRequest(error.to_string()))?;
         let compatibility_mutation = method == Method::POST && (matches!(path, "/v1/releases" | "/v1/harness")
-            || (path == "/v1/profiles" && body.as_ref().and_then(|bytes| serde_json::from_slice::<Value>(bytes).ok()).is_some_and(|body| body.get("action").and_then(Value::as_str) == Some("select"))));
-        let mut request = self.http.request(method, url);
+            || (path == "/v1/profiles" && body.as_ref().and_then(|bytes| serde_json::from_slice::<Value>(bytes).ok()).is_some_and(|body| matches!(body.get("action").and_then(Value::as_str), Some("select" | "compatibility_check")))));
+        let patch_download = method == Method::POST && path == "/v1/config" && body.as_ref().and_then(|bytes| serde_json::from_slice::<Value>(bytes).ok()).is_some_and(|body| matches!(body.get("action").and_then(Value::as_str), Some("fetch_harness_patches" | "preview_harness_patches" | "list_harness_patch_refs" | "set_external_harness")));
+        let offline_preview = method == Method::POST && path == "/v1/updates" && body.as_ref().and_then(|bytes| serde_json::from_slice::<Value>(bytes).ok()).is_some_and(|body| body.get("action").and_then(Value::as_str) == Some("offline_inspect"));
+        let mut request = self.http.request(method.clone(), url);
+        let authentication = if path != "/v1/health" {
+            if let Some(paths) = &self.credential_paths {
+                use nexus_core::agent_auth as auth;
+                let identity = self.expected_identity.as_ref().ok_or_else(|| AgentClientError::InvalidRequest("Agent identity must be verified before authorization".into()))?;
+                let credential = auth::AgentCredential::read(paths, &identity.data_root_id, &identity.instance_id)
+                    .map_err(|_| AgentClientError::InvalidRequest("Agent credential is unavailable or invalid; restart Nexus Agent".into()))?;
+                let nonce = auth::random_hex().map_err(|error| AgentClientError::InvalidRequest(error.to_string()))?;
+                let time = auth::unix_seconds().to_string();
+                body = Some(credential.seal_request(method.as_str(), path, &nonce, &time, body.as_deref().unwrap_or_default()).map_err(|_| AgentClientError::InvalidRequest("Agent request encryption failed".into()))?);
+                let signature = credential.request_signature(method.as_str(), path, &nonce, &time, body.as_deref().unwrap_or_default());
+                request = request.header(auth::VERSION_HEADER, "2").header(auth::NONCE_HEADER, &nonce).header(auth::TIME_HEADER, &time).header(auth::SIGNATURE_HEADER, signature);
+                Some((credential, nonce))
+            } else { None }
+        } else { None };
+        if method == Method::GET && path == "/v1/preflight" { request=request.timeout(Duration::from_secs(45)); }
         if compatibility_mutation { request = request.timeout(Duration::from_secs(660)); }
+        if offline_preview { request = request.timeout(OFFLINE_PREVIEW_TIMEOUT); }
+        if patch_download {
+            request = request.timeout(Duration::from_secs(75));
+        }
         if let Some(identity) = &self.expected_identity {
             request = request
                 .header(AGENT_DATA_ROOT_HEADER, &identity.data_root_id)
@@ -364,7 +400,16 @@ impl AgentClient {
             .await
             .map_err(|error| AgentClientError::Transport(error.to_string()))?;
         let status = response.status();
-        let bytes = read_bounded_body(response).await?;
+        let encrypted = response.headers().get(nexus_core::agent_auth::VERSION_HEADER).and_then(|v| v.to_str().ok()) == Some("2");
+        let response_signature = response.headers().get(nexus_core::agent_auth::RESPONSE_HEADER).and_then(|v| v.to_str().ok()).unwrap_or("").to_owned();
+        let mut bytes = read_bounded_body(response).await?;
+        if authentication.as_ref().is_some_and(|(credential, nonce)| !credential.verify_response(nonce, status.as_u16(), &bytes, &response_signature)) {
+            return Err(AgentClientError::InvalidResponse("Agent response authentication failed; response was not trusted".into()));
+        }
+        if let Some((credential, nonce)) = authentication {
+            if !encrypted { return Err(AgentClientError::InvalidResponse("Agent response encryption is required".into())); }
+            bytes = credential.open_response(&nonce, status.as_u16(), &bytes).map_err(|_| AgentClientError::InvalidResponse("Agent response decryption failed".into()))?;
+        }
         if !status.is_success() {
             return Err(AgentClientError::Http {
                 status,
@@ -382,7 +427,7 @@ impl AgentClient {
 async fn read_bounded_body(response: reqwest::Response) -> Result<Vec<u8>, AgentClientError> {
     if response
         .content_length()
-        .is_some_and(|length| length > MAX_RESPONSE_BODY_BYTES as u64)
+        .is_some_and(|length| length > (MAX_RESPONSE_BODY_BYTES + nexus_core::agent_auth::TAG_BYTES) as u64)
     {
         return Err(AgentClientError::ResponseTooLarge {
             limit: MAX_RESPONSE_BODY_BYTES,
@@ -392,7 +437,7 @@ async fn read_bounded_body(response: reqwest::Response) -> Result<Vec<u8>, Agent
     let mut bytes = Vec::new();
     while let Some(chunk) = stream.next().await {
         let chunk = chunk.map_err(|error| AgentClientError::Transport(error.to_string()))?;
-        if bytes.len().saturating_add(chunk.len()) > MAX_RESPONSE_BODY_BYTES {
+        if bytes.len().saturating_add(chunk.len()) > MAX_RESPONSE_BODY_BYTES + nexus_core::agent_auth::TAG_BYTES {
             return Err(AgentClientError::ResponseTooLarge {
                 limit: MAX_RESPONSE_BODY_BYTES,
             });
@@ -432,9 +477,10 @@ pub fn validate_agent_request(
         | "/v1/harness/discover"
         | "/v1/releases/tags"
         | "/v1/runtime"
+        | "/v1/requests"
         | "/v1/preflight" => *method == Method::GET,
         "/v1/runtime/plan" => *method == Method::POST,
-        "/v1/recovery" | "/v1/harness" | "/v1/profiles" | "/v1/checkpoints" | "/v1/releases" | "/v1/updates"
+        "/v1/harness/startup" | "/v1/canary" | "/v1/recovery" | "/v1/recovery/records" | "/v1/harness" | "/v1/profiles" | "/v1/checkpoints" | "/v1/releases" | "/v1/updates"
         | "/v1/diagnostics" | "/v1/config" | "/v1/maintenance" => {
             *method == Method::GET || *method == Method::POST
         }
@@ -611,10 +657,11 @@ impl AgentRuntime {
     pub fn client(&self) -> AgentClient {
         let port = self.effective_port.load(Ordering::Acquire);
         if port == self.config.port {
-            return self.base_client.clone();
+            return self.base_client.clone().with_credential_paths(self.paths.clone());
         }
         AgentClient::from_reqwest(port, self.base_client.http.clone())
             .expect("effective port is validated before adoption")
+            .with_credential_paths(self.paths.clone())
     }
 
     fn adopt_discovered_port(&self, port: u16) {
@@ -1396,6 +1443,52 @@ mod tests {
     };
 
     #[tokio::test]
+    async fn patch_download_waits_beyond_normal_request_deadline() {
+        let listener = TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0)).await.unwrap();
+        let client = AgentClient::new(listener.local_addr().unwrap().port()).unwrap();
+        let server = tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.unwrap();
+            let mut bytes = [0; 4096];
+            socket.read(&mut bytes).await.unwrap();
+            sleep(DEFAULT_REQUEST_TIMEOUT + Duration::from_secs(1)).await;
+            write_json_response(&mut socket, "200 OK", &serde_json::json!({"saved":true})).await;
+        });
+        let response: Value = client.request_json(Method::POST, "/v1/config", Some(br#"{"action":"fetch_harness_patches"}"#.to_vec())).await.unwrap();
+        assert_eq!(response["saved"], true); server.await.unwrap();
+    }
+    #[tokio::test]
+    async fn offline_preview_uses_the_full_archive_budget_across_transport() {
+        assert!(OFFLINE_PREVIEW_TIMEOUT >= Duration::from_secs(1830));
+        let listener=TcpListener::bind((std::net::Ipv4Addr::LOCALHOST,0)).await.unwrap();
+        let client=AgentClient::new(listener.local_addr().unwrap().port()).unwrap();
+        let server=tokio::spawn(async move {
+            let (mut socket,_)=listener.accept().await.unwrap();let mut bytes=[0;4096];socket.read(&mut bytes).await.unwrap();
+            sleep(DEFAULT_REQUEST_TIMEOUT+Duration::from_secs(1)).await;
+            write_json_response(&mut socket,"200 OK",&serde_json::json!({"preview":true})).await;
+        });
+        let response:Value=client.request_json(Method::POST,"/v1/updates",Some(br#"{"action":"offline_inspect"}"#.to_vec())).await.unwrap();
+        assert_eq!(response["preview"],true);server.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn manual_plugin_check_waits_beyond_normal_request_deadline() {
+        let listener = TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0)).await.unwrap();
+        let client = AgentClient::new(listener.local_addr().unwrap().port()).unwrap();
+        let server = tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.unwrap();
+            let mut bytes = [0; 4096];
+            let count = socket.read(&mut bytes).await.unwrap();
+            assert!(String::from_utf8_lossy(&bytes[..count]).starts_with("POST /v1/profiles "));
+            sleep(DEFAULT_REQUEST_TIMEOUT + Duration::from_secs(1)).await;
+            write_json_response(&mut socket, "200 OK", &serde_json::json!({"verified":true})).await;
+        });
+        let response: Value = client.request_json(Method::POST, "/v1/profiles",
+            Some(br#"{"action":"compatibility_check"}"#.to_vec())).await.unwrap();
+        assert_eq!(response["verified"], true);
+        server.await.unwrap();
+    }
+
+    #[tokio::test]
     async fn agent_client_bypasses_download_proxy_environment() {
         // Isolate environment changes from every other concurrent test.
         if env::var_os("NEXUS_TEST_LOOPBACK_PROXY").is_none() {
@@ -1430,7 +1523,8 @@ mod tests {
         fs::write(&program, "test binary; never executed").unwrap();
         fs::write(resources.join("release-identity.json"), r#"{"schemaVersion":1,"buildId":"package-build"}"#).unwrap();
         let listener = TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0)).await.unwrap();
-        let runtime = AgentRuntime::new_with_resource_dir(NexusConfig { data_dir: Some(root.join("data")), port: listener.local_addr().unwrap().port() }, Some(program.clone()), Some(resources)).unwrap();
+        let mut runtime = AgentRuntime::new_with_resource_dir(NexusConfig { data_dir: Some(root.join("data")), port: listener.local_addr().unwrap().port() }, Some(program.clone()), Some(resources)).unwrap();
+        runtime.bind_build_identity("package-build").unwrap();
         let mut health = HealthResponse::healthy(runtime.data_root_id().to_owned(), "old-instance".to_owned());
         health.binary_path = Some(program.to_string_lossy().into_owned());
         health.build_id = Some("old-build".to_owned());
@@ -1589,12 +1683,18 @@ mod tests {
             .unwrap();
         let configured = unused.local_addr().unwrap().port();
         drop(unused);
-        let runtime = AgentRuntime::new(
+        let build_id = option_env!("NEXUS_BUILD_ID").unwrap_or("discovery-fixture-build");
+        let resources = root.join("resources"); fs::create_dir_all(&resources).unwrap();
+        let program = resources.join(if cfg!(windows) { "nexus-agent.exe" } else { "nexus-agent" });
+        fs::write(&program, b"mock Agent identity; never executed").unwrap();
+        fs::write(resources.join("release-identity.json"), serde_json::to_vec(&serde_json::json!({"schemaVersion":1,"buildId":build_id})).unwrap()).unwrap();
+        let runtime = AgentRuntime::new_with_resource_dir(
             NexusConfig {
                 data_dir: Some(root.clone()),
                 port: configured,
             },
-            None,
+            Some(program.clone()),
+            Some(resources),
         )
         .unwrap();
         let shared = runtime.clone();
@@ -1621,7 +1721,11 @@ mod tests {
                     updated_at_unix: 0,
                 })
                 .unwrap();
-            let health = HealthResponse::healthy(runtime.data_root_id.clone(), instance);
+            let credential = nexus_core::agent_auth::AgentCredential::publish(&runtime.paths, &instance).unwrap();
+            let identity = AgentIdentity { data_root_id: runtime.data_root_id.clone(), instance_id: instance.clone() };
+            let mut health = HealthResponse::healthy(runtime.data_root_id.clone(), instance);
+            health.build_id = Some(build_id.into());
+            health.binary_path = Some(program.to_string_lossy().into_owned());
             let server = tokio::spawn(async move {
                 for route in [
                     "GET /v1/health ",
@@ -1636,8 +1740,12 @@ mod tests {
                     if route.contains("health") {
                         write_json_response(&mut socket, "200 OK", &health).await;
                     } else {
-                        write_json_response(&mut socket, "200 OK", &serde_json::json!({"ok":true}))
-                            .await;
+                        let raw = String::from_utf8_lossy(&request[..len]);
+                        let nonce = raw.lines().find_map(|line| line.strip_prefix("x-nexus-auth-nonce: ")).unwrap();
+                        let body = br#"{"ok":true}"#;
+                        let body = credential.seal_response(nonce, 200, body).unwrap(); let proof = credential.response_signature(nonce, 200, &body);
+                        socket.write_all(format!("HTTP/1.1 200 OK\r\nContent-Length: {}\r\nx-nexus-auth-version: 2\r\nx-nexus-auth-response: {proof}\r\nConnection: close\r\n\r\n", body.len()).as_bytes()).await.unwrap();
+                        socket.write_all(&body).await.unwrap();
                     }
                 }
             });
@@ -1645,12 +1753,12 @@ mod tests {
             assert_eq!(runtime.start(1).await.unwrap().port, port);
             assert_eq!(shared.client().base_url().port(), Some(port));
             shared
-                .client()
+                .client().with_expected_identity(identity.clone())
                 .get_json::<serde_json::Value>("/v1/config")
                 .await
                 .unwrap();
             shared
-                .client()
+                .client().with_expected_identity(identity.clone())
                 .post_json::<_, serde_json::Value>(
                     "/v1/harness",
                     &serde_json::json!({"action":"start"}),
@@ -1983,6 +2091,8 @@ mod tests {
         let resource_program = resource_dir.join(resource_name);
         fs::write(&resource_program, b"packaged-agent").expect("resource marker writes");
 
+        let build_id = option_env!("NEXUS_BUILD_ID").unwrap_or("running-fixture-build");
+        fs::write(resource_dir.join("release-identity.json"), serde_json::to_vec(&serde_json::json!({"schemaVersion":1,"buildId":build_id})).unwrap()).unwrap();
         let listener = TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0))
             .await
             .expect("existing Agent listener binds");
@@ -1999,10 +2109,12 @@ mod tests {
             Some(resource_dir),
         )
         .expect("runtime creates");
-        let health = HealthResponse::healthy(
+        let mut health = HealthResponse::healthy(
             runtime.data_root_id().to_owned(),
             "existing-agent-instance".to_owned(),
         );
+        health.build_id = Some(build_id.into());
+        health.binary_path = Some(resource_program.to_string_lossy().into_owned());
         let server = tokio::spawn(serve_health_once(listener, health));
         let result = runtime.start(1).await.expect("existing Agent is accepted");
         assert!(!result.started);
@@ -2041,6 +2153,8 @@ mod tests {
             runtime.data_root_id().to_owned(),
             "slow-stop-instance".to_owned(),
         );
+        fs::create_dir_all(&runtime.paths.run_dir).unwrap();
+        let credential = nexus_core::agent_auth::AgentCredential::publish(&runtime.paths, "slow-stop-instance").unwrap();
         let server = tokio::spawn(async move {
             loop {
                 let Ok((mut socket, _)) = listener.accept().await else {
@@ -2050,12 +2164,11 @@ mod tests {
                 let size = socket.read(&mut request).await.expect("slow request reads");
                 let request = String::from_utf8_lossy(&request[..size]);
                 if request.starts_with("POST /v1/shutdown ") {
-                    write_json_response(
-                        &mut socket,
-                        "202 Accepted",
-                        &LifecycleAccepted::accepted(LifecycleAction::Shutdown),
-                    )
-                    .await;
+                    let nonce = request.lines().find_map(|line| line.strip_prefix("x-nexus-auth-nonce: ")).unwrap();
+                    let body = serde_json::to_vec(&LifecycleAccepted::accepted(LifecycleAction::Shutdown)).unwrap();
+                    let body = credential.seal_response(nonce, 202, &body).unwrap(); let proof = credential.response_signature(nonce, 202, &body);
+                    socket.write_all(format!("HTTP/1.1 202 Accepted\r\nContent-Length: {}\r\nx-nexus-auth-version: 2\r\nx-nexus-auth-response: {proof}\r\nConnection: close\r\n\r\n", body.len()).as_bytes()).await.unwrap();
+                    socket.write_all(&body).await.unwrap();
                     // The HTTP listener disappears before the child process
                     // exits, modelling Harness supervisor drain time.
                     sleep(Duration::from_millis(300)).await;
@@ -2085,6 +2198,38 @@ mod tests {
         assert!(started.elapsed() >= Duration::from_millis(500));
         server.await.expect("slow Agent server completes");
         let _ = fs::remove_dir_all(root);
+    }
+
+    #[tokio::test]
+    async fn stale_port_impostor_never_receives_plaintext_configuration() {
+        use nexus_core::agent_auth::{self, AgentCredential};
+        let root = env::temp_dir().join(format!("nexus-impostor-{}", agent_auth::random_hex().unwrap()));
+        let paths = NexusPaths::from_root(root.clone());
+        fs::create_dir_all(&paths.run_dir).unwrap();
+        let credential = AgentCredential::publish(&paths, "old-generation").unwrap();
+        let listener = TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0)).await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let server = tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.unwrap();
+            let mut captured = Vec::new();
+            loop {
+                let mut chunk = [0u8; 4096];
+                let count = socket.read(&mut chunk).await.unwrap();
+                assert!(count != 0); captured.extend_from_slice(&chunk[..count]);
+                if let Some(index) = captured.windows(4).position(|window| window == b"\r\n\r\n") {
+                    let headers = String::from_utf8_lossy(&captured[..index]);
+                    let length: usize = headers.lines().find_map(|line| line.strip_prefix("content-length: ")).unwrap().parse().unwrap();
+                    if captured.len() >= index + 4 + length { break; }
+                }
+            }
+            assert!(!captured.windows(b"SECRET_SENTINEL".len()).any(|window| window == b"SECRET_SENTINEL"));
+            socket.write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\n{}").await.unwrap();
+        });
+        let client = AgentClient::new(port).unwrap().with_credential_paths(paths)
+            .with_expected_identity(AgentIdentity { data_root_id: credential.data_root_id, instance_id: credential.instance_id });
+        let result = client.post_json::<_, serde_json::Value>("/v1/config", &serde_json::json!({"action":"set_harness", "harness":{"args":["SECRET_SENTINEL"],"readiness_url":"http://localhost/?token=SECRET_SENTINEL"}})).await;
+        assert!(matches!(result, Err(AgentClientError::InvalidResponse(_))));
+        server.await.unwrap(); fs::remove_dir_all(root).unwrap();
     }
 
     #[test]

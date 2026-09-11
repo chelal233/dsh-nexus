@@ -24,6 +24,7 @@ struct Options {
 enum Command {
     Status,
     Harness(HarnessAction),
+    HarnessStartup(Option<String>),
     Profile(ProfileAction, Option<String>),
     ProfileRemove(String, String),
     Recovery,
@@ -85,6 +86,8 @@ fn parse_args_from(mut config: NexusConfig, mut explicit_port: bool, args: impl 
                 let action = args
                     .next()
                     .ok_or_else(|| "harness requires status, start, stop, or restart".to_owned())?;
+                if action=="startup-status" {command=Some(Command::HarnessStartup(None));continue;}
+                if action=="cancel-start" {command=Some(Command::HarnessStartup(Some(args.next().ok_or("cancel-start requires OPERATION_ID")?.to_string_lossy().into_owned())));continue;}
                 let action = match action.to_string_lossy().as_ref() {
                     "status" => HarnessAction::Status,
                     "start" => HarnessAction::Start,
@@ -477,7 +480,7 @@ fn local_client(headers: reqwest::header::HeaderMap) -> Result<reqwest::Client, 
         .default_headers(headers).build().map_err(|error| format!("cannot create the local Agent client: {error}"))
 }
 
-async fn resolve_agent_client(config: &NexusConfig, explicit_port: bool) -> Result<(reqwest::Client, SocketAddr), String> {
+async fn resolve_agent_client(config: &NexusConfig, explicit_port: bool) -> Result<(reqwest::Client, SocketAddr, nexus_protocol::HealthResponse), String> {
     let paths = config.paths();
     // An explicit port chooses an address, never a different data owner.
     let root_identity = Some(data_root_identity(&paths)
@@ -523,35 +526,79 @@ async fn resolve_agent_client(config: &NexusConfig, explicit_port: bool) -> Resu
         return Err("Agent health identity does not match the selected Nexus instance".into());
     }
     let mut headers = reqwest::header::HeaderMap::new();
-    headers.insert("x-nexus-data-root-id", health.data_root_id.parse().map_err(|_| "Invalid Agent data-root identity")?);
-    headers.insert("x-nexus-instance-id", health.instance_id.parse().map_err(|_| "Invalid Agent instance identity")?);
-    Ok((local_client(headers)?, address))
+    headers.insert("x-nexus-data-root-id", health.data_root_id.clone().parse().map_err(|_| "Invalid Agent data-root identity")?);
+    headers.insert("x-nexus-instance-id", health.instance_id.clone().parse().map_err(|_| "Invalid Agent instance identity")?);
+    Ok((local_client(headers)?, address, health))
+}
+
+fn attach_receipt_id(path: &str, value: &mut serde_json::Value, nonce: &str) -> Option<String> {
+    nexus_protocol::request_receipt_kind(path, value.get("action")?.as_str()?)?;
+    let id = env::var("NEXUS_REQUEST_ID").unwrap_or_else(|_| format!("{}-{nonce}", nexus_core::agent_auth::unix_seconds()));
+    value["request_id"] = serde_json::Value::String(id.clone());
+    Some(id)
+}
+
+async fn authenticated_response(client: &reqwest::Client, credential: &nexus_core::agent_auth::AgentCredential, request: reqwest::RequestBuilder) -> Result<(reqwest::StatusCode, String), String> {
+    use nexus_core::agent_auth as auth;
+    let nonce = auth::random_hex().map_err(|error| error.to_string())?;
+    let time = auth::unix_seconds().to_string();
+    let mut request = request.build().map_err(|error| error.to_string())?;
+    if request.method() == reqwest::Method::POST {
+        if let Ok(mut value) = serde_json::from_slice::<serde_json::Value>(request.body().and_then(|b| b.as_bytes()).unwrap_or_default()) {
+            if let Some(id) = attach_receipt_id(request.url().path(), &mut value, &nonce) {
+                eprintln!("Request ID: {id} (reuse with NEXUS_REQUEST_ID after a timeout)");
+                *request.body_mut() = Some(serde_json::to_vec(&value).map_err(|e|e.to_string())?.into());
+            }
+        }
+    }
+    let ciphertext = credential.seal_request(request.method().as_str(), request.url().path(), &nonce, &time, request.body().and_then(|body| body.as_bytes()).unwrap_or_default()).map_err(|_| "Agent request encryption failed")?;
+    *request.body_mut() = Some(ciphertext.into());
+    request.headers_mut().remove(reqwest::header::CONTENT_LENGTH);
+    request.headers_mut().insert(auth::VERSION_HEADER, "2".parse().unwrap());
+    let signature = credential.request_signature(request.method().as_str(), request.url().path(), &nonce, &time, request.body().and_then(|body| body.as_bytes()).unwrap_or_default());
+    request.headers_mut().insert(auth::NONCE_HEADER, nonce.parse().unwrap());
+    request.headers_mut().insert(auth::TIME_HEADER, time.parse().unwrap());
+    request.headers_mut().insert(auth::SIGNATURE_HEADER, signature.parse().unwrap());
+    let mut response = client.execute(request).await.map_err(|error| format!("Agent is unavailable: {error}"))?;
+    let status = response.status();
+    let encrypted = response.headers().get(auth::VERSION_HEADER).and_then(|v| v.to_str().ok()) == Some("2");
+    let signature = response.headers().get(auth::RESPONSE_HEADER).and_then(|v| v.to_str().ok()).unwrap_or("").to_owned();
+    let mut bytes = Vec::new();
+    while let Some(chunk) = response.chunk().await.map_err(|error| error.to_string())? {
+        if bytes.len() + chunk.len() > 512 * 1024 + auth::TAG_BYTES { return Err("Agent response is too large".into()); }
+        bytes.extend_from_slice(&chunk);
+    }
+    if !credential.verify_response(&nonce, status.as_u16(), &bytes, &signature) { return Err("Agent response authentication failed".into()); }
+    if !encrypted { return Err("Agent response encryption is required".into()); }
+    let bytes = credential.open_response(&nonce, status.as_u16(), &bytes).map_err(|_| "Agent response decryption failed")?;
+    let body = String::from_utf8(bytes).map_err(|_| "Agent response is not UTF-8")?;
+    Ok((status, body))
+
 }
 
 async fn run(options: Options) -> Result<(), String> {
-    let (client, address) = resolve_agent_client(&options.config, options.explicit_port).await?;
-    let response = match &options.command {
+    let (client, address, health) = resolve_agent_client(&options.config, options.explicit_port).await?;
+    let credential = nexus_core::agent_auth::AgentCredential::read(&options.config.paths(), &health.data_root_id, &health.instance_id)
+        .map_err(|_| "Agent credential is unavailable or invalid; restart Nexus Agent".to_owned())?;
+    let expected_revision = if matches!(&options.command, Command::Config(action, _) if *action != ConfigAction::Status) {
+        let (status, body) = authenticated_response(&client, &credential, client.get(format!("http://{address}/v1/config"))).await?;
+        if !status.is_success() { return Err(format!("Configuration refresh failed: HTTP {status}")); }
+        let snapshot: ConfigResponse = serde_json::from_str(&body).map_err(|error| error.to_string())?;
+        if snapshot.revision.is_empty() { return Err("Agent did not provide a configuration revision".into()); }
+        Some(snapshot.revision)
+    } else { None };
+    let request = match &options.command {
         Command::Status => client
-            .get(format!("http://{address}/v1/state"))
-            .send()
-            .await
-            .map_err(|error| format!("agent is unavailable: {error}"))?,
+            .get(format!("http://{address}/v1/state")),
+        Command::HarnessStartup(None)=>client.get(format!("http://{address}/v1/harness/startup")),
+        Command::HarnessStartup(Some(id))=>client.post(format!("http://{address}/v1/harness/startup")).json(&serde_json::json!({"action":"cancel","operation_id":id})),
         Command::Harness(HarnessAction::Status) => client
-            .get(format!("http://{address}/v1/harness"))
-            .send()
-            .await
-            .map_err(|error| format!("agent is unavailable: {error}"))?,
+            .get(format!("http://{address}/v1/harness")),
         Command::Harness(action) => client
             .post(format!("http://{address}/v1/harness"))
-            .json(&HarnessCommand { action: *action })
-            .send()
-            .await
-            .map_err(|error| format!("agent is unavailable: {error}"))?,
+            .json(&HarnessCommand { action: *action }),
         Command::Profile(ProfileAction::List | ProfileAction::Status, _) => client
-            .get(format!("http://{address}/v1/profiles"))
-            .send()
-            .await
-            .map_err(|error| format!("agent is unavailable: {error}"))?,
+            .get(format!("http://{address}/v1/profiles")),
         Command::Profile(ProfileAction::Select, profile) => client
             .post(format!("http://{address}/v1/profiles"))
             .json(&ProfileCommand {
@@ -559,10 +606,7 @@ async fn run(options: Options) -> Result<(), String> {
                 profile: profile.clone(),
                 package: None,
             
-                target: None,})
-            .send()
-            .await
-            .map_err(|error| format!("agent is unavailable: {error}"))?,
+                target: None,}),
         Command::Profile(
             ProfileAction::PluginInventory
             | ProfileAction::PluginMove
@@ -570,8 +614,12 @@ async fn run(options: Options) -> Result<(), String> {
             | ProfileAction::PluginRemove
             | ProfileAction::PluginDisable
             | ProfileAction::PluginEnable
+            | ProfileAction::CompatibilityCheck
             | ProfileAction::OpenPath
             | ProfileAction::OpenTerminal
+            | ProfileAction::Delete
+            | ProfileAction::DeletedList
+            | ProfileAction::RestoreDeleted
             | ProfileAction::Create,
             _,
         ) => {
@@ -584,35 +632,20 @@ async fn run(options: Options) -> Result<(), String> {
                 profile: Some(profile.clone()),
                 package: Some(package.clone()),
             
-                target: None,})
-            .send()
-            .await
-            .map_err(|error| format!("agent is unavailable: {error}"))?,
+                target: None,}),
         Command::Recovery => client
-            .get(format!("http://{address}/v1/recovery"))
-            .send()
-            .await
-            .map_err(|error| format!("agent is unavailable: {error}"))?,
+            .get(format!("http://{address}/v1/recovery")),
         Command::Checkpoint(CheckpointAction::List, _, _) => client
-            .get(format!("http://{address}/v1/checkpoints"))
-            .send()
-            .await
-            .map_err(|error| format!("agent is unavailable: {error}"))?,
+            .get(format!("http://{address}/v1/checkpoints")),
         Command::Checkpoint(action, id, note) => client
             .post(format!("http://{address}/v1/checkpoints"))
             .json(&CheckpointCommand {
                 action: *action,
                 id: id.clone(),
                 note: note.clone(),
-            })
-            .send()
-            .await
-            .map_err(|error| format!("agent is unavailable: {error}"))?,
+            }),
         Command::Release(ReleaseAction::List | ReleaseAction::Current, _, _, _, _) => client
-            .get(format!("http://{address}/v1/releases"))
-            .send()
-            .await
-            .map_err(|error| format!("agent is unavailable: {error}"))?,
+            .get(format!("http://{address}/v1/releases")),
         Command::Release(action, id, version, source, note) => client
             .post(format!("http://{address}/v1/releases"))
             .json(&ReleaseCommand {
@@ -621,18 +654,14 @@ async fn run(options: Options) -> Result<(), String> {
                 version: version.clone(),
                 source: source.clone(),
                 note: note.clone(),
-            })
-            .send()
-            .await
-            .map_err(|error| format!("agent is unavailable: {error}"))?,
+                ..ReleaseCommand::default()
+            }),
         Command::Update(UpdateAction::Status, _, _, _, _, _) => client
-            .get(format!("http://{address}/v1/updates"))
-            .send()
-            .await
-            .map_err(|error| format!("agent is unavailable: {error}"))?,
+            .get(format!("http://{address}/v1/updates")),
         Command::Update(action, release_id, version, third, source, mode) => client
             .post(format!("http://{address}/v1/updates"))
             .json(&UpdateCommand {
+                offline_contents: None,
                 archive_path: None,
                 action: *action,
                 release_id: release_id.clone(),
@@ -661,33 +690,24 @@ async fn run(options: Options) -> Result<(), String> {
                 } else {
                     None
                 },
-            })
-            .send()
-            .await
-            .map_err(|error| format!("agent is unavailable: {error}"))?,
+            }),
         Command::Diagnostics(DiagnosticsAction::Status, _) => client
-            .get(format!("http://{address}/v1/diagnostics"))
-            .send()
-            .await
-            .map_err(|error| format!("agent is unavailable: {error}"))?,
+            .get(format!("http://{address}/v1/diagnostics")),
         Command::Diagnostics(action, note) => client
             .post(format!("http://{address}/v1/diagnostics"))
             .json(&DiagnosticsCommand {
                 action: *action,
                 note: note.clone(),
                 ..Default::default()
-            })
-            .send()
-            .await
-            .map_err(|error| format!("agent is unavailable: {error}"))?,
+            }),
         Command::Config(ConfigAction::Status, _) => client
-            .get(format!("http://{address}/v1/config"))
-            .send()
-            .await
-            .map_err(|error| format!("agent is unavailable: {error}"))?,
+            .get(format!("http://{address}/v1/config")),
         Command::Config(action, runtime) => client
             .post(format!("http://{address}/v1/config"))
             .json(&ConfigCommand {
+                external_harness_path: None,
+                patch_query: None,
+                expected_revision,
                 harness_preferences: None,
                 action: *action,
                 harness: None,
@@ -695,16 +715,9 @@ async fn run(options: Options) -> Result<(), String> {
                 runtime: runtime.clone(),
                 snapshots: None,
                 preserve_harness_readiness_url: false,
-            })
-            .send()
-            .await
-            .map_err(|error| format!("agent is unavailable: {error}"))?,
+            }),
     };
-    let status = response.status();
-    let body = response
-        .text()
-        .await
-        .map_err(|error| format!("failed to read agent response: {error}"))?;
+    let (status, body) = authenticated_response(&client, &credential, request).await?;
 
     if !status.is_success() {
         if let Ok(error) = serde_json::from_str::<ErrorResponse>(&body) {
@@ -716,6 +729,9 @@ async fn run(options: Options) -> Result<(), String> {
         return Err(format!("agent returned HTTP {status}: {body}"));
     }
 
+    if let Ok(value) = serde_json::from_str::<serde_json::Value>(&body) {
+        if value.get("request").is_some() { println!("{}", serde_json::to_string_pretty(&value).map_err(|e|e.to_string())?); return Ok(()); }
+    }
     match &options.command {
         Command::Status => {
             let state: StateResponse = serde_json::from_str(&body)
@@ -735,6 +751,7 @@ async fn run(options: Options) -> Result<(), String> {
                 );
             }
         }
+        Command::HarnessStartup(_) => { println!("{body}"); },
         Command::Harness(_) => {
             let harness: HarnessResponse = serde_json::from_str(&body)
                 .map_err(|error| format!("invalid agent response: {error}"))?;
@@ -1138,6 +1155,8 @@ Usage:
   nexusctl release list|current [--json] [--port PORT]
   nexusctl release register ID VERSION [--source TEXT] [--note TEXT] [--json] [--port PORT]
   nexusctl release promote ID [--json] [--port PORT]
+  nexusctl harness startup-status [--json] [--port PORT]
+  nexusctl harness cancel-start OPERATION_ID [--json] [--port PORT]
   nexusctl release rollback [--json] [--port PORT]
   nexusctl update status [--json] [--port PORT]
   nexusctl update install [ID VERSION] [--json] [--port PORT]
@@ -1160,6 +1179,25 @@ Queries and controls the loopback Nexus Agent API."#
 mod tests {
     use super::*;
     use std::{io::{Read, Write}, net::TcpListener, fs};
+
+    #[test]
+    fn cli_injection_matches_the_agent_receipt_contract() {
+        let paths = ["/v1/harness", "/v1/releases", "/v1/updates", "/v1/checkpoints", "/v1/profiles", "/v1/config"];
+        let actions = ["restart", "rollback", "switch", "offline_import", "restore", "delete", "restore_deleted", "status"];
+        let mut controlled = 0;
+        for path in paths { for action in actions {
+            let mut body = serde_json::json!({"action":action,"profile":"web"});
+            let required = nexus_protocol::request_receipt_kind(path, action).is_some();
+            let id = attach_receipt_id(path, &mut body, "0123456789abcdef0123456789abcdef");
+            assert_eq!(id.is_some(), required, "{path} {action}");
+            assert_eq!(body.get("request_id").and_then(|v| v.as_str()), id.as_deref());
+            controlled += usize::from(required);
+        } }
+        assert_eq!(controlled, 7);
+        for action in ["delete", "restore_deleted"] {
+            assert!(parse_args_from(NexusConfig::default(), false, ["profile", action, "web"].into_iter().map(std::ffi::OsString::from)).is_err());
+        }
+    }
 
     fn fixture(label: &str) -> (NexusConfig, TcpListener) {
         let root = env::temp_dir().join(format!("nexus-cli-{label}-{}", nexus_core::unix_time_nanos_for_update()));
@@ -1208,7 +1246,7 @@ mod tests {
         let root = data_root_identity(&paths).unwrap();
         paths.publish_agent_discovery(&AgentDiscoveryRecord { port, data_root_id: root.clone(), instance_id: "fixture".into(), pid: 1, updated_at_unix: 1 }).unwrap();
         let server = respond(listener, health(&root, "fixture"), true);
-        let (client, address) = resolve_agent_client(&config, false).await.unwrap();
+        let (client, address, _health) = resolve_agent_client(&config, false).await.unwrap();
         assert_eq!(address.port(), port);
         client.post(format!("http://{address}/v1/harness")).json(&serde_json::json!({"action":"stop"})).send().await.unwrap();
         server.join().unwrap();

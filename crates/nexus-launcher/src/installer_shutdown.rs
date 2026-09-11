@@ -1,6 +1,24 @@
 //! Installer-only shutdown. The payload runs from the installer's temporary
 //! directory, so it neither locks nor depends on the previous installed CLI.
 use std::{ffi::OsString, path::PathBuf};
+const INNER_BUDGET_SECS: u64 = 150;
+const OUTER_BUDGET_SECS: u64 = INNER_BUDGET_SECS + 30;
+
+/// Called only after the installer holds and verifies the installed process.
+/// No credentials are placed on the command line or returned to PowerShell.
+pub async fn authenticated_shutdown() -> Result<(), String> {
+    let root = std::env::var_os("NEXUS_INSTALL_AUTH_ROOT").ok_or("Missing installer data root")?;
+    let paths = nexus_core::NexusPaths::from_root(root.into());
+    let record = paths.read_agent_discovery().map_err(|e| e.to_string())?.ok_or("Missing Agent discovery")?;
+    let expected_pid: u32 = std::env::var("NEXUS_INSTALL_AUTH_PID").map_err(|e| e.to_string())?.parse().map_err(|_| "Invalid process id")?;
+    let instance = std::env::var("NEXUS_INSTALL_AUTH_INSTANCE").map_err(|e| e.to_string())?;
+    if record.pid != expected_pid || record.instance_id != instance { return Err("Agent changed during installer shutdown".into()); }
+    let client = nexus_launcher_core::AgentClient::new(record.port).map_err(|e| e.to_string())?
+        .with_credential_paths(paths)
+        .with_expected_identity(nexus_launcher_core::AgentIdentity { data_root_id: record.data_root_id, instance_id: record.instance_id });
+    let _: nexus_protocol::LifecycleAccepted = client.post_empty("/v1/shutdown").await.map_err(|e| e.to_string())?;
+    Ok(())
+}
 
 /// Use the OS parser compiled into the installer payload. Never compile C#
 /// in the customer's PowerShell process to obtain this Win32 entry point.
@@ -69,10 +87,11 @@ pub fn run(args: Vec<OsString>) -> Result<(), String> {
             ])
             .env("NEXUS_INSTALL_STOP_DIRECTORY", directory)
             .env("NEXUS_INSTALL_STOP_HELPER", std::env::current_exe().map_err(|error| error.to_string())?)
+            .env("NEXUS_INSTALL_STOP_BUDGET_MS", (INNER_BUDGET_SECS * 1000).to_string())
             .creation_flags(0x08000000) // CREATE_NO_WINDOW
             .spawn()
             .map_err(|error| format!("cannot run installer shutdown: {error}"))?;
-        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(60);
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(OUTER_BUDGET_SECS);
         let status = loop {
             if let Some(status) = child.try_wait().map_err(|error| error.to_string())? {
                 break status;
@@ -102,6 +121,85 @@ pub fn run(args: Vec<OsString>) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(windows)]
+    fn run_installer_functions(script: &str, helper: Option<&std::path::Path>) {
+        let source = include_str!("installer_shutdown.ps1");
+        let functions = source.split("\ntry {").next().unwrap();
+        let powershell = PathBuf::from(std::env::var_os("SystemRoot").unwrap())
+            .join("System32/WindowsPowerShell/v1.0/powershell.exe");
+        let mut command = std::process::Command::new(powershell);
+        command.args(["-NoProfile", "-NonInteractive", "-Command", &format!("{functions}\n{script}")]);
+        if let Some(helper) = helper {
+            command.env("NEXUS_INSTALL_STOP_HELPER", helper);
+        }
+        let output = command.output().unwrap();
+        assert!(output.status.success(), "stdout={} stderr={}",
+            String::from_utf8_lossy(&output.stdout), String::from_utf8_lossy(&output.stderr));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn msi_tmp_helper_executes_without_file_associations_and_preserves_errors() {
+        let directory = std::env::temp_dir().join(format!("nexus-msi-helper-test-{}-{}",
+            std::process::id(), std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()));
+        std::fs::create_dir(&directory).unwrap();
+        let helper = directory.join("MSI helper.tmp");
+        let cmd = PathBuf::from(std::env::var_os("SystemRoot").unwrap()).join("System32/cmd.exe");
+        std::fs::copy(cmd, &helper).unwrap();
+        run_installer_functions(r#"
+$result = Invoke-InstallerHelper '/d /c echo installer-parser-probe'
+if ($result.Trim() -cne 'installer-parser-probe') { throw 'Missing helper stdout' }
+$failure = $null
+try { $null = Invoke-InstallerHelper '/d /c echo original-helper-error 1>&2 & exit /b 7' }
+catch { $failure = $_.Exception.Message }
+if (-not $failure -or -not $failure.Contains('code 7') -or -not $failure.Contains('original-helper-error')) { throw 'Helper failure was not preserved' }
+"#, Some(&helper));
+        std::fs::remove_file(&helper).unwrap();
+        std::fs::remove_dir(&directory).unwrap();
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn installer_defers_only_the_exact_console_owner_entrypoint() {
+        run_installer_functions(r#"
+if (-not (Test-HarnessCommandOwner @('agent.exe', '--harness-command', 'node.exe'))) { throw 'Owner not recognized' }
+foreach ($arguments in @(
+    @('agent.exe', '--data-dir', 'C:\data', '--instance-id', 'id'),
+    @('agent.exe', '--data-dir', '--harness-command'),
+    @('agent.exe', '--harness-command'),
+    @('agent.exe', '--HARNESS-COMMAND', 'node.exe'),
+    @('agent.exe', '--signal-console', '123', '456')
+)) {
+    if (Test-HarnessCommandOwner $arguments) { throw 'Non-owner was incorrectly deferred' }
+}
+"#, None);
+    }
+    #[cfg(windows)]
+    #[test]
+    fn installer_helpers_have_per_call_and_shared_deadlines_and_are_reaped() {
+        assert!(OUTER_BUDGET_SECS >= INNER_BUDGET_SECS + 30);
+        let directory=std::env::temp_dir().join(format!("nexus-helper-budget-{}",nexus_core::unix_time_nanos_for_update()));
+        std::fs::create_dir(&directory).unwrap();
+        let helper=directory.join("budget-helper.exe");
+        std::fs::copy(PathBuf::from(std::env::var_os("SystemRoot").unwrap()).join("System32/cmd.exe"),&helper).unwrap();
+        run_installer_functions(r#"
+$failed = $false
+try { $null = Invoke-InstallerHelper '/d /c for /L %i in (0,0,1) do @rem hold' $env:NEXUS_INSTALL_STOP_HELPER 150 }
+catch { $failed = $_.Exception.Message.Contains('execution deadline') }
+if (-not $failed) { throw 'Helper did not time out' }
+# The executable cannot be removed while a timed-out helper still owns it.
+[IO.File]::Delete($env:NEXUS_INSTALL_STOP_HELPER)
+$script:InstallerBudgetMs = [int]$script:InstallerClock.ElapsedMilliseconds + 100
+if ((Remaining-InstallerMilliseconds 45000) -gt 100) { throw 'Per-call budget ignored overall budget' }
+[Threading.Thread]::Sleep(110)
+$failed = $false
+try { $null = Invoke-InstallerHelper '--build-identity' 'must-not-start.exe' 10000 }
+catch { $failed = $_.Exception.Message.Contains('overall deadline') }
+if (-not $failed) { throw 'Expired overall deadline launched another helper' }
+"#,Some(&helper));
+        std::fs::remove_dir(directory).unwrap();
+    }
 
     #[cfg(windows)]
     #[test]

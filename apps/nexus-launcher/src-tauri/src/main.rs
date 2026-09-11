@@ -18,19 +18,138 @@ use reqwest::Method;
 use serde::Deserialize;
 use serde_json::{json, Value};
 use tauri::{
-    menu::{Menu, MenuItem},
+    menu::{Menu, MenuItem, PredefinedMenuItem},
     tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
     AppHandle, Emitter, Manager, WindowEvent,
 };
+
+#[tauri::command]
+async fn choose_local_path(window: tauri::WebviewWindow, directory: bool, save: Option<bool>, archive: Option<bool>) -> Result<Option<String>, String> {
+    #[cfg(windows)]
+    {
+        let owner = window.hwnd().map_err(|error| error.to_string())?.0 as usize;
+        let (send, receive) = std::sync::mpsc::channel();
+        window.run_on_main_thread(move || {
+            let result = unsafe { choose_windows_path(owner, directory, save.unwrap_or(false), archive.unwrap_or(false)) };
+            let _ = send.send(result);
+        }).map_err(|error| error.to_string())?;
+        tauri::async_runtime::spawn_blocking(move || receive.recv().map_err(|error| error.to_string()))
+            .await.map_err(|error| error.to_string())??
+    }
+    #[cfg(not(windows))]
+    { let _ = (window, directory, save, archive); Err("Path selection is available in the Windows launcher".into()) }
+}
+
+#[cfg(windows)]
+fn folder_browse_info(owner: usize, display_name: &mut [u16; windows_sys::Win32::Foundation::MAX_PATH as usize]) -> windows_sys::Win32::UI::Shell::BROWSEINFOW {
+    use windows_sys::Win32::UI::Shell::*;
+    BROWSEINFOW { hwndOwner: owner as _, pszDisplayName: display_name.as_mut_ptr(),
+        ulFlags: BIF_RETURNONLYFSDIRS | BIF_NEWDIALOGSTYLE | BIF_EDITBOX, ..unsafe { std::mem::zeroed() } }
+}
+
+#[cfg(windows)]
+unsafe fn choose_windows_path(owner: usize, directory: bool, save: bool, archive: bool) -> Result<Option<String>, String> {
+    use windows_sys::Win32::{System::Com::CoTaskMemFree, UI::{Shell::*, Controls::Dialogs::*}};
+    let mut buffer = vec![0u16; 32768];
+    if directory {
+        let mut display_name = [0u16; windows_sys::Win32::Foundation::MAX_PATH as usize];
+        let info = folder_browse_info(owner, &mut display_name);
+        let selected = SHBrowseForFolderW(&info);
+        if selected.is_null() { return Ok(None); }
+        let ok = SHGetPathFromIDListEx(selected, buffer.as_mut_ptr(), buffer.len() as u32, 0) != 0;
+        CoTaskMemFree(selected.cast());
+        if !ok { return Err("The selected folder path could not be read".into()); }
+    } else {
+        let filter: Vec<u16> = "Nexus offline package (*.tar.gz)\0*.tar.gz\0\0".encode_utf16().collect();
+        let extension: Vec<u16> = "tar.gz\0".encode_utf16().collect();
+        if save && archive {
+            for (index, value) in "harness-export.tar.gz".encode_utf16().enumerate() { buffer[index] = value; }
+        }
+        let mut info = OPENFILENAMEW { lStructSize: std::mem::size_of::<OPENFILENAMEW>() as u32,
+            hwndOwner: owner as _, lpstrFile: buffer.as_mut_ptr(), nMaxFile: buffer.len() as u32,
+            lpstrFilter: if archive { filter.as_ptr() } else { std::ptr::null() },
+            lpstrDefExt: if archive { extension.as_ptr() } else { std::ptr::null() },
+            Flags: OFN_EXPLORER | OFN_PATHMUSTEXIST | OFN_NOCHANGEDIR
+                | if save { OFN_OVERWRITEPROMPT } else { OFN_FILEMUSTEXIST },
+            ..std::mem::zeroed() };
+        let selected = if save { GetSaveFileNameW(&mut info) } else { GetOpenFileNameW(&mut info) };
+        if selected == 0 {
+            let code = CommDlgExtendedError();
+            return if code == 0 { Ok(None) } else { Err(format!("File picker failed (Windows error {code:#x})")) };
+        }
+    }
+    let end = buffer.iter().position(|value| *value == 0).ok_or("The selected path exceeds the supported length")?;
+    let path = String::from_utf16(&buffer[..end]).map_err(|error| error.to_string())?;
+    Ok((!path.is_empty()).then_some(path))
+}
 
 mod native_i18n;
 use native_i18n::{text as native_text, NativeText};
 
 const START_WAIT_SECS: u64 = nexus_launcher_core::DEFAULT_START_WAIT_SECS;
+#[derive(Debug, serde::Serialize)]
+struct BridgeError {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    preflight: Option<Value>,
+    code: String,
+    message: String,
+    retryable: bool,
+    actions: Vec<String>,
+    status: Option<u16>,
+}
+impl From<String> for BridgeError {
+    fn from(message: String) -> Self {
+        Self { preflight: None, code: "launcher_error".into(), message, retryable: false, actions: vec![], status: None }
+    }
+}
+impl From<nexus_launcher_core::AgentClientError> for BridgeError {
+    fn from(error: nexus_launcher_core::AgentClientError) -> Self {
+        if let nexus_launcher_core::AgentClientError::Http { status, message, body } = error {
+            let document: Value = serde_json::from_slice(&body).unwrap_or(Value::Null);
+            let code = document.get("code").and_then(Value::as_str).unwrap_or("agent_http_error").to_owned();
+            let actions = match code.as_str() {
+                "config_revision_conflict" | "config_revision_required" => vec!["reload_config".into()],
+                "harness_not_configured" | "harness_configuration_error" => vec!["open_settings".into()],
+                "harness_start_paused" => vec!["open_recovery".into()],
+                _ => vec![],
+            };
+            return Self { preflight: document.get("preflight").cloned(), code, message: document.get("message").and_then(Value::as_str).unwrap_or(&message).to_owned(),
+                retryable: matches!(status.as_u16(), 408 | 429 | 502 | 503 | 504), actions, status: Some(status.as_u16()) };
+        }
+        let retryable = matches!(&error, nexus_launcher_core::AgentClientError::Transport(_));
+        Self { preflight: None, code: if retryable { "agent_transport_error" } else { "agent_protocol_error" }.into(), message: error.to_string(), retryable,
+            actions: vec!["check_agent".into()], status: None }
+    }
+}
 const STOP_WAIT_SECS: u64 = nexus_launcher_core::DEFAULT_STOP_WAIT_SECS;
 static NATIVE_NOTIFICATIONS_ENABLED: AtomicBool = AtomicBool::new(false);
 static MINIMIZE_NOTICE_SHOWN: AtomicBool = AtomicBool::new(false);
 static EXIT_IN_PROGRESS: AtomicBool = AtomicBool::new(false);
+static DIAGNOSTIC_EXPORT_ACTIVE: AtomicBool = AtomicBool::new(false);
+
+#[tauri::command]
+async fn export_startup_diagnostics(state: tauri::State<'_, AppState>, observed_error: Option<String>) -> Result<Value, String> {
+    if DIAGNOSTIC_EXPORT_ACTIVE.swap(true, Ordering::AcqRel) {
+        return Err("Diagnostic export is already in progress".into());
+    }
+    struct Guard;
+    impl Drop for Guard { fn drop(&mut self) { DIAGNOSTIC_EXPORT_ACTIVE.store(false, Ordering::Release); } }
+    let guard = Guard;
+    let paths = state.runtime.paths().clone();
+    let context = json!({"build":build_identity().ok(),"agent_startup_error":state.runtime.startup_error(),
+        "observed_agent_error":observed_error.map(|error| error.chars().take(4096).collect::<String>()),
+        "harness_startup_error":state.harness_startup_error.lock().ok().and_then(|value| value.clone()),
+        "data_root":paths.root,"collection":"Launcher only; Agent availability is not required"});
+    tauri::async_runtime::spawn_blocking(move || {
+        let _guard = guard;
+        let path = nexus_launcher_core::startup_diagnostics::export(&paths, context).map_err(|error| error.to_string())?;
+        #[cfg(windows)]
+        let reveal_error = Command::new("explorer.exe").arg(format!("/select,{}",path.display())).spawn().err().map(|error| error.to_string());
+        #[cfg(not(windows))]
+        let reveal_error = Some("Open the exported file path manually".to_owned());
+        Ok(json!({"export_path":path,"reveal_error":reveal_error,"source":"launcher"}))
+    }).await.map_err(|error| error.to_string())?
+}
 
 #[tauri::command]
 fn set_native_notifications(enabled: bool) {
@@ -52,10 +171,12 @@ const ALLOWED_ROUTES: &[&str] = &[
     "/v1/health",
     "/v1/state",
     "/v1/harness",
+    "/v1/harness/startup",
     "/v1/harness/ui",
     "/v1/harness/discover",
     "/v1/profiles",
     "/v1/recovery",
+    "/v1/recovery/records",
     "/v1/preflight",
     "/v1/checkpoints",
     "/v1/releases",
@@ -64,6 +185,8 @@ const ALLOWED_ROUTES: &[&str] = &[
     "/v1/runtime/plan",
     "/v1/updates",
     "/v1/diagnostics",
+    "/v1/requests",
+    "/v1/canary",
     "/v1/config",
     "/v1/maintenance",
     "/v1/lifecycle",
@@ -210,13 +333,13 @@ async fn proxy_request(
     method: String,
     path: String,
     body: Option<Value>,
-) -> Result<Value, String> {
+) -> Result<Value, BridgeError> {
     let method = method
         .parse::<Method>()
         .map_err(|_| "Only GET and POST are supported by the local Agent bridge".to_owned())?;
 
     if !is_allowed_route(&path) {
-        return Err(format!("Agent route is not allowed: {path}"));
+        return Err(format!("Agent route is not allowed: {path}").into());
     }
 
     if method == Method::POST && path == "/v1/harness" {
@@ -224,7 +347,7 @@ async fn proxy_request(
     }
     if path == "/v1/agent" {
         validate_native_agent_request(&method, body.as_ref())?;
-        return execute_agent_action(&state, body.as_ref()).await;
+        return execute_agent_action(&state, body.as_ref()).await.map_err(BridgeError::from);
     }
 
     // Opening the validated Harness URL is a native side effect. The URL and
@@ -233,7 +356,7 @@ async fn proxy_request(
     if path == "/v1/harness/ui" && method == Method::POST {
         let command = parse_command(body.as_ref())?;
         if command.action != "open" {
-            return Err("Only the open action is supported for Harness UI metadata".to_owned());
+            return Err("Only the open action is supported for Harness UI metadata".to_owned().into());
         }
         let health = state
             .runtime
@@ -247,7 +370,7 @@ async fn proxy_request(
         let info = client
             .get_json::<Value>("/v1/harness/ui")
             .await
-            .map_err(|error| error.to_string())?;
+            .map_err(BridgeError::from)?;
         let url = info
             .get("url")
             .and_then(Value::as_str)
@@ -275,7 +398,7 @@ async fn proxy_request(
     client
         .request_value(method, &path, body.as_ref())
         .await
-        .map_err(|error| error.to_string())
+        .map_err(BridgeError::from)
 }
 
 fn validate_native_agent_request(method: &Method, body: Option<&Value>) -> Result<(), String> {
@@ -383,6 +506,44 @@ fn open_loopback_url(raw: &str) -> Result<(), String> {
         .map_err(|error| format!("could not open Harness URL in the system browser: {error}"))
 }
 
+#[derive(Clone, Debug, Default, PartialEq, Eq, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct TrayControls {
+    state: String,
+    start: bool,
+    stop: bool,
+    web: bool,
+    terminal: bool,
+}
+static TRAY_CONTROLS: Mutex<Option<(TrayControls, std::time::Instant)>> = Mutex::new(None);
+// Hidden Chromium pages may deliver timers only once per minute. Keep a
+// bounded cache across those batches; explicit unavailable updates still win.
+const TRAY_FRESH_SECS: u64 = 180;
+fn tray_controls_at(value: Option<&(TrayControls, std::time::Instant)>, now: std::time::Instant) -> TrayControls {
+    value.filter(|(_, time)| now.saturating_duration_since(*time).as_secs() < TRAY_FRESH_SECS)
+        .map(|(controls, _)| controls.clone()).unwrap_or_default()
+}
+fn current_tray_controls() -> TrayControls {
+    TRAY_CONTROLS.lock().ok().map(|value| tray_controls_at(value.as_ref(), std::time::Instant::now())).unwrap_or_default()
+}
+#[tauri::command]
+fn update_tray(app: AppHandle, controls: TrayControls) -> Result<(), String> {
+    let changed = current_tray_controls() != controls;
+    *TRAY_CONTROLS.lock().map_err(|_| "Tray state lock unavailable")? =
+        Some((controls, std::time::Instant::now()));
+    #[cfg(desktop)]
+    if changed { rebuild_tray(&app)?; }
+    Ok(())
+}
+#[cfg(desktop)]
+fn rebuild_tray(app: &AppHandle) -> Result<(), String> {
+    if let Some(tray) = app.tray_by_id("main") {
+        tray.set_menu(Some(tray_menu(app, native_i18n::active_locale()).map_err(|e| e.to_string())?))
+            .map_err(|e| e.to_string())?;
+    }
+    Ok(())
+}
+
 fn show_window(app: &AppHandle) {
     if let Some(window) = app.get_webview_window("main") {
         let _ = window.show();
@@ -411,7 +572,21 @@ fn tray_menu(
         None::<&str>,
     )?;
     let stop_quit = MenuItem::with_id(app, "stop-quit", native_text(locale, NativeText::TrayStopQuit), true, None::<&str>)?;
-    Menu::with_items(app, &[&show, &quit, &stop_quit])
+    let controls = current_tray_controls();
+    let status_key = match controls.state.as_str() {
+        "running" => NativeText::HarnessRunning, "stopped" | "detached" => NativeText::HarnessStopped,
+        "starting" => NativeText::HarnessStarting, "stopping" => NativeText::HarnessStopping,
+        "failed" => NativeText::HarnessFailed, _ => NativeText::HarnessUnknown,
+    };
+    let status = MenuItem::with_id(app, "status", native_text(locale, status_key), false, None::<&str>)?;
+    let action = if controls.stop { "stop" } else { "start" };
+    let lifecycle = MenuItem::with_id(app, action, native_text(locale,
+        if controls.stop { NativeText::HarnessStop } else { NativeText::HarnessStart }),
+        controls.start || controls.stop, None::<&str>)?;
+    let web = MenuItem::with_id(app, "web", native_text(locale, NativeText::HarnessWeb), controls.web, None::<&str>)?;
+    let terminal = MenuItem::with_id(app, "terminal", native_text(locale, NativeText::DshTerminal), controls.terminal, None::<&str>)?;
+    let separator = PredefinedMenuItem::separator(app)?;
+    Menu::with_items(app, &[&status, &show, &lifecycle, &web, &terminal, &separator, &quit, &stop_quit])
 }
 
 #[cfg(desktop)]
@@ -429,6 +604,13 @@ fn setup_tray(app: &mut tauri::App) -> tauri::Result<()> {
         .show_menu_on_left_click(false)
         .on_menu_event(|app, event| match event.id.as_ref() {
             "show" => show_window(app),
+            action @ ("start" | "stop" | "web" | "terminal") => {
+                let controls = current_tray_controls();
+                let allowed = match action { "start" => controls.start, "stop" => controls.stop,
+                    "web" => controls.web, "terminal" => controls.terminal, _ => false };
+                if allowed { let _ = app.emit("nexus-tray-action", action); }
+                else { show_window(app); }
+            },
             "quit" => app.exit(0),
             "stop-quit" => {
                 if EXIT_IN_PROGRESS.swap(true, Ordering::AcqRel) { return; }
@@ -458,6 +640,18 @@ fn setup_tray(app: &mut tauri::App) -> tauri::Result<()> {
             }
         })
         .build(app)?;
+    let handle = app.handle().clone();
+    std::thread::spawn(move || {
+        loop {
+            std::thread::sleep(std::time::Duration::from_secs(3));
+            let expired = TRAY_CONTROLS.lock().ok().is_some_and(|mut value| {
+                if value.as_ref().is_some_and(|(_, time)| time.elapsed().as_secs() >= TRAY_FRESH_SECS) {
+                    *value = None; true
+                } else { false }
+            });
+            if expired { let _ = rebuild_tray(&handle); }
+        }
+    });
     Ok(())
 }
 
@@ -509,7 +703,38 @@ fn autostart_set(app: AppHandle, enabled: bool) -> Result<(), String> {
     } else {
         autostart.disable()
     };
-    result.map_err(|error| error.to_string())
+    result.map_err(|error| error.to_string())?;
+    #[cfg(windows)]
+    if enabled {
+        // auto-launch 0.5 writes an unquoted executable path. The default
+        // installation directory contains spaces, so bind the Run command to
+        // the exact executable instead of Windows' ambiguous path parsing.
+        if let Err(error) = quote_windows_autostart(&app.package_info().name) {
+            let rollback = autostart.disable();
+            return Err(format!("Cannot save login startup command: {error}; rollback: {rollback:?}"));
+        }
+    }
+    Ok(())
+}
+
+#[cfg(windows)]
+fn quote_windows_autostart(name: &str) -> std::io::Result<()> {
+    use std::os::windows::ffi::OsStrExt;
+    use windows_sys::Win32::System::Registry::{RegCloseKey, RegOpenKeyExW, RegSetValueExW, HKEY_CURRENT_USER, KEY_SET_VALUE, REG_SZ};
+    let wide = |value: &std::ffi::OsStr| value.encode_wide().chain(Some(0)).collect::<Vec<u16>>();
+    let key = wide(std::ffi::OsStr::new("Software\\Microsoft\\Windows\\CurrentVersion\\Run"));
+    let name = wide(std::ffi::OsStr::new(name));
+    let executable = std::env::current_exe()?;
+    let mut command = vec![34u16];
+    command.extend(executable.as_os_str().encode_wide());
+    command.extend([34, 0]);
+    let mut handle = std::ptr::null_mut();
+    let opened = unsafe { RegOpenKeyExW(HKEY_CURRENT_USER, key.as_ptr(), 0, KEY_SET_VALUE, &mut handle) };
+    if opened != 0 { return Err(std::io::Error::from_raw_os_error(opened as i32)); }
+    let written = unsafe { RegSetValueExW(handle, name.as_ptr(), 0, REG_SZ, command.as_ptr().cast(), (command.len() * 2) as u32) };
+    unsafe { RegCloseKey(handle); }
+    if written != 0 { return Err(std::io::Error::from_raw_os_error(written as i32)); }
+    Ok(())
 }
 
 #[cfg(not(desktop))]
@@ -536,11 +761,14 @@ fn main() {
             None,
         ))
         .invoke_handler(tauri::generate_handler![
+            choose_local_path,
             build_identity,
             startup_status,
             retry_startup,
             proxy_request,
             set_native_locale,
+            update_tray,
+            export_startup_diagnostics,
             set_native_notifications,
             autostart_status,
             autostart_set,
@@ -557,6 +785,15 @@ fn main() {
             app.manage(state);
             #[cfg(desktop)]
             {
+                #[cfg(windows)]
+                {
+                    use tauri_plugin_autostart::ManagerExt;
+                    if app.autolaunch().is_enabled().unwrap_or(false) {
+                        if let Err(error) = quote_windows_autostart(&app.package_info().name) {
+                            eprintln!("nexus-launcher: cannot repair login startup command: {error}");
+                        }
+                    }
+                }
                 setup_tray(app)?;
                 use tauri_plugin_global_shortcut::{
                     Code, GlobalShortcutExt, Modifiers, Shortcut, ShortcutState,
@@ -608,6 +845,26 @@ fn main() {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn tray_cache_tolerates_hidden_timer_batches_but_expires_or_accepts_unavailable() {
+        let now=std::time::Instant::now();
+        let controls=super::TrayControls { terminal:true, ..Default::default() };
+        let cached=(controls.clone(),now);
+        for seconds in [0,65,125,179] { assert_eq!(super::tray_controls_at(Some(&cached),now+std::time::Duration::from_secs(seconds)),controls); }
+        assert_eq!(super::tray_controls_at(Some(&cached),now+std::time::Duration::from_secs(180)),super::TrayControls::default());
+        assert_eq!(super::tray_controls_at(Some(&(super::TrayControls::default(),now)),now),super::TrayControls::default());
+    }
+    #[cfg(windows)]
+    #[test]
+    fn folder_picker_provides_the_shell_a_max_path_output_buffer() {
+        let mut display_name = [0u16; windows_sys::Win32::Foundation::MAX_PATH as usize];
+        let info = super::folder_browse_info(0, &mut display_name);
+        assert_eq!(info.pszDisplayName, display_name.as_mut_ptr());
+        // The shell may write all MAX_PATH units, including the terminator.
+        unsafe { for index in 0..display_name.len() { *info.pszDisplayName.add(index) = if index + 1 == display_name.len() { 0 } else { b'x' as u16 }; } }
+        assert_eq!(display_name[display_name.len() - 2], b'x' as u16);
+        assert_eq!(display_name[display_name.len() - 1], 0);
+    }
     use super::*;
 
     #[test]
@@ -618,7 +875,11 @@ mod tests {
         std::fs::create_dir_all(&root).unwrap();
         let program = root.join("fixture-agent.exe");
         std::fs::write(&program, "fixture; never executed").unwrap();
-        let runtime = Arc::new(AgentRuntime::new(NexusConfig { data_dir: Some(root.clone()), port: listener.local_addr().unwrap().port() }, Some(program)).unwrap());
+        let build_id = option_env!("NEXUS_BUILD_ID").unwrap_or("native-bootstrap-fixture");
+        std::fs::write(root.join("release-identity.json"), json!({"schemaVersion":1,"buildId":build_id}).to_string()).unwrap();
+        let runtime = Arc::new(AgentRuntime::new(NexusConfig { data_dir: Some(root.clone()), port: listener.local_addr().unwrap().port() }, Some(program.clone())).unwrap());
+        let paths = nexus_core::NexusPaths::from_root(root.clone()); paths.ensure_directories().unwrap();
+        let credential = nexus_core::agent_auth::AgentCredential::publish(&paths,"fixture").unwrap();
         let identity = runtime.data_root_id().to_owned();
         let state = AppState { runtime, startup_attempted: Arc::new(AtomicBool::new(true)), desired_running: Arc::new(AtomicBool::new(true)), harness_startup_error: Arc::new(Mutex::new(None)) };
         let (reached_tx, reached_rx) = std::sync::mpsc::channel();
@@ -627,11 +888,33 @@ mod tests {
             for route in ["GET /v1/health", "GET /v1/recovery", "GET /v1/config", "POST /v1/harness"] {
                 let (mut stream, _) = listener.accept().unwrap();
                 stream.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
-                let mut bytes = [0u8; 8192];
-                let length = stream.read(&mut bytes).unwrap();
-                assert!(String::from_utf8_lossy(&bytes[..length]).starts_with(route));
+                // Read the whole framed request; a TCP read can split headers
+                // and encrypted body at any byte boundary.
+                let mut bytes = Vec::new(); let mut chunk = [0u8; 8192];
+                let boundary = loop {
+                    let length = stream.read(&mut chunk).unwrap(); assert_ne!(length,0);
+                    bytes.extend_from_slice(&chunk[..length]); assert!(bytes.len()<=64*1024);
+                    if let Some(index)=bytes.windows(4).position(|v|v==b"\r\n\r\n") {break index+4;}
+                };
+                let headers = String::from_utf8(bytes[..boundary].to_vec()).unwrap();
+                assert!(headers.starts_with(route));
+                let header = |name:&str| headers.lines().find_map(|line|line.split_once(':').filter(|(key,_)|key.eq_ignore_ascii_case(name)).map(|(_,value)|value.trim()));
+                let length:usize=header("content-length").unwrap_or("0").parse().unwrap(); assert!(length<=64*1024);
+                while bytes.len()<boundary+length {let count=stream.read(&mut chunk).unwrap();assert_ne!(count,0);bytes.extend_from_slice(&chunk[..count]);}
+                let nonce = if route.ends_with("health") { None } else {
+                    use nexus_core::agent_auth as auth;
+                    assert_eq!(header(auth::VERSION_HEADER),Some("2"));
+                    assert_eq!(header("x-nexus-data-root-id"),Some(identity.as_str()));
+                    assert_eq!(header("x-nexus-instance-id"),Some("fixture"));
+                    let nonce=header(auth::NONCE_HEADER).unwrap(); let time=header(auth::TIME_HEADER).unwrap();
+                    let (method,path)=route.split_once(' ').unwrap(); let body=&bytes[boundary..boundary+length];
+                    assert!(credential.verify_request(method,path,nonce,time,body,header(auth::SIGNATURE_HEADER).unwrap()));
+                    let plaintext=credential.open_request(method,path,nonce,time,body).unwrap();
+                    if method=="POST" {assert_eq!(serde_json::from_slice::<Value>(&plaintext).unwrap(),json!({"action":"start"}));} else {assert!(plaintext.is_empty());}
+                    Some(nonce)
+                };
                 let (status, body) = if route.ends_with("health") {
-                    ("200 OK", json!({"api_version":"v1","service":"nexus-agent","status":"ok","data_root_id":identity,"instance_id":"fixture"}).to_string())
+                    ("200 OK", json!({"api_version":"v1","service":"nexus-agent","status":"ok","data_root_id":identity,"instance_id":"fixture","build_id":build_id,"binary_path":program,"auth_version":2,"harness_config_wire_version":2}).to_string())
                 } else if route.ends_with("recovery") {
                     ("200 OK", json!({"api_version":"v1","paused":false}).to_string())
                 } else if route.ends_with("config") {
@@ -641,7 +924,16 @@ mod tests {
                     release_rx.recv_timeout(Duration::from_secs(10)).unwrap();
                     ("500 Internal Server Error", json!({"api_version":"v1","code":"fixture","message":"Node entry missing"}).to_string())
                 };
-                write!(stream, "HTTP/1.1 {status}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len()).unwrap();
+                if let Some(nonce)=nonce {
+                    use nexus_core::agent_auth as auth;
+                    let code=status.split_whitespace().next().unwrap().parse().unwrap();
+                    let ciphertext=credential.seal_response(nonce,code,body.as_bytes()).unwrap();
+                    let signature=credential.response_signature(nonce,code,&ciphertext);
+                    write!(stream,"HTTP/1.1 {status}\r\nContent-Type: application/json\r\nContent-Length: {}\r\n{}: 2\r\n{}: {signature}\r\nConnection: close\r\n\r\n",ciphertext.len(),auth::VERSION_HEADER,auth::RESPONSE_HEADER).unwrap();
+                    stream.write_all(&ciphertext).unwrap();
+                } else {
+                    write!(stream, "HTTP/1.1 {status}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len()).unwrap();
+                }
             }
         });
         let begin = Instant::now();

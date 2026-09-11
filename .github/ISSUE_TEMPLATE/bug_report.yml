@@ -1,0 +1,28 @@
+name: 故障报告 / Bug report
+description: 报告可以复现的 Nexus 故障，请勿上传密钥或未经检查的完整日志。
+body:
+  - type: input
+    id: build
+    attributes:
+      label: Nexus 版本与构建编号 / Version and build ID
+      description: 在应用或安装包文件名中查看，不能仅填写“最新版”。
+    validations:
+      required: true
+  - type: textarea
+    id: environment
+    attributes:
+      label: 环境 / Environment
+      description: Windows 版本、Harness 版本、受管或外部目录、相关 profile；不要填写密钥。
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: 操作、预期结果与实际结果 / Steps, expected and actual behavior
+    validations:
+      required: true
+  - type: textarea
+    id: evidence
+    attributes:
+      label: 脱敏错误与证据 / Redacted evidence
+      description: 保留错误码和相关原始错误；提交前检查路径、令牌和私人内容。安全问题请参阅 SECURITY.md。

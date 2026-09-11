@@ -18,10 +18,15 @@ use nexus_protocol::{HarnessLaunchMode, HarnessRuntimeInfo, HarnessState};
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
     net::TcpStream,
-    process::{Child, Command},
+    process::Command,
     sync::{oneshot, Mutex, OwnedMutexGuard},
     time::{sleep, timeout},
 };
+
+#[cfg(windows)]
+use crate::windows_harness::Child;
+#[cfg(not(windows))]
+use tokio::process::Child;
 
 pub const DEFAULT_GRACEFUL_STOP_SECS: u64 = 5;
 pub const DEFAULT_READINESS_TIMEOUT_SECS: u64 = 30;
@@ -33,6 +38,11 @@ const UNATTACHED_RECOVERY_CAP: Duration = Duration::from_secs(1);
 /// Registered slot paths are selections, not pins to an old installation.
 /// Keep custom commands outside the release store unchanged. Only executable,
 /// Node entry and cwd are paths here; never rewrite arbitrary user arguments.
+pub(crate) fn normalize_selected_launch(spec: &mut HarnessLaunchSpec, paths: &NexusPaths, releases: &ReleaseStore) -> io::Result<()> {
+    if nexus_core::ConfigStore::new(paths.clone()).load()?.external_harness.is_some() { return Ok(()); }
+    normalize_managed_launch(spec,releases)
+}
+
 pub(crate) fn normalize_managed_launch(
     spec: &mut HarnessLaunchSpec,
     releases: &ReleaseStore,
@@ -88,6 +98,9 @@ pub(crate) struct HarnessLifecycleGuard {
 #[derive(Debug)]
 pub enum HarnessSupervisorError {
     NotConfigured,
+    Cancelled,
+    Busy,
+    Preflight(serde_json::Value),
     RecoveryPaused,
     AlreadyRunning,
     Unattached,
@@ -102,6 +115,9 @@ pub enum HarnessSupervisorError {
 impl fmt::Display for HarnessSupervisorError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            Self::Cancelled => formatter.write_str("Harness startup was cancelled; no previous instance is restarted automatically"),
+            Self::Busy => formatter.write_str("A lifecycle operation is already in progress; retry after it finishes"),
+            Self::Preflight(_) => formatter.write_str("Resolve the blocking startup checks before starting Harness"),
             Self::NotConfigured => write!(
                 formatter,
                 "Harness is not configured; set harness.program in Nexus config.json or {HARNESS_PROGRAM_ENV}"
@@ -127,6 +143,10 @@ const HARNESS_PROGRAM_ENV: &str = "NEXUS_HARNESS_PROGRAM";
 
 struct SupervisorInner {
     child: Option<Child>,
+    // In-memory evidence only: persisted Failed metadata is not proof that
+    // this Agent ever spawned a child. Retained across child handoff/reaping.
+    spawned_launch: bool,
+    spawned_preferences: Option<nexus_protocol::HarnessPreferencesPayload>,
     #[cfg(windows)]
     job: Option<crate::dsh::WindowsJob>,
     runtime: HarnessRuntimeInfo,
@@ -142,6 +162,8 @@ struct SupervisorInner {
     readiness_owner: Option<ReadinessOwner>,
     attached_readiness: Option<AttachedReadinessState>,
     unattached_monitor_started: bool,
+    healthy_candidate: Option<nexus_core::HealthyReleaseEvidence>,
+    verified_health: Option<(String, u64)>,
 }
 
 pub(crate) fn preflight_readiness_endpoint(spec: &HarnessLaunchSpec) -> Result<Option<(String, u16)>, HarnessSupervisorError> {
@@ -154,25 +176,15 @@ struct SpawnedHarness {
     job: crate::dsh::WindowsJob,
 }
 
-async fn spawn_owned_harness(mut command: Command) -> io::Result<SpawnedHarness> {
+async fn spawn_owned_harness(command: Command, logs: Option<(&fs::File, &fs::File)>) -> io::Result<SpawnedHarness> {
     #[cfg(windows)]
     {
-        // No Harness instruction runs until the whole future tree is owned.
         let job = crate::dsh::WindowsJob::new()?;
-        command.creation_flags(windows_sys::Win32::System::Threading::CREATE_SUSPENDED
-            | windows_sys::Win32::System::Threading::CREATE_NO_WINDOW);
-        let mut child = command.spawn()?;
-        if let Err(error) = job.assign_and_resume(&child) {
-            // Before assignment the only process is the suspended direct child;
-            // after assignment the Job also covers any resumed descendants.
-            let cleanup = child.kill().await;
-            drop(job);
-            return Err(io::Error::new(error.kind(), format!("cannot own Harness process tree: {error}; direct child cleanup: {cleanup:?}")));
-        }
+        let child = crate::windows_harness::spawn(command.as_std(), logs, &job)?;
         Ok(SpawnedHarness { child, job })
     }
     #[cfg(not(windows))]
-    { command.spawn().map(|child| SpawnedHarness { child }) }
+    { let _ = logs; let mut command = command; command.spawn().map(|child| SpawnedHarness { child }) }
 }
 
 #[cfg(windows)]
@@ -253,6 +265,12 @@ enum StartOwnershipSignal {
     },
 }
 
+struct StartupOperation {
+    id: String,
+    phase: &'static str,
+    token: nexus_core::CancellationToken,
+}
+
 #[derive(Clone)]
 pub struct HarnessSupervisor {
     paths: NexusPaths,
@@ -261,6 +279,7 @@ pub struct HarnessSupervisor {
     releases: ReleaseStore,
     inner: Arc<Mutex<SupervisorInner>>,
     lifecycle: Arc<Mutex<()>>,
+    startup_operation: Arc<Mutex<Option<StartupOperation>>>,
     #[cfg(test)]
     lifecycle_wait_observer: Arc<Mutex<Option<oneshot::Sender<()>>>>,
     #[cfg(test)]
@@ -269,6 +288,8 @@ pub struct HarnessSupervisor {
     harness_persist_gate: Arc<Mutex<Option<HarnessPersistGate>>>,
     #[cfg(test)]
     stop_wait_failure: Arc<std::sync::atomic::AtomicBool>,
+    #[cfg(test)]
+    stop_wait_gate: Arc<Mutex<Option<StartPersistGate>>>,
     graceful_wait: Duration,
 }
 
@@ -315,6 +336,8 @@ impl HarnessSupervisor {
             releases,
             inner: Arc::new(Mutex::new(SupervisorInner {
                 child: None,
+                spawned_launch: false,
+                spawned_preferences: None,
                 #[cfg(windows)]
                 job: None,
                 runtime,
@@ -330,8 +353,11 @@ impl HarnessSupervisor {
                 readiness_owner: None,
                 attached_readiness: None,
                 unattached_monitor_started: false,
+                healthy_candidate: None,
+                verified_health: None,
             })),
             lifecycle: Arc::new(Mutex::new(())),
+            startup_operation: Arc::new(Mutex::new(None)),
             #[cfg(test)]
             lifecycle_wait_observer: Arc::new(Mutex::new(None)),
             #[cfg(test)]
@@ -340,6 +366,8 @@ impl HarnessSupervisor {
             harness_persist_gate: Arc::new(Mutex::new(None)),
             #[cfg(test)]
             stop_wait_failure: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            #[cfg(test)]
+            stop_wait_gate: Arc::new(Mutex::new(None)),
             graceful_wait,
         })
     }
@@ -416,16 +444,16 @@ impl HarnessSupervisor {
     #[cfg(test)]
     pub(crate) async fn inject_nonquiescent_failed_state(
         &self,
-        child: Option<Child>,
+        child: Option<tokio::process::Child>,
         launch_pending: bool,
     ) -> io::Result<()> {
         let mut inner = self.inner.lock().await;
-        let pid = child.as_ref().and_then(Child::id);
+        let pid = child.as_ref().and_then(tokio::process::Child::id);
         let mut session = inner.log_session.clone();
         session.launch_pending = launch_pending;
         self.log_sessions.write(&session)?;
         inner.log_session = session;
-        inner.child = child;
+        inner.child = child.map(Into::into);
         inner.stop_pending = false;
         inner.start_ownership_pending = false;
         inner.recovery = None;
@@ -505,6 +533,7 @@ impl HarnessSupervisor {
             || inner.log_session.run_id != run_id
             || inner.log_session.generation != generation
             || inner.log_session.healthy_snapshot_attempted
+            || inner.verified_health.as_ref() != Some(&(run_id.to_owned(), generation))
         {
             return Ok(false);
         }
@@ -575,8 +604,9 @@ impl HarnessSupervisor {
                     let preferences = nexus_core::load_harness_preferences(&self.paths)?;
                     let profile = nexus_core::ProfileStore::new(self.paths.clone()).load()?.active_profile;
                     let home = crate::dsh::resolve_dsh_home_for_paths(&self.paths)?;
-                    normalize_managed_launch(&mut spec, &self.releases)?;
-                    let root = self.releases.load()?.current_release.as_deref().map(|id| self.releases.release_root(id)).transpose()?;
+                    normalize_selected_launch(&mut spec, &self.paths, &self.releases)?;
+                    let root = if let Some(source)=nexus_core::ConfigStore::new(self.paths.clone()).load()?.external_harness {Some(source.root)} else {self.releases.load()?.current_release.as_deref().map(|id|self.releases.release_root(id)).transpose()?};
+                    crate::runtime_patches::check_failures(&self.paths, &preferences)?;
                     crate::preference_capabilities::validate_launch(&spec, &preferences, root.as_deref())?;
                     let capabilities = crate::preference_capabilities::resolve(root.as_deref(), &home, &profile, &preferences)?;
                     nexus_core::apply_harness_preferences(&mut spec, &preferences, &capabilities);
@@ -761,21 +791,57 @@ impl HarnessSupervisor {
         profile: &str,
         _lifecycle: &HarnessLifecycleGuard,
     ) -> Result<HarnessRuntimeInfo, HarnessSupervisorError> {
-        self.start_with_profile_inner(profile).await
+        self.start_with_profile_inner(profile,None).await
     }
 
+    pub(crate) async fn begin_startup(&self) -> Result<(), HarnessSupervisorError> {
+        let id=nexus_core::agent_auth::random_hex().map_err(HarnessSupervisorError::Persistence)?;
+        *self.startup_operation.lock().await=Some(StartupOperation{id,phase:"checking",token:Default::default()});
+        Ok(())
+    }
+    pub(crate) async fn startup_status(&self) -> serde_json::Value {
+        let operation=self.startup_operation.lock().await;
+        match operation.as_ref() {
+            Some(op)=>serde_json::json!({"operation_id":op.id,"phase":op.phase,"cancellable":matches!(op.phase,"checking"|"compatibility"),"cancel_requested":op.token.is_cancelled()}),
+            None=>serde_json::json!({"phase":"idle","cancellable":false}),
+        }
+    }
+    pub(crate) async fn cancel_startup(&self,id:&str)->bool {
+        let operation=self.startup_operation.lock().await;
+        if let Some(op)=operation.as_ref().filter(|op|op.id==id&&matches!(op.phase,"checking"|"compatibility")) {op.token.cancel();true} else {false}
+    }
+    async fn startup_phase(&self,phase:&'static str)->Result<nexus_core::CancellationToken,HarnessSupervisorError> {
+        let mut operation=self.startup_operation.lock().await;
+        if let Some(op)=operation.as_mut().filter(|op|matches!(op.phase,"checking"|"compatibility")) {
+            if op.token.is_cancelled(){return Err(HarnessSupervisorError::Cancelled);}
+            op.phase=phase;
+            return Ok(op.token.clone());
+        }
+        Ok(Default::default())
+    }
+    pub(crate) async fn finish_startup(&self,success:bool,cancelled:bool) {
+        if let Some(op)=self.startup_operation.lock().await.as_mut(){op.phase=if success{"submitted"}else if cancelled{"cancelled"}else{"failed"};}
+    }
+    pub(crate) async fn start_prepared(&self,profile:&str,lifecycle:&HarnessLifecycleGuard,prepared:crate::preflight::PreparedStart,restart:bool)->Result<HarnessRuntimeInfo,HarnessSupervisorError>{
+        prepared.recheck(&self.paths,profile).map_err(HarnessSupervisorError::Configuration)?;
+        self.startup_phase("checking").await?;
+        if restart {self.stop_locked(lifecycle).await?;}
+        self.start_with_profile_inner(profile,Some(prepared)).await
+    }
     async fn start_with_profile_inner(
         &self,
         profile: &str,
+        prepared: Option<crate::preflight::PreparedStart>,
     ) -> Result<HarnessRuntimeInfo, HarnessSupervisorError> {
         crate::recovery_mode::ensure_start_allowed(&self.paths)?;
         validate_profile_name(profile)
             .map_err(|error| HarnessSupervisorError::InvalidProfile(error.to_string()))?;
+        let health_config_revision = nexus_core::ConfigStore::new(self.paths.clone()).snapshot().ok().map(|snapshot| snapshot.revision);
         let mut spec = load_harness_launch_spec(&self.paths)
             .map_err(HarnessSupervisorError::Configuration)?
             .filter(|spec| !spec.program.as_os_str().is_empty())
             .ok_or(HarnessSupervisorError::NotConfigured)?;
-        normalize_managed_launch(&mut spec, &self.releases)
+        normalize_selected_launch(&mut spec, &self.paths, &self.releases)
             .map_err(HarnessSupervisorError::Configuration)?;
         let preferences = nexus_core::load_harness_preferences(&self.paths)
             .map_err(HarnessSupervisorError::Configuration)?;
@@ -787,14 +853,13 @@ impl HarnessSupervisor {
             .map_err(HarnessSupervisorError::Configuration)?;
         let selected_home = crate::dsh::resolve_dsh_home_for_paths(&self.paths)
             .map_err(HarnessSupervisorError::Configuration)?;
-        let release_catalog = self
-            .releases
-            .load()
-            .map_err(HarnessSupervisorError::Configuration)?;
-        let release_id = release_catalog.current_release.as_deref();
-        let release_root = release_id
-            .map(|id| self.releases.release_root(id))
-            .transpose()
+        let source=if let Some(prepared)=&prepared {
+            prepared.recheck(&self.paths,profile).map_err(HarnessSupervisorError::Configuration)?;
+            crate::source_context::SourceContext{root:prepared.source.root.clone(),release_id:prepared.source.release_id.clone(),external:prepared.source.external}
+        }else{crate::source_context::resolve_async(&self.paths,&self.releases).await.map_err(HarnessSupervisorError::Configuration)?};
+        let release_id=source.release_id.as_deref();
+        let release_root=source.root;
+        crate::runtime_patches::validate_for_paths(&self.paths, &preferences)
             .map_err(HarnessSupervisorError::Configuration)?;
         crate::preference_capabilities::validate_launch(&spec, &preferences, release_root.as_deref())
             .map_err(HarnessSupervisorError::Configuration)?;
@@ -802,6 +867,7 @@ impl HarnessSupervisor {
             .map_err(HarnessSupervisorError::Configuration)?;
         // The lifecycle owner remains held while the isolated check runs, but
         // never hold `inner` across the child-process probe.
+        let cancellation = self.startup_phase("compatibility").await?;
         let mut compatible_profile = None;
         if spec.mode == HarnessLaunchMode::Node {
             if let (Some(id), Some(root)) = (release_id, release_root.as_deref()) {
@@ -823,16 +889,24 @@ impl HarnessSupervisor {
                     }
                     let home = selected_home.clone();
                     compatible_profile = crate::compatibility::prepare(&self.paths, &home, profile, id, root,
-                        &spec.program, false, &nexus_core::CancellationToken::default()).await
-                        .map_err(HarnessSupervisorError::Configuration)?.map(|report| report.effective_profile);
+                        &spec.program, false, &cancellation).await
+                        .map_err(|e|if cancellation.is_cancelled()&&e.kind()==io::ErrorKind::Interrupted {HarnessSupervisorError::Cancelled}else{HarnessSupervisorError::Configuration(e)})?.map(|report| report.effective_profile);
                 }
             }
         }
+        if source.external && spec.mode==HarnessLaunchMode::Node {
+            let id=crate::source_context::compatibility_id(&self.paths,&self.releases).map_err(HarnessSupervisorError::Configuration)?.expect("external identity");
+            compatible_profile=crate::compatibility::prepare(&self.paths,&selected_home,profile,&id,release_root.as_deref().expect("external root"),&spec.program,false,&cancellation).await.map_err(|e|if cancellation.is_cancelled()&&e.kind()==io::ErrorKind::Interrupted {HarnessSupervisorError::Cancelled}else{HarnessSupervisorError::Configuration(e)})?.map(|report|report.effective_profile);
+        }
+        if let Some(prepared)=&prepared {prepared.recheck(&self.paths,profile).map_err(HarnessSupervisorError::Configuration)?;}
         let profile = compatible_profile.as_deref().unwrap_or(profile);
         let capabilities = crate::preference_capabilities::resolve(release_root.as_deref(), &selected_home, profile, &preferences)
             .map_err(HarnessSupervisorError::Configuration)?;
+        // A port preference may synthesize a TCP target; it is not a user's
+        // explicit readiness contract and must still receive owned Web health checks.
+        let configured_spec = spec.clone();
         nexus_core::apply_harness_preferences(&mut spec, &preferences, &capabilities);
-        let readiness = readiness_config(&spec)?;
+        let mut readiness = readiness_config(&spec)?;
         let program = spec
             .render_path_for_context(&spec.program, profile, release_id, release_root.as_deref())
             .map_err(HarnessSupervisorError::Configuration)?;
@@ -847,10 +921,27 @@ impl HarnessSupervisor {
             })
             .transpose()
             .map_err(HarnessSupervisorError::Configuration)?;
+        if automatic_web_readiness_supported(&configured_spec, release_root.as_deref(), &selected_home, profile, &arguments) {
+            readiness = Some(ReadinessConfig {
+                target: ReadinessTarget { host: "127.0.0.1".into(), port: 0, path: "/".into(), tcp: true, token_required: true, owned_web: true },
+                timeout: Duration::from_secs(spec.readiness_timeout_secs.unwrap_or(DEFAULT_READINESS_TIMEOUT_SECS)),
+            });
+        }
+        let healthy_candidate = if readiness.as_ref().is_some_and(|config| config.target.token_required) {
+            let entry = if spec.mode == HarnessLaunchMode::Node { arguments.first().map(PathBuf::from) } else { Some(program.clone()) };
+            entry.and_then(|entry| {
+                let entry = if entry.is_relative() { working_dir.as_deref().unwrap_or(Path::new(".")).join(entry) } else { entry };
+                let revision = nexus_core::ConfigStore::new(self.paths.clone()).snapshot().ok()?.revision;
+                if health_config_revision.as_ref() != Some(&revision) { return None; }
+                self.releases.healthy_launch_candidate(release_id?, &entry, profile, revision).ok()
+            })
+        } else { None };
         self.paths
             .ensure_directories()
             .map_err(HarnessSupervisorError::Configuration)?;
 
+        // Atomically close cancellation before committing process ownership.
+        self.startup_phase("spawning").await?;
         let (generation, owner_epoch, runtime) = {
             let mut inner = self.inner.lock().await;
             if inner.stop_pending
@@ -907,9 +998,20 @@ impl HarnessSupervisor {
                 }
             }
             let generation = inner.generation.wrapping_add(1).max(1);
-            let (session, stdout, stderr) = self
+            let (mut session, stdout, stderr) = self
                 .prepare_log_session(&inner, generation)
                 .map_err(HarnessSupervisorError::Persistence)?;
+            // Only claim the revision if it remained unchanged throughout
+            // launch-input resolution. Mixed/concurrently edited inputs are
+            // explicitly unknown, rather than attributed to a newer config.
+            let current_revision = nexus_core::ConfigStore::new(self.paths.clone()).snapshot().ok().map(|s| s.revision);
+            session.context = Some(nexus_core::OperationContext {
+                build_id: option_env!("NEXUS_BUILD_ID").map(str::to_owned),
+                version: Some(env!("CARGO_PKG_VERSION").into()),
+                profile: Some(profile.into()),
+                config_revision: health_config_revision.clone().filter(|revision| current_revision.as_ref() == Some(revision)),
+                run_id: Some(session.run_id.clone()),
+            });
             let inputs = crate::launch_inputs::describe(profile, &selected_home, &program, working_dir.as_deref(),
                 release_root.as_deref(), &preferences, crate::launch_inputs::environment_override(), &arguments);
             if crate::launch_inputs::record(&self.paths, inputs, &session).is_err() {
@@ -924,7 +1026,13 @@ impl HarnessSupervisor {
                 .write(&session)
                 .map_err(HarnessSupervisorError::Persistence)?;
             inner.generation = generation;
+            inner.spawned_launch = false;
+            inner.spawned_preferences = None;
             inner.log_session = session;
+            inner.healthy_candidate = healthy_candidate.map(|mut candidate| {
+                candidate.run_id = inner.log_session.run_id.clone(); candidate.generation = generation; candidate
+            });
+            inner.verified_health = None;
             let now = unix_time_seconds();
             inner.runtime = HarnessRuntimeInfo {
                 state: HarnessState::Starting,
@@ -969,16 +1077,26 @@ impl HarnessSupervisor {
             command.envs(nexus_core::harness_preferences_environment(&preferences, &capabilities));
             command.env("DSH_HOME", &selected_home);
             command
-                .args(&arguments)
+                .args(arguments.iter().enumerate().map(|(index, argument)| {
+                    if index == 0 && spec.mode == HarnessLaunchMode::Node {
+                        nexus_core::node_script_argument(Path::new(argument))
+                    } else {
+                        std::ffi::OsString::from(argument)
+                    }
+                }))
                 .kill_on_drop(true)
-                .stdin(Stdio::null())
-                .stdout(Stdio::from(stdout))
-                .stderr(Stdio::from(stderr));
+                .stdin(Stdio::null());
+            #[cfg(not(windows))]
+            command.stdout(Stdio::from(stdout)).stderr(Stdio::from(stderr));
             if let Some(working_dir) = &working_dir {
                 command.current_dir(working_dir);
             }
 
-            let spawned = match spawn_owned_harness(command).await {
+            #[cfg(windows)]
+            let spawn_result = spawn_owned_harness(command, Some((&stdout, &stderr))).await;
+            #[cfg(not(windows))]
+            let spawn_result = spawn_owned_harness(command, None).await;
+            let spawned = match spawn_result {
                 Ok(spawned) => spawned,
                 Err(error) => {
                     inner.runtime =
@@ -1007,7 +1125,9 @@ impl HarnessSupervisor {
             inner.runtime = HarnessRuntimeInfo::starting(pid, now);
             #[cfg(windows)]
             { inner.job = Some(spawned.job); }
-            inner.child = Some(child);
+            inner.child = Some(child.into());
+            inner.spawned_launch = true;
+            inner.spawned_preferences = Some(preferences.clone());
             inner.start_ownership_pending = true;
             let owner_epoch = next_operation_epoch(&mut inner);
             inner.readiness_owner = Some(ReadinessOwner::Start {
@@ -1225,6 +1345,11 @@ impl HarnessSupervisor {
         attached_readiness: Option<AttachedReadinessState>,
     ) -> Result<HarnessRuntimeInfo, HarnessSupervisorError> {
         #[cfg(test)]
+        if let Some(gate) = self.stop_wait_gate.lock().await.take() {
+            let _ = gate.reached.send(());
+            let _ = gate.release.await;
+        }
+        #[cfg(test)]
         if self
             .stop_wait_failure
             .swap(false, std::sync::atomic::Ordering::SeqCst)
@@ -1242,6 +1367,10 @@ impl HarnessSupervisor {
             )));
         }
 
+        #[cfg(windows)]
+        let stop_request_error = child.request_stop().await.err();
+        #[cfg(not(windows))]
+        let stop_request_error: Option<io::Error> = None;
         let mut killed = false;
         let exit = match wait_for_exit(&mut child, self.graceful_wait).await {
             Ok(Some(exit)) => exit,
@@ -1291,7 +1420,10 @@ impl HarnessSupervisor {
                 state: HarnessState::Stopped,
                 pid: None,
                 exit_code: exit.code(),
-                error: Some("Harness was killed after the graceful stop timeout".to_owned()),
+                error: Some(match stop_request_error {
+                    Some(error) => format!("Harness was forcibly stopped because the graceful stop request failed: {error}"),
+                    None => "Harness was killed after the graceful stop timeout".to_owned(),
+                }),
                 started_at_unix: started_at,
                 updated_at_unix: Some(unix_time_seconds()),
             }
@@ -1340,7 +1472,7 @@ impl HarnessSupervisor {
             {
                 return;
             }
-            inner.child = Some(child);
+            inner.child = Some(child.into());
             inner.stop_pending = false;
             inner.readiness = readiness.clone();
             let attached_target = match (attached_readiness, readiness.as_ref()) {
@@ -1433,7 +1565,7 @@ impl HarnessSupervisor {
     ) -> Result<HarnessRuntimeInfo, HarnessSupervisorError> {
         crate::recovery_mode::ensure_start_allowed(&self.paths)?;
         let _ = self.stop_inner().await?;
-        self.start_with_profile_inner(profile).await
+        self.start_with_profile_inner(profile,None).await
     }
 
     async fn mark_running(&self, owner: ReadinessOwner) -> HarnessRuntimeInfo {
@@ -1485,6 +1617,14 @@ impl HarnessSupervisor {
                 };
                 inner.readiness_owner = None;
                 inner.runtime = HarnessRuntimeInfo::running(pid, started_at, unix_time_seconds());
+                if inner.readiness.as_ref().is_some_and(|config| config.target.token_required) {
+                    if let Some(candidate) = inner.healthy_candidate.take().filter(|candidate| candidate.generation == generation && candidate.run_id == inner.log_session.run_id) {
+                        match self.releases.record_healthy_release(candidate) {
+                            Ok(()) => inner.verified_health = Some((inner.log_session.run_id.clone(), generation)),
+                            Err(error) => tracing::warn!(error = %error, "Could not persist verified Harness release health"),
+                        }
+                    }
+                }
                 let target = inner
                     .readiness
                     .as_ref()
@@ -1720,6 +1860,14 @@ impl HarnessSupervisor {
         if inner.generation != generation || inner.runtime != *runtime {
             return Ok(false);
         }
+        // This path persists outcomes from an owned, spawned child. Missing
+        // Node / pre-spawn configuration errors never reach this point.
+        if runtime.state == HarnessState::Failed && inner.spawned_launch {
+            if let Some(preferences) = &inner.spawned_preferences {
+                crate::runtime_patches::record_failure(&self.paths, preferences, "spawned_combination_failed")
+                    .map_err(HarnessSupervisorError::Persistence)?;
+            }
+        }
         self.store
             .update_harness(runtime.clone())
             .map_err(HarnessSupervisorError::Persistence)?;
@@ -1799,6 +1947,7 @@ impl HarnessSupervisor {
     ) -> Result<Option<ReadinessOwner>, (HarnessSupervisorError, ReadinessOwner)> {
         let start_deadline = Instant::now() + readiness.timeout;
         let mut log_observer = HarnessLogObserver::default();
+        let mut target = readiness.target.clone();
 
         loop {
             let lease = match self.refresh_readiness_owner(owner, start_deadline).await {
@@ -1817,15 +1966,29 @@ impl HarnessSupervisor {
 
             let remaining = lease.deadline.saturating_duration_since(Instant::now());
             let attempt_timeout = remaining.min(READINESS_ATTEMPT_TIMEOUT);
+            if target.owned_web {
+                let session = {
+                    let inner = self.inner.lock().await;
+                    if inner.readiness_owner != Some(owner) || inner.child.is_none() { return Ok(None); }
+                    inner.log_session.clone()
+                };
+                let Some(discovered) = observed_web_readiness(&self.paths, &session, &mut log_observer) else { sleep(MONITOR_INTERVAL).await; continue; };
+                target = discovered;
+            }
             let ready = matches!(
-                timeout(attempt_timeout, readiness_probe(&readiness.target)).await,
+                timeout(attempt_timeout, readiness_probe(&target)).await,
                 Ok(Ok(()))
             );
             if ready
                 && self
-                    .readiness_evidence_matches_owner(owner, &readiness.target, &mut log_observer)
+                    .readiness_evidence_matches_owner(owner, &target, &mut log_observer)
                     .await
             {
+                if target.owned_web {
+                    let mut inner = self.inner.lock().await;
+                    if inner.readiness_owner != Some(owner) { return Ok(None); }
+                    if let Some(config) = inner.readiness.as_mut() { config.target = target.clone(); }
+                }
                 return Ok(self
                     .refresh_readiness_owner(owner, start_deadline)
                     .await
@@ -1975,6 +2138,7 @@ impl HarnessSupervisor {
             if inner.readiness_owner != Some(owner) {
                 return false;
             }
+            if target.owned_web && !owned_web_listener(&inner, target) { return false; }
             inner.log_session.clone()
         };
         if !matches!(self.log_sessions.read(), Ok(Some(ref durable)) if durable == &session) {
@@ -1991,7 +2155,11 @@ impl HarnessSupervisor {
         if !target.token_required {
             return true;
         }
-        let session = self.inner.lock().await.log_session.clone();
+        let session = {
+            let inner = self.inner.lock().await;
+            if target.owned_web && !owned_web_listener(&inner, target) { return false; }
+            inner.log_session.clone()
+        };
         if !matches!(self.log_sessions.read(), Ok(Some(ref durable)) if durable == &session) {
             return false;
         }
@@ -2230,6 +2398,69 @@ impl HarnessSupervisor {
             }
         });
     }
+}
+
+fn observed_web_readiness(paths: &NexusPaths, session: &HarnessLogSession, observer: &mut HarnessLogObserver) -> Option<ReadinessTarget> {
+    if !matches!(HarnessLogSessionStore::new(paths.clone()).read(), Ok(Some(ref durable)) if durable == session) { return None; }
+    let info = read_harness_ui_info_with_observer(paths, observer, Some(session));
+    if !info.available || info.token.is_none() || info.run_id.as_deref() != Some(session.run_id.as_str()) || info.generation != Some(session.generation) { return None; }
+    let mut target = ReadinessTarget::parse(info.url.as_deref()?).ok()?;
+    // Never retain the credential in readiness targets, debug output or errors.
+    target.path = "/".into(); target.tcp = true; target.token_required = true; target.owned_web = true;
+    if target.host.eq_ignore_ascii_case("localhost") { target.host = "127.0.0.1".into(); }
+    Some(target)
+}
+
+fn automatic_web_readiness_supported(spec: &HarnessLaunchSpec, root: Option<&Path>, home: &Path, profile: &str, arguments: &[String]) -> bool {
+    if !cfg!(windows) || spec.readiness_url.is_some() || spec.mode != HarnessLaunchMode::Node { return false; }
+    let Some(root) = root else { return false; };
+    let managed = arguments.first().and_then(|entry| fs::canonicalize(entry).ok())
+        .zip(fs::canonicalize(root.join("apps/cli/lib/bin.js")).ok()).is_some_and(|(entry, expected)| entry == expected);
+    managed && crate::preference_capabilities::inspect(root, home, profile).is_ok_and(|evidence| evidence.capabilities.web)
+}
+
+fn owned_web_listener(inner: &SupervisorInner, target: &ReadinessTarget) -> bool {
+    #[cfg(windows)]
+    {
+        let Some(pid) = inner.child.as_ref().and_then(Child::id) else { return false; };
+        let Ok(owners) = windows_listener_owners(&target.host, target.port) else { return false; };
+        !owners.is_empty() && owners.into_iter().all(|owner| owner == pid || inner.job.as_ref().is_some_and(|job| job.contains_pid(owner).unwrap_or(false)))
+    }
+    #[cfg(not(windows))]
+    { let _ = (inner, target); false }
+}
+
+#[cfg(windows)]
+fn windows_listener_owners(host: &str, port: u16) -> io::Result<Vec<u32>> {
+    // Query the OS listener table directly; never launch a shell or trust the
+    // fact that an arbitrary process accepts a loopback TCP connection.
+    #[link(name = "iphlpapi")]
+    extern "system" { fn GetExtendedTcpTable(table: *mut std::ffi::c_void, size: *mut u32, order: i32, family: u32, class: i32, reserved: u32) -> u32; }
+    let ipv6 = host == "::1";
+    let mut size = 0u32;
+    let status = unsafe { GetExtendedTcpTable(std::ptr::null_mut(), &mut size, 0, if ipv6 { 23 } else { 2 }, 3, 0) };
+    if status != 122 { return Err(io::Error::from_raw_os_error(status as i32)); }
+    for _ in 0..3 {
+        if size < 4 || size > 1024 * 1024 { return Err(io::Error::other("Listener table exceeds observation budget")); }
+        let mut table = vec![0u32; (size as usize + 3) / 4];
+        let status = unsafe { GetExtendedTcpTable(table.as_mut_ptr().cast(), &mut size, 0, if ipv6 { 23 } else { 2 }, 3, 0) };
+        if status == 122 { continue; }
+        if status != 0 { return Err(io::Error::from_raw_os_error(status as i32)); }
+        let words = if ipv6 { 14 } else { 6 };
+        let count = table[0] as usize;
+        if count > (table.len() - 1) / words { return Err(io::Error::other("Invalid listener table")); }
+        let mut owners = Vec::new();
+        for row in table[1..].chunks_exact(words).take(count) {
+            let (port_word, pid) = if ipv6 { (row[5], row[13]) } else { (row[2], row[5]) };
+            let local = if ipv6 {
+                let bytes: Vec<u8> = row[..4].iter().flat_map(|v|v.to_ne_bytes()).collect();
+                bytes.iter().all(|b|*b==0) || (bytes[..15].iter().all(|b|*b==0) && bytes[15]==1)
+            } else { row[1] == 0 || row[1].to_ne_bytes() == [127,0,0,1] };
+            if local && u16::from_be(port_word as u16) == port { owners.push(pid); }
+        }
+        return Ok(owners);
+    }
+    Err(io::Error::other("Listener table changed during observation"))
 }
 
 fn readiness_config(
@@ -2834,6 +3065,7 @@ struct ReadinessTarget {
     path: String,
     tcp: bool,
     token_required: bool,
+    owned_web: bool,
 }
 
 impl ReadinessTarget {
@@ -2951,6 +3183,7 @@ impl ReadinessTarget {
             path,
             tcp,
             token_required: false,
+            owned_web: false,
         })
     }
 }
@@ -3054,6 +3287,51 @@ mod tests {
     };
 
     #[cfg(windows)]
+    #[test]
+    fn automatic_web_readiness_requires_managed_verified_web_and_owned_dynamic_listener() {
+        let root = std::env::temp_dir().join(format!("nexus-auto-readiness-{}",unix_time_nanos_for_update()));
+        let paths = NexusPaths::from_root(root.join("data")); paths.ensure_directories().unwrap();
+        let slot = root.join("slot"); fs::create_dir_all(slot.join("apps/cli/lib")).unwrap();
+        let entry = slot.join("apps/cli/lib/bin.js"); fs::write(&entry,"fixture").unwrap();
+        fs::write(slot.join("package.json"),r#"{"name":"@deepseek-ai/dsh-root","version":"0.1.2-rc.1"}"#).unwrap();
+        let home = root.join("home");
+        let mut spec = nexus_core::HarnessLaunchSpec { mode:nexus_protocol::HarnessLaunchMode::Node,program:"node.exe".into(),args:vec![entry.to_string_lossy().into_owned()],working_dir:Some(slot.clone()),readiness_url:None,readiness_timeout_secs:None,readiness_token_required:false };
+        assert!(super::automatic_web_readiness_supported(&spec,Some(&slot),&home,"web",&spec.args));
+        let mut preferred_port = spec.clone();
+        let capabilities = crate::preference_capabilities::inspect(&slot, &home, "web").unwrap().capabilities;
+        nexus_core::apply_harness_preferences(&mut preferred_port, &nexus_protocol::HarnessPreferencesPayload { port: Some(4567), ..Default::default() }, &capabilities);
+        assert!(preferred_port.readiness_url.is_some(), "port preference synthesizes a TCP target");
+        assert!(super::automatic_web_readiness_supported(&spec,Some(&slot),&home,"web",&preferred_port.args), "the original configured spec still enables owned health discovery");
+        assert!(!super::automatic_web_readiness_supported(&spec,Some(&slot),&home,"headless",&spec.args));
+        spec.readiness_url=Some("tcp://127.0.0.1:4567".into());
+        assert!(!super::automatic_web_readiness_supported(&spec,Some(&slot),&home,"web",&spec.args));
+        assert!(!super::readiness_config(&spec).unwrap().unwrap().target.owned_web);
+        spec.readiness_url=None;
+        assert!(!super::automatic_web_readiness_supported(&spec,Some(&slot),&home,"web",&[root.join("custom.js").to_string_lossy().into_owned()]));
+        fs::write(slot.join("package.json"),r#"{"name":"@deepseek-ai/dsh-root","version":"unknown"}"#).unwrap();
+        assert!(!super::automatic_web_readiness_supported(&spec,Some(&slot),&home,"web",&spec.args));
+
+        let listener=std::net::TcpListener::bind("127.0.0.1:0").unwrap(); let port=listener.local_addr().unwrap().port();
+        assert_eq!(super::windows_listener_owners("127.0.0.1",port).unwrap(),vec![std::process::id()]);
+        let job=crate::dsh::WindowsJob::new().unwrap();
+        assert!(!job.contains_pid(std::process::id()).unwrap(),"an unrelated live listener is not owned by a new Harness job");
+        let (session,mut stdout,stderr)=super::create_harness_log_session(&paths,1,true).unwrap();
+        let mut observer=nexus_launcher_core::HarnessLogObserver::default();
+        use std::io::Write;
+        writeln!(stdout,"http://127.0.0.1:{port}/?token=secret-fixture").unwrap(); stdout.flush().unwrap();
+        assert!(super::observed_web_readiness(&paths,&session,&mut observer).is_none(),"missing durable marker is not evidence");
+        nexus_core::HarnessLogSessionStore::new(paths.clone()).write(&session).unwrap();
+        let target=super::observed_web_readiness(&paths,&session,&mut observer).unwrap();
+        assert_eq!(target.port,port); assert!(target.token_required && target.owned_web && target.tcp); assert!(!format!("{target:?}").contains("secret-fixture"));
+        let (next,next_out,next_err)=super::create_harness_log_session(&paths,2,true).unwrap();
+        nexus_core::HarnessLogSessionStore::new(paths.clone()).write(&next).unwrap();
+        assert!(super::observed_web_readiness(&paths,&session,&mut observer).is_none());
+        assert!(super::observed_web_readiness(&paths,&next,&mut observer).is_none(),"old log token cannot complete a new run");
+        assert!(nexus_core::HarnessLogSessionStore::new(paths.clone()).read().unwrap().unwrap().launch_pending);
+        drop((stdout,stderr,next_out,next_err,listener,job)); fs::remove_dir_all(root).unwrap();
+    }
+
+    #[cfg(windows)]
     #[tokio::test]
     async fn windows_owned_harness_job_stops_descendants_after_parent_exit() {
         use windows_sys::Win32::{Foundation::{CloseHandle, WAIT_TIMEOUT}, System::Threading::{OpenProcess, WaitForSingleObject}};
@@ -3070,10 +3348,12 @@ mod tests {
                 .env("NEXUS_JOB_TEST_POWERSHELL", &powershell)
                 .env("NEXUS_JOB_TEST_PID", root.join("descendant.pid"))
                 .kill_on_drop(true);
-            let mut spawned = super::spawn_owned_harness(command).await.unwrap();
+            let mut spawned = super::spawn_owned_harness(command, None).await.unwrap();
             assert!(timeout(Duration::from_secs(20), spawned.child.wait()).await.unwrap().unwrap().success());
             assert!(!spawned.job.is_empty().unwrap(), "the bootstrap descendant must remain owned after its parent exits");
             let pid: u32 = fs::read_to_string(root.join("descendant.pid")).unwrap().parse().unwrap();
+            assert!(spawned.job.contains_pid(pid).unwrap());
+            assert!(!spawned.job.contains_pid(std::process::id()).unwrap());
             let process = unsafe { OpenProcess(0x00100000, 0, pid) };
             assert!(!process.is_null());
             assert_eq!(unsafe { WaitForSingleObject(process, 0) }, WAIT_TIMEOUT);
@@ -3217,6 +3497,8 @@ mod tests {
                 .write(&inner.log_session)
                 .expect("unclaimed session writes");
         }
+        assert!(!supervisor.claim_healthy_snapshot_attempt("run-seven", 7).await.unwrap(), "Running without verified readiness is not healthy evidence");
+        supervisor.inner.lock().await.verified_health = Some(("run-seven".to_owned(), 7));
         assert!(supervisor
             .claim_healthy_snapshot_attempt("run-seven", 7)
             .await
@@ -3290,7 +3572,8 @@ mod tests {
             )
         };
         ConfigStore::new(paths.clone())
-            .write(&NexusConfigFile {
+            .write(&NexusConfigFile { update_attempt_id: None, external_harness: None,
+                schema_version: 1,
                 harness_preferences: None,
                 harness: Some(HarnessLaunchSpec {
                     mode: Default::default(),
@@ -3354,7 +3637,8 @@ mod tests {
         ));
         let paths = NexusPaths::from_root(root.clone());
         ConfigStore::new(paths.clone())
-            .write(&NexusConfigFile {
+            .write(&NexusConfigFile { update_attempt_id: None, external_harness: None,
+                schema_version: 1,
                 harness_preferences: None,
                 harness: Some(HarnessLaunchSpec {
                     mode: Default::default(),
@@ -3483,7 +3767,8 @@ mod tests {
             )
         };
         ConfigStore::new(paths.clone())
-            .write(&NexusConfigFile {
+            .write(&NexusConfigFile { update_attempt_id: None, external_harness: None,
+                schema_version: 1,
                 harness_preferences: None,
                 harness: Some(HarnessLaunchSpec {
                     mode: Default::default(),
@@ -3584,7 +3869,8 @@ mod tests {
                 .expect("readiness responds");
         });
         ConfigStore::new(paths.clone())
-            .write(&NexusConfigFile {
+            .write(&NexusConfigFile { update_attempt_id: None, external_harness: None,
+                schema_version: 1,
                 harness_preferences: None,
                 harness: Some(HarnessLaunchSpec {
                     mode: Default::default(),
@@ -3695,7 +3981,8 @@ mod tests {
             )
         };
         ConfigStore::new(paths.clone())
-            .write(&NexusConfigFile {
+            .write(&NexusConfigFile { update_attempt_id: None, external_harness: None,
+                schema_version: 1,
                 harness_preferences: None,
                 harness: Some(HarnessLaunchSpec {
                     mode: Default::default(),
@@ -3838,6 +4125,35 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn historical_failed_metadata_does_not_blame_current_patches() {
+        let root = std::env::temp_dir().join(format!("nexus-patch-spawn-evidence-{}", nexus_core::unix_time_nanos_for_update()));
+        let paths = NexusPaths::from_root(root.clone());
+        let preferences = nexus_protocol::HarnessPreferencesPayload { patches: Some(vec![root.join("local.yml").to_string_lossy().into_owned()]), ..Default::default() };
+        nexus_core::ConfigStore::new(paths.clone()).transaction(|document| { document.harness_preferences = Some(preferences.clone()); Ok(()) }).unwrap();
+        let supervisor = HarnessSupervisor::new(paths.clone()).unwrap();
+        let (generation, failed) = {
+            let mut inner = supervisor.inner.lock().await;
+            inner.runtime = super::failed_runtime(&inner.runtime, "historical Node spawn failure".into());
+            (inner.generation, inner.runtime.clone())
+        };
+        assert!(supervisor.persist_if_current(generation, &failed).await.unwrap());
+        crate::runtime_patches::check_failures(&paths, &preferences).unwrap();
+        // A successfully spawned launch remains proven even after reaping
+        // removes inner.child. The same failure now blocks the combination.
+        {
+            let mut inner = supervisor.inner.lock().await;
+            inner.spawned_launch = true;
+            inner.spawned_preferences = Some(preferences.clone());
+        }
+        let other = nexus_protocol::HarnessPreferencesPayload { patches: Some(vec![root.join("other.yml").to_string_lossy().into_owned()]), ..Default::default() };
+        nexus_core::ConfigStore::new(paths.clone()).transaction(|document| { document.harness_preferences = Some(other.clone()); Ok(()) }).unwrap();
+        assert!(supervisor.persist_if_current(generation, &failed).await.unwrap());
+        assert!(crate::runtime_patches::check_failures(&paths, &preferences).is_err());
+        crate::runtime_patches::check_failures(&paths, &other).unwrap();
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[tokio::test]
     async fn stale_generation_snapshot_is_dropped_before_persistence() {
         let root = std::env::temp_dir().join(format!(
             "nexus-agent-stale-persistence-{}",
@@ -3921,7 +4237,8 @@ mod tests {
             (PathBuf::from("sleep"), vec!["10".to_owned()])
         };
         ConfigStore::new(paths.clone())
-            .write(&NexusConfigFile {
+            .write(&NexusConfigFile { update_attempt_id: None, external_harness: None,
+                schema_version: 1,
                 harness_preferences: None,
                 harness: Some(HarnessLaunchSpec {
                     mode: Default::default(),
@@ -3944,14 +4261,20 @@ mod tests {
             .expect("supervisor creates");
         supervisor.start().await.expect("initial start succeeds");
 
+        // A real CTRL_C can now finish immediately. Hold the stop owner at a
+        // deterministic boundary instead of assuming it always needs 500 ms.
+        let (reached, reached_receiver) = oneshot::channel();
+        let (release, release_receiver) = oneshot::channel();
+        *supervisor.stop_wait_gate.lock().await = Some(super::StartPersistGate { reached, release: release_receiver });
         let stop_supervisor = supervisor.clone();
         let stop_task = tokio::spawn(async move { stop_supervisor.stop().await });
-        sleep(Duration::from_millis(50)).await;
+        timeout(Duration::from_secs(2), reached_receiver).await.unwrap().unwrap();
         let overlapping_start = timeout(Duration::from_millis(100), supervisor.start()).await;
         assert!(
             overlapping_start.is_err(),
             "start must remain serialized until stop completes"
         );
+        release.send(()).unwrap();
         stop_task
             .await
             .expect("stop task joins")
@@ -3998,7 +4321,8 @@ mod tests {
             (PathBuf::from("sleep"), vec!["10".to_owned()])
         };
         ConfigStore::new(paths.clone())
-            .write(&NexusConfigFile {
+            .write(&NexusConfigFile { update_attempt_id: None, external_harness: None,
+                schema_version: 1,
                 harness_preferences: None,
                 harness: Some(HarnessLaunchSpec {
                     mode: Default::default(),
@@ -4079,7 +4403,8 @@ mod tests {
             (PathBuf::from("sleep"), vec!["30".to_owned()])
         };
         ConfigStore::new(paths.clone())
-            .write(&NexusConfigFile {
+            .write(&NexusConfigFile { update_attempt_id: None, external_harness: None,
+                schema_version: 1,
                 harness_preferences: None,
                 harness: Some(HarnessLaunchSpec {
                     mode: Default::default(),
@@ -4153,7 +4478,8 @@ mod tests {
             (PathBuf::from("sleep"), vec!["30".to_owned()])
         };
         ConfigStore::new(paths.clone())
-            .write(&NexusConfigFile {
+            .write(&NexusConfigFile { update_attempt_id: None, external_harness: None,
+                schema_version: 1,
                 harness_preferences: None,
                 harness: Some(HarnessLaunchSpec {
                     mode: Default::default(),
@@ -4222,7 +4548,8 @@ mod tests {
             (PathBuf::from("sleep"), vec!["10".to_owned()])
         };
         ConfigStore::new(paths.clone())
-            .write(&NexusConfigFile {
+            .write(&NexusConfigFile { update_attempt_id: None, external_harness: None,
+                schema_version: 1,
                 harness_preferences: None,
                 harness: Some(HarnessLaunchSpec {
                     mode: Default::default(),
@@ -4305,7 +4632,8 @@ mod tests {
         });
         let (program, args) = immediate_nonzero_marker_command(&marker);
         ConfigStore::new(paths.clone())
-            .write(&NexusConfigFile {
+            .write(&NexusConfigFile { update_attempt_id: None, external_harness: None,
+                schema_version: 1,
                 harness_preferences: None,
                 harness: Some(HarnessLaunchSpec {
                     mode: Default::default(),
@@ -4400,7 +4728,8 @@ mod tests {
         });
         let (program, args) = immediate_nonzero_marker_command(&marker);
         ConfigStore::new(paths.clone())
-            .write(&NexusConfigFile {
+            .write(&NexusConfigFile { update_attempt_id: None, external_harness: None,
+                schema_version: 1,
                 harness_preferences: None,
                 harness: Some(HarnessLaunchSpec {
                     mode: Default::default(),
@@ -4491,7 +4820,8 @@ mod tests {
             (PathBuf::from("sleep"), vec!["30".to_owned()])
         };
         ConfigStore::new(paths.clone())
-            .write(&NexusConfigFile {
+            .write(&NexusConfigFile { update_attempt_id: None, external_harness: None,
+                schema_version: 1,
                 harness_preferences: None,
                 harness: Some(HarnessLaunchSpec {
                     mode: Default::default(),
@@ -4555,7 +4885,8 @@ mod tests {
         let marker = root.join("must-not-spawn.txt");
         let (program, args) = immediate_nonzero_marker_command(&marker);
         ConfigStore::new(paths.clone())
-            .write(&NexusConfigFile {
+            .write(&NexusConfigFile { update_attempt_id: None, external_harness: None,
+                schema_version: 1,
                 harness_preferences: None,
                 harness: Some(HarnessLaunchSpec {
                     mode: Default::default(),
@@ -4616,7 +4947,8 @@ mod tests {
             (PathBuf::from("sleep"), vec!["30".to_owned()])
         };
         ConfigStore::new(paths.clone())
-            .write(&NexusConfigFile {
+            .write(&NexusConfigFile { update_attempt_id: None, external_harness: None,
+                schema_version: 1,
                 harness_preferences: None,
                 harness: Some(HarnessLaunchSpec {
                     mode: Default::default(),
@@ -4670,7 +5002,8 @@ mod tests {
             (PathBuf::from("sleep"), vec!["30".to_owned()])
         };
         ConfigStore::new(paths.clone())
-            .write(&NexusConfigFile {
+            .write(&NexusConfigFile { update_attempt_id: None, external_harness: None,
+                schema_version: 1,
                 harness_preferences: None,
                 harness: Some(HarnessLaunchSpec {
                     mode: Default::default(),
@@ -4758,7 +5091,8 @@ mod tests {
             (PathBuf::from("sleep"), vec!["30".to_owned()])
         };
         ConfigStore::new(paths.clone())
-            .write(&NexusConfigFile {
+            .write(&NexusConfigFile { update_attempt_id: None, external_harness: None,
+                schema_version: 1,
                 harness_preferences: None,
                 harness: Some(HarnessLaunchSpec {
                     mode: Default::default(),
@@ -4873,7 +5207,8 @@ mod tests {
             )
         };
         ConfigStore::new(paths.clone())
-            .write(&NexusConfigFile {
+            .write(&NexusConfigFile { update_attempt_id: None, external_harness: None,
+                schema_version: 1,
                 harness_preferences: None,
                 harness: Some(HarnessLaunchSpec {
                     mode: Default::default(),
@@ -4920,7 +5255,8 @@ mod tests {
         ));
         let paths = NexusPaths::from_root(root.clone());
         ConfigStore::new(paths.clone())
-            .write(&NexusConfigFile {
+            .write(&NexusConfigFile { update_attempt_id: None, external_harness: None,
+                schema_version: 1,
                 harness_preferences: None,
                 harness: Some(HarnessLaunchSpec {
                     mode: Default::default(),
@@ -4983,7 +5319,8 @@ mod tests {
         ));
         let paths = NexusPaths::from_root(root.clone());
         ConfigStore::new(paths.clone())
-            .write(&NexusConfigFile {
+            .write(&NexusConfigFile { update_attempt_id: None, external_harness: None,
+                schema_version: 1,
                 harness_preferences: None,
                 harness: Some(HarnessLaunchSpec {
                     mode: Default::default(),
@@ -5075,7 +5412,8 @@ mod tests {
             )
         };
         ConfigStore::new(paths.clone())
-            .write(&NexusConfigFile {
+            .write(&NexusConfigFile { update_attempt_id: None, external_harness: None,
+                schema_version: 1,
                 harness_preferences: None,
                 harness: Some(HarnessLaunchSpec {
                     mode: Default::default(),
@@ -5134,7 +5472,7 @@ mod tests {
                     .expect("loopback target parses"),
                 timeout: Duration::from_secs(2),
             });
-            inner.child = Some(child);
+            inner.child = Some(child.into());
         }
 
         let error = supervisor
@@ -5231,7 +5569,7 @@ mod tests {
                     .expect("loopback target parses"),
                 timeout: Duration::from_secs(2),
             });
-            inner.child = Some(child);
+            inner.child = Some(child.into());
         }
         let (gate_reached_tx, gate_reached_rx) = oneshot::channel();
         let (_gate_release_tx, gate_release_rx) = oneshot::channel();
@@ -5357,7 +5695,8 @@ mod tests {
             }
         });
         ConfigStore::new(paths.clone())
-            .write(&NexusConfigFile {
+            .write(&NexusConfigFile { update_attempt_id: None, external_harness: None,
+                schema_version: 1,
                 harness_preferences: None,
                 harness: Some(HarnessLaunchSpec {
                     mode: Default::default(),
@@ -5411,7 +5750,8 @@ mod tests {
             }
         });
         ConfigStore::new(paths.clone())
-            .write(&NexusConfigFile {
+            .write(&NexusConfigFile { update_attempt_id: None, external_harness: None,
+                schema_version: 1,
                 harness_preferences: None,
                 harness: Some(HarnessLaunchSpec {
                     mode: Default::default(),
@@ -5688,7 +6028,8 @@ mod tests {
         ));
         let paths = NexusPaths::from_root(root.clone());
         ConfigStore::new(paths.clone())
-            .write(&NexusConfigFile {
+            .write(&NexusConfigFile { update_attempt_id: None, external_harness: None,
+                schema_version: 1,
                 harness_preferences: None,
                 harness: Some(HarnessLaunchSpec {
                     mode: Default::default(),
@@ -5773,7 +6114,8 @@ mod tests {
         });
         let shell = std::env::var_os("ComSpec").unwrap_or_else(|| "cmd.exe".into());
         ConfigStore::new(paths.clone())
-            .write(&NexusConfigFile {
+            .write(&NexusConfigFile { update_attempt_id: None, external_harness: None,
+                schema_version: 1,
                 harness_preferences: None,
                 harness: Some(HarnessLaunchSpec {
                     mode: Default::default(),
@@ -5807,7 +6149,9 @@ mod tests {
         let runtime = timeout(Duration::from_secs(2), async {
             loop {
                 let runtime = supervisor.status().await;
-                if runtime.state == HarnessState::Running {
+                // Readiness may succeed before the bootstrap parent exits. Wait for
+                // the detached recovery state that this test actually verifies.
+                if runtime.state == HarnessState::Running && runtime.pid.is_none() {
                     break runtime;
                 }
                 sleep(Duration::from_millis(25)).await;
@@ -5883,7 +6227,8 @@ mod tests {
             )
         };
         ConfigStore::new(paths.clone())
-            .write(&NexusConfigFile {
+            .write(&NexusConfigFile { update_attempt_id: None, external_harness: None,
+                schema_version: 1,
                 harness_preferences: None,
                 harness: Some(HarnessLaunchSpec {
                     mode: Default::default(),
@@ -5963,7 +6308,8 @@ mod tests {
         });
         let (program, args) = immediate_nonzero_marker_command(&marker);
         ConfigStore::new(paths.clone())
-            .write(&NexusConfigFile {
+            .write(&NexusConfigFile { update_attempt_id: None, external_harness: None,
+                schema_version: 1,
                 harness_preferences: None,
                 harness: Some(HarnessLaunchSpec {
                     mode: Default::default(),
@@ -6045,7 +6391,8 @@ mod tests {
             (PathBuf::from("sleep"), vec!["30".to_owned()])
         };
         ConfigStore::new(paths.clone())
-            .write(&NexusConfigFile {
+            .write(&NexusConfigFile { update_attempt_id: None, external_harness: None,
+                schema_version: 1,
                 harness_preferences: None,
                 harness: Some(HarnessLaunchSpec {
                     mode: Default::default(),
@@ -6280,7 +6627,8 @@ mod tests {
             (PathBuf::from("sleep"), vec!["30".to_owned()])
         };
         ConfigStore::new(paths.clone())
-            .write(&NexusConfigFile {
+            .write(&NexusConfigFile { update_attempt_id: None, external_harness: None,
+                schema_version: 1,
                 harness_preferences: None,
                 harness: Some(HarnessLaunchSpec {
                     mode: Default::default(),
@@ -6411,7 +6759,8 @@ mod tests {
             }
         });
         ConfigStore::new(paths.clone())
-            .write(&NexusConfigFile {
+            .write(&NexusConfigFile { update_attempt_id: None, external_harness: None,
+                schema_version: 1,
                 harness_preferences: None,
                 harness: Some(HarnessLaunchSpec {
                     mode: Default::default(),
@@ -6531,7 +6880,8 @@ mod tests {
             }
         });
         ConfigStore::new(paths.clone())
-            .write(&NexusConfigFile {
+            .write(&NexusConfigFile { update_attempt_id: None, external_harness: None,
+                schema_version: 1,
                 harness_preferences: None,
                 harness: Some(HarnessLaunchSpec {
                     mode: Default::default(),
@@ -6677,5 +7027,132 @@ mod tests {
 
         spec.args = vec!["--headless".to_owned()];
         assert_eq!(spec.render_args_for_profile("web"), vec!["--headless"]);
+    }
+}
+
+#[cfg(test)]
+mod startup_operation_tests {
+    #[cfg(windows)]
+    #[tokio::test]
+    #[ignore = "requires local Node and an owned child process"]
+    async fn canonical_node_entry_starts_and_preserves_user_arguments() {
+        use std::{fs, path::PathBuf, time::Duration};
+        let output = std::process::Command::new("node").args(["-p", "process.execPath"]).output().unwrap();
+        assert!(output.status.success());
+        let node = PathBuf::from(String::from_utf8(output.stdout).unwrap().trim());
+        let state = crate::switch_ownership_tests::switch_test_state("canonical-node-entry");
+        let entry = state.paths.root.join("script with spaces.cjs");
+        let marker = state.paths.root.join("arguments.json");
+        fs::write(&entry, format!("require('node:fs').writeFileSync({},JSON.stringify(process.argv.slice(2)));setInterval(()=>{{}},1000);", serde_json::to_string(&marker).unwrap())).unwrap();
+        let canonical = fs::canonicalize(&entry).unwrap();
+        let literal = r"\\?\C:\user argument";
+        let mut spec = nexus_core::HarnessLaunchSpec::new(node);
+        spec.mode = nexus_protocol::HarnessLaunchMode::Node;
+        spec.args = vec![canonical.to_string_lossy().into_owned(), literal.into()];
+        state.config.transaction(|config| { config.harness = Some(spec); Ok(()) }).unwrap();
+        let start = state.supervisor.start().await;
+        let observed = tokio::time::timeout(Duration::from_secs(10), async {
+            loop {
+                if let Ok(bytes) = fs::read(&marker) { break bytes; }
+                tokio::time::sleep(Duration::from_millis(25)).await;
+            }
+        }).await;
+        let stop = state.supervisor.stop().await;
+        assert!(start.is_ok(), "{start:?}");
+        assert!(stop.is_ok(), "{stop:?}");
+        assert_eq!(serde_json::from_slice::<Vec<String>>(&observed.unwrap()).unwrap(), vec![literal]);
+        // The terminal receives this same Node entry through its environment.
+        let terminal = std::process::Command::new("node")
+            .args(["-e", "require('node:child_process').execFileSync(process.execPath,[process.env.NEXUS_TERMINAL_ENTRY,'terminal'],{timeout:1000});"])
+            .env("NEXUS_TERMINAL_ENTRY", nexus_core::node_script_argument(&canonical)).output().unwrap();
+        // The fixture deliberately remains alive, so timeout is expected after writing.
+        assert!(!terminal.status.success());
+        assert_eq!(serde_json::from_slice::<Vec<String>>(&fs::read(&marker).unwrap()).unwrap(), vec!["terminal"]);
+        fs::remove_dir_all(&state.paths.root).unwrap();
+    }
+
+    /// Exercises the real supervisor/checker/owned process chain with a fake slot,
+    /// not a real Harness installation or the HTTP interface.
+    #[cfg(windows)]
+    #[tokio::test]
+    #[ignore = "requires local Node and permission to create/terminate an owned test process tree"]
+    async fn startup_cancel_reaps_slow_fake_compatibility_probe_without_harness_spawn() {
+        use std::{fs,path::PathBuf,time::Duration};
+        use windows_sys::Win32::{Foundation::CloseHandle,System::Threading::{OpenProcess,WaitForSingleObject}};
+        let node=std::process::Command::new("node").args(["-p","process.execPath"]).output().expect("explicit integration test requires Node");
+        assert!(node.status.success(),"explicit integration test requires usable Node");
+        let node=PathBuf::from(String::from_utf8(node.stdout).unwrap().trim());
+        let state=crate::switch_ownership_tests::switch_test_state("startup-cancel-probe");
+        state.releases.register("fake-slot","0.1.2-rc.1",None,None).unwrap();
+        state.releases.promote("fake-slot").unwrap();
+        let slot=state.releases.release_root("fake-slot").unwrap();
+        let home=state.paths.root.join("fixture-home");
+        fs::create_dir_all(slot.join("apps/cli/lib")).unwrap();
+        fs::create_dir_all(slot.join("vendor/fixture")).unwrap();
+        fs::write(slot.join("vendor/fixture/package.json"),br#"{"name":"@deepseek-ai/fixture","version":"0.0.0"}"#).unwrap();
+        fs::create_dir_all(home.join("profiles/web")).unwrap();
+        fs::write(slot.join("package.json"),br#"{"name":"@deepseek-ai/dsh-root","version":"0.1.2-rc.1"}"#).unwrap();
+        fs::write(home.join("profiles/web/package.json"),br#"{"name":"web","private":true,"dsh":{"profile":{"bundles":[]}}}"#).unwrap();
+        let marker=state.paths.root.join("probe-pid.json");
+        let entry=slot.join("apps/cli/lib/bin.js");
+        fs::write(&entry,format!("require('node:fs').writeFileSync({},JSON.stringify({{pid:process.pid,args:process.argv}}));setInterval(()=>{{}},1000);",serde_json::to_string(&marker).unwrap())).unwrap();
+        let mut spec=nexus_core::HarnessLaunchSpec::new(node);
+        spec.mode=nexus_protocol::HarnessLaunchMode::Node;
+        spec.args=vec![entry.to_string_lossy().into_owned(),"--profile".into(),"{profile}".into()];
+        spec.working_dir=Some(slot.clone());
+        state.config.transaction(|d|{d.harness=Some(spec);d.harness_preferences=Some(nexus_protocol::HarnessPreferencesPayload{home:Some(home.to_string_lossy().into_owned()),..Default::default()});Ok(())}).unwrap();
+        let lifecycle=state.supervisor.acquire_lifecycle().await;
+        state.supervisor.begin_startup().await.unwrap();
+        let id=state.supervisor.startup_status().await["operation_id"].as_str().unwrap().to_owned();
+        let supervisor=state.supervisor.clone();
+        let mut task=tokio::spawn(async move{supervisor.start_with_profile_locked("web",&lifecycle).await});
+        let observed=tokio::time::timeout(Duration::from_secs(15),async {
+            loop {if let Ok(bytes)=fs::read(&marker){if let Ok(value)=serde_json::from_slice::<serde_json::Value>(&bytes){break value;}}if task.is_finished(){break serde_json::Value::Null;}tokio::time::sleep(Duration::from_millis(25)).await;}
+        }).await.ok();
+        let pid=observed.as_ref().and_then(|v|v["pid"].as_u64()).unwrap_or(0) as u32;
+        let process=if pid>0{unsafe{OpenProcess(0x00100000,0,pid)}}else{std::ptr::null_mut()};
+        // Always request cleanup, including a failed marker wait, before assertions.
+        let accepted=state.supervisor.cancel_startup(&id).await;
+        let result=tokio::time::timeout(Duration::from_secs(30),&mut task).await;
+        if result.is_err() {
+            // Leave the owned task running its cancellation cleanup; aborting it
+            // would discard precisely the ownership guarantee under test.
+            panic!("owned cancellation did not settle; fixture retained at {}",state.paths.root.display());
+        }
+        let result=result.unwrap().unwrap();
+        let exited=if !process.is_null(){let value=unsafe{WaitForSingleObject(process,5000)};unsafe{CloseHandle(process)};value==0}else{false};
+        let runtime=state.supervisor.status().await;
+        let session=state.supervisor.log_sessions.read().unwrap().unwrap();
+        let pending=state.paths.root.join("compatibility/owner-pending.json").exists();
+        let work_empty=fs::read_dir(home.join("profiles/.nexus-compatibility-work")).map(|mut entries|entries.next().is_none()).unwrap_or(false);
+        state.supervisor.finish_startup(false,matches!(result,Err(super::HarnessSupervisorError::Cancelled))).await;
+        fs::remove_dir_all(&state.paths.root).unwrap();
+        assert!(accepted&&pid>0,"fake compatibility child must run before cancellation: {result:?}");
+        assert!(exited,"owned compatibility child must exit before cancellation completes");
+        assert!(matches!(result,Err(super::HarnessSupervisorError::Cancelled)),"{result:?}");
+        assert!(runtime.pid.is_none()&&!session.launch_pending,"Harness must never spawn");
+        assert!(!pending&&work_empty,"owned checker files must be cleaned after process exit");
+    }
+    #[tokio::test]
+    async fn startup_cancel_is_bound_to_owner_and_closes_before_spawn() {
+        let state=crate::switch_ownership_tests::switch_test_state("startup-cancel-owner");
+        let supervisor=&state.supervisor;
+        supervisor.begin_startup().await.unwrap();
+        let first=supervisor.startup_status().await["operation_id"].as_str().unwrap().to_owned();
+        let token=supervisor.startup_phase("compatibility").await.unwrap();
+        assert!(!supervisor.cancel_startup("stale").await);
+        assert!(supervisor.cancel_startup(&first).await);
+        assert!(token.is_cancelled());
+        assert!(matches!(supervisor.startup_phase("spawning").await,Err(super::HarnessSupervisorError::Cancelled)));
+        supervisor.finish_startup(false,true).await;
+        supervisor.begin_startup().await.unwrap();
+        let second=supervisor.startup_status().await["operation_id"].as_str().unwrap().to_owned();
+        assert_ne!(first,second);
+        assert!(!supervisor.cancel_startup(&first).await);
+        supervisor.startup_phase("spawning").await.unwrap();
+        assert!(!supervisor.cancel_startup(&second).await);
+        supervisor.finish_startup(true,false).await;
+        assert_eq!(supervisor.startup_status().await["phase"],"submitted");
+        std::fs::remove_dir_all(&state.paths.root).unwrap();
     }
 }

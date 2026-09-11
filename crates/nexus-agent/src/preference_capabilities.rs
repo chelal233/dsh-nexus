@@ -18,7 +18,9 @@ fn unsupported(message: impl Into<String>) -> io::Error {
 }
 
 pub(crate) fn resolve(root: Option<&Path>, home: &Path, profile: &str, preferences: &HarnessPreferencesPayload) -> io::Result<HarnessProfileCapabilities> {
-    let preferences = nexus_core::normalize_harness_preferences(preferences.clone())?;
+    let mut effective = preferences.clone();
+    effective.patch_entries = None; // Metadata and disabled entries are not overrides.
+    let preferences = nexus_core::normalize_harness_preferences(effective)?;
     if preferences == HarnessPreferencesPayload::default() { return Ok(HarnessProfileCapabilities::default()); }
     let root = root.ok_or_else(|| unsupported("Harness settings are unverified without an installed release. Clear explicit overrides to use the original configuration."))?;
     let evidence = inspect(root, home, profile)?;
@@ -68,6 +70,7 @@ pub(crate) fn inspect(root: &Path, home: &Path, profile: &str) -> io::Result<Pre
 }
 
 pub(crate) fn validate_launch(spec: &HarnessLaunchSpec, p: &HarnessPreferencesPayload, root: Option<&Path>) -> io::Result<()> {
+    crate::runtime_patches::validate(p)?;
     if p.port.is_none() && p.open_browser.is_none() && !p.patches.as_ref().is_some_and(|v| !v.is_empty()) { return Ok(()); }
     let managed = root.is_some_and(|root| {
         let raw = if spec.mode == nexus_protocol::HarnessLaunchMode::Node {

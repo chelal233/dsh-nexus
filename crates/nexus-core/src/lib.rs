@@ -1,4 +1,6 @@
 //! UI-independent configuration, path, and state primitives for Nexus.
+mod external_harness;
+pub use external_harness::ExternalHarness;
 
 use std::{
     collections::HashSet,
@@ -26,6 +28,12 @@ use nexus_snapshots::RestoreTicket;
 use serde::{Deserialize, Serialize};
 
 pub mod runtime_requirements;
+pub mod profile_history;
+pub mod agent_auth;
+pub mod terminal_lease;
+pub mod log_retention;
+/// Verifies the ACL/mode of a private evidence file without changing it.
+pub fn verify_private_file(file: &std::fs::File) -> std::io::Result<()> { nexus_private_file::verify_private(file) }
 pub mod disk;
 mod harness_preferences;
 pub use harness_preferences::*;
@@ -240,12 +248,14 @@ impl NexusPaths {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
 pub struct RuntimePin {
     pub path: PathBuf,
     pub ownership: RuntimeOwnership,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
 pub struct RuntimeConfig {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub node: Option<RuntimePin>,
@@ -509,6 +519,7 @@ pub fn build_pnpm_args(
 /// Nexus-owned profile catalog.  Profiles are names only in this phase; the
 /// catalog deliberately does not contain Harness settings or user data.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
 pub struct ProfileCatalog {
     #[serde(default = "default_profile_schema")]
     pub schema_version: u32,
@@ -543,6 +554,7 @@ impl ProfileCatalog {
     }
 
     fn normalize(&mut self) -> io::Result<()> {
+        if self.schema_version > PROFILE_SCHEMA_VERSION { return Err(invalid_data("Unsupported profile catalog schema")); }
         if self.schema_version == 0 {
             self.schema_version = PROFILE_SCHEMA_VERSION;
         }
@@ -610,6 +622,7 @@ pub fn validate_profile_name(name: &str) -> io::Result<()> {
 pub struct ProfileStore {
     paths: NexusPaths,
     write_gate: Arc<Mutex<()>>,
+    history_observed: Arc<Mutex<Option<ProfileCatalog>>>,
 }
 
 impl ProfileStore {
@@ -617,6 +630,7 @@ impl ProfileStore {
         Self {
             paths,
             write_gate: Arc::new(Mutex::new(())),
+            history_observed: Arc::new(Mutex::new(None)),
         }
     }
 
@@ -638,9 +652,10 @@ impl ProfileStore {
 
     pub fn write(&self, catalog: &ProfileCatalog) -> io::Result<()> {
         let _guard = self.lock_gate()?;
+        if let Some(previous)=self.read_unlocked()? { self.capture_history(&previous); }
         let mut catalog = catalog.clone();
         catalog.normalize()?;
-        write_json_atomic(&self.paths.root, &self.paths.profiles_file, &catalog)
+        self.publish_with_history(&catalog)
     }
 
     /// Select a valid profile and add it to the known catalog if necessary.
@@ -651,7 +666,7 @@ impl ProfileStore {
         let mut catalog = self.load_unlocked()?;
         catalog.active_profile = name.to_owned();
         catalog.normalize()?;
-        write_json_atomic(&self.paths.root, &self.paths.profiles_file, &catalog)?;
+        self.publish_with_history(&catalog)?;
         Ok(catalog)
     }
 
@@ -720,30 +735,48 @@ impl ProfileStore {
         fs::rename(&staging, &profile_dir)?;
         catalog.profiles.push(name.to_owned());
         catalog.normalize()?;
-        write_json_atomic(&self.paths.root, &self.paths.profiles_file, &catalog)?;
+        self.publish_with_history(&catalog)?;
         Ok(catalog)
     }
 
     fn load_unlocked(&self) -> io::Result<ProfileCatalog> {
         let Some(mut catalog) = self.read_unlocked()? else {
             let catalog = ProfileCatalog::default();
-            write_json_atomic(&self.paths.root, &self.paths.profiles_file, &catalog)?;
+            self.publish_with_history(&catalog)?;
             return Ok(catalog);
         };
         let before = catalog.clone();
         catalog.normalize()?;
         if catalog != before {
-            write_json_atomic(&self.paths.root, &self.paths.profiles_file, &catalog)?;
+            self.publish_with_history(&catalog)?;
+        } else {
+            self.capture_history(&catalog);
         }
         Ok(catalog)
     }
 
-    fn read_unlocked(&self) -> io::Result<Option<ProfileCatalog>> {
-        if !self.paths.profiles_file.exists() {
-            return Ok(None);
+    fn publish_with_history(&self, catalog: &ProfileCatalog) -> io::Result<()> {
+        write_json_atomic(&self.paths.root, &self.paths.profiles_file, catalog)?;
+        self.capture_history(catalog);
+        Ok(())
+    }
+
+    fn capture_history(&self, catalog: &ProfileCatalog) {
+        let Ok(mut observed) = self.history_observed.lock() else { return; };
+        if observed.as_ref() == Some(catalog) { return; }
+        // History is auxiliary. Its failure must not turn a committed profile
+        // change into an API failure or break an otherwise healthy Agent.
+        if let Err(error) = profile_history::capture(&self.paths, catalog) {
+            eprintln!("Nexus profile recovery history unavailable: {error}");
         }
-        let bytes = fs::read(&self.paths.profiles_file)?;
-        decode_json(&bytes).map(Some).map_err(invalid_data)
+        *observed = Some(catalog.clone());
+    }
+
+    fn read_unlocked(&self) -> io::Result<Option<ProfileCatalog>> {
+        let Some(bytes) = read_regular_file_bounded(&self.paths.profiles_file, 4 * 1024 * 1024)? else { return Ok(None); };
+        let catalog: ProfileCatalog = decode_json(&bytes).map_err(invalid_data)?;
+        if catalog.schema_version > PROFILE_SCHEMA_VERSION { return Err(invalid_data("Unsupported profile catalog schema")); }
+        Ok(Some(catalog))
     }
 
     fn lock_gate(&self) -> io::Result<std::sync::MutexGuard<'_, ()>> {
@@ -968,6 +1001,7 @@ pub enum CheckpointRestorePhase {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
 pub struct CheckpointRestoreIntent {
     pub checkpoint_id: String,
     pub previous_profiles: ProfileCatalog,
@@ -983,6 +1017,7 @@ pub struct CheckpointRestoreIntent {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
 pub struct BoundSnapshotRestore {
     pub ticket: RestoreTicket,
     pub dsh_home: PathBuf,
@@ -990,6 +1025,7 @@ pub struct BoundSnapshotRestore {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
 pub struct CheckpointRestoreJournal {
     pub schema_version: u32,
     pub phase: CheckpointRestorePhase,
@@ -999,8 +1035,9 @@ pub struct CheckpointRestoreJournal {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
 struct CheckpointRestoreJournalDocument {
-    #[serde(default = "default_checkpoint_restore_schema")]
+    #[serde(default = "default_checkpoint_restore_schema", deserialize_with = "deserialize_record_schema")]
     schema_version: u32,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pending: Option<CheckpointRestoreJournal>,
@@ -1316,6 +1353,7 @@ impl ReleaseCatalog {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
 struct ReleasePointerDocument {
     #[serde(default = "default_release_schema")]
     schema_version: u32,
@@ -1323,6 +1361,21 @@ struct ReleasePointerDocument {
     current_release: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     last_known_good: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    healthy: Vec<HealthyReleaseEvidence>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct HealthyReleaseEvidence {
+    pub release_id: String,
+    pub profile: String,
+    pub config_revision: String,
+    pub run_id: String,
+    pub generation: u64,
+    pub verified_at_unix: u64,
+    entry: PathBuf,
+    fingerprint: String,
 }
 
 /// Durable store for immutable release manifests and atomic current/LKG
@@ -1337,14 +1390,80 @@ pub struct ReleaseStore {
     paths: NexusPaths,
     write_gate: Arc<Mutex<()>>,
     max_slots: usize,
+    #[cfg(test)]
+    prepared_failure_cut: Arc<std::sync::atomic::AtomicU8>,
 }
 
 impl ReleaseStore {
+    fn health_records(&self) -> io::Result<Vec<HealthyReleaseEvidence>> {
+        let Some(bytes) = read_regular_file_bounded(&self.paths.release_pointers_file, 1024 * 1024)? else { return Ok(Vec::new()); };
+        let document: ReleasePointerDocument = decode_json(&bytes).map_err(invalid_data)?;
+        if document.schema_version != RELEASE_SCHEMA_VERSION || document.healthy.len() > 256 { return Err(invalid_data("Unsupported release health record")); }
+        Ok(document.healthy)
+    }
+
+    fn health_fingerprint(&self, id: &str, relative_entry: &Path) -> io::Result<String> {
+        use sha2::{Digest, Sha256};
+        if relative_entry.is_absolute() || relative_entry.components().any(|c| !matches!(c, std::path::Component::Normal(_))) { return Err(invalid_data("Invalid release health entry")); }
+        let slot = self.slot_dir(id)?;
+        let entry = slot.join(relative_entry);
+        if !fs::canonicalize(&entry)?.starts_with(fs::canonicalize(&slot)?) { return Err(invalid_data("Release health entry escapes its slot")); }
+        let manifest = read_regular_file_bounded(&slot.join("manifest.json"), 65536)?.ok_or_else(|| invalid_data("Missing release manifest"))?;
+        let bytes = read_regular_file_bounded(&entry, 32 * 1024 * 1024)?.ok_or_else(|| invalid_data("Missing release entry"))?;
+        let mut hash = Sha256::new(); hash.update(manifest); hash.update(bytes);
+        Ok(format!("{:x}", hash.finalize()))
+    }
+
+    pub fn healthy_launch_candidate(&self, id: &str, entry: &Path, profile: &str, config_revision: String) -> io::Result<HealthyReleaseEvidence> {
+        validate_profile_name(profile)?;
+        let slot = fs::canonicalize(self.slot_dir(id)?)?;
+        let entry = fs::canonicalize(entry)?.strip_prefix(&slot).map_err(invalid_data)?.to_owned();
+        Ok(HealthyReleaseEvidence { release_id: id.into(), profile: profile.into(), config_revision, run_id: String::new(), generation: 0, verified_at_unix: 0,
+            fingerprint: self.health_fingerprint(id, &entry)?, entry })
+    }
+
+    pub fn record_healthy_release(&self, mut evidence: HealthyReleaseEvidence) -> io::Result<()> {
+        let _gate = self.lock_gate()?;
+        if evidence.run_id.is_empty() || evidence.config_revision.is_empty() || evidence.fingerprint != self.health_fingerprint(&evidence.release_id, &evidence.entry)? {
+            return Err(invalid_data("Release changed since the healthy launch"));
+        }
+        let catalog = self.load_unlocked()?;
+        if catalog.current_release.as_deref() != Some(&evidence.release_id) { return Err(invalid_data("Healthy observation belongs to an older selection")); }
+        let mut healthy = self.health_records()?;
+        healthy.retain(|item| item.release_id != evidence.release_id && catalog.find(&item.release_id).is_some());
+        evidence.verified_at_unix = unix_time_seconds(); healthy.push(evidence);
+        if healthy.len() > 256 { return Err(invalid_data("Release health record capacity reached")); }
+        let document = ReleasePointerDocument { schema_version: RELEASE_SCHEMA_VERSION, current_release: catalog.current_release, last_known_good: catalog.last_known_good, healthy };
+        write_json_atomic(&self.paths.root, &self.paths.release_pointers_file, &document)
+    }
+
+    pub fn verified_fallback(&self, selected: Option<&str>) -> io::Result<Option<String>> {
+        let mut records = self.health_records()?;
+        records.reverse();
+        records.sort_by_key(|record| std::cmp::Reverse(record.verified_at_unix));
+        for record in records {
+            if selected != Some(record.release_id.as_str()) && self.health_evidence_matches(&record)? {
+                return Ok(Some(record.release_id));
+            }
+        }
+        Ok(None)
+    }
+    fn health_evidence_matches(&self, record: &HealthyReleaseEvidence) -> io::Result<bool> {
+        match self.health_fingerprint(&record.release_id, &record.entry) {
+            Ok(fingerprint) => Ok(fingerprint == record.fingerprint),
+            Err(error) if matches!(error.kind(), io::ErrorKind::NotFound | io::ErrorKind::InvalidData | io::ErrorKind::InvalidInput) => Ok(false),
+            // A locked or temporarily unavailable file is not negative health
+            // evidence. Let the caller retry without rewriting the pointers.
+            Err(error) => Err(error),
+        }
+    }
     pub fn new(paths: NexusPaths) -> Self {
         Self {
             paths,
             write_gate: Arc::new(Mutex::new(())),
             max_slots: DEFAULT_MAX_RELEASE_SLOTS,
+            #[cfg(test)]
+            prepared_failure_cut: Arc::new(std::sync::atomic::AtomicU8::new(0)),
         }
     }
 
@@ -1534,28 +1653,151 @@ impl ReleaseStore {
                 format!("release slot {} already exists", slot_dir.display()),
             ));
         }
-        fs::rename(&candidate, &slot_dir)?;
-        let manifest = ReleaseManifest {
-            id: id.to_owned(),
-            version: version.to_owned(),
-            installed_at_unix: unix_time_seconds(),
-            source,
-            note,
-        };
-        if let Err(error) = write_json_atomic(&slot_dir, &slot_dir.join("manifest.json"), &manifest)
-        {
-            // Leave the renamed directory in place without a manifest. Load
-            // deliberately ignores such an incomplete slot for recovery.
-            return Err(error);
+        match fs::symlink_metadata(candidate.join("manifest.json")) {
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+            Err(error) => return Err(error),
+            Ok(_) => return Err(io::Error::new(io::ErrorKind::InvalidData, "prepared candidate must not supply a release manifest")),
         }
+        let links = Self::prepared_absolute_links(&candidate)?;
+        let manifest = ReleaseManifest {
+            id: id.to_owned(), version: version.to_owned(),
+            installed_at_unix: unix_time_seconds(), source, note,
+        };
+        let marker = candidate.join(".nexus-cleanup.json");
+        if fs::symlink_metadata(&marker).is_ok() { return Err(invalid_data("Prepared candidate supplies a cleanup marker")); }
+        write_json_atomic(&candidate, &marker, &manifest)?;
+        fs::rename(&candidate, &slot_dir)?;
+        #[cfg(test)]
+        if self.prepared_failure_cut.load(std::sync::atomic::Ordering::SeqCst) == 1 { return Err(io::Error::other("Injected prepared link repair failure")); }
+        // pnpm uses absolute Windows junctions for workspace dependencies.
+        // Moving the tree alone leaves them pointing at downloads/.cold-*.
+        // Repair before writing the manifest: a failed repair stays unselectable.
+        for (relative, target, directory) in links {
+            let link = slot_dir.join(relative);
+            let target = slot_dir.join(target);
+            Self::ensure_module_directory(link.parent().ok_or_else(|| io::Error::other("prepared link has no parent"))?)?;
+            if !is_within(&fs::canonicalize(&slot_dir)?, &fs::canonicalize(&target)?) {
+                return Err(io::Error::other("prepared link target changed outside its slot"));
+            }
+            if directory {
+                Self::replace_module_link(&link, &target)?;
+            } else {
+                fs::remove_file(&link)?;
+                #[cfg(windows)]
+                std::os::windows::fs::symlink_file(&target, &link)?;
+                #[cfg(not(windows))]
+                std::os::unix::fs::symlink(&target, &link)?;
+            }
+        }
+        #[cfg(test)]
+        if self.prepared_failure_cut.load(std::sync::atomic::Ordering::SeqCst) == 2 { return Err(io::Error::other("Injected prepared manifest failure")); }
+        // The marker already contains the final manifest. Publish it in one
+        // rename so a ready slot never depends on a subsequent marker deletion.
+        Self::publish_prepared_manifest(&slot_dir)?;
         catalog.releases.push(manifest);
         catalog.normalize()?;
         Ok(catalog)
     }
 
-    /// Atomically make an already-registered slot current. The previous
-    /// current pointer becomes last-known-good; no manifest is modified.
+    fn publish_prepared_manifest(slot: &Path) -> io::Result<()> {
+        fs::rename(slot.join(".nexus-cleanup.json"), slot.join("manifest.json"))
+    }
+
+    /// Inspect links without descending into them. Resolve targets while the
+    /// candidate still exists, including chains, so publication never relies on
+    /// external directories or on the order in which links are recreated.
+    fn prepared_absolute_links(root: &Path) -> io::Result<Vec<(PathBuf, PathBuf, bool)>> {
+        let mut pending = vec![root.to_path_buf()];
+        let mut links = Vec::new();
+        let mut count = 0usize;
+        while let Some(directory) = pending.pop() {
+            for entry in fs::read_dir(directory)? {
+                let path = entry?.path();
+                count += 1;
+                if count > 250_000 {
+                    return Err(io::Error::new(io::ErrorKind::InvalidData, "prepared release has too many entries"));
+                }
+                let metadata = fs::symlink_metadata(&path)?;
+                #[cfg(windows)]
+                let is_link = {
+                    use std::os::windows::fs::MetadataExt;
+                    metadata.file_attributes() & 0x400 != 0
+                };
+                #[cfg(not(windows))]
+                let is_link = metadata.file_type().is_symlink();
+                if is_link {
+                    let raw = fs::read_link(&path)?;
+                    let resolved = fs::canonicalize(&path)?;
+                    if !is_within(root, &resolved) || resolved == root {
+                        return Err(io::Error::new(io::ErrorKind::InvalidData, "prepared release link leaves its candidate"));
+                    }
+                    if raw.is_absolute() {
+                        links.push((path.strip_prefix(root).unwrap().to_path_buf(),
+                            resolved.strip_prefix(root).map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "prepared link path identity mismatch"))?.to_path_buf(),
+                            resolved.is_dir()));
+                    }
+                } else if metadata.is_dir() {
+                    pending.push(path);
+                }
+            }
+        }
+        Ok(links)
+    }
+
+    /// Atomically select a registered slot and retain only a verified fallback.
+    /// Selecting a slot does not establish health or modify its manifest.
     pub fn promote(&self, id: &str) -> io::Result<ReleaseCatalog> {
+        self.promote_inner(id, false, None)
+    }
+
+    /// Forward publication must retain an independently observed fallback.
+    pub fn promote_with_rollback(&self, id: &str) -> io::Result<ReleaseCatalog> {
+        self.promote_inner(id, true, None)
+    }
+
+    pub fn promote_confirmed(&self, id: &str, confirmation: Option<&str>) -> io::Result<ReleaseCatalog> {
+        self.promote_inner(id, true, confirmation)
+    }
+
+    pub fn promotion_risk_confirmation(&self, id: &str) -> io::Result<Option<String>> {
+        let _gate = self.lock_gate()?;
+        self.release_root_unlocked(id, &self.load_unlocked()?)?;
+        match self.ensure_rollback_protection_unlocked(id) {
+            Ok(()) => Ok(None),
+            Err(error) if error.kind() == io::ErrorKind::WouldBlock => self.promotion_confirmation_unlocked(id).map(Some),
+            Err(error) => Err(error),
+        }
+    }
+
+    fn promotion_confirmation_unlocked(&self, id: &str) -> io::Result<String> {
+        use sha2::{Digest, Sha256};
+        let mut hash = Sha256::new(); hash.update(id.as_bytes());
+        for file in [&self.paths.release_pointers_file, &self.paths.config_file, &self.slot_dir(id)?.join("manifest.json")] {
+            let bytes = read_regular_file_bounded(file, 1024 * 1024)?.unwrap_or_default();
+            hash.update((bytes.len() as u64).to_le_bytes()); hash.update(bytes);
+        }
+        Ok(format!("unprotected-promotion-{:x}", hash.finalize()))
+    }
+
+    pub fn ensure_rollback_protection(&self, id: &str) -> io::Result<()> {
+        let _gate = self.lock_gate()?;
+        self.ensure_rollback_protection_unlocked(id)
+    }
+
+    fn ensure_rollback_protection_unlocked(&self, id: &str) -> io::Result<()> {
+        let Some(bytes) = read_regular_file_bounded(&self.paths.release_pointers_file, 1024 * 1024)? else { return Ok(()); };
+        let document: ReleasePointerDocument = decode_json(&bytes).map_err(invalid_data)?;
+        if document.schema_version != RELEASE_SCHEMA_VERSION { return Err(invalid_data("Unsupported release pointer schema")); }
+        let (current, legacy_lkg) = (document.current_release, document.last_known_good);
+        if current.as_deref() == Some(id) || (current.is_none() && legacy_lkg.is_none()) { return Ok(()); }
+        if self.verified_fallback(Some(id))?.is_none() {
+            return Err(io::Error::new(io::ErrorKind::WouldBlock,
+                "rollback_health_required: No verified rollback target is available. Start the current Harness and complete its authenticated readiness check before switching versions. Legacy version pointers alone are not health evidence."));
+        }
+        Ok(())
+    }
+
+    fn promote_inner(&self, id: &str, require_rollback: bool, confirmation: Option<&str>) -> io::Result<ReleaseCatalog> {
         validate_release_id(id)?;
         let _guard = self.lock_gate()?;
         let mut catalog = self.load_unlocked()?;
@@ -1565,13 +1807,15 @@ impl ReleaseStore {
                 format!("release {id} was not found"),
             ));
         }
+        if require_rollback {
+            if let Err(error) = self.ensure_rollback_protection_unlocked(id) {
+                if error.kind() != io::ErrorKind::WouldBlock || confirmation != Some(self.promotion_confirmation_unlocked(id)?.as_str()) { return Err(error); }
+            }
+        }
         if catalog.current_release.as_deref() != Some(id) {
             let previous = catalog.current_release.clone();
-            if let Some(previous) = catalog.current_release.replace(id.to_owned()) {
-                catalog.last_known_good = Some(previous);
-            } else if catalog.last_known_good.as_deref() == Some(id) {
-                catalog.last_known_good = None;
-            }
+            catalog.current_release = Some(id.to_owned());
+            catalog.last_known_good = self.verified_fallback(Some(id))?;
             catalog.normalize()?;
             self.retarget_launch_placeholder(&previous.unwrap_or_default(), Some(id))?;
             self.write_pointers(&catalog)?;
@@ -1611,6 +1855,7 @@ impl ReleaseStore {
             ));
         }
         let slot_dir = self.slot_dir(id)?;
+        terminal_lease::ensure_release_idle(&self.paths, id)?;
         ensure_configuration_paths_preserved(&self.paths, &slot_dir)?;
         ensure_harness_homes_preserved(&self.paths.root, &slot_dir)?;
         if let Some(journal) = CheckpointRestoreJournalStore::new(self.paths.clone()).load()? {
@@ -1994,12 +2239,8 @@ fn create_dir_junction(link: &Path, target: &Path) -> io::Result<()> {
         }
         let restored = release_id.map(str::to_owned);
         if catalog.current_release != restored {
-            let previous = std::mem::replace(&mut catalog.current_release, restored);
-            if let Some(previous) = previous {
-                catalog.last_known_good = Some(previous);
-            } else if catalog.last_known_good == catalog.current_release {
-                catalog.last_known_good = None;
-            }
+            catalog.current_release = restored;
+            catalog.last_known_good = self.verified_fallback(catalog.current_release.as_deref())?;
             catalog.normalize()?;
         }
         Ok(())
@@ -2030,11 +2271,25 @@ fn create_dir_junction(link: &Path, target: &Path) -> io::Result<()> {
             catalog.normalize()?;
             self.write_pointers(&catalog)?;
         }
-        Ok(catalog)
+        self.load_unlocked()
     }
 
-    /// Swap current and last-known-good pointers. This is intentionally a
-    /// reversible metadata operation and does not start Harness.
+    /// Transaction evidence is the durable tuple, not the health-filtered UI
+    /// view. Old journals must settle without granting old pointers health.
+    pub fn stored_release_pointers(&self) -> io::Result<(Option<String>, Option<String>)> {
+        let _gate = self.lock_gate()?;
+        let Some(bytes) = read_regular_file_bounded(&self.paths.release_pointers_file, 1024 * 1024)? else { return Ok((None, None)); };
+        let document: ReleasePointerDocument = decode_json(&bytes).map_err(invalid_data)?;
+        if document.schema_version != RELEASE_SCHEMA_VERSION { return Err(invalid_data("Unsupported release pointer schema")); }
+        let catalog = self.load_unlocked()?;
+        for id in [&document.current_release, &document.last_known_good].into_iter().flatten() {
+            self.release_root_unlocked(id, &catalog)?;
+        }
+        Ok((document.current_release, document.last_known_good))
+    }
+
+    /// Select the verified fallback without starting Harness. The previous
+    /// selection only remains a fallback if it has matching health evidence.
     pub fn rollback(&self) -> io::Result<ReleaseCatalog> {
         let _guard = self.lock_gate()?;
         let mut catalog = self.load_unlocked()?;
@@ -2045,8 +2300,8 @@ fn create_dir_junction(link: &Path, target: &Path) -> io::Result<()> {
             ));
         };
         let previous_current = catalog.current_release.clone();
-        let previous = catalog.current_release.replace(last_known_good.clone());
-        catalog.last_known_good = previous;
+        catalog.current_release = Some(last_known_good.clone());
+        catalog.last_known_good = self.verified_fallback(Some(&last_known_good))?;
         self.retarget_launch_placeholder(
             previous_current.as_deref().unwrap_or_default(),
             Some(&last_known_good),
@@ -2064,18 +2319,22 @@ fn create_dir_junction(link: &Path, target: &Path) -> io::Result<()> {
                 schema_version: RELEASE_SCHEMA_VERSION,
                 current_release: None,
                 last_known_good: None,
+                healthy: Vec::new(),
             }
         };
-        if pointers.schema_version == 0 {
-            // Version zero was never published, but accepting it here keeps
-            // the same forward-compatible convention as other Nexus stores.
-        }
+        if pointers.schema_version != RELEASE_SCHEMA_VERSION { return Err(invalid_data("Unsupported release pointer schema")); }
 
+        let mut verified_lkg = None;
+        if let Some(id) = pointers.last_known_good.as_deref() {
+            for record in pointers.healthy.iter().filter(|record| record.release_id == id) {
+                if self.health_evidence_matches(record)? { verified_lkg = Some(id.to_owned()); break; }
+            }
+        }
         let mut catalog = ReleaseCatalog {
             unavailable_selections: Vec::new(),
             schema_version: RELEASE_SCHEMA_VERSION,
             current_release: pointers.current_release,
-            last_known_good: pointers.last_known_good,
+            last_known_good: verified_lkg,
             releases: Vec::new(),
         };
         if self.paths.releases_dir.exists() {
@@ -2136,6 +2395,7 @@ fn create_dir_junction(link: &Path, target: &Path) -> io::Result<()> {
             schema_version: RELEASE_SCHEMA_VERSION,
             current_release: catalog.current_release.clone(),
             last_known_good: catalog.last_known_good.clone(),
+            healthy: self.health_records()?,
         };
         write_json_atomic(
             &self.paths.root,
@@ -2422,6 +2682,7 @@ impl AgentState {
 /// Durable Nexus-owned runtime metadata. The state file is intentionally
 /// separate from any Harness working/data directory and contains no secrets.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
 pub struct NexusRuntimeMetadata {
     pub schema_version: u32,
     pub lifecycle: AgentLifecycleState,
@@ -2434,6 +2695,17 @@ pub struct NexusRuntimeMetadata {
 
 /// Durable boundary that separates authentication URLs emitted by different
 /// Harness runs while retaining the append-only Nexus logs.
+/// Correlation metadata only. Never add arguments, URLs or environment values.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct OperationContext {
+    pub build_id: Option<String>,
+    pub version: Option<String>,
+    pub profile: Option<String>,
+    pub config_revision: Option<String>,
+    pub run_id: Option<String>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct HarnessLogSession {
     pub schema_version: u32,
@@ -2460,6 +2732,8 @@ pub struct HarnessLogSession {
     /// including a failed attempt, so an Agent restart does not duplicate it.
     #[serde(default)]
     pub healthy_snapshot_attempted: bool,
+    #[serde(default)]
+    pub context: Option<OperationContext>,
     pub created_at_unix: u64,
 }
 
@@ -2488,6 +2762,7 @@ impl HarnessLogSession {
             stderr_log_name,
             launch_pending,
             healthy_snapshot_attempted: false,
+            context: None,
             created_at_unix,
         }
     }
@@ -2727,17 +3002,17 @@ pub fn write_runtime_metadata(
     paths: &NexusPaths,
     metadata: &NexusRuntimeMetadata,
 ) -> io::Result<()> {
+    if metadata.schema_version != RUNTIME_SCHEMA_VERSION { return Err(invalid_data("Unsupported runtime metadata schema")); }
+    read_runtime_metadata(paths)?;
     paths.ensure_directories()?;
     write_json_atomic(&paths.root, &paths.state_file, metadata)
 }
 
 pub fn read_runtime_metadata(paths: &NexusPaths) -> io::Result<Option<NexusRuntimeMetadata>> {
-    if !paths.state_file.exists() {
-        return Ok(None);
-    }
-
-    let bytes = fs::read(&paths.state_file)?;
-    decode_json(&bytes).map(Some).map_err(invalid_data)
+    let Some(bytes) = read_regular_file_bounded(&paths.state_file, 1024 * 1024)? else { return Ok(None); };
+    let metadata: NexusRuntimeMetadata = decode_json(&bytes).map_err(invalid_data)?;
+    if metadata.schema_version != RUNTIME_SCHEMA_VERSION { return Err(invalid_data("Unsupported runtime metadata schema")); }
+    Ok(Some(metadata))
 }
 
 /// In-process serialization gate shared by the Agent and supervisor. It
@@ -2796,8 +3071,9 @@ impl RuntimeMetadataStore {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
 struct UpdateStateDocument {
-    #[serde(default = "default_update_schema")]
+    #[serde(default = "default_update_schema", deserialize_with = "deserialize_record_schema")]
     schema_version: u32,
     update: UpdateRuntimeInfo,
 }
@@ -2834,6 +3110,7 @@ impl UpdateStateStore {
 
     pub fn write(&self, update: &UpdateRuntimeInfo) -> io::Result<()> {
         let _guard = self.lock_gate()?;
+        if let Some(bytes) = read_regular_file_bounded(&self.paths.update_state_file, 4 * 1024 * 1024)? { let _: UpdateStateDocument = decode_json(&bytes).map_err(invalid_data)?; }
         let document = UpdateStateDocument {
             schema_version: UPDATE_SCHEMA_VERSION,
             update: update.clone(),
@@ -2878,6 +3155,7 @@ fn default_update_schema() -> u32 {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
 struct DiagnosticsDocument {
     #[serde(default = "default_diagnostics_schema")]
     schema_version: u32,
@@ -2906,11 +3184,13 @@ impl DiagnosticsStore {
     }
 
     pub fn list(&self) -> io::Result<Vec<DiagnosticsBundle>> {
+        self.list_with_warnings().map(|(bundles,_)|bundles)
+    }
+    pub fn list_with_warnings(&self) -> io::Result<(Vec<DiagnosticsBundle>,Vec<serde_json::Value>)> {
         let _guard = self.lock_gate()?;
-        if !self.paths.diagnostics_dir.exists() {
-            return Ok(Vec::new());
-        }
+        match fs::symlink_metadata(&self.paths.diagnostics_dir) {Ok(meta) if meta.is_dir()&&!path_is_reparse(&meta)=>{},Ok(_)=>return Err(invalid_data("Diagnostic directory is not ordinary")),Err(error) if error.kind()==io::ErrorKind::NotFound=>return Ok((vec![],vec![])),Err(error)=>return Err(error)}
         let mut bundles = Vec::new();
+        let mut warnings=Vec::new();
         for entry in fs::read_dir(&self.paths.diagnostics_dir)? {
             let entry = entry?;
             if !entry.file_type()?.is_dir() {
@@ -2921,15 +3201,14 @@ impl DiagnosticsStore {
                 if fs::symlink_metadata(ownership).is_ok() { continue; }
             }
             let manifest_path = entry.path().join("diagnostics.json");
-            if !manifest_path.exists() {
-                continue;
-            }
-            let bytes = fs::read(&manifest_path)?;
-            let document: DiagnosticsDocument = decode_json(&bytes).map_err(invalid_data)?;
-            if document.schema_version != DIAGNOSTICS_SCHEMA_VERSION {
-                return Err(invalid_data("unsupported diagnostics schema version"));
-            }
-            validate_diagnostics_bundle(&document.bundle)?;
+            let document = (|| -> io::Result<DiagnosticsDocument> {
+                let bytes=read_regular_file_bounded(&manifest_path,4*1024*1024)?.ok_or_else(||invalid_data("diagnostics manifest missing"))?;
+                let document:DiagnosticsDocument=decode_json(&bytes).map_err(invalid_data)?;
+                if document.schema_version!=DIAGNOSTICS_SCHEMA_VERSION || entry.file_name().to_str()!=Some(document.bundle.id.as_str()) {return Err(invalid_data("unsupported diagnostics identity or version"));}
+                validate_diagnostics_bundle(&document.bundle)?;Ok(document)
+            })();
+            // A damaged historical bundle does not hide independent healthy evidence.
+            let document=match document {Ok(value)=>value,Err(_)=>{if warnings.len()<64{warnings.push(serde_json::json!({"bundle_id":entry.file_name().to_string_lossy(),"reason":"Unreadable or unsupported diagnostic record was preserved"}));}continue;}};
             bundles.push(document.bundle);
         }
         bundles.sort_by(|left, right| {
@@ -2939,7 +3218,7 @@ impl DiagnosticsStore {
                 .then_with(|| right.id.cmp(&left.id))
         });
         bundles.truncate(MAX_DIAGNOSTICS_BUNDLES);
-        Ok(bundles)
+        Ok((bundles,warnings))
     }
 
     pub fn collect(&self, note: Option<String>) -> io::Result<DiagnosticsBundle> {
@@ -2991,7 +3270,7 @@ impl DiagnosticsStore {
             }
         }
         for relative in ["install-operation.json", "cold-operation.json", "cold-publication.json", "run/harness-log-session.json", "run/checkpoint-restore.json", "run/harness-recovery.json", "run/harness-effective.json",
-            "run/last-capture.json", "run/cleanup-result.json", "compatibility/latest.json", "run/agent.json", "run/launcher-agent.json"] {
+            "run/last-capture.json", "run/cleanup-result.json", "compatibility/latest.json", "canary/latest.json", "run/agent.json", "run/launcher-agent.json"] {
             let path = self.paths.root.join(relative);
             if is_regular_diagnostics_file(&path) { sources.push((path, relative.into(), MAX_DIAGNOSTICS_FILE_BYTES)); }
         }
@@ -3279,14 +3558,14 @@ fn read_diagnostics_tail(path: &Path, limit: usize) -> io::Result<Vec<u8>> {
 /// A tail may start inside a PEM body after its BEGIN marker was discarded.
 /// When its first key boundary is END, omit the entire ambiguous prefix. Other
 /// unlabelled fragments remain outside the guarantees of marker-based redaction.
-fn omit_truncated_private_key_prefix(bytes: &[u8]) -> (&[u8], bool) {
-    let Ok(text) = std::str::from_utf8(bytes) else { return (bytes, false); };
+pub fn omit_truncated_private_key_prefix(bytes: &[u8]) -> (&[u8], bool) {
     let mut offset = 0;
-    for line in text.split_inclusive('\n') {
+    for line in bytes.split_inclusive(|byte| *byte == b'\n') {
         offset += line.len();
-        if line.contains("PRIVATE KEY-----") {
-            if line.contains("-----BEGIN") { return (bytes, false); }
-            if line.contains("-----END") { return (&bytes[offset..], true); }
+        let text = String::from_utf8_lossy(line);
+        if text.contains("PRIVATE KEY-----") {
+            if text.contains("-----BEGIN") { return (bytes, false); }
+            if text.contains("-----END") { return (&bytes[offset..], true); }
         }
     }
     (bytes, false)
@@ -3771,7 +4050,7 @@ mod tests {
         store
             .register("harness-b", "2", None, None)
             .expect("beta registers");
-        store.promote("harness-a").expect("alpha promoted");
+        { let result = store.promote("harness-a").expect("alpha promoted"); mark_fixture_healthy(&store, "harness-a"); result };
 
         let protected = store.remove("harness-a").expect_err("current is protected");
         assert_eq!(protected.kind(), std::io::ErrorKind::ResourceBusy);
@@ -3816,6 +4095,121 @@ mod tests {
         }
     }
 
+    fn mark_fixture_healthy(store: &super::ReleaseStore, id: &str) {
+        let entry = store.slot_dir(id).unwrap().join("health-entry.js");
+        fs::write(&entry, "fixture entry").unwrap();
+        let mut evidence = store.healthy_launch_candidate(id, &entry, "web", "fixture-config".into()).unwrap();
+        evidence.run_id = format!("run-{id}"); evidence.generation = 1;
+        store.record_healthy_release(evidence).unwrap();
+    }
+    #[test]
+    #[cfg(windows)]
+    fn locked_health_evidence_is_retryable_and_does_not_erase_fallback() {
+        use std::os::windows::fs::OpenOptionsExt;
+        let root=unique_test_root("locked-health-evidence");let paths=NexusPaths::from_root(root.clone());
+        let store=ReleaseStore::new(paths.clone());
+        for id in ["old","new"] { store.register(id,"1",None,None).unwrap(); }
+        store.promote("old").unwrap();mark_fixture_healthy(&store,"old");store.promote("new").unwrap();
+        let bytes=fs::read(&paths.release_pointers_file).unwrap();
+        let locked=fs::OpenOptions::new().read(true).share_mode(0).open(store.slot_dir("old").unwrap().join("health-entry.js")).unwrap();
+        assert!(store.load().is_err());assert!(store.rollback().is_err());
+        assert!(store.ensure_rollback_protection("old").is_err());
+        assert_eq!(fs::read(&paths.release_pointers_file).unwrap(),bytes);
+        drop(locked);
+        assert_eq!(store.rollback().unwrap().current_release.as_deref(),Some("old"));
+        fs::remove_dir_all(root).unwrap();
+    }
+    #[test]
+    fn prepared_registration_failure_remains_visible_for_cleanup_and_retry() {
+        for cut in [1,2] {
+            let root=unique_test_root("prepared-registration-cut");let paths=NexusPaths::from_root(root.clone());paths.ensure_directories().unwrap();
+            let store=ReleaseStore::new(paths.clone());let candidate=paths.downloads_dir.join("candidate");
+            fs::create_dir(&candidate).unwrap();fs::write(candidate.join("payload"),b"ready").unwrap();
+            store.prepared_failure_cut.store(cut,std::sync::atomic::Ordering::SeqCst);
+            assert!(store.register_prepared(&candidate,"slot","1",None,None).is_err());
+            assert!(store.load().unwrap().find("slot").is_none());
+            assert!(store.pending_cleanup("slot").unwrap().is_some());
+            let slot=store.slot_dir("slot").unwrap();assert_eq!(fs::read(slot.join("payload")).unwrap(),b"ready");
+            fs::remove_dir_all(slot).unwrap();
+            store.prepared_failure_cut.store(0,std::sync::atomic::Ordering::SeqCst);
+            fs::create_dir(&candidate).unwrap();fs::write(candidate.join("payload"),b"retry").unwrap();
+            assert!(store.register_prepared(&candidate,"slot","1",None,None).unwrap().find("slot").is_some());
+            assert!(store.pending_cleanup("slot").unwrap().is_none());
+            fs::remove_dir_all(root).unwrap();
+        }
+    }
+
+    #[test]
+    #[cfg(windows)]
+    fn prepared_manifest_publication_has_no_post_commit_cleanup_window() {
+        use std::os::windows::fs::OpenOptionsExt;
+        let root=unique_test_root("prepared-manifest-atomic");fs::create_dir_all(&root).unwrap();
+        let marker=root.join(".nexus-cleanup.json");fs::write(&marker,b"prepared manifest").unwrap();
+        let lock=fs::OpenOptions::new().read(true).share_mode(1).open(&marker).unwrap();
+        assert!(ReleaseStore::publish_prepared_manifest(&root).is_err());
+        assert!(!root.join("manifest.json").exists());assert!(marker.exists());
+        drop(lock);
+        ReleaseStore::publish_prepared_manifest(&root).unwrap();
+        assert_eq!(fs::read(root.join("manifest.json")).unwrap(),b"prepared manifest");
+        assert!(!marker.exists());fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn legacy_upgrade_requires_real_health_before_forward_publication() {
+        let root = unique_test_root("legacy-rollback-protection");
+        let paths = NexusPaths::from_root(root.clone());
+        let store = super::ReleaseStore::new(paths.clone());
+        for id in ["old", "legacy-lkg", "new"] { store.register(id, "1", None, None).unwrap(); }
+        store.promote_with_rollback("old").unwrap();
+        fs::write(&paths.release_pointers_file, br#"{"schema_version":1,"current_release":"old","last_known_good":"legacy-lkg"}"#).unwrap();
+        let before = fs::read(&paths.release_pointers_file).unwrap();
+        assert!(store.load().unwrap().last_known_good.is_none());
+        assert!(store.promote_with_rollback("new").unwrap_err().to_string().contains("rollback_health_required"));
+        assert_eq!(fs::read(&paths.release_pointers_file).unwrap(), before);
+        store.promote_with_rollback("old").unwrap();
+        mark_fixture_healthy(&store, "old");
+        store.ensure_rollback_protection("new").unwrap();
+        fs::write(store.slot_dir("old").unwrap().join("health-entry.js"), "changed after admission").unwrap();
+        assert!(store.promote_with_rollback("new").is_err());
+        mark_fixture_healthy(&store, "old");
+        store.promote_with_rollback("new").unwrap();
+        assert_eq!(store.rollback().unwrap().current_release.as_deref(), Some("old"));
+        fs::write(&paths.release_pointers_file, br#"{"schema_version":1,"current_release":"missing","last_known_good":"legacy-lkg"}"#).unwrap();
+        assert!(store.load().unwrap().current_release.is_none());
+        assert!(store.promote_with_rollback("new").is_err(), "missing selection is not a first install");
+        let confirmation = store.promotion_risk_confirmation("new").unwrap().unwrap();
+        assert!(store.promote_confirmed("legacy-lkg", Some(&confirmation)).is_err(), "confirmation binds target");
+        fs::write(&paths.config_file, b"{}").unwrap();
+        assert!(store.promote_confirmed("new", Some(&confirmation)).is_err(), "confirmation binds config revision");
+        let confirmation = store.promotion_risk_confirmation("new").unwrap().unwrap();
+        store.promote_confirmed("new", Some(&confirmation)).unwrap();
+        assert!(store.load().unwrap().last_known_good.is_none(), "manual consent is not health evidence");
+        assert!(store.promote_confirmed("old", Some(&confirmation)).is_err());
+        store.restore_release_pointers(Some("old"), Some("legacy-lkg")).unwrap();
+        assert_eq!(store.stored_release_pointers().unwrap(), (Some("old".into()), Some("legacy-lkg".into())));
+        fs::remove_dir_all(root).unwrap();
+    }
+    #[test]
+    fn release_health_requires_observation_and_unchanged_entry() {
+        let root = unique_test_root("verified-release");
+        let store = super::ReleaseStore::new(NexusPaths::from_root(root.clone()));
+        for id in ["good", "unstarted", "failed"] { store.register(id, "1", None, None).unwrap(); }
+        store.promote("good").unwrap();
+        store.promote("unstarted").unwrap();
+        assert!(store.load().unwrap().last_known_good.is_none());
+        assert!(store.rollback().is_err());
+        store.promote("good").unwrap(); mark_fixture_healthy(&store, "good");
+        store.promote("unstarted").unwrap();
+        store.promote("failed").unwrap();
+        assert_eq!(store.load().unwrap().last_known_good.as_deref(), Some("good"));
+        store.rollback().unwrap();
+        assert!(store.load().unwrap().last_known_good.is_none(), "failed release cannot become a fallback");
+        store.promote("failed").unwrap();
+        fs::write(store.slot_dir("good").unwrap().join("health-entry.js"), "changed").unwrap();
+        assert!(store.load().unwrap().last_known_good.is_none());
+        assert!(store.rollback().is_err());
+        fs::remove_dir_all(root).unwrap();
+    }
     #[test]
     fn release_store_registers_promotes_and_rolls_back_atomically() {
         let root = unique_test_root("releases");
@@ -3847,14 +4241,14 @@ mod tests {
         assert_eq!(rc.releases.len(), 2);
         assert!(store.register("harness-rc1", "rc.1", None, None).is_err());
 
-        let promoted_alpha = store.promote("harness-alpha5").expect("alpha promotes");
+        let promoted_alpha = { let result = store.promote("harness-alpha5").expect("alpha promotes"); mark_fixture_healthy(&store, "harness-alpha5"); result };
         assert_eq!(
             promoted_alpha.current_release.as_deref(),
             Some("harness-alpha5")
         );
         assert!(promoted_alpha.last_known_good.is_none());
 
-        let promoted_rc = store.promote("harness-rc1").expect("rc promotes");
+        let promoted_rc = { let result = store.promote("harness-rc1").expect("rc promotes"); mark_fixture_healthy(&store, "harness-rc1"); result };
         assert_eq!(promoted_rc.current_release.as_deref(), Some("harness-rc1"));
         assert_eq!(
             promoted_rc.last_known_good.as_deref(),
@@ -3906,12 +4300,12 @@ mod tests {
         let paths = NexusPaths::from_root(root.clone());
         let store = super::ReleaseStore::new(paths.clone());
         store.register("good", "1", None, None).unwrap();
-        store.promote("good").unwrap();
+        { let result = store.promote("good").unwrap(); mark_fixture_healthy(&store, "good"); result };
         store.register("missing", "2", None, None).unwrap();
-        store.promote("missing").unwrap();
+        { let result = store.promote("missing").unwrap(); mark_fixture_healthy(&store, "missing"); result };
         fs::remove_file(paths.releases_dir.join("missing/manifest.json")).unwrap();
         assert_eq!(store.load().unwrap().last_known_good.as_deref(), Some("good"));
-        store.promote("good").unwrap();
+        { let result = store.promote("good").unwrap(); mark_fixture_healthy(&store, "good"); result };
         let catalog = store.load().unwrap();
         assert_eq!(catalog.current_release.as_deref(), Some("good"));
         assert!(catalog.last_known_good.is_none());
@@ -3929,8 +4323,8 @@ mod tests {
         store
             .register("harness-b", "b", None, None)
             .expect("release B registers");
-        store.promote("harness-a").expect("release A promotes");
-        store.promote("harness-b").expect("release B promotes");
+        { let result = store.promote("harness-a").expect("release A promotes"); mark_fixture_healthy(&store, "harness-a"); result };
+        { let result = store.promote("harness-b").expect("release B promotes"); mark_fixture_healthy(&store, "harness-b"); result };
 
         let restored = store
             .restore_checkpoint_release(Some("harness-a"))
@@ -3962,7 +4356,7 @@ mod tests {
             .restore_checkpoint_release(None)
             .expect("checkpoint without a release restores");
         assert_eq!(cleared.current_release, None);
-        assert_eq!(cleared.last_known_good.as_deref(), Some("harness-a"));
+        assert_eq!(cleared.last_known_good.as_deref(), Some("harness-b"));
         let rolled_back = store
             .restore_release_pointers(Some("harness-a"), Some("harness-b"))
             .expect("prior pointers restore exactly");
@@ -4071,6 +4465,48 @@ mod tests {
         assert!(recovered.error.is_some());
         assert_eq!(store.load().expect("state reloads"), recovered);
         let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn prepared_publication_retargets_workspace_directory_links() {
+        let root = unique_test_root("prepared-links");
+        let paths = NexusPaths::from_root(root.clone());
+        paths.ensure_directories().unwrap();
+        let candidate = paths.downloads_dir.join("candidate");
+        let target = candidate.join("packages/boot");
+        let link = candidate.join("apps/cli/node_modules/boot");
+        fs::create_dir_all(&target).unwrap();
+        fs::create_dir_all(link.parent().unwrap()).unwrap();
+        fs::write(target.join("index.js"), "export default 1").unwrap();
+        ReleaseStore::create_dir_junction(&link, &target).unwrap();
+        ReleaseStore::create_dir_junction(&candidate.join("boot-alias"), &link).unwrap();
+        let store = ReleaseStore::new(paths.clone());
+        store.register_prepared(&candidate, "harness-links", "rc.1", None, None).unwrap();
+        let slot = paths.releases_dir.join("harness-links");
+        assert!(!candidate.exists());
+        assert_eq!(fs::read_to_string(slot.join("apps/cli/node_modules/boot/index.js")).unwrap(), "export default 1");
+        assert_eq!(fs::canonicalize(slot.join("apps/cli/node_modules/boot")).unwrap(), fs::canonicalize(slot.join("packages/boot")).unwrap());
+        assert_eq!(fs::read_to_string(slot.join("boot-alias/index.js")).unwrap(), "export default 1");
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn prepared_publication_rejects_external_directory_links_before_move() {
+        let root = unique_test_root("prepared-external-link");
+        let paths = NexusPaths::from_root(root.clone());
+        paths.ensure_directories().unwrap();
+        let candidate = paths.downloads_dir.join("candidate");
+        let outside = root.join("user-data");
+        fs::create_dir_all(&candidate).unwrap();
+        fs::create_dir_all(&outside).unwrap();
+        fs::write(outside.join("keep.txt"), "user data").unwrap();
+        ReleaseStore::create_dir_junction(&candidate.join("external"), &outside).unwrap();
+        let store = ReleaseStore::new(paths.clone());
+        assert!(store.register_prepared(&candidate, "harness-links", "rc.1", None, None).is_err());
+        assert!(candidate.exists());
+        assert!(!paths.releases_dir.join("harness-links").exists());
+        assert_eq!(fs::read_to_string(outside.join("keep.txt")).unwrap(), "user data");
+        fs::remove_dir_all(root).unwrap();
     }
 
     #[test]
@@ -4441,6 +4877,9 @@ mod tests {
         paths.ensure_directories().unwrap();
         fs::create_dir_all(root.join("compatibility")).unwrap();
         fs::write(root.join("compatibility/latest.json"), "{\"status\":\"failed\"}").unwrap();
+        fs::create_dir_all(root.join("canary/work-test")).unwrap();
+        fs::write(root.join("canary/latest.json"), "{\"phase\":\"failed\",\"token\":\"CANARY_SECRET\"}").unwrap();
+        fs::write(root.join("canary/work-test/.env"), "PRIVATE_WORK_SECRET").unwrap();
         fs::write(root.join("run/checkpoint-restore.json"), "{\"phase\":\"prepared\"}").unwrap();
         let stdout = "zz-current.stdout.log";
         let stderr = "zz-current.stderr.log";
@@ -4461,6 +4900,10 @@ mod tests {
         assert!(!bytes.contains("MUST-NOT-LEAK"));
         assert!(bundle.files.iter().any(|f| f.name == "effective-config.json"));
         assert!(bundle.files.iter().any(|f| f.name == "compatibility/latest.json"));
+        assert!(bundle.files.iter().any(|f| f.name == "canary/latest.json"));
+        assert!(!bundle.files.iter().any(|f| f.name.contains("work-test")));
+        let canary = fs::read_to_string(PathBuf::from(&bundle.directory).join("files/canary/latest.json")).unwrap();
+        assert!(!canary.contains("CANARY_SECRET"));
         assert!(bundle.files.iter().any(|f| f.name == "run/checkpoint-restore.json"));
         let _ = fs::remove_dir_all(root);
     }
@@ -4556,7 +4999,8 @@ mod tests {
             NexusConfigFile::default()
         );
 
-        let document = NexusConfigFile {
+        let document = NexusConfigFile { update_attempt_id: None, external_harness: None,
+            schema_version: 1,
             harness_preferences: None,
             harness: Some(HarnessLaunchSpec {
                 mode: Default::default(),
@@ -4655,7 +5099,7 @@ mod tests {
         };
         let store = ConfigStore::new(paths.clone());
         store
-            .write(&NexusConfigFile {
+            .write(&NexusConfigFile { external_harness: None,
                 runtime: Some(runtime.clone()),
                 ..NexusConfigFile::default()
             })
@@ -4869,6 +5313,7 @@ mod tests {
 /// persisted here. Node mode is normalized to `program=node` and an entry
 /// script as the first process argument so the supervisor remains unchanged.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
 pub struct HarnessLaunchSpec {
     #[serde(default)]
     pub mode: HarnessLaunchMode,
@@ -5731,6 +6176,7 @@ pub fn unix_time_nanos_for_update() -> u128 {
 /// External update commands are configured by Nexus and run in a disposable
 /// candidate directory. No command is inferred from the Harness source tree.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
 pub struct UpdateSpec {
     pub source: String,
     #[serde(default = "default_update_ref")]
@@ -5925,8 +6371,17 @@ fn validate_update_args(args: &[String], label: &str) -> io::Result<()> {
     Ok(())
 }
 
-#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
 pub struct NexusConfigFile {
+    /// Ownership of automatic rollback for one in-flight update attempt.
+    /// Explicit replacement of update settings revokes this ownership.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub update_attempt_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub external_harness: Option<ExternalHarness>,
+    #[serde(default = "current_record_schema", deserialize_with = "deserialize_record_schema")]
+    pub schema_version: u32,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub harness_preferences: Option<nexus_protocol::HarnessPreferencesPayload>,
     #[serde(default)]
@@ -5941,8 +6396,55 @@ pub struct NexusConfigFile {
     pub snapshots: Option<SnapshotsConfig>,
 }
 
+/// Version 1 is also the explicitly supported pre-versioned format.
+pub fn current_record_schema() -> u32 { 1 }
+pub fn deserialize_record_schema<'de, D: serde::Deserializer<'de>>(d: D) -> Result<u32, D::Error> {
+    let version = u32::deserialize(d)?;
+    if version != 1 { return Err(serde::de::Error::custom("Unsupported persisted record schema")); }
+    Ok(version)
+}
+impl Default for NexusConfigFile {
+    fn default() -> Self { Self { update_attempt_id: None, external_harness: None, schema_version: 1, harness_preferences: None, harness: None, update: None, releases: None, runtime: None, snapshots: None } }
+}
+impl NexusConfigFile {
+    /// Explicit user intent revokes a prior automatic rollback, even when the
+    /// newly saved update settings happen to equal the previous settings.
+    pub fn set_update(&mut self, update: Option<UpdateSpec>) {
+        self.update = update;
+        self.update_attempt_id = None;
+    }
+}
+/// Read a versioned record; missing version is the supported legacy v1 layout.
+pub fn decode_versioned_record<T: serde::de::DeserializeOwned>(bytes: &[u8]) -> io::Result<T> {
+    let mut value: serde_json::Value = serde_json::from_slice(bytes).map_err(|_| invalid_data("Invalid persisted record"))?;
+    let fields = value.as_object_mut().ok_or_else(|| invalid_data("Invalid persisted record"))?;
+    if fields.remove("schema_version").is_some_and(|version| version.as_u64() != Some(1)) {
+        return Err(invalid_data("Unsupported persisted record schema"));
+    }
+    serde_json::from_value(value).map_err(|_| invalid_data("Unsupported persisted record fields"))
+}
+pub fn write_versioned_record<T: Serialize + serde::de::DeserializeOwned>(root: &Path, path: &Path, record: &T) -> io::Result<()> {
+    if let Some(bytes) = read_regular_file_bounded(path, 16 * 1024 * 1024)? { let _: T = decode_versioned_record(&bytes)?; }
+    let mut value = serde_json::to_value(record).map_err(invalid_data)?;
+    value.as_object_mut().ok_or_else(|| invalid_data("Invalid persisted record"))?.insert("schema_version".into(), 1.into());
+    let _: T = decode_versioned_record(&serde_json::to_vec(&value).map_err(invalid_data)?)?;
+    write_private_json_atomic(root, path, &value)
+}
+/// Strict dispatch preserves the two documented legacy single-section forms.
+fn decode_config_document(bytes: &[u8]) -> io::Result<NexusConfigFile> {
+    let value: serde_json::Value = serde_json::from_slice(bytes).map_err(|_| invalid_data("Invalid configuration format"))?;
+    let object = value.as_object().ok_or_else(|| invalid_data("Invalid configuration format"))?;
+    let document = if !object.contains_key("schema_version") && object.contains_key("program") {
+        NexusConfigFile { external_harness: None, harness: Some(serde_json::from_value(value).map_err(|_| invalid_data("Invalid legacy Harness configuration"))?), ..Default::default() }
+    } else if !object.contains_key("schema_version") && object.contains_key("source") {
+        NexusConfigFile { external_harness: None, update: Some(serde_json::from_value(value).map_err(|_| invalid_data("Invalid legacy update configuration"))?), ..Default::default() }
+    } else { serde_json::from_value(value).map_err(|_| invalid_data("Unsupported configuration schema or fields"))? };
+    Ok(document)
+}
+
 /// Nexus-owned release slot capacity settings.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
 pub struct ReleasesConfig {
     #[serde(default = "default_max_release_slots")]
     pub max_slots: u32,
@@ -5959,6 +6461,7 @@ fn default_max_release_slots() -> u32 {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
 pub struct SnapshotsConfig {
     #[serde(default = "default_healthy_snapshot_slots")]
     pub healthy_slots: u32,
@@ -5992,6 +6495,16 @@ fn default_max_manual_snapshots() -> u32 {
 
 /// Nexus-owned configuration writer, previous valid config and home protection. Harness
 /// source, working directories, and `$HOME/.dsh` are never modified here.
+#[derive(Debug, Clone)]
+pub struct ConfigSnapshot { pub document: NexusConfigFile, pub revision: String }
+#[derive(Debug)]
+struct ConfigRevisionConflict;
+impl std::fmt::Display for ConfigRevisionConflict {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result { f.write_str("Configuration changed since this draft was loaded. Keep the draft and refresh before saving again.") }
+}
+impl std::error::Error for ConfigRevisionConflict {}
+pub fn is_config_revision_conflict(error: &io::Error) -> bool { error.get_ref().is_some_and(|inner| inner.is::<ConfigRevisionConflict>()) }
+
 #[derive(Clone)]
 pub struct ConfigStore {
     paths: NexusPaths,
@@ -6010,6 +6523,38 @@ impl ConfigStore {
         &self.paths
     }
 
+    pub fn snapshot(&self) -> io::Result<ConfigSnapshot> {
+        let _guard = self.lock_gate()?;
+        self.settle_pending_unlocked()?;
+        self.snapshot_unlocked()
+    }
+    fn snapshot_unlocked(&self) -> io::Result<ConfigSnapshot> {
+        use sha2::{Digest, Sha256};
+        let bytes = read_regular_file_bounded(&self.paths.config_file, 4 * 1024 * 1024)?;
+        let document = bytes.as_deref().map(decode_config_document).transpose()?.unwrap_or_default();
+        validate_config_document(&self.paths, &document)?;
+        let revision = bytes.as_ref().map(|b| format!("sha256:{:x}", Sha256::digest(b))).unwrap_or_else(|| "missing".into());
+        Ok(ConfigSnapshot { document, revision })
+    }
+    pub fn transaction_if_revision<T>(&self, expected: &str, update: impl FnOnce(&mut NexusConfigFile) -> io::Result<T>) -> io::Result<(ConfigSnapshot, T)> {
+        let _guard = self.lock_gate()?;
+        self.settle_pending_unlocked()?;
+        let mut snapshot = self.snapshot_unlocked()?;
+        if snapshot.revision != expected { return Err(io::Error::new(io::ErrorKind::WouldBlock, ConfigRevisionConflict)); }
+        let result = update(&mut snapshot.document)?;
+        validate_config_document(&self.paths, &snapshot.document)?;
+        self.write_unlocked(&snapshot.document)?;
+        Ok((self.snapshot_unlocked()?, result))
+    }
+    pub fn restore_previous_if_revision(&self, expected: &str) -> io::Result<ConfigSnapshot> {
+        self.transaction_if_revision(expected, |document| {
+            let bytes = read_regular_file_bounded(&self.paths.root.join(PREVIOUS_CONFIG_FILE), 4 * 1024 * 1024)?
+                .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "No previous valid Nexus configuration is available"))?;
+            *document = decode_config_document(&bytes)?;
+            document.update_attempt_id = None;
+            Ok(())
+        }).map(|(snapshot, ())| snapshot)
+    }
     pub fn load(&self) -> io::Result<NexusConfigFile> {
         let _guard = self.lock_gate()?;
         self.settle_pending_unlocked()?;
@@ -6020,12 +6565,20 @@ impl ConfigStore {
         let Some(bytes) = read_regular_file_bounded(&self.paths.config_file, 4 * 1024 * 1024)? else {
             return Ok(NexusConfigFile::default());
         };
-        let document: NexusConfigFile = decode_json(&bytes).map_err(invalid_data)?;
+        let document = decode_config_document(&bytes)?;
         validate_config_document(&self.paths, &document)?;
         Ok(document)
     }
 
     pub fn write(&self, document: &NexusConfigFile) -> io::Result<()> {
+        let mut document = document.clone();
+        document.update_attempt_id = None;
+        self.write_recovery_document(&document)
+    }
+
+    /// Replay an already validated publication decision exactly. Ordinary
+    /// full-document saves must use `write` to revoke prior rollback ownership.
+    pub fn write_recovery_document(&self, document: &NexusConfigFile) -> io::Result<()> {
         validate_config_document(&self.paths, document)?;
         let _guard = self.lock_gate()?;
         self.write_unlocked(document)
@@ -6037,20 +6590,30 @@ impl ConfigStore {
         let _guard = self.lock_gate()?;
         self.settle_pending_unlocked()?;
         if self.load_unlocked()? != *expected { return Ok(false); }
-        self.write_unlocked(document)?;
+        let mut document = document.clone();document.update_attempt_id = None;
+        self.write_unlocked(&document)?;
         Ok(true)
     }
 
     fn write_unlocked(&self, document: &NexusConfigFile) -> io::Result<()> {
-        self.paths.ensure_directories()?;
         self.settle_pending_unlocked()?;
-        let previous = self.load_unlocked().ok();
+        let previous = Some(self.load_unlocked()?);
+        let mut document = document.clone();
+        if previous.as_ref().is_some_and(|old| old.update != document.update && old.update_attempt_id == document.update_attempt_id) {
+            document.update_attempt_id = None;
+        }
+        let document = &document;
+        if let Some(bytes) = read_regular_file_bounded(&self.paths.root.join(PREVIOUS_CONFIG_FILE), 4 * 1024 * 1024)? { validate_config_document(&self.paths, &decode_config_document(&bytes)?)?; }
+        self.paths.ensure_directories()?;
         let old_home = configured_harness_home(&self.paths.root)?;
         let new_home = document.harness_preferences.as_ref().and_then(|p| p.home.as_deref())
             .map(str::trim).filter(|value| !value.is_empty()).map(PathBuf::from);
         let inherited = env::var_os("DSH_HOME").filter(|value| !value.is_empty()).map(PathBuf::from);
+        // Program sources have their own protection registry below. Recording
+        // them as data homes as well exhausts that unrelated registry's limit.
         let homes: Vec<_> = old_home.into_iter().chain(new_home).chain(inherited).collect();
         protect_harness_homes(&self.paths.root, &homes)?;
+        external_harness::protect_locations(&self.paths,previous.as_ref().and_then(|p|p.external_harness.as_ref()),document.external_harness.as_ref())?;
         // Only these explicitly Nexus-owned files are tightened. A no-op save
         // must not rotate or rewrite the previous valid configuration bytes.
         for path in [&self.paths.config_file, &self.paths.root.join(PREVIOUS_CONFIG_FILE)] {
@@ -6068,7 +6631,8 @@ impl ConfigStore {
         let path = self.paths.root.join(PREVIOUS_CONFIG_FILE);
         let bytes = read_regular_file_bounded(&path, 4 * 1024 * 1024)?
             .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "No previous valid Nexus configuration is available"))?;
-        let previous: NexusConfigFile = decode_json(&bytes).map_err(invalid_data)?;
+        let mut previous = decode_config_document(&bytes)?;
+        previous.update_attempt_id = None;
         validate_config_document(&self.paths, &previous)?;
         // write_unlocked checks both old and new Harness homes and preserves
         // the current valid configuration as the next undo point.
@@ -6087,7 +6651,7 @@ impl ConfigStore {
         let result = update(&mut document)?;
         validate_config_document(&self.paths, &document)?;
         self.write_unlocked(&document)?;
-        Ok((document, result))
+        Ok((self.load_unlocked()?, result))
     }
 
     fn lock_gate(&self) -> io::Result<std::sync::MutexGuard<'static, ()>> {
@@ -6098,6 +6662,18 @@ impl ConfigStore {
 }
 
 fn validate_config_document(paths: &NexusPaths, document: &NexusConfigFile) -> io::Result<()> {
+    if document.update_attempt_id.as_ref().is_some_and(|id| id.len()!=64 || !id.bytes().all(|b|b.is_ascii_hexdigit())) {
+        return Err(invalid_data("Invalid update attempt identity"));
+    }
+    if let Some(source)=&document.external_harness {
+        if !source.root.is_absolute() || source.identity.is_empty() || source.fingerprint.len()!=64 {return Err(invalid_data("Invalid external Harness identity"));}
+        if config_protection::paths_overlap_by_identity(&paths.root,&source.root)? {return Err(invalid_data("External Harness overlaps Nexus directories"));}
+        if let Some(home)=document.harness_preferences.as_ref().and_then(|p|p.home.as_ref()) {
+            if config_protection::paths_overlap_by_identity(&source.root,Path::new(home))? {return Err(invalid_data("Harness home overlaps external program directory"));}
+        }
+    }
+
+    if document.schema_version != 1 { return Err(invalid_data("Unsupported configuration schema")); }
     if let Some(preferences) = &document.harness_preferences {
         normalize_harness_preferences(preferences.clone())?;
     }
@@ -6135,41 +6711,72 @@ fn validate_config_document(paths: &NexusPaths, document: &NexusConfigFile) -> i
     Ok(())
 }
 
-/// Read-only deletion guard; never acquire CONFIG_WRITE_GATE under RELEASE_GATE.
-fn ensure_configuration_paths_preserved(paths: &NexusPaths, target: &Path) -> io::Result<()> {
+/// Read-only launch references shared by preview and deletion. Never acquire
+/// CONFIG_WRITE_GATE or RELEASE_GATE here: deletion already owns its release gate.
+fn configuration_launch_paths(paths: &NexusPaths) -> io::Result<Vec<PathBuf>> {
     match fs::symlink_metadata(paths.root.join("config-write.pending.json")) {
         Ok(_) => return Err(io::Error::new(io::ErrorKind::WouldBlock, "Configuration recovery must finish before deleting a release")),
         Err(error) if error.kind() == io::ErrorKind::NotFound => {},
         Err(error) => return Err(error),
     }
     let bytes = read_regular_file_bounded(&paths.config_file, 4 * 1024 * 1024)?;
-    let config: NexusConfigFile = bytes.as_deref().map(decode_json).transpose().map_err(invalid_data)?.unwrap_or_default();
+    let config: NexusConfigFile = bytes.as_deref().map(decode_config_document).transpose()?.unwrap_or_default();
     let mut references = Vec::new();
+    if let Some(preferences) = &config.harness_preferences {
+        references.extend(preferences.patches.iter().flatten().map(PathBuf::from));
+        references.extend(preferences.patch_entries.iter().flatten().filter(|entry| entry.enabled && !entry.source.starts_with("https://")).map(|entry| PathBuf::from(&entry.source)));
+    }
+    if let Some(source)=&config.external_harness { references.push(source.root.clone()); }
     if let Some(runtime) = config.runtime {
         for pin in [runtime.node, runtime.pnpm, runtime.git].into_iter().flatten() { references.push(pin.path); }
     }
-    let harness = parse_harness_launch_spec(bytes.as_deref())?;
-    if let Some(harness) = harness {
-        let cwd = harness.working_dir.as_ref().filter(|path| path.is_absolute()).cloned()
-            .unwrap_or_else(|| paths.root.join(harness.working_dir.as_deref().unwrap_or(Path::new(""))));
-        if harness_program_is_node_runtime(&harness.program) || harness.mode == HarnessLaunchMode::Node {
-            for argument in &harness.args {
+    if let Some(harness) = parse_harness_launch_spec(bytes.as_deref())? {
+        let pointers = read_regular_file_bounded(&paths.release_pointers_file, 1024 * 1024)?
+            .map(|bytes| decode_json::<ReleasePointerDocument>(&bytes).map_err(invalid_data)).transpose()?;
+        if pointers.as_ref().is_some_and(|p| p.schema_version != RELEASE_SCHEMA_VERSION) {
+            return Err(invalid_data("Unsupported release pointer schema"));
+        }
+        let release_id = pointers.as_ref().and_then(|p| p.current_release.as_deref());
+        if let Some(id) = release_id { validate_release_id(id)?; }
+        let release_root = release_id.map(|id| paths.releases_dir.join(id));
+        let profile = ProfileStore::new(paths.clone()).read_unlocked()?
+            .map(|catalog| catalog.active_profile).unwrap_or_else(|| DEFAULT_PROFILE.to_owned());
+        validate_profile_name(&profile)?;
+        // An unresolved context stays relative and is protected conservatively.
+        // Do not guess an Agent working directory for arbitrary relative paths.
+        let render = |path: &Path| harness.render_path_for_context(path, &profile, release_id, release_root.as_deref())
+            .unwrap_or_else(|_| path.to_path_buf());
+        let cwd = harness.working_dir.as_deref().map(&render);
+        if let Some(directory) = &cwd { references.push(directory.clone()); }
+        let program = render(&harness.program);
+        if program.is_absolute() { references.push(program.clone()); }
+        else if program.components().count() > 1 {
+            references.push(cwd.as_ref().map_or_else(|| program.clone(), |cwd| cwd.join(&program)));
+        }
+        if harness_program_is_node_runtime(&program) || harness.mode == HarnessLaunchMode::Node {
+            let args = harness.render_args_for_context(&profile, release_id, release_root.as_deref())
+                .unwrap_or_else(|_| harness.args.clone());
+            for argument in &args {
                 let value = if argument.starts_with('-') { argument.split_once('=').map_or(argument.as_str(), |(_, value)| value) } else { argument.as_str() };
-                if value.starts_with('-') || ["{release_root}", "{profile}", "{dsh_home}"].iter().any(|token| value.contains(token)) || value.is_empty() { continue; }
+                if value.starts_with('-') || value.contains("{dsh_home}") || value.is_empty() { continue; }
                 let path = PathBuf::from(value);
-                references.push(if path.is_absolute() { path } else { cwd.join(path) });
+                references.push(if path.is_absolute() { path } else { cwd.as_ref().map_or_else(|| path.clone(), |cwd| cwd.join(&path)) });
             }
         }
-        if let Some(directory) = &harness.working_dir { references.push(directory.clone()); }
-        if harness.program.is_absolute() { references.push(harness.program); }
-        else if harness.program.components().count() > 1 {
-            references.push(harness.working_dir.unwrap_or(paths.root.clone()).join(harness.program));
-        }
     }
+    Ok(references)
+}
+
+fn configuration_paths_overlap(target: &Path, references: &[PathBuf]) -> io::Result<bool> {
     for reference in references {
-        if config_protection::paths_overlap_by_identity(target, &reference)? {
-            return Err(io::Error::new(io::ErrorKind::ResourceBusy, "Release contains a configured runtime or Harness launch path"));
-        }
+        if !reference.is_absolute() || config_protection::paths_overlap_by_identity(target, reference)? { return Ok(true); }
+    }
+    Ok(false)
+}
+
+fn ensure_configuration_paths_preserved(paths: &NexusPaths, target: &Path) -> io::Result<()> {
+    if configuration_paths_overlap(target, &configuration_launch_paths(paths)?)? {
+        return Err(io::Error::new(io::ErrorKind::ResourceBusy, "Release contains a configured runtime or Harness launch path"));
     }
     Ok(())
 }
@@ -6184,13 +6791,16 @@ pub fn load_harness_launch_spec(paths: &NexusPaths) -> io::Result<Option<Harness
         store.settle_pending_unlocked()?;
         read_regular_file_bounded(&paths.config_file, 4 * 1024 * 1024)?
     };
+    if let Some(bytes) = &bytes {
+        if let Some(source) = decode_config_document(bytes)?.external_harness { return Ok(Some(source.launch_spec(paths))); }
+    }
     parse_harness_launch_spec(bytes.as_deref())
 }
 
 /// Pure parsing and environment application, shared with deletion protection.
 fn parse_harness_launch_spec(bytes: Option<&[u8]>) -> io::Result<Option<HarnessLaunchSpec>> {
     let mut spec = if let Some(bytes) = bytes {
-        let document: NexusConfigFile = decode_json(bytes).map_err(invalid_data)?;
+        let document = decode_config_document(bytes)?;
         match document.harness {
             Some(spec) => Some(spec),
             None => decode_json::<HarnessLaunchSpec>(&bytes).ok(),
@@ -6273,8 +6883,12 @@ pub fn load_update_spec(paths: &NexusPaths) -> io::Result<Option<UpdateSpec>> {
         store.settle_pending_unlocked()?;
         read_regular_file_bounded(&paths.config_file, 4 * 1024 * 1024)?
     };
+    parse_update_spec(bytes.as_deref())
+}
+
+fn parse_update_spec(bytes: Option<&[u8]>) -> io::Result<Option<UpdateSpec>> {
     let mut spec = if let Some(bytes) = bytes {
-        let document: NexusConfigFile = decode_json(&bytes).map_err(invalid_data)?;
+        let document = decode_config_document(&bytes)?;
         match document.update {
             Some(spec) => Some(spec),
             None => decode_json::<UpdateSpec>(&bytes).ok(),
@@ -6331,6 +6945,14 @@ pub fn load_update_spec(paths: &NexusPaths) -> io::Result<Option<UpdateSpec>> {
     Ok(Some(configured))
 }
 
+/// Apply environment overrides to exactly the caller's captured document.
+pub fn effective_config_document(mut document: NexusConfigFile) -> io::Result<NexusConfigFile> {
+    let bytes = encode_json(&document).map_err(invalid_data)?;
+    document.harness = parse_harness_launch_spec(Some(&bytes))?;
+    document.update = parse_update_spec(Some(&bytes))?;
+    Ok(document)
+}
+
 fn invalid_data(error: impl std::fmt::Display) -> io::Error {
     io::Error::new(io::ErrorKind::InvalidData, error.to_string())
 }
@@ -6352,8 +6974,8 @@ mod private_config_tests {
         let root = env::temp_dir().join(format!("nexus-private-config-{}", unix_time_nanos_for_update()));
         let paths = NexusPaths::from_root(root.clone());
         let store = ConfigStore::new(paths.clone());
-        let a = NexusConfigFile { harness_preferences: Some(nexus_protocol::HarnessPreferencesPayload { telemetry_disabled: Some(true), ..Default::default() }), ..Default::default() };
-        let b = NexusConfigFile { harness_preferences: Some(nexus_protocol::HarnessPreferencesPayload { telemetry_disabled: Some(false), ..Default::default() }), ..Default::default() };
+        let a = NexusConfigFile { external_harness: None, harness_preferences: Some(nexus_protocol::HarnessPreferencesPayload { telemetry_disabled: Some(true), ..Default::default() }), ..Default::default() };
+        let b = NexusConfigFile { external_harness: None, harness_preferences: Some(nexus_protocol::HarnessPreferencesPayload { telemetry_disabled: Some(false), ..Default::default() }), ..Default::default() };
         store.write(&a).unwrap(); store.write(&b).unwrap();
         let backup = root.join(PREVIOUS_CONFIG_FILE);
         let original = fs::read(&backup).unwrap();
@@ -6395,3 +7017,7 @@ mod private_config_tests {
         fs::remove_dir_all(root).unwrap();
     }
 }
+
+pub use nexus_private_file::create_new_private_directory;
+
+pub use config_protection::paths_overlap_by_identity;

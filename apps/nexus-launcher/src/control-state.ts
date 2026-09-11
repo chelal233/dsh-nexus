@@ -3,6 +3,39 @@ export type HarnessControlGate = {
   externallyManaged: boolean;
 };
 
+export function pluginPolicyVerified(profiles: Record<string, unknown>): boolean {
+  const report = profiles.compatibility as Record<string, unknown> | undefined;
+  const checked = report?.checked_disabled_plugins;
+  const policy = Object.hasOwn(profiles, "disabled_plugins") ? profiles.disabled_plugins : [];
+  if (profiles.api_version !== "v1" || !Array.isArray(checked) || !Array.isArray(policy)
+      || !checked.every(value => typeof value === "string") || !policy.every(value => typeof value === "string")) return false;
+  const expected = new Set(checked), current = new Set(policy);
+  return expected.size === current.size && [...current].every(value => expected.has(value));
+}
+
+/** The server exposes one source profile's policy, never a per-profile map. */
+export function pluginIsolationChoice(profiles: Record<string, unknown>, profile: string, packageName: string, blocked: boolean) {
+  const manifests = Array.isArray(profiles.manifests) ? profiles.manifests as Record<string, unknown>[] : [];
+  const selected = manifests.find(item => item?.name === profiles.active_profile);
+  const displayed = manifests.find(item => item?.name === profile);
+  const report = profiles.compatibility && typeof profiles.compatibility === "object"
+    ? profiles.compatibility as Record<string, unknown> : {};
+  const selectedSource = selected?.source_profile || profiles.active_profile;
+  const policySource = report.source_profile || profiles.active_profile;
+  // v1 omits this field when the saved policy is empty. Explicit malformed
+  // values remain unknown; only an absent field receives the wire default.
+  const policy = Object.hasOwn(profiles, "disabled_plugins") ? profiles.disabled_plugins : [];
+  const eligible = !!packageName && !packageName.startsWith("@deepseek-ai/")
+    && Array.isArray(displayed?.bundles) && displayed.bundles.includes(packageName);
+  const known = profiles.api_version === "v1" && eligible && !!selected && !displayed?.source_profile && profile === selectedSource
+    && profile === policySource && Array.isArray(policy) && policy.every(item => typeof item === "string");
+  const disabled = known ? (policy as string[]).includes(packageName) : null;
+  const command = known && !blocked ? {
+    action: disabled ? "plugin_enable" : "plugin_disable", profile, package: packageName,
+  } : null;
+  return { eligible, known, disabled, command };
+}
+
 export function validStartupCheck(value: unknown): boolean {
   if (!value || typeof value !== "object" || Array.isArray(value)) return false;
   const report = value as Record<string, unknown>;
@@ -33,7 +66,23 @@ export function isMissingHarnessError(message: string): boolean {
   return /harness_not_configured|Harness is not configured|no verified DSH release is selected|no current release (?:is )?selected/i.test(message);
 }
 
+export function externalHarnessRoot(config: Record<string, unknown> | null): string | undefined {
+  const document = (config?.config ?? config ?? {}) as Record<string, unknown>;
+  const source = (config?.external_harness ?? document.external_harness) as Record<string, unknown> | undefined;
+  return typeof source?.root === "string" && source.root.length > 0 ? source.root : undefined;
+}
+export function hasHarnessSource(config: Record<string, unknown> | null, releases: Record<string, unknown> | null): boolean {
+  return !!externalHarnessRoot(config) || typeof releases?.current_release === "string" && releases.current_release.length > 0;
+}
+export function startupRepairTarget(id: string): {module: "guide"|"profiles"|"settings"|"maintenance";section?:string} {
+  if (["profile"].includes(id)) return {module:"profiles"};
+  if (["release","source","entry"].includes(id)) return {module:"guide"};
+  if (["recovery","recovery_mode","cold_operation","paused","pending_restore","transaction","installation"].includes(id)) return {module:"maintenance"};
+  return {module:"settings",section:["runtime","node","npm","pnpm","node_program","launch","working_directory"].includes(id)?"runtime":"harness"};
+}
+
 export function needsHarnessInstall(config: Record<string, unknown> | null, releases: Record<string, unknown> | null): boolean {
+  if (externalHarnessRoot(config)) return false;
   if (!config || !releases || !Array.isArray(releases.releases)) return false;
   const document = (config.config ?? config) as Record<string, unknown>;
   if (config.harness_env_override === true || document.harness_env_override === true) return false;
@@ -123,10 +172,11 @@ export function createFailureNoticeTracker() {
 }
 
 export function coldOperationIsTerminal(phase: unknown): boolean {
-  return phase === "succeeded" || phase === "cancelled" || phase === "failed";
+  return phase === "prepared" || phase === "succeeded" || phase === "cancelled" || phase === "failed";
 }
 
 export function actionNoticeKey(path: string, action: unknown): string {
+  if (path === "/v1/harness" && (action === "start" || action === "restart")) return "Harness startup requested. Check its status and Web entry to confirm readiness.";
   if (path === "/v1/updates" && (action === "offline_import" || action === "offline_export")) return "Offline package request accepted. Follow the current stage to confirm completion.";
   if (path === "/v1/updates" && (action === "switch" || action === "confirm")) {
     return "Installation request accepted. Follow the current stage below to confirm completion.";
@@ -176,6 +226,19 @@ export function runtimeSettingsGate(
 
 
 export const FIXED_PROFILE_PLUGINS = ["@deepseek-ai/dsh-base", "@deepseek-ai/dsh-web-app"];
+
+// Hidden windows retain a modest heartbeat so native tray state stays fresh.
+export function launcherPollDelay(state: string | undefined, unchangedFailures: number, hidden: boolean): number {
+  if (hidden) return 8000;
+  if (state === "busy") return 1000;
+  if (state === "starting") return 400;
+  if (state === "failed") return Math.min(8000, 400 * 2 ** Math.min(unchangedFailures, 5));
+  return 8000;
+}
+
+export function patchPreviewExpired(expiresAt: unknown, nowMillis: number): boolean {
+  return typeof expiresAt !== "number" || !Number.isFinite(expiresAt) || nowMillis >= expiresAt * 1000;
+}
 
 /** Dropping on a later row moves after it; on an earlier row moves before it. */
 export function pluginMoveTarget(order: string[], source: string, destination: string): { target: string | null } | null {

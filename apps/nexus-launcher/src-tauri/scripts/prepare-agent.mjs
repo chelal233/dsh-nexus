@@ -1,10 +1,10 @@
 import { access, copyFile, mkdir, rm } from "node:fs/promises";
 import path from "node:path";
 import { spawn } from "node:child_process";
-import { randomUUID } from "node:crypto";
 import { createInterface } from "node:readline";
 import { fileURLToPath } from "node:url";
 import { verifyStaticRuntime } from "./verify-static-runtime.mjs";
+import { selectBuildId } from "./release-gate.mjs";
 
 // This is a local, reproducible staging step for the three Nexus binaries. It
 // never downloads, edits, or starts Harness source or data.
@@ -58,12 +58,13 @@ function run(command, args, options) {
 }
 
 async function main() {
-const buildId = `${new Date().toISOString().replace(/[-:.]/g, "")}-${randomUUID().slice(0, 8)}`;
+const buildId = selectBuildId(process.env.NEXUS_BUILD_ID);
 const artifacts = await run(
   cargoCommand,
   [
     "build",
     "--release",
+    "-j", "2",
     ...packageNames.flatMap((packageName) => ["-p", packageName]),
     "--manifest-path",
     cargoManifest,

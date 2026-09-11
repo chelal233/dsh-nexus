@@ -116,7 +116,7 @@ impl UpdateExecutor {
         if !metadata.is_file() || nexus_core::path_is_reparse(&metadata) || metadata.len() > 256 * 1024 {
             return Err(io::Error::other("Invalid install operation record"));
         }
-        let operation: InstallOperation = serde_json::from_slice(&fs::read(path)?)?;
+        let operation: InstallOperation = nexus_core::decode_versioned_record(&fs::read(path)?)?;
         validate_release_id(&operation.operation_id)?;
         validate_release_id(&operation.release_id)?;
         let candidate = Path::new(&operation.candidate);
@@ -138,7 +138,7 @@ impl UpdateExecutor {
         if self.install_operation()?.is_some_and(|current| current.operation_id == operation.operation_id && current.cancel_requested) {
             operation.cancel_requested = true;
         }
-        nexus_core::write_json_atomic(&self.paths.root, &self.paths.root.join("install-operation.json"), &operation)
+        nexus_core::write_versioned_record(&self.paths.root, &self.paths.root.join("install-operation.json"), &operation)
     }
 
     fn finish_install_cleanup(&self, operation: &mut InstallOperation) -> io::Result<()> {
@@ -278,7 +278,8 @@ impl UpdateExecutor {
     /// holding the executor gate), then either promotes an already-installed
     /// slot with that version (fast path) or installs it and promotes the new
     /// slot. The caller must ensure Harness is quiescent; promotion here does
-    /// not re-check supervisor state.
+    /// not re-check supervisor state. A failed attempt restores its update ref
+    /// without undoing unrelated configuration edits made in the meantime.
     #[allow(dead_code)]
     pub(crate) async fn switch_tag_owned(
         &self,
@@ -287,15 +288,20 @@ impl UpdateExecutor {
     ) -> Result<UpdateResponse, UpdateExecutorError> {
         validate_update_ref(&tag).map_err(UpdateExecutorError::Configuration)?;
         let config_store = ConfigStore::new(self.paths.clone());
-        config_store
+        let (attempted_config, (original, original_bytes, original_undo)) = config_store
             .transaction(|document| {
+                let original = document.clone();
+                let original_bytes = nexus_core::read_regular_file_bounded(&self.paths.config_file, 4 * 1024 * 1024)?
+                    .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "configuration is missing"))?;
+                let original_undo = nexus_core::read_regular_file_bounded(&self.paths.root.join("config.previous.json"), 4 * 1024 * 1024)?;
                 let spec = document.update.as_mut().ok_or_else(|| {
                     io::Error::new(io::ErrorKind::NotFound, "update is not configured")
                 })?;
                 if spec.ref_name != tag {
                     spec.ref_name = tag.clone();
                 }
-                Ok(())
+                document.update_attempt_id = Some(nexus_core::agent_auth::random_hex()?);
+                Ok((original, original_bytes, original_undo))
             })
             .map_err(|error| {
                 if error.kind() == io::ErrorKind::NotFound {
@@ -304,8 +310,42 @@ impl UpdateExecutor {
                     UpdateExecutorError::Configuration(error)
                 }
             })?;
+        let mut promoted = false;
+        let mut attempt_release = None;
+        let attempt_started = unix_time_seconds();
+        let outcome = self.switch_configured_tag_owned(tag, _guard, &mut promoted, &mut attempt_release, attempt_started).await;
+        if let Err(error) = outcome {
+            // Promotion has its own durable commit. A later status-file error
+            // must not put the ref back while the new release remains selected.
+            if promoted { return Err(error); }
+            let restored = config_store.restore_failed_update_ref(&attempted_config, &original, &original_bytes, &original_undo);
+            let summary = match &restored {
+                Ok(()) => "Previous update ref and undo configuration restored".to_owned(),
+                Err(restore) => format!("Configuration recovery did not overwrite newer or unavailable files: {restore}"),
+            };
+            // Publish the terminal explanation after configuration recovery, so
+            // diagnostics describe the actual result, including CAS conflicts.
+            let failed = UpdateRuntimeInfo {
+                state: UpdateState::Failed, release_id: attempt_release,
+                started_at_unix: Some(attempt_started), finished_at_unix: Some(unix_time_seconds()),
+                exit_code: error_exit_code(&error), error: Some(format!("{error}; {summary}")),
+            };
+            if let Err(persistence) = self.state.write(&failed) {
+                return Err(UpdateExecutorError::Persistence(io::Error::new(persistence.kind(),
+                    format!("{error}; {summary}; failed to persist recovery result: {persistence}"))));
+            }
+            return match restored {
+                Ok(()) => Err(error),
+                Err(restore) => Err(UpdateExecutorError::Configuration(io::Error::new(restore.kind(), format!("{error}; {summary}")))),
+            };
+        }
+        outcome
+    }
+
+    async fn switch_configured_tag_owned(&self, tag: String, _guard: &OwnedMutexGuard<()>, promoted: &mut bool, attempt_release: &mut Option<String>, started_at: u64)
+        -> Result<UpdateResponse, UpdateExecutorError> {
         if let Some(manifest) = self.latest_slot_for_tag(&tag)? {
-            let started_at = unix_time_seconds();
+            *attempt_release = Some(manifest.id.clone());
             let catalog = match self.promote_for_switch(&manifest.id).await {
                 Ok(catalog) => catalog,
                 Err(error) => {
@@ -317,6 +357,7 @@ impl UpdateExecutor {
                     ));
                 }
             };
+            *promoted = true;
             let finished = UpdateRuntimeInfo {
                 state: UpdateState::Succeeded,
                 release_id: Some(manifest.id.clone()),
@@ -340,8 +381,8 @@ impl UpdateExecutor {
             .map_err(UpdateExecutorError::Configuration)?
             .ok_or(UpdateExecutorError::NotConfigured)?;
         let release_id = resolve_release_id(None, &spec)?;
+        *attempt_release = Some(release_id.clone());
         let version = resolve_release_version(None, &spec)?;
-        let started_at = unix_time_seconds();
         let running = UpdateRuntimeInfo::running(release_id.clone(), started_at);
         self.state
             .write(&running)
@@ -396,6 +437,7 @@ impl UpdateExecutor {
                 ));
             }
         };
+        *promoted = true;
         let finished = UpdateRuntimeInfo {
             state: UpdateState::Succeeded,
             release_id: Some(manifest.id.clone()),
@@ -432,9 +474,8 @@ impl UpdateExecutor {
             )));
         }
         // releases.promote retargets stale harness launch paths internally.
-        let catalog = self
-            .releases
-            .promote(release_id)
+        let external = nexus_core::ConfigStore::new(self.paths.clone()).load().map_err(UpdateExecutorError::Persistence)?.external_harness.is_some();
+        let catalog = if external { self.releases.promote(release_id) } else { self.releases.promote_with_rollback(release_id) }
             .map_err(UpdateExecutorError::Persistence)?;
         Ok(catalog)
     }
@@ -565,6 +606,10 @@ impl UpdateExecutor {
                 "update candidate directory already exists",
             )));
         }
+        // Clone/build size is not knowable before execution; this is a floor,
+        // on the candidate's actual volume. Publication renames this tree.
+        nexus_core::disk::ensure_free_space(candidate, nexus_core::disk::MIN_INSTALL_FREE_BYTES)
+            .map_err(UpdateExecutorError::Configuration)?;
         let clone_spec = spec.clone();
         let clone_candidate = candidate.to_owned();
         let clone_directory = self.paths.run_dir.clone();
@@ -790,7 +835,8 @@ def	refs/tags/v0.9.0^{}
 
     fn write_test_update(paths: &NexusPaths, git_program: PathBuf) {
         ConfigStore::new(paths.clone())
-            .write(&NexusConfigFile {
+            .write(&NexusConfigFile { update_attempt_id: None, external_harness: None,
+                schema_version: 1,
                 harness_preferences: None,
                 harness: None,
                 update: Some(UpdateSpec {
@@ -996,7 +1042,8 @@ def	refs/tags/v0.9.0^{}
         ));
         let paths = NexusPaths::from_root(root.clone());
         ConfigStore::new(paths.clone())
-            .write(&NexusConfigFile {
+            .write(&NexusConfigFile { update_attempt_id: None, external_harness: None,
+                schema_version: 1,
                 harness_preferences: None,
                 harness: None,
                 update: Some(UpdateSpec {
@@ -1142,6 +1189,128 @@ def	refs/tags/v0.9.0^{}
     }
 
     #[tokio::test]
+    async fn rejected_switch_restores_its_ref_without_overwriting_concurrent_edits() {
+        for edit in ["none", "preferences", "preferences-twice", "update", "same-update", "aba-update", "full-save"] {
+            let root = std::env::temp_dir().join(format!("nexus-switch-ref-{edit}-{}", nexus_core::unix_time_nanos_for_update()));
+            let paths = NexusPaths::from_root(root.clone()); paths.ensure_directories().unwrap();
+            write_test_update(&paths, fake_git_program(&root));
+            let store = ConfigStore::new(paths.clone());
+            let original = store.load().unwrap();
+            let original_bytes=fs::read(&paths.config_file).unwrap();
+            let undo_path=paths.root.join("config.previous.json");
+            let original_undo=nexus_core::read_regular_file_bounded(&undo_path,4*1024*1024).unwrap();
+            let releases = ReleaseStore::new(paths.clone());
+            releases.register("old", "v-old", None, None).unwrap();
+            releases.register("new", "v-new", None, None).unwrap();
+            releases.promote("old").unwrap(); // Upgraded installation without healthy evidence.
+            let executor = UpdateExecutor::new(paths.clone(), releases.clone());
+            let (reached, wait) = oneshot::channel(); let (resume, pause) = oneshot::channel();
+            executor.observe_next_switch_promotion(reached, pause).await;
+            let owner = executor.clone();
+            let attempt = tokio::spawn(async move {
+                let guard = owner.try_acquire_gate()?;
+                owner.switch_tag_owned("v-new".into(), &guard).await
+            });
+            timeout(Duration::from_secs(3), wait).await.unwrap().unwrap();
+            if edit == "full-save" {
+                store.write(&store.load().unwrap()).unwrap();
+            } else if edit != "none" {
+                store.transaction(|config| {
+                    if edit.starts_with("preferences") { config.harness_preferences.get_or_insert_with(Default::default).telemetry_disabled = Some(true); }
+                    else if edit=="same-update" { config.set_update(config.update.clone()); }
+                    else { config.update.as_mut().unwrap().ref_name = "v-external".into(); }
+                    Ok(())
+                }).unwrap();
+                if edit=="preferences-twice" {
+                    store.transaction(|config| {config.harness_preferences.as_mut().unwrap().open_browser=Some(false);Ok(())}).unwrap();
+                }
+                if edit=="aba-update" { store.transaction(|config| {config.update.as_mut().unwrap().ref_name="v-new".into();Ok(())}).unwrap(); }
+            }
+            resume.send(()).unwrap();
+            let error = attempt.await.unwrap().unwrap_err().to_string();
+            assert!(error.contains("rollback_health_required"), "{error}");
+            let mut expected = original;
+            if edit.starts_with("preferences") { expected.harness_preferences.get_or_insert_with(Default::default).telemetry_disabled = Some(true); }
+            if edit=="preferences-twice" { expected.harness_preferences.as_mut().unwrap().open_browser=Some(false); }
+            let conflict=matches!(edit,"update"|"same-update"|"aba-update"|"full-save");
+            if conflict {
+                expected.update.as_mut().unwrap().ref_name = if edit=="update" {"v-external"} else {"v-new"}.into();
+                assert!(error.contains("changed concurrently"));
+            }
+            assert_eq!(store.load().unwrap(), expected, "{edit}");
+            assert_eq!(releases.load().unwrap().current_release.as_deref(), Some("old"));
+            assert_eq!(executor.status().unwrap().state, UpdateState::Failed);
+            let explanation=executor.status().unwrap().error.unwrap();
+            if conflict { assert!(explanation.contains("newer settings were retained")); }
+            else {
+                assert!(explanation.contains("Previous update ref and undo configuration restored"));
+                if edit=="none" {
+                    assert_eq!(fs::read(&paths.config_file).unwrap(),original_bytes);
+                    assert_eq!(nexus_core::read_regular_file_bounded(&undo_path,4*1024*1024).unwrap(),original_undo);
+                } else {
+                    let undo: nexus_core::NexusConfigFile=serde_json::from_slice(&fs::read(&undo_path).unwrap()).unwrap();
+                    assert_eq!(undo.update.as_ref().unwrap().ref_name,expected.update.as_ref().unwrap().ref_name);
+                    if edit=="preferences-twice" {
+                        assert_eq!(undo.harness_preferences.as_ref().unwrap().telemetry_disabled,Some(true));
+                        assert_ne!(undo.harness_preferences.as_ref().unwrap().open_browser,Some(false));
+                    }
+                    store.restore_previous().unwrap();
+                    assert_eq!(store.load().unwrap().update.unwrap().ref_name,expected.update.unwrap().ref_name);
+                }
+            }
+            fs::remove_dir_all(root).unwrap();
+        }
+    }
+
+    #[tokio::test]
+    async fn early_switch_failure_does_not_relabel_a_previous_success() {
+        let root=std::env::temp_dir().join(format!("nexus-early-switch-{}",nexus_core::unix_time_nanos_for_update()));
+        let paths=NexusPaths::from_root(root.clone());paths.ensure_directories().unwrap();write_test_update(&paths,fake_git_program(&root));
+        let releases=ReleaseStore::new(paths.clone());releases.register("old","v-old",None,None).unwrap();
+        let executor=UpdateExecutor::new(paths.clone(),releases);
+        executor.state.write(&nexus_protocol::UpdateRuntimeInfo{state:UpdateState::Succeeded,release_id:Some("old".into()),started_at_unix:Some(1),finished_at_unix:Some(2),exit_code:Some(0),error:None}).unwrap();
+        fs::write(&paths.release_pointers_file,b"{broken").unwrap();
+        let guard=executor.try_acquire_gate().unwrap();
+        assert!(executor.switch_tag_owned("v-new".into(),&guard).await.is_err());
+        let result=executor.status().unwrap();assert_eq!(result.state,UpdateState::Failed);assert_eq!(result.release_id,None);
+        assert!(result.started_at_unix.unwrap()>2);assert!(result.error.unwrap().contains("Previous update ref and undo configuration restored"));
+        fs::remove_dir_all(root).unwrap();
+    }
+    #[tokio::test]
+    #[cfg(windows)]
+    async fn committed_switch_keeps_new_ref_when_final_status_file_is_locked() {
+        use std::os::windows::fs::OpenOptionsExt;
+        for fast in [true, false] {
+            let root = std::env::temp_dir().join(format!("nexus-switch-status-{fast}-{}", nexus_core::unix_time_nanos_for_update()));
+            let paths = NexusPaths::from_root(root.clone()); paths.ensure_directories().unwrap();
+            write_test_update(&paths, fake_git_program(&root));
+            let releases = ReleaseStore::new(paths.clone());
+            if fast { releases.register("fast-post", "v-post", None, None).unwrap(); }
+            let executor = UpdateExecutor::new(paths.clone(), releases.clone());
+            executor.state.write(&nexus_protocol::UpdateRuntimeInfo::idle()).unwrap();
+            let (reached, wait) = oneshot::channel(); let (resume, pause) = oneshot::channel();
+            executor.observe_next_switch_promotion(reached, pause).await;
+            let owner = executor.clone();
+            let attempt = tokio::spawn(async move {
+                let guard = owner.try_acquire_gate()?;
+                owner.switch_tag_owned("v-post".into(), &guard).await
+            });
+            timeout(Duration::from_secs(5), wait).await.unwrap().unwrap();
+            let lock = fs::OpenOptions::new().read(true).share_mode(3).open(&paths.update_state_file).unwrap();
+            let before = fs::read(&paths.update_state_file).unwrap();
+            resume.send(()).unwrap();
+            let error = attempt.await.unwrap().unwrap_err();
+            assert!(matches!(error, UpdateExecutorError::Persistence(_)), "{error}");
+            let catalog = releases.load().unwrap();
+            assert_eq!(catalog.find(catalog.current_release.as_deref().unwrap()).unwrap().version, "v-post");
+            assert_eq!(ConfigStore::new(paths.clone()).load().unwrap().update.unwrap().ref_name, "v-post");
+            assert_eq!(fs::read(&paths.update_state_file).unwrap(), before);
+            drop(lock);
+            fs::remove_dir_all(root).unwrap();
+        }
+    }
+
+    #[tokio::test]
     async fn fast_switch_preserves_validation_and_configuration_errors() {
         let root = std::env::temp_dir().join(format!(
             "nexus-switch-fast-{}-{}",
@@ -1194,7 +1363,8 @@ def	refs/tags/v0.9.0^{}
         ));
         drop(guard);
         ConfigStore::new(paths.clone())
-            .write(&NexusConfigFile {
+            .write(&NexusConfigFile { update_attempt_id: None, external_harness: None,
+                schema_version: 1,
                 harness_preferences: None,
                 harness: None,
                 update: None,

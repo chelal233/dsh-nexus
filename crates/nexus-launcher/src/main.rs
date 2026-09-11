@@ -240,6 +240,13 @@ async fn main() {
         }
         return;
     }
+    if env::args_os().nth(1).as_deref() == Some(std::ffi::OsStr::new("installer-authenticated-shutdown")) {
+        if let Err(message) = installer_shutdown::authenticated_shutdown().await {
+            eprintln!("nexus-launcher installer shutdown: {message}");
+            process::exit(1);
+        }
+        return;
+    }
     if env::args_os().nth(1).as_deref() == Some(std::ffi::OsStr::new("installer-stop")) {
         if let Err(message) = installer_shutdown::run(env::args_os().skip(2).collect()) {
             eprintln!("nexus-launcher installer-stop: {message}");
@@ -1670,6 +1677,31 @@ mod tests {
     use nexus_protocol::{HarnessRuntimeInfo, HealthResponse};
     use reqwest::Client;
 
+    async fn authenticated_mock_agent(
+        State(credential): State<nexus_core::agent_auth::AgentCredential>, request: Request, next: Next,
+    ) -> Response {
+        use nexus_core::agent_auth as auth;
+        if request.method() == axum::http::Method::GET && request.uri().path() == "/v1/health" { return next.run(request).await; }
+        let (mut parts, body) = request.into_parts();
+        let nonce = parts.headers.get(auth::NONCE_HEADER).and_then(|v|v.to_str().ok()).unwrap().to_owned();
+        let time = parts.headers.get(auth::TIME_HEADER).and_then(|v|v.to_str().ok()).unwrap();
+        let signature = parts.headers.get(auth::SIGNATURE_HEADER).and_then(|v|v.to_str().ok()).unwrap();
+        assert_eq!(parts.headers.get(auth::VERSION_HEADER).unwrap(), "2");
+        let ciphertext = to_bytes(body, 1024 * 1024).await.unwrap();
+        assert!(credential.verify_request(parts.method.as_str(), parts.uri.path(), &nonce, time, &ciphertext, signature));
+        let plaintext = credential.open_request(parts.method.as_str(), parts.uri.path(), &nonce, time, &ciphertext).unwrap();
+        parts.headers.remove(axum::http::header::CONTENT_LENGTH);
+        let response = next.run(Request::from_parts(parts, Body::from(plaintext))).await;
+        let (mut parts, body) = response.into_parts();
+        let bytes = to_bytes(body, 1024 * 1024).await.unwrap();
+        let ciphertext = credential.seal_response(&nonce, parts.status.as_u16(), &bytes).unwrap();
+        let signature = credential.response_signature(&nonce, parts.status.as_u16(), &ciphertext);
+        parts.headers.insert(auth::VERSION_HEADER, "2".parse().unwrap());
+        parts.headers.insert(auth::RESPONSE_HEADER, signature.parse().unwrap());
+        parts.headers.insert(axum::http::header::CONTENT_LENGTH, ciphertext.len().to_string().parse().unwrap());
+        Response::from_parts(parts, Body::from(ciphertext))
+    }
+
     fn test_harness_log_session(
         paths: &NexusPaths,
         run_id: &str,
@@ -1809,6 +1841,7 @@ mod tests {
         paths.ensure_directories().expect("root creates");
         let data_root_id = data_root_identity(&paths).expect("root identity reads");
         let instance_id = "expected-instance".to_owned();
+        let credential = nexus_core::agent_auth::AgentCredential::publish(&paths, &instance_id).unwrap();
         let health = HealthResponse::healthy(data_root_id.clone(), instance_id.clone());
         let expected_root = data_root_id.clone();
         let expected_instance = instance_id.clone();
@@ -1842,6 +1875,7 @@ mod tests {
                     }
                 }),
             );
+        let app = app.layer(middleware::from_fn_with_state(credential, authenticated_mock_agent));
         let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0))
             .await
             .expect("Agent mock binds");
@@ -2077,6 +2111,7 @@ mod tests {
             .expect("Harness stdout metadata reads")
             .len();
         let current_session = test_harness_log_session(&paths, "run-gated", 1, stdout_watermark, 0);
+        let credential = nexus_core::agent_auth::AgentCredential::publish(&paths, "runtime-token-agent").unwrap();
         let runtime = std::sync::Arc::new(std::sync::Mutex::new(HarnessRuntimeInfo::running(
             42,
             unix_time_seconds(),
@@ -2121,6 +2156,7 @@ mod tests {
                     }
                 }),
             );
+        let app = app.layer(middleware::from_fn_with_state(credential, authenticated_mock_agent));
         let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0))
             .await
             .expect("mock Agent binds");
