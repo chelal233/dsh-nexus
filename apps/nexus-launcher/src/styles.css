@@ -414,3 +414,19 @@ body, [data-theme="light"] body { background: var(--bg); }
 .canary-summary .detail-list { margin: 4px 0; gap: 10px; }
 .canary-summary details { margin-top: 6px; }
 @media(max-width:640px) { .storage-item { flex-wrap: wrap; } .request-table { font-size: .8rem; } }
+
+/* Patch rows follow the profile directory hierarchy. */
+.patch-list { margin: 12px 0; }
+.patch-entry { border-bottom: 1px solid var(--line-strong); padding: 12px 0; min-width: 0; }
+.patch-row-toggle { flex: 1; min-width: 0; }
+.patch-source { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.patch-number { opacity: .6; font-variant-numeric: tabular-nums; }
+.patch-row-actions { flex-shrink: 0; margin: 0; }
+.patch-row-actions label { display: flex; align-items: center; gap: 4px; white-space: nowrap; }
+.patch-editor { margin: 12px 0 4px 20px; padding-left: 14px; border-left: 2px solid var(--line-strong); }
+.patch-editor[hidden] { display: none; }
+@media (max-width: 1000px) {
+  .patch-entry-header { flex-wrap: wrap; }
+  .patch-row-toggle { flex-basis: 100%; }
+  .patch-row-actions { flex-wrap: wrap; margin-left: 20px; }
+}

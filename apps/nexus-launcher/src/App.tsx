@@ -3087,6 +3087,7 @@ function HarnessPreferencesPanel({ snapshot, busyAction, runAction, children }: 
   const preferencesRevision = useDraftRevision(snapshot.config, dirty, "preferences.revision");
   const [error, setError] = useState<string | null>(null);
   const [patchBusy, setPatchBusy] = useState(false);
+  const [expandedPatch, setExpandedPatch] = useState<number | null>(null);
   const [patchPreview, setPatchPreview] = useState<JsonObject | null>(null);
   const [previewNow, setPreviewNow] = useState(Date.now);
   useEffect(() => {
@@ -3140,7 +3141,7 @@ function HarnessPreferencesPanel({ snapshot, busyAction, runAction, children }: 
     </select>
   </label>;
   const editPatches = (entries: HarnessPreferencesDraft["patch_entries"]) => { setDraft(current => ({ ...current, patches: "", patch_entries: entries })); setDirty(true); setError(null); };
-  const movePatch = (index: number, direction: number) => { const entries = [...draft.patch_entries]; [entries[index], entries[index + direction]] = [entries[index + direction], entries[index]]; editPatches(entries); };
+  const movePatch = (index: number, direction: number) => { const entries = [...draft.patch_entries]; [entries[index], entries[index + direction]] = [entries[index + direction], entries[index]]; editPatches(entries); setExpandedPatch(current => current === index ? index + direction : current === index + direction ? index : current); };
   const save = async (download = false) => {
     if (disabled) return;
     const result = preferencesPayload(draft);
@@ -3180,8 +3181,22 @@ function HarnessPreferencesPanel({ snapshot, busyAction, runAction, children }: 
       <p className="field-help">{t("Danger full access removes the default sandbox restrictions and automatic approval prompts. Tool mode applies to web and headless profiles.")}</p>
       <h3>{t("Runtime configuration patches")}</h3>
       <p className="field-help">{t("Applied from top to bottom after the profile configuration. Later patches act on the result of earlier patches. Save and restart Harness to apply changes.")}</p>
-      {draft.patch_entries.map((entry, index) => <div className="form-field" key={index}>
-        <label><input type="checkbox" disabled={disabled} checked={entry.enabled} onChange={event => editPatches(draft.patch_entries.map((item, i) => i === index ? { ...item, enabled: event.target.checked } : item))} />{t("Enabled")}</label>
+      <div className="patch-list">
+      {draft.patch_entries.map((entry, index) => <section className="patch-entry" key={index}>
+        <div className="profile-entry-header patch-entry-header">
+          <button type="button" className="profile-row-toggle patch-row-toggle" aria-expanded={expandedPatch === index} aria-controls={`patch-editor-${index}`} onClick={() => setExpandedPatch(expandedPatch === index ? null : index)}>
+            <span className="profile-chevron" aria-hidden="true">{expandedPatch === index ? "▾" : "▸"}</span>
+            <span className="patch-number">{index + 1}</span>
+            <strong className="patch-source" title={entry.source}>{entry.source || t("Add patch")}</strong>
+          </button>
+          <div className="button-row patch-row-actions">
+            <label><input type="checkbox" disabled={disabled} checked={entry.enabled} onChange={event => editPatches(draft.patch_entries.map((item, i) => i === index ? { ...item, enabled: event.target.checked } : item))} />{t("Enabled")}</label>
+            <ActionButton disabled={disabled || index === 0} onClick={() => movePatch(index, -1)}>{t("Move up")}</ActionButton>
+            <ActionButton disabled={disabled || index + 1 === draft.patch_entries.length} onClick={() => movePatch(index, 1)}>{t("Move down")}</ActionButton>
+            <ActionButton tone="danger" disabled={disabled} onClick={() => { editPatches(draft.patch_entries.filter((_, i) => i !== index)); setExpandedPatch(current => current === index ? null : current !== null && current > index ? current - 1 : current); }}>{t("Remove patch entry")}</ActionButton>
+          </div>
+        </div>
+        <div id={`patch-editor-${index}`} className="patch-editor form-field" hidden={expandedPatch !== index}>
         <label><span className="field-label">{t("Local absolute path or HTTPS / GitHub file URL")}</span><input className="form-input" disabled={disabled} value={entry.source} onChange={event => editPatches(draft.patch_entries.map((item, i) => i === index ? { source: event.target.value, enabled: item.enabled } : item))} /></label>
         {entry.source.startsWith("https://github.com/") && <div className="form-grid">
           <label><span className="field-label">{t("GitHub reference type")}</span><select className="form-input" disabled={disabled} value={githubRefKind(entry)} onChange={event => editPatches(draft.patch_entries.map((item, i) => i === index ? { ...item, github_ref_kind: event.target.value, github_ref_name: item.github_ref_name ?? item.source.split("/blob/")[1]?.split("/")[0] ?? "", sha256: undefined, cache_identity: undefined, resolved_commit: undefined } : item))}><option value="branch">{t("Branch")}</option><option value="tag">{t("Tag")}</option><option value="commit">{t("Commit")}</option></select></label>
@@ -3197,9 +3212,10 @@ function HarnessPreferencesPanel({ snapshot, busyAction, runAction, children }: 
           <label><span className="field-label">{t("GitHub file path")}</span><input className="form-input" disabled={disabled} value={entry.github_file_path ?? entry.source.split("/blob/")[1]?.split("/").slice(1).join("/") ?? ""} onChange={event => editPatches(draft.patch_entries.map((item, i) => i === index ? { ...item, github_file_path: event.target.value, sha256: undefined, cache_identity: undefined, resolved_commit: undefined } : item))} /></label>
         </div>}
         <span className="field-help">{entry.sha256 ? `${t("Cached SHA256")}: ${entry.sha256}` : entry.source.startsWith("https://") ? t("Not downloaded") : t("Local file")}</span>
-        <div className="button-row"><ActionButton disabled={disabled || index === 0} onClick={() => movePatch(index, -1)}>{t("Move up")}</ActionButton><ActionButton disabled={disabled || index + 1 === draft.patch_entries.length} onClick={() => movePatch(index, 1)}>{t("Move down")}</ActionButton><ActionButton disabled={disabled} onClick={() => editPatches(draft.patch_entries.filter((_, i) => i !== index))}>{t("Remove patch entry")}</ActionButton></div>
-      </div>)}
-      <div className="button-row"><ActionButton disabled={disabled || draft.patch_entries.length >= 32} onClick={() => editPatches([...draft.patch_entries, { source: "", enabled: true }])}>{t("Add patch")}</ActionButton><ActionButton disabled={disabled || !draft.patch_entries.some(entry => entry.enabled && entry.source.startsWith("https://"))} onClick={() => void save(true)}>{t("Preview remote patch update")}</ActionButton></div>
+        </div>
+      </section>)}
+      </div>
+      <div className="button-row"><ActionButton disabled={disabled || draft.patch_entries.length >= 32} onClick={() => { setExpandedPatch(draft.patch_entries.length); editPatches([...draft.patch_entries, { source: "", enabled: true }]); }}>{t("Add patch")}</ActionButton><ActionButton disabled={disabled || !draft.patch_entries.some(entry => entry.enabled && entry.source.startsWith("https://"))} onClick={() => void save(true)}>{t("Preview remote patch update")}</ActionButton></div>
       {patchPreview && <div className="status-block"><strong>{t("Patch update preview")}</strong><p role="status">{previewExpired ? t("This patch preview has expired. Preview again before applying.") : t("Preview valid for {seconds} more seconds", { seconds: Math.max(0, Math.ceil(Number(patchPreview.expires_at_unix) - previewNow / 1000)) })}</p><p>{t("Preview downloads candidates but does not save settings. Apply uses these exact cached files without downloading again. Changes are a bounded, redacted line comparison; unchanged or sensitive text may be omitted.")}</p>
         {arrayValue(patchPreview, "entries").map((value, index) => { const row = asObject(value); const changes = asObject(row.changes); return <details key={index}><summary>{stringValue(row, "source")}</summary><p>{t("Previous SHA256")}: {stringValue(row, "old_sha256") || t("Not available")}</p>{row.old_bytes == null && <p>{t("No previous content is available for comparison. The preview shows candidate content, not a verified set of additions.")}</p>}<p>{t("Candidate SHA256")}: {stringValue(row, "new_sha256")}</p><p>{t("Cached commit")}: {stringValue(row, "old_commit") || t("Not available")} → {stringValue(row, "new_commit") || t("Not available")}</p><pre>{arrayValue(changes, "lines").map(value => { const line = asObject(value); return `${line.line}: - ${line.before ?? ""}\n${line.line}: + ${line.after ?? ""}`; }).join("\n")}</pre>{booleanValue(changes, "truncated") && <p>{t("Preview truncated")}</p>}</details>; })}
         {previewDraft !== JSON.stringify(draft) && <p>{t("Draft changed; create a new preview before applying.")}</p>}
