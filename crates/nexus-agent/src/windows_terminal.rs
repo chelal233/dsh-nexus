@@ -57,7 +57,9 @@ pub(crate) fn spawn(command: &Command, visible: bool) -> io::Result<ConsoleChild
     let mut args = quoted(command.get_program())?;
     for argument in command.get_args() { args.push(32); args.extend(quoted(argument)?); }
     args.push(0);
-    let mut directory = command.get_current_dir().map(|p| wide(p.as_os_str())).transpose()?;
+    // PowerShell exposes verbatim cwd paths as provider-qualified locations, which breaks pnpm.
+    // Normalize only the console boundary; keep canonical paths for validation and identity.
+    let mut directory = command.get_current_dir().map(|p| wide(&nexus_core::node_script_argument(p))).transpose()?;
     if let Some(path) = &mut directory { path.push(0); }
     let mut env: Vec<_> = std::env::vars_os().collect();
     for (key, value) in command.get_envs() {
@@ -93,16 +95,16 @@ mod tests {
         let result = root.join("console result.txt");
         let shell = std::path::PathBuf::from(std::env::var_os("SystemRoot").unwrap()).join("System32/WindowsPowerShell/v1.0/powershell.exe");
         let mut command = Command::new(shell);
-        command.args(["-NoLogo", "-NoProfile", "-NoExit", "-Command", "[IO.File]::WriteAllText($env:NEXUS_CONSOLE_RESULT, ('{0}|{1}|{2}' -f [Console]::IsInputRedirected, [Console]::IsOutputRedirected, $env:NEXUS_CONSOLE_VALUE))"])
-            .current_dir(&root).env("NEXUS_CONSOLE_RESULT", &result).env("NEXUS_CONSOLE_VALUE", "space %PATH% & ! ' 中文");
+        command.args(["-NoLogo", "-NoProfile", "-NoExit", "-Command", "[IO.File]::WriteAllText($env:NEXUS_CONSOLE_RESULT, ('{0}|{1}|{2}|{3}' -f [Console]::IsInputRedirected, [Console]::IsOutputRedirected, $env:NEXUS_CONSOLE_VALUE, (Get-Location).Path))"])
+            .current_dir(std::fs::canonicalize(&root).unwrap()).env("NEXUS_CONSOLE_RESULT", &result).env("NEXUS_CONSOLE_VALUE", "space %PATH% & ! ' 中文");
         let mut child = spawn(&command, false).unwrap();
         let began = std::time::Instant::now();
         while !result.exists() && began.elapsed().as_secs() < 10 { std::thread::sleep(std::time::Duration::from_millis(100)); }
         let value = std::fs::read_to_string(&result);
         let running = child.try_wait().unwrap().is_none();
         child.kill().unwrap(); child.wait().unwrap();
-        std::fs::remove_dir_all(root).unwrap();
-        assert_eq!(value.unwrap(), "False|False|space %PATH% & ! ' 中文");
+        std::fs::remove_dir_all(&root).unwrap();
+        assert_eq!(value.unwrap(), format!("False|False|space %PATH% & ! ' 中文|{}", root.display()));
         assert!(running, "-NoExit must remain interactive after initialization");
     }
 }
