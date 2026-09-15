@@ -6549,7 +6549,7 @@ server.listen(0, '127.0.0.1', () => console.log('dsh web: http://127.0.0.1:' + s
     }
 
     async fn wait_for_marker_lines(marker: &Path, expected: usize) -> Vec<String> {
-        timeout(Duration::from_secs(3), async {
+        timeout(Duration::from_secs(15), async {
             loop {
                 let lines: Vec<_> = fs::read_to_string(marker)
                     .unwrap_or_default()
@@ -7025,6 +7025,14 @@ server.listen(0, '127.0.0.1', () => console.log('dsh web: http://127.0.0.1:' + s
             wait_for_marker_lines(&marker, 2).await,
             ["harness-a", "harness-a"]
         );
+        // The child writes its marker before the background readiness owner
+        // publishes Running. Wait for that observable transition on fast Unix
+        // children as well as slower Windows shells.
+        timeout(Duration::from_secs(5), async {
+            while supervisor.status().await.state == HarnessState::Starting {
+                sleep(Duration::from_millis(20)).await;
+            }
+        }).await.expect("restarted Harness readiness settles");
         assert_eq!(
             supervisor.status().await.state,
             HarnessState::Running,

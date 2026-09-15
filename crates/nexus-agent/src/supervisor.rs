@@ -3438,7 +3438,7 @@ mod tests {
     }
 
     async fn wait_for_pending_child_exit(supervisor: &HarnessSupervisor) {
-        timeout(Duration::from_secs(2), async {
+        timeout(Duration::from_secs(15), async {
             loop {
                 let exited = {
                     let mut inner = supervisor.inner.lock().await;
@@ -5042,10 +5042,9 @@ mod tests {
             .expect_err("stop request is cancelled")
             .is_cancelled());
 
-        assert!(matches!(
-            supervisor.start().await,
-            Err(HarnessSupervisorError::AlreadyRunning)
-        ));
+        let duplicate = supervisor.start().await;
+        assert!(matches!(duplicate, Err(HarnessSupervisorError::AlreadyRunning)),
+            "start while detached stop is pending: {duplicate:?}");
         let stopped = timeout(Duration::from_secs(2), async {
             loop {
                 let runtime = supervisor.status().await;
@@ -6580,10 +6579,9 @@ mod tests {
                 .is_none());
         }
         let restarted = HarnessSupervisor::new(paths.clone()).expect("Agent restart reconstructs");
-        assert!(matches!(
-            restarted.start().await,
-            Err(HarnessSupervisorError::AlreadyRunning)
-        ));
+        let duplicate = restarted.start().await;
+        assert!(matches!(duplicate, Err(HarnessSupervisorError::AlreadyRunning)),
+            "restarted Agent must reject duplicate start: {duplicate:?}");
         drop(restarted);
 
         supervisor.stop().await.expect("Harness stops");

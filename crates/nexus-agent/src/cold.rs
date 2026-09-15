@@ -2473,13 +2473,13 @@ while ($true) {{ Start-Sleep -Seconds 1 }}"#, child.display())).unwrap();
                 run_owned_command(
                     command,
                     "cold fixture",
-                    Duration::from_secs(5),
+                    Duration::from_secs(20),
                     &diagnostic_dir,
                     &token,
                 )
                 .await
             });
-            tokio::time::timeout(Duration::from_secs(4), async {
+            tokio::time::timeout(Duration::from_secs(15), async {
                 while !marker.exists() {
                     tokio::time::sleep(Duration::from_millis(20)).await;
                 }

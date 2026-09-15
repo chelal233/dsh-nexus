@@ -50,6 +50,9 @@ jobs:
             # /var is a macOS symlink. Tests must use an ordinary data-root
             # ancestry so they exercise, rather than weaken, no-link guards.
             echo "TMPDIR=$(cd "$RUNNER_TEMP" && pwd -P)/" >> "$GITHUB_ENV"
+          else
+            echo "TEMP=$RUNNER_TEMP" >> "$GITHUB_ENV"
+            echo "TMP=$RUNNER_TEMP" >> "$GITHUB_ENV"
           fi
           npm install --global pnpm@11.7.0
           rustup toolchain install 1.98.0 --profile minimal
@@ -71,7 +74,7 @@ jobs:
           pnpm test
           node --test tests/release-platform.test.mjs
       - name: Rust workspace tests (target architecture)
-        run: cargo test --workspace --locked --target "$CARGO_BUILD_TARGET" -j 2 -- --test-threads=4
+        run: cargo test --workspace --locked --target "$CARGO_BUILD_TARGET" -j 2 -- --test-threads=1
       - name: Compatibility checker regression tests
         run: node --test --test-concurrency=4 crates/nexus-agent/tests/compatibility.test.mjs
       - name: Stage native resources
@@ -84,7 +87,7 @@ jobs:
           pnpm prepare:release
           node --test tests/prepare-agent.test.mjs tests/release-gate.test.mjs tests/release-manifest.test.mjs
       - name: Native bridge regression tests
-        run: cargo test --manifest-path apps/nexus-launcher/src-tauri/Cargo.toml --locked --target "$CARGO_BUILD_TARGET" -j 2 -- --test-threads=4
+        run: cargo test --manifest-path apps/nexus-launcher/src-tauri/Cargo.toml --locked --target "$CARGO_BUILD_TARGET" -j 2 -- --test-threads=1
       - name: Build installers
         working-directory: apps/nexus-launcher
         env:

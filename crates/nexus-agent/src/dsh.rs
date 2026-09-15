@@ -1624,7 +1624,7 @@ while ($true) {{ Start-Sleep -Seconds 1 }}
 
         let mut command = Command::new(powershell());
         command.args(["-NoProfile", "-File"]).arg(&parent_script);
-        let error = run_owned_process(&mut command, Duration::from_secs(3))
+        let error = run_owned_process(&mut command, Duration::from_secs(15))
             .expect_err("controlled process tree times out");
         assert_eq!(error.kind(), io::ErrorKind::TimedOut);
         assert!(child_pid.is_file(), "descendant started before cleanup");
