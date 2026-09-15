@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { selectPlatform, targets } from '../src-tauri/scripts/release-platform.mjs';
+import { releaseBasename, selectPlatform, targets } from '../src-tauri/scripts/release-platform.mjs';
 
 test('all products select their native Node archive and packaging format', () => {
   for (const [target, spec] of Object.entries(targets)) {
@@ -20,4 +20,13 @@ test('unsupported or mismatched targets fail before staging host binaries', () =
   assert.throws(() => selectPlatform('aarch64-pc-windows-msvc', 'win32', 'x64'), /native runner/);
   assert.throws(() => selectPlatform('i686-apple-darwin', 'darwin', 'x64'), /Unsupported/);
   assert.throws(() => selectPlatform(undefined, 'linux', 'arm'), /Unsupported/);
+});
+
+test('public download names identify product, version, system and architecture', () => {
+  const expected = ['windows_x64', 'windows_x86', 'windows_arm64', 'macos_x64', 'macos_arm64'];
+  assert.deepEqual(Object.keys(targets).map(target => releaseBasename(target, '0.1.3')),
+    expected.map(suffix => 'dsh-nexus_0.1.3_' + suffix));
+  assert.equal(releaseBasename('x86_64-pc-windows-msvc', '0.1.3-rc.1'), 'dsh-nexus_0.1.3-rc.1_windows_x64');
+  assert.throws(() => releaseBasename('unsupported', '0.1.3'));
+  assert.throws(() => releaseBasename('x86_64-pc-windows-msvc', '../0.1.3'));
 });

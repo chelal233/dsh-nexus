@@ -3,7 +3,7 @@ import { createHash } from 'node:crypto';
 import { readdirSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
-import { bundleFormats, targets } from '../../apps/nexus-launcher/src-tauri/scripts/release-platform.mjs';
+import { bundleFormats, releaseBasename, targets } from '../../apps/nexus-launcher/src-tauri/scripts/release-platform.mjs';
 
 export function verifyReleaseAssets(directory, tag, commit) {
   assert.match(commit, /^[a-f0-9]{40}$/);
@@ -29,12 +29,14 @@ export function verifyReleaseAssets(directory, tag, commit) {
   }
 
   for (const [target, spec] of Object.entries(targets)) {
-    const metadata = `${target}_build.json`;
-    const checksums = `${target}_SHA256SUMS.txt`;
+    const basename = releaseBasename(target, tag.replace(/^v/, ''));
+    const metadata = `${basename}_build.json`;
+    const checksums = `${basename}_SHA256SUMS.txt`;
     const build = JSON.parse(take(metadata));
     assert.equal(build.target, target);
     assert.equal(`v${build.version}`, tag);
     assert.equal(build.commit, commit);
+    assert.ok(typeof build.buildId === 'string' && build.buildId.length > 0, 'Missing build identity');
     assert.equal(build.automatedChecks, 'passed');
     assert.equal(build.installedPackageSmoke, 'passed-on-ci-runner');
     const extensions = spec.bundles.flatMap(kind => {
@@ -43,7 +45,7 @@ export function verifyReleaseAssets(directory, tag, commit) {
     });
     assert.deepEqual(build.files.map(f => path.extname(f.name)).sort(), extensions.sort());
     for (const file of build.files) {
-      assert.ok(file.name.startsWith(`${target}_${build.buildId}_`));
+      assert.equal(file.name, `${basename}${path.extname(file.name)}`);
       assert.ok(!/[\\/\r\n]/.test(file.name));
       assert.match(file.sha256, /^[a-f0-9]{64}$/);
       const actual = createHash('sha256').update(take(file.name)).digest('hex');

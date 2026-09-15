@@ -33,7 +33,7 @@ Windows x86 在 x64 runner 上编译并运行 x86 Rust 测试及内置 Node 探�
 
 日常开发只需运行必要的目标；发布时推送版本 tag 即包含上传和发布下载流程。复用要求完全相同的提交，不能用旧提交的产物冒充新 tag。发布工作流自身仍消耗少量 Linux runner 时间；额度耗尽时不要反复触发。首次 `v0.1.2` 通过本地 GitHub CLI 发布已验证产物，临时停用旧的 tag 工作流以避免重复构建，完成后恢复。
 
-产物文件名包含 Rust target 和唯一 run/attempt 构建编号。每个平台附 `SHA256SUMS.txt` 和 `build.json`，只含版本、提交、构建编号、运行时版本、签名/机器验收状态及哈希；不上传完整测试日志或诊断目录。
+产物文件名采用 `dsh-nexus_<版本>_<系统>_<架构>.<扩展名>`；系统为 `windows` 或 `macos`，架构为 `x86`、`x64` 或 `arm64`。仅当实际按 CPU 子型号构建时才增加子架构字段。每个平台附同名前缀的 `_SHA256SUMS.txt` 和 `_build.json`，精确 Rust target 和唯一 run/attempt 构建编号保留在元数据内，只含版本、提交、构建编号、运行时版本、签名/机器验收状态及哈希；不上传完整测试日志或诊断目录。
 
 ## 本地执行
 
@@ -77,7 +77,7 @@ DSH 交互终端入口及终端租约目前仅在 Windows 实现；macOS 调用�
 5. 同步根 Cargo、GUI Cargo、两个 Cargo.lock 中本项目包版本、package.json 和 tauri.conf.json；版本必须与发布 tag 一致。对已审核提交创建对应标签并显式 push 标签。
 6. 打 tag 前更新 `.github/RELEASE_TEMPLATE.md` 中的下载说明、验证范围和已知问题。工作流成功后自动发布预发布版及各架构独立下载附件，维护者核对 Release 结果；稳定版发布需独立确认验收与签名状态。
 
-校验下载文件：Windows 使用 `Get-FileHash <安装包> -Algorithm SHA256`；macOS 在附件目录执行 `shasum -a 256 -c <target>_SHA256SUMS.txt`。
+校验下载文件：Windows 使用 `Get-FileHash <安装包> -Algorithm SHA256`；macOS 在附件目录执行 `shasum -a 256 -c dsh-nexus_<版本>_<系统>_<架构>_SHA256SUMS.txt`。
 
 参考：[GitHub runner 矩阵](https://docs.github.com/en/actions/reference/runners/github-hosted-runners)、[Tauri Windows 打包](https://tauri.app/distribute/windows-installer/)、[Tauri macOS bundle](https://tauri.app/distribute/macos-application-bundle/)、[Node 24 校验清单](https://nodejs.org/dist/v24.20.0/SHASUMS256.txt)、[Node 22 x86 校验清单](https://nodejs.org/dist/v22.23.2/SHASUMS256.txt)。
 

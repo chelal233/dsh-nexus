@@ -156,10 +156,10 @@ test("process death releases the kernel lock but never invents completion of run
 });
 
 test("local release produces one multilingual EXE", () => {
-  assert.deepEqual(packageOutputs("0.1.2", "acceptance-build"), [{
+  assert.deepEqual(packageOutputs("0.1.2"), [{
     kind: "nsis", locale: "multilingual",
     source: "Nexus Launcher_0.1.2_x64-setup.exe",
-    file: "NexusLauncher_0.1.2_acceptance-build_x64.exe",
+    file: "dsh-nexus_0.1.2_windows_x64.exe",
   }]);
 });
 

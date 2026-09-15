@@ -5,6 +5,7 @@ import { DatabaseSync } from "node:sqlite";
 import { spawn, execFileSync } from "node:child_process";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { releaseBasename } from "./release-platform.mjs";
 
 const app = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
 const root = path.resolve(app, "../..");
@@ -14,9 +15,9 @@ export function selectBuildId(value) {
   if (!/^[A-Za-z0-9][A-Za-z0-9_-]{7,95}$/.test(id) || id === "development") throw new Error("Invalid release build ID");
   return id;
 }
-export function packageOutputs(version, buildId) {
+export function packageOutputs(version) {
   return [
-    { kind: "nsis", locale: "multilingual", source: `Nexus Launcher_${version}_x64-setup.exe`, file: `NexusLauncher_${version}_${buildId}_x64.exe` },
+    { kind: "nsis", locale: "multilingual", source: `Nexus Launcher_${version}_x64-setup.exe`, file: `${releaseBasename('x86_64-pc-windows-msvc', version)}.exe` },
   ];
 }
 async function sha(file) {
@@ -212,10 +213,11 @@ async function main() {
     if (identity.buildId !== buildId || identity.version !== report.version) throw new Error("Packaged release identity differs from verification build");
     report.releaseIdentity = identity;
     report.artifacts = [];
-    for (const { kind, locale, source, file: filename } of packageOutputs(report.version, buildId)) {
+    for (const { kind, locale, source, file: filename } of packageOutputs(report.version)) {
       const folder = path.join(target, "release/bundle", kind);
       const output = path.join(folder, source);
-      const file = path.join(folder, filename);
+      // Stable names remain separate for each immutable verification attempt.
+      const file = path.join(directory, filename);
       await copyFile(output, file);
       report.artifacts.push({ path: file, locale, sha256: await sha(file), bytes: (await lstat(file)).size });
     }

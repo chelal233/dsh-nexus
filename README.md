@@ -16,6 +16,8 @@ Nexus 是面向 Windows 和 macOS 的 Harness 启动器，提供安装与版本�
 | macOS | Intel x64 | DMG | 24.20.0 | macOS 13.5 或更新 |
 | macOS | Apple Silicon ARM64 | DMG | 24.20.0 | macOS 13.5 或更新 |
 
+安装包统一命名为 `dsh-nexus_<版本>_<系统>_<架构>.<扩展名>`，例如 `dsh-nexus_0.1.3_windows_x64.exe`。构建编号和精确 Rust target 保留在同名前缀的 `_build.json` 中。
+
 macOS 不提供 x86 32 位版本；其他架构及 Linux 尚未纳入发行矩阵。Windows 包含 WebView2 离线安装器，macOS 使用系统 WKWebView。Windows 包未签名；macOS 使用 ad-hoc 签名但未 Apple 公证，当前为开发预发布候选。不要混用不同构建的附件。
 
 1. 安装并打开 Nexus，确认 Agent 正常。
@@ -66,7 +68,7 @@ pnpm prepare:release
 pnpm tauri dev
 ```
 
-Windows x64 本地完整门禁：在 `apps/nexus-launcher` 执行 `pnpm release:gate`。结果写入仓库 `target-rtest/release/verify-<构建编号>`，候选安装包位于 `target-rtest/release/bundle`。完整记录可能含本机路径和测试输出，**不要整目录上传到公开 Release**。
+Windows x64 本地完整门禁：在 `apps/nexus-launcher` 执行 `pnpm release:gate`。结果写入仓库 `target-rtest/release/verify-<构建编号>`，候选安装包保存在对应 `verify-<构建编号>/attempt-*` 验证目录中，避免同版本的多次构建互相覆盖。完整记录可能含本机路径和测试输出，**不要整目录上传到公开 Release**。
 
 运行完整发布门禁前，在开发终端执行 `Remove-Item Env:NEXUS_BUILD_ID -ErrorAction SilentlyContinue`，让门禁生成新的候选构建编号。原生测试同样依赖上面的资源准备步骤；新克隆不能依赖旧机器上的缓存。
 

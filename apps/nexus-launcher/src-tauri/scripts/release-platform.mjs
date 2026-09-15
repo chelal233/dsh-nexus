@@ -57,3 +57,15 @@ export function selectPlatform(target, platform = process.platform, arch = proce
   }
   return { target, ...spec };
 }
+
+// Keep target triples and CI identifiers in metadata, not user-facing names.
+export function releaseBasename(target, version) {
+  const spec = targets[target];
+  if (!spec?.bundles) throw new Error(`Unsupported release target: ${target}`);
+  if (!/^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/.test(version)) {
+    throw new Error(`Invalid release version: ${version}`);
+  }
+  const system = spec.platform === 'win32' ? 'windows' : 'macos';
+  const arch = spec.arch === 'ia32' ? 'x86' : spec.arch;
+  return `dsh-nexus_${version}_${system}_${arch}`;
+}
