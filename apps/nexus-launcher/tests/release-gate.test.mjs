@@ -106,8 +106,10 @@ test("preoccupying the old public IPC name does not deny the file-backed gate", 
   const identity=process.platform==="win32"?directory.toLowerCase():directory;
   const name=`nexus-release-${createHash("sha256").update(identity).digest("hex")}`;
   const server=createServer(socket=>socket.destroy());
+  // macOS supports filesystem sockets, not Linux abstract namespace sockets.
+  const unixAddress = process.platform === "linux" ? `\0${name}` : path.join(directory, "public.sock");
   try {
-    await new Promise((resolve,reject)=>{server.once("error",reject);server.listen(process.platform==="win32"?`\\\\.\\pipe\\${name}`:`\0${name}`,resolve);});
+    await new Promise((resolve,reject)=>{server.once("error",reject);server.listen(process.platform==="win32"?`\\\\.\\pipe\\${name}`:unixAddress,resolve);});
     const result=await verificationAttempt(directory,"public-preoccupied",async report=>{report.status="passed";});
     assert.equal(result.report.status,"passed");
   } finally {await new Promise(resolve=>server.close(resolve));await rm(directory,{recursive:true,force:true});}
