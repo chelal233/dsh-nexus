@@ -17,7 +17,9 @@
     "typecheck": "tsc --noEmit",
     "tauri": "tauri",
     "tauri:dev": "tauri dev",
-    "tauri:build": "tauri build"
+    "tauri:build": "tauri build",
+    "prepare:notices": "node -e \"require('fs').mkdirSync('src-tauri/resources/notices',{recursive:true})\" && pnpm licenses list --prod --json > src-tauri/resources/notices/frontend-input.json && node src-tauri/scripts/prepare-notices.mjs",
+    "test:platform": "node --test tests/release-platform.test.mjs"
   },
   "dependencies": {
     "@phosphor-icons/react": "^2.1.7",

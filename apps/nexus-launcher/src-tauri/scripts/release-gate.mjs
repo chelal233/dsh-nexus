@@ -165,6 +165,7 @@ export async function verificationAttempt(releaseDirectory, requestedId, action)
   return { report, directory };
 }
 async function main() {
+  if (process.platform !== "win32" || process.arch !== "x64" || (process.env.CARGO_BUILD_TARGET && process.env.CARGO_BUILD_TARGET !== "x86_64-pc-windows-msvc")) throw new Error("release:gate is the Windows x64 local gate; use Desktop build for other targets");
   const target = path.join(root, "target-rtest");
   const { report, directory } = await verificationAttempt(path.join(target, "release"), process.env.NEXUS_BUILD_ID, async (report, directory, save) => {
   const buildId = report.buildId;
@@ -213,7 +214,7 @@ async function main() {
     if (identity.buildId !== buildId || identity.version !== report.version) throw new Error("Packaged release identity differs from verification build");
     report.releaseIdentity = identity;
     report.artifacts = [];
-    const tauri = JSON.parse(await readFile(path.join(app, "src-tauri/tauri.conf.json"), "utf8"));
+    const tauri = JSON.parse(await readFile(path.join(app, "src-tauri/tauri.windows.conf.json"), "utf8"));
     for (const { kind, locale, source, file: filename } of packageOutputs(report.version, buildId, tauri.bundle.windows.wix.language)) {
       const folder = path.join(target, "release/bundle", kind);
       const output = path.join(folder, source);

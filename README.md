@@ -1,12 +1,22 @@
 # Nexus Launcher
 
-Nexus 是 Windows 上的 Harness 启动器，提供安装与版本选择、启动检查、profile 管理、运行配置补丁、恢复辅助和故障诊断。界面支持简体中文和 English。
+Nexus 是面向 Windows 和 macOS 的 Harness 启动器，提供安装与版本选择、启动检查、profile 管理、运行配置补丁、恢复辅助和故障诊断。界面支持简体中文和 English。
 
 **当前为 0.1.2 候选版本。自动化检查、包内校验与真实机器验收分别记录；尚未执行的验收不算通过。** 发布后的安装包位于本仓库 Releases，源码目录不等于安装包。
 
 ## 安装与第一次启动
 
-目标平台为 Windows 10/11 x64。下载 Release 中带构建编号的 EXE，或选择对应语言的 MSI；不要混用不同构建的文件。首次运行所需的 WebView2 若未安装，其引导安装可能需要联网。
+按操作系统和 CPU 架构选择附件。下表表示已配置构建目标，首次远端构建及各架构实际机器验收仍待执行。
+
+| 系统 | CPU | 安装包 | 内置 Node | 系统要求 |
+| --- | --- | --- | --- | --- |
+| Windows | x64 / AMD64 | EXE、英文/中文 MSI | 24.20.0 | Windows 10/11 x64 |
+| Windows | x86 / 32 位 | EXE、英文/中文 MSI | 22.23.2 | Windows 10 x86，或支持 x86 应用的 x64 系统 |
+| Windows | ARM64 / aarch64 | EXE | 24.20.0 | Windows 11 ARM64 |
+| macOS | Intel x64 | DMG | 24.20.0 | macOS 13.5 或更新 |
+| macOS | Apple Silicon ARM64 | DMG | 24.20.0 | macOS 13.5 或更新 |
+
+macOS 不提供 x86 32 位版本；其他架构及 Linux 尚未纳入发行矩阵。Windows 包含 WebView2 离线安装器，macOS 使用系统 WKWebView。Windows 包未签名；macOS 使用 ad-hoc 签名但未 Apple 公证，当前为开发预发布候选。不要混用不同构建的附件。
 
 1. 安装并打开 Nexus，确认 Agent 正常。
 2. 在引导页安装一个受支持的 Harness 版本，或选择自己已经准备好的外部 Harness 程序目录。
@@ -40,7 +50,7 @@ Nexus 安装、升级和卸载不会现场编译。内置 Node/npm/pnpm 供 Harn
 
 ## 开发与验证
 
-开发者需要 Rust/MSVC Windows 构建工具、Node 和 pnpm；这些是构建 Nexus 的条件，不是用户安装 Nexus 的前提。
+开发者需要 Rust 1.98.0、Node 24.20.0、pnpm 11.7.0；Windows 使用 MSVC C++ 工具及对应架构组件，macOS 使用 Xcode Command Line Tools。这些是编译条件，不是用户安装 Nexus 的前提。
 
 ```powershell
 cd apps/nexus-launcher
@@ -51,11 +61,12 @@ pnpm test:rust
 $env:NEXUS_BUILD_ID = 'dev-' + (Get-Date -Format 'yyyyMMddHHmmss')
 pnpm prepare:agent
 pnpm prepare:runtime
+pnpm prepare:notices
 pnpm prepare:release
 pnpm tauri dev
 ```
 
-本地完整门禁：在 `apps/nexus-launcher` 执行 `pnpm release:gate`。结果写入仓库 `target-rtest/release/verify-<构建编号>`，候选安装包位于 `target-rtest/release/bundle`。完整记录可能含本机路径和测试输出，**不要整目录上传到公开 Release**。
+Windows x64 本地完整门禁：在 `apps/nexus-launcher` 执行 `pnpm release:gate`。结果写入仓库 `target-rtest/release/verify-<构建编号>`，候选安装包位于 `target-rtest/release/bundle`。完整记录可能含本机路径和测试输出，**不要整目录上传到公开 Release**。
 
 运行完整发布门禁前，在开发终端执行 `Remove-Item Env:NEXUS_BUILD_ID -ErrorAction SilentlyContinue`，让门禁生成新的候选构建编号。原生测试同样依赖上面的资源准备步骤；新克隆不能依赖旧机器上的缓存。
 

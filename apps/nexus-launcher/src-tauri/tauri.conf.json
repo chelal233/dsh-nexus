@@ -6,7 +6,7 @@
   "build": {
     "beforeDevCommand": "pnpm dev",
     "devUrl": "http://localhost:1420",
-    "beforeBuildCommand": "pnpm prepare:agent && pnpm prepare:runtime && pnpm test:bundled-runtime && pnpm prepare:release && pnpm build && pnpm verify:release",
+    "beforeBuildCommand": "pnpm prepare:agent && pnpm prepare:runtime && pnpm test:bundled-runtime && pnpm prepare:notices && pnpm prepare:release && pnpm build && pnpm verify:release",
     "frontendDist": "../dist"
   },
   "app": {
@@ -31,33 +31,16 @@
   },
   "bundle": {
     "active": true,
-    "targets": ["nsis", "msi"],
+    "targets": "all",
     "resources": {
-      "resources/nexus-agent.exe": "nexus-agent.exe",
-      "resources/nexus-launcher.exe": "nexus-launcher.exe",
-      "resources/nexusctl.exe": "nexusctl.exe",
       "resources/release-manifest.json": "release-manifest.json",
       "resources/release-identity.json": "release-identity.json",
-      "resources/runtime": "runtime/"
+      "resources/runtime": "runtime/",
+      "resources/notices": "notices/"
     },
     "category": "Utility",
     "shortDescription": "Native local control plane for Nexus",
     "longDescription": "A native operator shell for the independent Nexus Agent and immutable Harness runtime.",
-    "windows": {
-      "nsis": {
-        "languages": ["English", "SimpChinese"],
-        "displayLanguageSelector": true,
-        "installerHooks": "installers/shutdown.nsh"
-      },
-      "wix": {
-        "language": ["en-US", "zh-CN"],
-        "fragmentPaths": ["installers/shutdown.wxs"],
-        "componentGroupRefs": ["NexusInstallerShutdown"]
-      },
-      "webviewInstallMode": {
-        "type": "offlineInstaller"
-      }
-    },
     "icon": [
       "icons/32x32.png",
       "icons/128x128.png",

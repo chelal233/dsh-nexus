@@ -12,7 +12,7 @@ body:
     id: environment
     attributes:
       label: 环境 / Environment
-      description: Windows 版本、Harness 版本、受管或外部目录、相关 profile；不要填写密钥。
+      description: Windows/macOS 版本、CPU 架构与安装包架构、Harness 版本、受管或外部目录、相关 profile；不要填写密钥。
     validations:
       required: true
   - type: textarea

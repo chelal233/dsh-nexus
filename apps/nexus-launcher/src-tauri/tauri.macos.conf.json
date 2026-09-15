@@ -1,0 +1,16 @@
+{
+  "bundle": {
+    "targets": [
+      "dmg"
+    ],
+    "resources": {
+      "resources/nexus-agent": "nexus-agent",
+      "resources/nexus-launcher": "nexus-launcher",
+      "resources/nexusctl": "nexusctl"
+    },
+    "macOS": {
+      "minimumSystemVersion": "13.5",
+      "signingIdentity": "-"
+    }
+  }
+}

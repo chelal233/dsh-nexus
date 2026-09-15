@@ -13,10 +13,8 @@ profiles, checkpoints, releases, updates, and diagnostics remain in the
 separate `nexus-agent` process.
 
 The native side uses `nexus-launcher-core` for Agent HTTP requests and for
-resolving, starting, probing, and stopping the independent Agent. The app does
-not spawn, package, or require `nexus-launcher.exe`. The executable remains a
-legacy compatibility client for existing headless scripts and is not a GUI
-runtime dependency.
+resolving, starting, probing, and stopping the independent Agent. The bundle also includes `nexus-launcher` (with `.exe` on Windows) for
+installer shutdown/cleanup and legacy headless scripts; the GUI uses the Agent directly.
 
 Agent resolution is ordered as follows:
 
@@ -39,9 +37,11 @@ The Agent HTTP/JSON API is the cross-language boundary. Future Electron or
 another UI consumes the same API rather than linking the Rust crate directly;
 `nexus-launcher-core` is a current Rust bridge and compatibility convenience.
 
+See the [release matrix and platform commands](../../docs/github-release.md) for Windows x86/x64/ARM64 and macOS x64/ARM64. The local `release:gate` remains Windows x64 only.
+
 ## Development
 
-Developers need Rust/MSVC Windows build tools, Node and pnpm. End users install
+Developers need Rust 1.98.0, Node 24.20.0 and pnpm 11.7.0, plus MSVC C++ tools on Windows or Xcode Command Line Tools on macOS. End users install
 the prebuilt package and do not need these development tools. From the repository
 root, install locked frontend dependencies and run a native development window:
 
@@ -51,6 +51,7 @@ pnpm install --frozen-lockfile
 $env:NEXUS_BUILD_ID = 'dev-' + (Get-Date -Format 'yyyyMMddHHmmss')
 pnpm prepare:agent
 pnpm prepare:runtime
+pnpm prepare:notices
 pnpm prepare:release
 pnpm tauri dev
 ```

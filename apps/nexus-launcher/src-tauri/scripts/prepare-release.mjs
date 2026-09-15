@@ -1,3 +1,4 @@
+import { selectPlatform } from "./release-platform.mjs";
 import { createHash } from "node:crypto";
 import { createReadStream } from "node:fs";
 import { readFile, readdir, writeFile, lstat } from "node:fs/promises";
@@ -66,6 +67,8 @@ export function verifyIdentity(manifest, identity, manifestSha256) {
 export function verifyRuntimeVersions(resources, runtime) {
   const node = path.join(resources, "runtime/node", process.platform === "win32" ? "node.exe" : "node");
   const run = args => execFileSync(node, args, { cwd: resources, encoding: "utf8", windowsHide: true, timeout: 15000 }).trim();
+  const spec = selectPlatform(process.env.CARGO_BUILD_TARGET);
+  if (runtime.target !== spec.target || run(["-p", "process.arch"]) !== spec.arch) throw new Error("Runtime target architecture mismatch");
   const actual = {
     node: run(["--version"]),
     npm: run([path.join(resources, "runtime/node/node_modules/npm/bin/npm-cli.js"), "--version"]),
@@ -93,7 +96,7 @@ async function main() {
   if (process.argv.includes("--verify")) {
     const manifest = JSON.parse(await readFile(manifestPath, "utf8"));
     verifyAgentIdentity(manifest, readAgentIdentity(resources));
-    const actual = await inventoryResources(resources, ["nexus-agent", "nexus-launcher", "nexusctl"].map(n => n + (process.platform === "win32" ? ".exe" : "")).concat("runtime"));
+    const actual = await inventoryResources(resources, ["nexus-agent", "nexus-launcher", "nexusctl"].map(n => n + (process.platform === "win32" ? ".exe" : "")).concat("runtime", "notices"));
     if (JSON.stringify(actual) !== JSON.stringify(manifest.files)) throw new Error("Release inventory is incomplete or changed");
     verifyIdentity(manifest, JSON.parse(await readFile(path.join(resources, "release-identity.json"), "utf8")), (await digest(manifestPath)).sha256);
     verifyRuntimeVersions(resources, manifest.runtime);
@@ -109,7 +112,7 @@ async function main() {
     throw new Error("Package, Tauri, and Rust release versions disagree");
   }
   const suffix = process.platform === "win32" ? ".exe" : "";
-  const files = await inventoryResources(resources, ["nexus-agent", "nexus-launcher", "nexusctl"].map(n => n + suffix).concat("runtime"));
+  const files = await inventoryResources(resources, ["nexus-agent", "nexus-launcher", "nexusctl"].map(n => n + suffix).concat("runtime", "notices"));
   const runtime = JSON.parse(await readFile(path.join(resources, "runtime/manifest.json"), "utf8"));
   verifyRuntimeVersions(resources, runtime);
   const git = args => execFileSync("git", args, { cwd: repositoryRoot, encoding: "utf8", windowsHide: true }).trim();

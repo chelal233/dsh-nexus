@@ -1,0 +1,36 @@
+name: Draft release
+on:
+  push:
+    tags: ['v*']
+permissions:
+  contents: read
+jobs:
+  build:
+    uses: ./.github/workflows/build.yml
+  draft:
+    needs: build
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@v7
+        with:
+          pattern: release-*
+          path: release-assets
+          merge-multiple: true
+      - name: Create draft only after all five targets succeed
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ github.ref_name }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd release-assets
+          test "$(find . -maxdepth 1 -name '*_build.json' | wc -l)" -eq 5
+          for checksums in *_SHA256SUMS.txt; do sha256sum --check "$checksums"; done
+          gh release create "$RELEASE_TAG" ./* --repo "$GITHUB_REPOSITORY" \
+            --verify-tag --draft --prerelease --title "Nexus Launcher $RELEASE_TAG" \
+            --notes-file ../.github/RELEASE_TEMPLATE.md

@@ -1,0 +1,95 @@
+name: Desktop build
+on:
+  workflow_call:
+  workflow_dispatch:
+  pull_request:
+  push:
+    branches: [main]
+permissions:
+  contents: read
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: windows-2022
+            target: x86_64-pc-windows-msvc
+            bundles: nsis,msi
+          - runner: windows-2022
+            target: i686-pc-windows-msvc
+            bundles: nsis,msi
+          - runner: windows-11-arm
+            target: aarch64-pc-windows-msvc
+            bundles: nsis
+          - runner: macos-15-intel
+            target: x86_64-apple-darwin
+            bundles: dmg
+          - runner: macos-15
+            target: aarch64-apple-darwin
+            bundles: dmg
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 90
+    defaults:
+      run:
+        shell: bash
+    env:
+      CARGO_BUILD_JOBS: '2'
+      CARGO_BUILD_TARGET: ${{ matrix.target }}
+      CARGO_TARGET_DIR: ${{ github.workspace }}/target-rtest
+      NEXUS_BUILD_ID: ci-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.target }}
+      MACOSX_DEPLOYMENT_TARGET: '13.5'
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '24.20.0'
+          package-manager-cache: false
+      - name: Prepare tools
+        run: |
+          npm install --global pnpm@11.7.0
+          rustup toolchain install 1.98.0 --profile minimal
+          rustup default 1.98.0
+          rustup target add "$CARGO_BUILD_TARGET"
+      - name: Install locked frontend dependencies
+        working-directory: apps/nexus-launcher
+        run: pnpm install --frozen-lockfile
+      - name: Frontend and platform regression tests
+        working-directory: apps/nexus-launcher
+        run: |
+          pnpm typecheck
+          pnpm test
+          node --test tests/release-platform.test.mjs
+      - name: Rust workspace tests (target architecture)
+        run: cargo test --workspace --locked --target "$CARGO_BUILD_TARGET" -j 2 -- --test-threads=4
+      - name: Compatibility checker regression tests
+        run: node --test --test-concurrency=4 crates/nexus-agent/tests/compatibility.test.mjs
+      - name: Stage native resources
+        working-directory: apps/nexus-launcher
+        run: |
+          pnpm prepare:agent
+          pnpm prepare:runtime
+          pnpm test:bundled-runtime
+          pnpm prepare:notices
+          pnpm prepare:release
+          node --test tests/prepare-agent.test.mjs tests/release-gate.test.mjs tests/release-manifest.test.mjs
+      - name: Native bridge regression tests
+        run: cargo test --manifest-path apps/nexus-launcher/src-tauri/Cargo.toml --locked --target "$CARGO_BUILD_TARGET" -j 2 -- --test-threads=4
+      - name: Build installers
+        working-directory: apps/nexus-launcher
+        env:
+          BUNDLES: ${{ matrix.bundles }}
+        run: pnpm tauri build --target "$CARGO_BUILD_TARGET" --bundles "$BUNDLES" -- --locked
+      - name: Verify resources and collect public artifacts
+        working-directory: apps/nexus-launcher
+        run: |
+          pnpm verify:release
+          node src-tauri/scripts/collect-release.mjs
+      - uses: actions/upload-artifact@v6
+        with:
+          name: release-${{ matrix.target }}
+          path: target/release-assets/${{ matrix.target }}/*
+          if-no-files-found: error
+          retention-days: 14

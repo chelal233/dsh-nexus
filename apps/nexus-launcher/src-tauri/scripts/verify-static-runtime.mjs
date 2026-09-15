@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import path from "node:path";
 
 // The Windows build already requires Visual Studio. Inspect actual PE imports,
@@ -10,7 +10,10 @@ export function verifyStaticRuntime(binaryPaths) {
   const installation = execFileSync(vswhere, ["-latest", "-products", "*", "-requires", "Microsoft.VisualStudio.Component.VC.Tools.x86.x64", "-property", "installationPath"], { encoding: "utf8", windowsHide: true }).trim();
   if (!installation) throw new Error("Visual Studio C++ tools were not found for import verification");
   const version = readFileSync(path.join(installation, "VC/Auxiliary/Build/Microsoft.VCToolsVersion.default.txt"), "utf8").trim();
-  const dumpbin = path.join(installation, "VC/Tools/MSVC", version, "bin/Hostx64/x64/dumpbin.exe");
+  const bin = path.join(installation, "VC/Tools/MSVC", version, "bin");
+  const dumpbin = (process.arch === "arm64" ? ["Hostarm64/arm64/dumpbin.exe", "Hostx64/x64/dumpbin.exe"] : ["Hostx64/x64/dumpbin.exe"])
+    .map(name => path.join(bin, name)).find(existsSync);
+  if (!dumpbin) throw new Error("dumpbin was not found for PE import verification");
   // shell32 supplies CommandLineToArgvW; user32 supplies the native uninstall
   // data-choice dialog. iphlpapi supplies GetExtendedTcpTable for verifying
   // that the Harness process owns its advertised listener. All ship with Windows.

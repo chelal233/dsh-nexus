@@ -138,7 +138,7 @@ test("dynamic variable and interpolated template calls require registration", ()
   } finally { rmSync(directory,{recursive:true,force:true}); }
 });
 test("installer languages explicitly offer Simplified Chinese rather than generic Chinese", () => {
-  const config=JSON.parse(readFileSync(path.join(root,"../src-tauri/tauri.conf.json"),"utf8"));
+  const config=JSON.parse(readFileSync(path.join(root,"../src-tauri/tauri.windows.conf.json"),"utf8"));
   assert.deepEqual(config.bundle.windows.nsis.languages,["English","SimpChinese"]);
   assert.equal(config.bundle.windows.nsis.displayLanguageSelector,true);
   assert.deepEqual(config.bundle.windows.wix.language,["en-US","zh-CN"]);

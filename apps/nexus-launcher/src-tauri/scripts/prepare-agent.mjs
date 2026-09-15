@@ -64,6 +64,7 @@ const artifacts = await run(
   [
     "build",
     "--release",
+    ...(process.env.CARGO_BUILD_TARGET ? ["--target", process.env.CARGO_BUILD_TARGET] : []),
     "-j", "2",
     ...packageNames.flatMap((packageName) => ["-p", packageName]),
     "--manifest-path",

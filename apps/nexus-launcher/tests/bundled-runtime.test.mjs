@@ -8,20 +8,20 @@ import { spawnSync } from 'node:child_process';
 
 // Run after prepare:runtime. No system Node/npm/pnpm or developer tools may
 // satisfy the nested build commands that failed on a clean Windows machine.
-for (const systemRootKey of ['SystemRoot', 'SYSTEMROOT']) test(`bundled pnpm -> npm -> node works without system tools (${systemRootKey})`, {
-  skip: process.platform !== 'win32',
+for (const systemRootKey of (process.platform === 'win32' ? ['SystemRoot', 'SYSTEMROOT'] : ['unix'])) test(`bundled pnpm -> npm -> node works without system tools (${systemRootKey})`, {
+  skip: !['win32', 'darwin'].includes(process.platform),
 }, () => {
   const runtime = process.env.NEXUS_TEST_RUNTIME_DIR
     || fileURLToPath(new URL('../src-tauri/resources/runtime/', import.meta.url));
-  const node = path.join(runtime, 'node/node.exe');
+  const node = path.join(runtime, process.platform === 'win32' ? 'node/node.exe' : 'node/node');
   const pnpm = path.join(runtime, 'pnpm/bin/pnpm.cjs');
   const fixture = mkdtempSync(path.join(tmpdir(), 'nexus runtime 用户 '));
   const env = Object.fromEntries(Object.entries(process.env).filter(([key]) =>
     !['PATH', 'SYSTEMROOT'].includes(key.toUpperCase()) && !/^(npm_|pnpm_)/i.test(key)));
-  env[systemRootKey] = Object.entries(process.env).find(([key]) => key.toUpperCase() === 'SYSTEMROOT')?.[1];
+  if (process.platform === 'win32') env[systemRootKey] = Object.entries(process.env).find(([key]) => key.toUpperCase() === 'SYSTEMROOT')?.[1];
   const systemRoot = Object.entries(env).find(([key]) => key.toUpperCase() === 'SYSTEMROOT')?.[1];
-  assert.ok(systemRoot, 'Windows SystemRoot is required for the isolated runtime test');
-  env.PATH = [path.dirname(node), path.dirname(pnpm), path.join(systemRoot, 'System32')].join(';');
+  if (process.platform === 'win32') assert.ok(systemRoot, 'Windows SystemRoot is required for the isolated runtime test');
+  env.PATH = [path.dirname(node), path.dirname(pnpm), ...(process.platform === 'win32' ? [path.join(systemRoot, 'System32')] : ['/usr/bin', '/bin'])].join(path.delimiter);
   env.EXPECTED_NODE = node;
   try {
     writeFileSync(path.join(fixture, 'package.json'), JSON.stringify({

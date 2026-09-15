@@ -1,0 +1,38 @@
+{
+  "bundle": {
+    "targets": [
+      "nsis",
+      "msi"
+    ],
+    "resources": {
+      "resources/nexus-agent.exe": "nexus-agent.exe",
+      "resources/nexus-launcher.exe": "nexus-launcher.exe",
+      "resources/nexusctl.exe": "nexusctl.exe"
+    },
+    "windows": {
+      "nsis": {
+        "languages": [
+          "English",
+          "SimpChinese"
+        ],
+        "displayLanguageSelector": true,
+        "installerHooks": "installers/shutdown.nsh"
+      },
+      "wix": {
+        "language": [
+          "en-US",
+          "zh-CN"
+        ],
+        "fragmentPaths": [
+          "installers/shutdown.wxs"
+        ],
+        "componentGroupRefs": [
+          "NexusInstallerShutdown"
+        ]
+      },
+      "webviewInstallMode": {
+        "type": "offlineInstaller"
+      }
+    }
+  }
+}
