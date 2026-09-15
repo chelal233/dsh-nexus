@@ -2002,7 +2002,7 @@ async fn profile_open_terminal(
     {
         let shell = std::env::var_os("SHELL")
             .map(std::path::PathBuf::from)
-            .unwrap_or_else(|| PathBuf::from("/bin/bash"));
+            .unwrap_or_else(|| std::path::PathBuf::from("/bin/bash"));
         let _ = (&shell, &profile_dir, &envs, &dsh_home);
         // Windows is the only shipped platform in this release; opening a
         // visible terminal elsewhere needs a platform terminal emulator, and

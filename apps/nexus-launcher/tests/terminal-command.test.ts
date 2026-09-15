@@ -21,9 +21,12 @@ test("terminal uses exact paths and profile only after durable registration", { 
     NEXUS_TERMINAL_ENTRY: entry, NEXUS_TERMINAL_PROFILE: "custom-profile",
     NEXUS_TERMINAL_NPM: entry, NEXUS_TERMINAL_PNPM: entry, NEXUS_TERMINAL_PNPM_SCRIPT: "1" };
   const invoke = (command: string) => spawnSync(shell, ["-NoLogo", "-NoProfile", "-NonInteractive", "-Command", command],
-    { env, encoding: "utf8", timeout: 15000 });
+    // The script itself waits up to ten seconds for registration. Hosted
+    // Windows PowerShell cold startup needs additional headroom under load.
+    { env, encoding: "utf8", timeout: 60000 });
   try {
     const aborted = invoke(wait + init + "; dsh --help");
+    assert.equal(aborted.error, undefined, aborted.error?.message);
     assert.equal(aborted.status, 1, aborted.stderr); assert.equal(aborted.stdout, "");
     fs.writeFileSync(ready, "ready");
     const accepted = invoke(wait + init + '; dsh --marker "space %UNEXPECTED% !"');

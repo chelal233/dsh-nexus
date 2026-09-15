@@ -82,6 +82,49 @@ jobs:
         env:
           BUNDLES: ${{ matrix.bundles }}
         run: pnpm tauri build --target "$CARGO_BUILD_TARGET" --bundles "$BUNDLES" -- --locked
+      - name: Windows installed package smoke
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $bundle = Join-Path $env:CARGO_TARGET_DIR "$env:CARGO_BUILD_TARGET/release/bundle"
+          $install = Join-Path $env:RUNNER_TEMP 'Nexus Package Smoke'
+          $setup = @(Get-ChildItem -LiteralPath (Join-Path $bundle 'nsis') -Filter '*.exe')
+          if ($setup.Count -ne 1) { throw 'Expected one NSIS installer' }
+          $process = Start-Process -FilePath $setup[0].FullName -ArgumentList "/S /D=$install" -WindowStyle Hidden -Wait -PassThru
+          if ($process.ExitCode -ne 0) { throw "Installer exited $($process.ExitCode)" }
+          node apps/nexus-launcher/src-tauri/scripts/verify-installed.mjs "$install" "$install/nexus-launcher-app.exe"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $process = Start-Process -FilePath "$install/uninstall.exe" -ArgumentList '/S' -WindowStyle Hidden -Wait -PassThru
+          if ($process.ExitCode -ne 0) { throw "Uninstaller exited $($process.ExitCode)" }
+          if (Test-Path -LiteralPath "$install/nexus-launcher-app.exe") { throw 'Uninstall left the GUI binary behind' }
+          if (Test-Path -LiteralPath (Join-Path $bundle 'msi')) {
+            foreach ($msi in Get-ChildItem -LiteralPath (Join-Path $bundle 'msi') -Filter '*.msi') {
+              $extract = Join-Path $env:RUNNER_TEMP $msi.BaseName
+              $process = Start-Process msiexec.exe -ArgumentList "/a `"$($msi.FullName)`" /qn TARGETDIR=`"$extract`"" -WindowStyle Hidden -Wait -PassThru
+              if ($process.ExitCode -ne 0) { throw "MSI extraction exited $($process.ExitCode)" }
+              $manifest = @(Get-ChildItem -LiteralPath $extract -Filter release-manifest.json -Recurse)
+              if ($manifest.Count -ne 1) { throw 'Expected one packaged resource manifest' }
+              node apps/nexus-launcher/src-tauri/scripts/verify-installed.mjs $manifest[0].DirectoryName
+              if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+            }
+          }
+      - name: macOS installed package smoke
+        if: runner.os == 'macOS'
+        run: |
+          set -euo pipefail
+          mount="$RUNNER_TEMP/nexus-dmg"
+          mkdir -p "$mount" "$RUNNER_TEMP/nexus-installed"
+          images=("$CARGO_TARGET_DIR/$CARGO_BUILD_TARGET/release/bundle/dmg/"*.dmg)
+          test "${#images[@]}" -eq 1
+          hdiutil attach "${images[0]}" -readonly -nobrowse -mountpoint "$mount"
+          trap 'hdiutil detach "$mount"' EXIT
+          apps=("$mount/"*.app)
+          test "${#apps[@]}" -eq 1
+          installed="$RUNNER_TEMP/nexus-installed/Nexus Launcher.app"
+          ditto "${apps[0]}" "$installed"
+          codesign --verify --deep --strict "$installed"
+          node apps/nexus-launcher/src-tauri/scripts/verify-installed.mjs "$installed/Contents/Resources" "$installed/Contents/MacOS/nexus-launcher-app"
       - name: Verify resources and collect public artifacts
         working-directory: apps/nexus-launcher
         run: |

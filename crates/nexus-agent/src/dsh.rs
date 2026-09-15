@@ -1048,6 +1048,7 @@ pub(crate) fn assign_process_to_job(
     }
 }
 
+#[cfg(windows)]
 pub(crate) fn assign_child_to_job(
     child: &Child,
     job: windows_sys::Win32::Foundation::HANDLE,
@@ -1056,6 +1057,7 @@ pub(crate) fn assign_child_to_job(
     assign_process_to_job(child.as_raw_handle().cast(), job)
 }
 
+#[cfg(windows)]
 pub(crate) fn terminate_job_tree(job: usize) -> io::Result<()> {
     use windows_sys::Win32::System::JobObjects::TerminateJobObject;
     let ok = unsafe { TerminateJobObject(job as windows_sys::Win32::Foundation::HANDLE, 1) };

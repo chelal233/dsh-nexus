@@ -33,6 +33,6 @@ await writeFile(path.join(destination, `${spec.target}_SHA256SUMS.txt`), files.m
 await writeFile(path.join(destination, `${spec.target}_build.json`), JSON.stringify({
   version: identity.version, buildId: identity.buildId, commit: identity.commit,
   target: spec.target, node: identity.node, npm: identity.npm, pnpm: identity.pnpm,
-  automatedChecks: 'passed', machineAcceptance: 'not-performed-by-ci',
+  automatedChecks: 'passed', installedPackageSmoke: 'passed-on-ci-runner', machineAcceptance: 'not-performed-by-ci',
   signing: spec.platform === 'darwin' ? 'ad-hoc; not notarized' : 'unsigned', files,
 }, null, 2) + '\n');
