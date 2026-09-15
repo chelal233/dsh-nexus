@@ -74,7 +74,7 @@ DSH 交互终端入口及终端租约目前仅在 Windows 实现；macOS 调用�
 2. 将审核后的提交放入计划发布的 main，配置正确 GitHub remote，启用 Actions；确认 ARM runner 可用于该仓库和账户。设置所需分支保护及私密漏洞报告入口。
 3. 先执行 Desktop build，排除任何目标失败；核对生成的 `notices/components.json`，补齐 `reviewRequired` 项及嵌套组件许可义务。
 4. 对每个目标完成安装、首次启动、Agent 身份、Harness 安装/启动/停止、升级、卸载及数据保留验收；macOS 增查 DMG 挂载、复制到 Applications 后启动、资源可执行权限和系统权限提示。使用 [现有验收清单](manual-acceptance-0.1.2.md) 并记录平台差异。
-5. 同步根 Cargo、GUI Cargo、两个 Cargo.lock 中本项目包版本、package.json 和 tauri.conf.json；本次准备未递增 0.1.2。对已审核提交创建对应标签并显式 push 标签。
+5. 同步根 Cargo、GUI Cargo、两个 Cargo.lock 中本项目包版本、package.json 和 tauri.conf.json；版本必须与发布 tag 一致。对已审核提交创建对应标签并显式 push 标签。
 6. 打 tag 前更新 `.github/RELEASE_TEMPLATE.md` 中的下载说明、验证范围和已知问题。工作流成功后自动发布预发布版及各架构独立下载附件，维护者核对 Release 结果；稳定版发布需独立确认验收与签名状态。
 
 校验下载文件：Windows 使用 `Get-FileHash <安装包> -Algorithm SHA256`；macOS 在附件目录执行 `shasum -a 256 -c <target>_SHA256SUMS.txt`。

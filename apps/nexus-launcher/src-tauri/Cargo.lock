@@ -2162,7 +2162,7 @@ checksum = "650eef8c711430f1a879fdd01d4745a7deea475becfb90269c06775983bbf086"
 
 [[package]]
 name = "nexus-core"
-version = "0.1.2"
+version = "0.1.3"
 dependencies = [
  "getrandom 0.4.3",
  "hmac",
@@ -2178,7 +2178,7 @@ dependencies = [
 
 [[package]]
 name = "nexus-launcher-app"
-version = "0.1.2"
+version = "0.1.3"
 dependencies = [
  "nexus-core",
  "nexus-launcher-core",
@@ -2196,7 +2196,7 @@ dependencies = [
 
 [[package]]
 name = "nexus-launcher-core"
-version = "0.1.2"
+version = "0.1.3"
 dependencies = [
  "futures-util",
  "nexus-core",
@@ -2209,14 +2209,14 @@ dependencies = [
 
 [[package]]
 name = "nexus-private-file"
-version = "0.1.2"
+version = "0.1.3"
 dependencies = [
  "windows-sys 0.61.2",
 ]
 
 [[package]]
 name = "nexus-protocol"
-version = "0.1.2"
+version = "0.1.3"
 dependencies = [
  "serde",
  "serde_json",
@@ -2224,7 +2224,7 @@ dependencies = [
 
 [[package]]
 name = "nexus-snapshots"
-version = "0.1.2"
+version = "0.1.3"
 dependencies = [
  "nexus-private-file",
  "serde",

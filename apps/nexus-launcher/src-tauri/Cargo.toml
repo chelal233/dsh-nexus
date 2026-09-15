@@ -1,6 +1,6 @@
 [package]
 name = "nexus-launcher-app"
-version = "0.1.2"
+version = "0.1.3"
 description = "Native Tauri shell for the Nexus local control plane"
 authors = ["Nexus maintainers"]
 edition = "2021"
