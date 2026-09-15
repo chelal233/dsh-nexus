@@ -3823,12 +3823,19 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
-    fn data_root_identity_does_not_merge_distinct_non_utf8_directories() {
+    fn data_root_identity_does_not_merge_distinct_directories() {
+        #[cfg(not(target_os = "macos"))]
         use std::{ffi::OsString, os::unix::ffi::OsStringExt};
 
         let parent = unique_test_root("non-utf8-root-identity");
+        #[cfg(not(target_os = "macos"))]
         let first = parent.join(OsString::from_vec(vec![b'r', 0x80]));
+        #[cfg(not(target_os = "macos"))]
         let second = parent.join(OsString::from_vec(vec![b'r', 0x81]));
+        // APFS rejects non-UTF8 names before identity lookup. Use distinct
+        // valid Unicode names there, while retaining byte-name coverage elsewhere.
+        #[cfg(target_os = "macos")]
+        let (first, second) = (parent.join("目录甲"), parent.join("目录乙"));
         fs::create_dir_all(&first).expect("first non-UTF8 root creates");
         fs::create_dir_all(&second).expect("second non-UTF8 root creates");
         let first =
@@ -5128,9 +5135,12 @@ mod tests {
     fn shared_runtime_command_and_child_environment_cover_pnpm_js_entries() {
         let root = unique_test_root("runtime-command");
         let node = root.join("node/node.exe");
+        #[cfg(windows)]
         let pnpm_verbatim = PathBuf::from(
             r"\\?\C:\Users\PC\AppData\Local\node\corepack\v1\pnpm\11.7.0\bin\pnpm.mjs",
         );
+        #[cfg(not(windows))]
+        let pnpm_verbatim = root.join("pnpm/bin/pnpm.mjs");
         let config = RuntimeConfig {
             node: Some(RuntimePin {
                 path: node.clone(),
@@ -5147,12 +5157,15 @@ mod tests {
             .expect("pnpm command resolves")
             .expect("pnpm pin exists");
         assert_eq!(command.program, node);
+        #[cfg(windows)]
         assert_eq!(
             command.prefix_args,
             vec![OsString::from(
                 r"C:\Users\PC\AppData\Local\node\corepack\v1\pnpm\11.7.0\bin\pnpm.mjs"
             )]
         );
+        #[cfg(not(windows))]
+        assert_eq!(command.prefix_args, vec![pnpm_verbatim.as_os_str().to_owned()]);
         let environment = build_runtime_child_env(&config, None).expect("child PATH builds");
         let path_entries: Vec<_> = std::env::split_paths(&environment[0].1).collect();
         assert_eq!(path_entries[0], root.join("node"));

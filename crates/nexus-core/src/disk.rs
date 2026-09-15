@@ -191,6 +191,7 @@ mod tests {
     use super::{VolumeRejection, MIN_INSTALL_FREE_BYTES};
 
     #[test]
+    #[cfg(windows)]
     fn volume_policy_accepts_fixed_ntfs_and_refs_only() {
         assert_eq!(super::classify_volume(3, "NTFS".to_owned()), Ok(()));
         assert_eq!(super::classify_volume(3, "ntfs".to_owned()), Ok(()));

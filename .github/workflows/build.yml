@@ -2,6 +2,18 @@ name: Desktop build
 on:
   workflow_call:
   workflow_dispatch:
+    inputs:
+      target:
+        description: 'Target to diagnose; all runs the full release matrix'
+        type: choice
+        default: all
+        options:
+          - all
+          - x86_64-pc-windows-msvc
+          - i686-pc-windows-msvc
+          - aarch64-pc-windows-msvc
+          - x86_64-apple-darwin
+          - aarch64-apple-darwin
   pull_request:
   push:
     branches: [main]
@@ -12,23 +24,8 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        include:
-          - runner: windows-2022
-            target: x86_64-pc-windows-msvc
-            bundles: nsis,msi
-          - runner: windows-2022
-            target: i686-pc-windows-msvc
-            bundles: nsis,msi
-          - runner: windows-11-arm
-            target: aarch64-pc-windows-msvc
-            bundles: nsis
-          - runner: macos-15-intel
-            target: x86_64-apple-darwin
-            bundles: dmg
-          - runner: macos-15
-            target: aarch64-apple-darwin
-            bundles: dmg
-    runs-on: ${{ matrix.runner }}
+        target: ${{ fromJSON(inputs.target && inputs.target != 'all' && format('["{0}"]', inputs.target) || '["x86_64-pc-windows-msvc","i686-pc-windows-msvc","aarch64-pc-windows-msvc","x86_64-apple-darwin","aarch64-apple-darwin"]') }}
+    runs-on: ${{ matrix.target == 'aarch64-pc-windows-msvc' && 'windows-11-arm' || matrix.target == 'x86_64-apple-darwin' && 'macos-15-intel' || matrix.target == 'aarch64-apple-darwin' && 'macos-15' || 'windows-2022' }}
     timeout-minutes: 90
     defaults:
       run:
@@ -91,7 +88,7 @@ jobs:
       - name: Build installers
         working-directory: apps/nexus-launcher
         env:
-          BUNDLES: ${{ matrix.bundles }}
+          BUNDLES: ${{ contains(matrix.target, 'apple') && 'dmg' || matrix.target == 'aarch64-pc-windows-msvc' && 'nsis' || 'nsis,msi' }}
         run: pnpm tauri build --target "$CARGO_BUILD_TARGET" --bundles "$BUNDLES" -- --locked
       - name: Windows installed package smoke
         if: runner.os == 'Windows'

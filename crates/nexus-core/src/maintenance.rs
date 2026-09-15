@@ -244,7 +244,6 @@ fn content_sha256(path: &Path, expected: &EntryIdentity, budget: &mut ContentSca
     let verify = |file: &fs::File| -> io::Result<()> {
         let metadata = file.metadata()?;
         let identity = log_file_identity(file)?;
-        #[cfg(unix)] let identity = identity.strip_prefix("unix:").unwrap_or(&identity);
         if !metadata.is_file() || path_is_reparse(&metadata) || identity != expected.identity
             || metadata.len() != expected.bytes || metadata.modified()?.duration_since(UNIX_EPOCH).map_err(io::Error::other)?.as_nanos() != expected.modified_nanos {
             return Err(invalid("Cleanup file changed while reading its contents"));
@@ -286,7 +285,7 @@ fn entry_identity(path: &Path, relative: PathBuf, budget: &mut ContentScanBudget
     #[cfg(unix)]
     let (identity, directory) = {
         use std::os::unix::fs::MetadataExt;
-        (format!("{}:{}", metadata.dev(), metadata.ino()), metadata.is_dir())
+        (format!("unix:{}:{}", metadata.dev(), metadata.ino()), metadata.is_dir())
     };
     #[cfg(not(any(windows, unix)))]
     let (identity, directory) = (log_file_identity(&fs::File::open(path)?)?, metadata.is_dir());
