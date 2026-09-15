@@ -29,9 +29,9 @@ jobs:
           node -e "require('node:assert/strict').equal(require('./apps/nexus-launcher/src-tauri/tauri.windows.conf.json').bundle.windows.webviewInstallMode.type, 'offlineInstaller')"
           sha=$(git rev-parse HEAD)
           runs=$(gh run list --repo "$GITHUB_REPOSITORY" --workflow build.yml --commit "$sha" --status success --limit 100 --json databaseId --jq '.[].databaseId')
+          expected=$(node --input-type=module -e "import { targets } from './apps/nexus-launcher/src-tauri/scripts/release-platform.mjs'; console.log(Object.keys(targets).map(target => 'release-' + target).sort().join('\n'))")
           for run in $runs; do
             names=$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$run/artifacts" --paginate --jq '.artifacts[] | select(.expired == false) | .name' | sort)
-            expected=$(printf '%s\n' release-aarch64-apple-darwin release-aarch64-pc-windows-msvc release-i686-pc-windows-msvc release-x86_64-apple-darwin release-x86_64-pc-windows-msvc | sort)
             if [[ "$names" == "$expected" ]]; then
               echo "run=$run" >> "$GITHUB_OUTPUT"
               exit 0

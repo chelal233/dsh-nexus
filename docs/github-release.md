@@ -6,20 +6,20 @@
 
 | 目标 | GitHub runner | 产物 | 内置运行时 |
 | --- | --- | --- | --- |
-| `x86_64-pc-windows-msvc` | `windows-2022` | NSIS EXE、en-US/zh-CN MSI | Node 24.20.0 x64 |
-| `i686-pc-windows-msvc` | `windows-2022` | NSIS EXE、en-US/zh-CN MSI | Node 22.23.2 x86 |
+| `x86_64-pc-windows-msvc` | `windows-2022` | 多语言 NSIS EXE | Node 24.20.0 x64 |
+| `i686-pc-windows-msvc` | `windows-2022` | 多语言 NSIS EXE | Node 22.23.2 x86 |
 | `aarch64-pc-windows-msvc` | `windows-11-arm` | NSIS EXE | Node 24.20.0 ARM64 |
 | `x86_64-apple-darwin` | `macos-15-intel` | DMG | Node 24.20.0 x64 |
 | `aarch64-apple-darwin` | `macos-15` | DMG | Node 24.20.0 ARM64 |
 
-所有目标内置 pnpm 11.7.0。Node 24 官方无 Windows x86 发行包，故此目标单独固定 Node 22；不修改 Harness 的版本要求。Windows ARM64 使用 NSIS，因为 Tauri 使用的 WiX 3 不支持 ARM64 MSI。macOS 分架构发行，不将单架构 Node 和辅助程序放入所谓 Universal 包。macOS 无现代 32 位 x86 产品；Linux、ARM32、其他 CPU 不在本次矩阵内。
+所有目标内置 pnpm 11.7.0。Node 24 官方无 Windows x86 发行包，故此目标单独固定 Node 22；不修改 Harness 的版本要求。所有 Windows 架构统一提供一个 NSIS EXE，安装时选择简体中文或 English，不再生成 MSI。macOS 分架构发行，不将单架构 Node 和辅助程序放入所谓 Universal 包。macOS 无现代 32 位 x86 产品；Linux、ARM32、其他 CPU 不在本次矩阵内。
 
 Windows x86 在 x64 runner 上编译并运行 x86 Rust 测试及内置 Node 探针；不能等同于 Windows 10 32 位机器验收。其他目标使用匹配架构 runner。脚本拒绝不受支持的交叉构建，避免错装宿主架构运行时。
 
 ## 开发机与终端用户要求
 
 - 编译：Rust 1.98.0，构建用 Node 24.20.0，pnpm 11.7.0；依赖用锁文件安装。
-- Windows：MSVC C++ Build Tools、Windows SDK、目标架构 C++ 组件；MSI 打包还需要 VBScript 可选功能。CI 工具安装只作用于临时 runner。
+- Windows：MSVC C++ Build Tools、Windows SDK、目标架构 C++ 组件。CI 工具安装只作用于临时 runner。
 - macOS：Xcode Command Line Tools；应用最低系统版本为 macOS 13.5，同时覆盖内置 Node 的要求。
 - 用户：安装预编译包，不需要 Rust、Xcode、MSVC、系统 Node/pnpm。Windows 使用包内 WebView2 离线安装器；macOS 使用系统 WKWebView。受管 Harness 首次安装仍可能联网安装依赖并构建，其原生依赖失败会保留原始错误。
 - Windows 未配置 Authenticode；macOS 使用 ad-hoc 签名，未配置 Developer ID 与公证。面向普通用户的签名发布需要维护者证书和独立验收；当前产物定位为开发预发布，不自动提供绕过平台保护的操作。
@@ -45,7 +45,7 @@ pnpm install --frozen-lockfile
 $env:CARGO_BUILD_TARGET = 'x86_64-pc-windows-msvc'
 $env:NEXUS_BUILD_ID = 'local-' + (Get-Date -Format 'yyyyMMddHHmmss')
 rustup target add $env:CARGO_BUILD_TARGET
-pnpm tauri build --target $env:CARGO_BUILD_TARGET --bundles nsis,msi -- --locked
+pnpm tauri build --target $env:CARGO_BUILD_TARGET --bundles nsis -- --locked
 ```
 
 ARM64 将 `--bundles` 改为 `nsis`。macOS 原生示例：
@@ -62,7 +62,7 @@ pnpm tauri build --target "$CARGO_BUILD_TARGET" --bundles dmg -- --locked
 
 构建自动准备辅助程序、运行时、许可材料、版本身份及前端。使用显式 target 时，安装包位于 Cargo target 目录的 `<target>/release/bundle/`。`CARGO_TARGET_DIR` 可指定独立输出目录。`collect-release.mjs` 只用于检查已通过的干净提交构建，拒绝 dirty checkout；它本身不执行测试。
 
-原有 `pnpm release:gate` 保留为 **Windows x64 本地门禁**，使用前清除 `CARGO_BUILD_TARGET` 和 `NEXUS_BUILD_ID` 环境变量。它与跨平台 CI 的包收集流程分开；CI 会执行 NSIS 静默安装/卸载、MSI 管理提取、DMG 挂载复制、包内哈希校验、Agent/CLI 身份验证和 GUI 进程启动检查；这仍不代表真实用户交互、Gatekeeper/SmartScreen 信任或完整 Harness 真机验收。
+原有 `pnpm release:gate` 保留为 **Windows x64 本地门禁**，使用前清除 `CARGO_BUILD_TARGET` 和 `NEXUS_BUILD_ID` 环境变量。它与跨平台 CI 的包收集流程分开；CI 会执行 NSIS 静默安装/卸载、DMG 挂载复制、包内哈希校验、Agent/CLI 身份验证和 GUI 进程启动检查；这仍不代表真实用户交互、Gatekeeper/SmartScreen 信任或完整 Harness 真机验收。
 
 ## 已知平台功能差异
 

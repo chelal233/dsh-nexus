@@ -14,12 +14,9 @@ export function selectBuildId(value) {
   if (!/^[A-Za-z0-9][A-Za-z0-9_-]{7,95}$/.test(id) || id === "development") throw new Error("Invalid release build ID");
   return id;
 }
-export function packageOutputs(version, buildId, languages) {
-  if (!Array.isArray(languages) || languages.length === 0 || new Set(languages).size !== languages.length
-      || languages.some(locale => !["en-US", "zh-CN"].includes(locale))) throw new Error("Unsupported or duplicate MSI language");
+export function packageOutputs(version, buildId) {
   return [
     { kind: "nsis", locale: "multilingual", source: `Nexus Launcher_${version}_x64-setup.exe`, file: `NexusLauncher_${version}_${buildId}_x64.exe` },
-    ...languages.map(locale => ({ kind: "msi", locale, source: `Nexus Launcher_${version}_x64_${locale}.msi`, file: `NexusLauncher_${version}_${buildId}_x64_${locale}.msi` })),
   ];
 }
 async function sha(file) {
@@ -198,6 +195,7 @@ async function main() {
   await save();
     await run("rust-workspace", "cargo", ["test", "--manifest-path", "Cargo.toml", "--workspace", "--locked", "-j", "2", "--", "--test-threads=4"], root);
     await run("frontend-typecheck", node, ["node_modules/typescript/bin/tsc", "--noEmit"], app);
+    await run("frontend-format", node, ["node_modules/prettier/bin/prettier.cjs", "--check", "src"], app);
     const tests = (await readdir(path.join(app, "tests"))).filter(name => name.endsWith(".test.ts")).sort().map(name => `tests/${name}`);
     await run("frontend-tests", node, ["--experimental-strip-types", "--test", "--test-concurrency=4", ...tests], app);
     const scripts = (await readdir(path.join(app, "tests"))).filter(name => name.endsWith(".test.mjs")).sort().map(name => `tests/${name}`);
@@ -214,8 +212,7 @@ async function main() {
     if (identity.buildId !== buildId || identity.version !== report.version) throw new Error("Packaged release identity differs from verification build");
     report.releaseIdentity = identity;
     report.artifacts = [];
-    const tauri = JSON.parse(await readFile(path.join(app, "src-tauri/tauri.windows.conf.json"), "utf8"));
-    for (const { kind, locale, source, file: filename } of packageOutputs(report.version, buildId, tauri.bundle.windows.wix.language)) {
+    for (const { kind, locale, source, file: filename } of packageOutputs(report.version, buildId)) {
       const folder = path.join(target, "release/bundle", kind);
       const output = path.join(folder, source);
       const file = path.join(folder, filename);

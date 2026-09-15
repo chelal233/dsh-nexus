@@ -346,8 +346,10 @@ async fn proxy_request(
         if let Ok(mut error) = state.harness_startup_error.lock() { *error = None; }
     }
     if path == "/v1/agent" {
-        validate_native_agent_request(&method, body.as_ref())?;
-        return execute_agent_action(&state, body.as_ref()).await.map_err(BridgeError::from);
+        let action = validate_native_agent_request(&method, body.as_ref())?;
+        return execute_agent_action(&state, action)
+            .await
+            .map_err(BridgeError::from);
     }
 
     // Opening the validated Harness URL is a native side effect. The URL and
@@ -401,18 +403,21 @@ async fn proxy_request(
         .map_err(BridgeError::from)
 }
 
-fn validate_native_agent_request(method: &Method, body: Option<&Value>) -> Result<(), String> {
+fn validate_native_agent_request(
+    method: &Method,
+    body: Option<&Value>,
+) -> Result<AgentAction, String> {
     if *method != Method::POST {
         return Err("Agent lifecycle adapter accepts POST only".to_owned());
     }
     let command = parse_command(body)?;
-    if !matches!(
-        command.action.as_str(),
-        "start" | "stop" | "restart" | "status"
-    ) {
-        return Err(format!("Agent action is not allowed: {}", command.action));
+    match command.action.as_str() {
+        "start" => Ok(AgentAction::Start),
+        "stop" => Ok(AgentAction::Stop),
+        "restart" => Ok(AgentAction::Restart),
+        "status" => Ok(AgentAction::Status),
+        _ => Err(format!("Agent action is not allowed: {}", command.action)),
     }
-    Ok(())
 }
 
 fn parse_command(body: Option<&Value>) -> Result<AgentCommand, String> {
@@ -428,18 +433,10 @@ fn parse_command(body: Option<&Value>) -> Result<AgentCommand, String> {
         .map_err(|error| format!("request body must contain an action: {error}"))
 }
 
-async fn execute_agent_action(state: &AppState, body: Option<&Value>) -> Result<Value, String> {
-    let command = parse_command(body)?;
-    let action = match command.action.as_str() {
-        "start" => AgentAction::Start,
-        "stop" => AgentAction::Stop,
-        "restart" => AgentAction::Restart,
-        "status" => AgentAction::Status,
-        _ => unreachable!("validate_native_agent_request checks Agent actions"),
-    };
+async fn execute_agent_action(state: &AppState, action: AgentAction) -> Result<Value, String> {
     match action {
-        AgentAction::Status => Ok(serde_json::to_value(state.runtime.status().await)
-            .map_err(|error| format!("Agent status could not be encoded: {error}"))?),
+        AgentAction::Status => serde_json::to_value(state.runtime.status().await)
+            .map_err(|error| format!("Agent status could not be encoded: {error}")),
         AgentAction::Start | AgentAction::Restart => {
             state.set_desired_running(true);
             state
@@ -452,7 +449,12 @@ async fn execute_agent_action(state: &AppState, body: Option<&Value>) -> Result<
             // the first GUI handshake so an explicit Agent restart does not
             // leave the saved Harness idle.
             schedule_configured_harness(state.clone());
-            Ok(json!({ "accepted": true, "action": command.action }))
+            let name = if action == AgentAction::Start {
+                "start"
+            } else {
+                "restart"
+            };
+            Ok(json!({ "accepted": true, "action": name }))
         }
         AgentAction::Stop => {
             state.set_desired_running(false);
@@ -461,7 +463,7 @@ async fn execute_agent_action(state: &AppState, body: Option<&Value>) -> Result<
                 .action(action, STOP_WAIT_SECS)
                 .await
                 .map_err(|error| error.to_string())?;
-            Ok(json!({ "accepted": true, "action": command.action }))
+            Ok(json!({ "accepted": true, "action": "stop" }))
         }
     }
 }
@@ -617,7 +619,7 @@ fn setup_tray(app: &mut tauri::App) -> tauri::Result<()> {
                 let app = app.clone();
                 let state = app.state::<AppState>().inner().clone();
                 tauri::async_runtime::spawn(async move {
-                    match execute_agent_action(&state, Some(&json!({"action":"stop"}))).await {
+                    match execute_agent_action(&state, AgentAction::Stop).await {
                         Ok(_) => app.exit(0),
                         Err(error) => {
                             EXIT_IN_PROGRESS.store(false, Ordering::Release);
@@ -973,10 +975,18 @@ mod tests {
 
     #[test]
     fn lifecycle_adapter_actions_are_bounded() {
-        assert!(
-            validate_native_agent_request(&Method::POST, Some(&json!({ "action": "start" })),)
-                .is_ok()
-        );
+        for (name, action) in [
+            ("start", AgentAction::Start),
+            ("stop", AgentAction::Stop),
+            ("restart", AgentAction::Restart),
+            ("status", AgentAction::Status),
+        ] {
+            assert_eq!(
+                validate_native_agent_request(&Method::POST, Some(&json!({ "action": name })))
+                    .unwrap(),
+                action
+            );
+        }
         assert!(
             validate_native_agent_request(&Method::GET, Some(&json!({ "action": "status" })),)
                 .is_err()

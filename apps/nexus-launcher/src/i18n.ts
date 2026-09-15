@@ -13,24 +13,34 @@ export type TranslationParams = Record<string, string | number>;
 export type Translator = (key: string, params?: TranslationParams) => string;
 
 const english: Record<string, string> = {
-  "Version prepared only. Your current selection is unchanged. Select the prepared version in Release slots to review the rollback warning and confirm a manual switch.": "Version prepared only. Your current selection is unchanged. Select the prepared version in Release slots to review the rollback warning and confirm a manual switch.",
-  "There is no verified rollback version. Switch manually to {version} anyway? If it fails, automatic rollback will be unavailable. Harness will stay stopped.": "There is no verified rollback version. Switch manually to {version} anyway? If it fails, automatic rollback will be unavailable. Harness will stay stopped.",
+  "Version prepared only. Your current selection is unchanged. Select the prepared version in Release slots to review the rollback warning and confirm a manual switch.":
+    "Version prepared only. Your current selection is unchanged. Select the prepared version in Release slots to review the rollback warning and confirm a manual switch.",
+  "There is no verified rollback version. Switch manually to {version} anyway? If it fails, automatic rollback will be unavailable. Harness will stay stopped.":
+    "There is no verified rollback version. Switch manually to {version} anyway? If it fails, automatic rollback will be unavailable. Harness will stay stopped.",
   "Credential conflicts": "Credential conflicts",
   "Keep existing local credentials": "Keep existing local credentials",
   "Replace with package credentials": "Replace with package credentials",
   "Credential recovery record": "Credential recovery record",
-  "Some incoming configuration values were not applied to preserve your local credentials. To use the package values, review the credential conflict option before importing again.": "Some incoming configuration values were not applied to preserve your local credentials. To use the package values, review the credential conflict option before importing again.",
-  "This archive is not encrypted. Replacing credentials changes the accounts used by this environment. Original files remain in the previous data directory; a recovery record identifies them.": "This archive is not encrypted. Replacing credentials changes the accounts used by this environment. Original files remain in the previous data directory; a recovery record identifies them.",
-  "This archive is not encrypted and includes account credentials. Anyone who can read it can use those accounts, including recipients of a shared-folder copy.": "This archive is not encrypted and includes account credentials. Anyone who can read it can use those accounts, including recipients of a shared-folder copy.",
-  "Original credential files remain in the previous data directory. The record lists their locations; stop Harness before restoring them.": "Original credential files remain in the previous data directory. The record lists their locations; stop Harness before restoring them.",
-  "Select this profile before creating a checkpoint.": "Select this profile before creating a checkpoint.",
+  "Some incoming configuration values were not applied to preserve your local credentials. To use the package values, review the credential conflict option before importing again.":
+    "Some incoming configuration values were not applied to preserve your local credentials. To use the package values, review the credential conflict option before importing again.",
+  "This archive is not encrypted. Replacing credentials changes the accounts used by this environment. Original files remain in the previous data directory; a recovery record identifies them.":
+    "This archive is not encrypted. Replacing credentials changes the accounts used by this environment. Original files remain in the previous data directory; a recovery record identifies them.",
+  "This archive is not encrypted and includes account credentials. Anyone who can read it can use those accounts, including recipients of a shared-folder copy.":
+    "This archive is not encrypted and includes account credentials. Anyone who can read it can use those accounts, including recipients of a shared-folder copy.",
+  "Original credential files remain in the previous data directory. The record lists their locations; stop Harness before restoring them.":
+    "Original credential files remain in the previous data directory. The record lists their locations; stop Harness before restoring them.",
+  "Select this profile before creating a checkpoint.":
+    "Select this profile before creating a checkpoint.",
   "Import": "Import",
   "Export": "Export",
-  "Choose a package, read its contents, then select what to import. No dependency downloads or builds are needed.": "Choose a package, read its contents, then select what to import. No dependency downloads or builds are needed.",
-  "Select what to export, then choose where to save the package. Program and runtime are optional.": "Select what to export, then choose where to save the package. Program and runtime are optional.",
+  "Choose a package, read its contents, then select what to import. No dependency downloads or builds are needed.":
+    "Choose a package, read its contents, then select what to import. No dependency downloads or builds are needed.",
+  "Select what to export, then choose where to save the package. Program and runtime are optional.":
+    "Select what to export, then choose where to save the package. Program and runtime are optional.",
   "Plugins belong to the selected profiles.": "Plugins belong to the selected profiles.",
   "Choose contents to import": "Choose contents to import",
-  "Only selected contents are applied. Unselected local data and the previous data directory are preserved.": "Only selected contents are applied. Unselected local data and the previous data directory are preserved.",
+  "Only selected contents are applied. Unselected local data and the previous data directory are preserved.":
+    "Only selected contents are applied. Unselected local data and the previous data directory are preserved.",
   "Recent activity": "Recent activity",
   "Resolve issue": "Resolve issue",
   "View progress": "View progress",
@@ -41,21 +51,30 @@ const english: Record<string, string> = {
   "Shared environment settings": "Shared environment settings",
   "Session history and attachments": "Session history and attachments",
   "Account credentials and .env": "Account credentials and .env",
-  "Choose exactly what to transfer. Program and runtime are optional; profiles, environment settings and sessions can be transferred separately. Import needs no dependency downloads or builds.": "Choose exactly what to transfer. Program and runtime are optional; profiles, environment settings and sessions can be transferred separately. Import needs no dependency downloads or builds.",
-  "Session messages and associated storage are copied unchanged and may contain private content. Project files are not included.": "Session messages and associated storage are copied unchanged and may contain private content. Project files are not included.",
-  "Data-only transfer keeps the target program and runtime. Unselected local data is retained; the previous data directory is preserved.": "Data-only transfer keeps the target program and runtime. Unselected local data is retained; the previous data directory is preserved.",
-  "Data import completed. Your program and runtime are unchanged.": "Data import completed. Your program and runtime are unchanged.",
+  "Choose exactly what to transfer. Program and runtime are optional; profiles, environment settings and sessions can be transferred separately. Import needs no dependency downloads or builds.":
+    "Choose exactly what to transfer. Program and runtime are optional; profiles, environment settings and sessions can be transferred separately. Import needs no dependency downloads or builds.",
+  "Session messages and associated storage are copied unchanged and may contain private content. Project files are not included.":
+    "Session messages and associated storage are copied unchanged and may contain private content. Project files are not included.",
+  "Data-only transfer keeps the target program and runtime. Unselected local data is retained; the previous data directory is preserved.":
+    "Data-only transfer keeps the target program and runtime. Unselected local data is retained; the previous data directory is preserved.",
+  "Data import completed. Your program and runtime are unchanged.":
+    "Data import completed. Your program and runtime are unchanged.",
   "Yes": "Yes",
   "Choose save location": "Choose save location",
   "Additional export contents": "Additional export contents",
-  "Select profiles to include. Leave all unchecked for a runtime-only package.": "Select profiles to include. Leave all unchecked for a runtime-only package.",
+  "Select profiles to include. Leave all unchecked for a runtime-only package.":
+    "Select profiles to include. Leave all unchecked for a runtime-only package.",
   "Profile and shared configuration": "Profile and shared configuration",
   "Installed plugins and complete dependencies": "Installed plugins and complete dependencies",
   "Include account credentials and .env": "Include account credentials and .env",
-  "The package will contain account credentials. Share it only with recipients who may use those accounts.": "The package will contain account credentials. Share it only with recipients who may use those accounts.",
-  "Recognized key, password and token fields are excluded. Custom plugin configuration may use other names; review it before sharing.": "Recognized key, password and token fields are excluded. Custom plugin configuration may use other names; review it before sharing.",
-  "Conversation history and project files are not included. Import keeps the previous data directory and activates a separate imported environment.": "Conversation history and project files are not included. Import keeps the previous data directory and activates a separate imported environment.",
-  "Packages include a built Windows x64 Harness and complete Node/npm/pnpm runtime. Optionally include selected profiles, installed plugins and credentials. Import needs no dependency downloads or builds.": "Packages include a built Windows x64 Harness and complete Node/npm/pnpm runtime. Optionally include selected profiles, installed plugins and credentials. Import needs no dependency downloads or builds.",
+  "The package will contain account credentials. Share it only with recipients who may use those accounts.":
+    "The package will contain account credentials. Share it only with recipients who may use those accounts.",
+  "Recognized key, password and token fields are excluded. Custom plugin configuration may use other names; review it before sharing.":
+    "Recognized key, password and token fields are excluded. Custom plugin configuration may use other names; review it before sharing.",
+  "Conversation history and project files are not included. Import keeps the previous data directory and activates a separate imported environment.":
+    "Conversation history and project files are not included. Import keeps the previous data directory and activates a separate imported environment.",
+  "Packages include a built Windows x64 Harness and complete Node/npm/pnpm runtime. Optionally include selected profiles, installed plugins and credentials. Import needs no dependency downloads or builds.":
+    "Packages include a built Windows x64 Harness and complete Node/npm/pnpm runtime. Optionally include selected profiles, installed plugins and credentials. Import needs no dependency downloads or builds.",
   "Preparing package": "Preparing package",
   "Scanning Harness files": "Scanning Harness files",
   "Scanning runtime files": "Scanning runtime files",
@@ -80,7 +99,8 @@ const english: Record<string, string> = {
   "Reading package contents": "Reading package contents",
   "Read package contents": "Read package contents",
   "Package contents": "Package contents",
-  "This is the package manifest. Every file is verified during import before activation.": "This is the package manifest. Every file is verified during import before activation.",
+  "This is the package manifest. Every file is verified during import before activation.":
+    "This is the package manifest. Every file is verified during import before activation.",
   "cold_switch": "Install or switch version",
   "harness_restart": "Restart Harness",
   "rollback": "Roll back version",
@@ -101,39 +121,56 @@ const english: Record<string, string> = {
   "Select all removable items": "Select all removable items",
   "No removable items in this category": "No removable items in this category",
   "Appearance and display": "Appearance and display",
-  "Move profile {name} to Deleted profiles? Its files are kept for restoration. Checkpoints and other profiles are unchanged.": "Move profile {name} to Deleted profiles? Its files are kept for restoration. Checkpoints and other profiles are unchanged.",
+  "Move profile {name} to Deleted profiles? Its files are kept for restoration. Checkpoints and other profiles are unchanged.":
+    "Move profile {name} to Deleted profiles? Its files are kept for restoration. Checkpoints and other profiles are unchanged.",
   "Delete profile": "Delete profile",
   "Delete": "Delete",
-  "Select a profile to manage its checkpoints and plugins. Deleted profiles are kept for restoration; the current profile cannot be deleted.": "Select a profile to manage its checkpoints and plugins. Deleted profiles are kept for restoration; the current profile cannot be deleted.",
+  "Select a profile to manage its checkpoints and plugins. Deleted profiles are kept for restoration; the current profile cannot be deleted.":
+    "Select a profile to manage its checkpoints and plugins. Deleted profiles are kept for restoration; the current profile cannot be deleted.",
   "Deleted profiles": "Deleted profiles",
-  "Deleting moves the complete profile into a local recovery folder. Close DSH terminals first. Restoring never overwrites an existing profile.": "Deleting moves the complete profile into a local recovery folder. Close DSH terminals first. Restoring never overwrites an existing profile.",
+  "Deleting moves the complete profile into a local recovery folder. Close DSH terminals first. Restoring never overwrites an existing profile.":
+    "Deleting moves the complete profile into a local recovery folder. Close DSH terminals first. Restoring never overwrites an existing profile.",
   "Restore deleted profile": "Restore deleted profile",
   "A profile with this name already exists": "A profile with this name already exists",
   "No deleted profiles": "No deleted profiles",
   "Restore Nexus records": "Restore Nexus records",
-  "Choose a time and restore. This restores the active profile and known profile names only; Harness files, plugins and conversations are not changed.": "Choose a time and restore. This restores the active profile and known profile names only; Harness files, plugins and conversations are not changed.",
+  "Choose a time and restore. This restores the active profile and known profile names only; Harness files, plugins and conversations are not changed.":
+    "Choose a time and restore. This restores the active profile and known profile names only; Harness files, plugins and conversations are not changed.",
   "Recovery time": "Recovery time",
   "Choose a recovery time": "Choose a recovery time",
-  "No valid recovery history is available. Nexus cannot restore a time that was never backed up.": "No valid recovery history is available. Nexus cannot restore a time that was never backed up.",
-  "The current record is backed up first. Harness remains stopped after recovery.": "The current record is backed up first. Harness remains stopped after recovery.",
+  "No valid recovery history is available. Nexus cannot restore a time that was never backed up.":
+    "No valid recovery history is available. Nexus cannot restore a time that was never backed up.",
+  "The current record is backed up first. Harness remains stopped after recovery.":
+    "The current record is backed up first. Harness remains stopped after recovery.",
   "Restore with one click": "Restore with one click",
-  "Nexus record restored. Harness has not been started.": "Nexus record restored. Harness has not been started.",
-  "Harness could not be stopped. No record was restored.": "Harness could not be stopped. No record was restored.",
-  "Record restored. Agent restart failed; retry restarting Agent.": "Record restored. Agent restart failed; retry restarting Agent.",
+  "Nexus record restored. Harness has not been started.":
+    "Nexus record restored. Harness has not been started.",
+  "Harness could not be stopped. No record was restored.":
+    "Harness could not be stopped. No record was restored.",
+  "Record restored. Agent restart failed; retry restarting Agent.":
+    "Record restored. Agent restart failed; retry restarting Agent.",
   "Technical details": "Technical details",
   "{count} profiles": "{count} profiles",
-  "Profile arguments are managed automatically. Select the profile in Configuration and plugins.": "Profile arguments are managed automatically. Select the profile in Configuration and plugins.",
+  "Profile arguments are managed automatically. Select the profile in Configuration and plugins.":
+    "Profile arguments are managed automatically. Select the profile in Configuration and plugins.",
   "Save startup parameters": "Save startup parameters",
   "Advanced startup parameters": "Advanced startup parameters",
-  "Current version is unverified. This reference describes 0.1.2-rc.1; automatic suggestions are disabled.": "Current version is unverified. This reference describes 0.1.2-rc.1; automatic suggestions are disabled.",
-  "Reference verified for Harness 0.1.2-rc.1. Profile-specific arguments may differ.": "Reference verified for Harness 0.1.2-rc.1. Profile-specific arguments may differ.",
+  "Current version is unverified. This reference describes 0.1.2-rc.1; automatic suggestions are disabled.":
+    "Current version is unverified. This reference describes 0.1.2-rc.1; automatic suggestions are disabled.",
+  "Reference verified for Harness 0.1.2-rc.1. Profile-specific arguments may differ.":
+    "Reference verified for Harness 0.1.2-rc.1. Profile-specific arguments may differ.",
   "Show the version and exit.": "Show the version and exit.",
   "Show command help and exit.": "Show command help and exit.",
-  "Print the default configuration and exit; do not use for service startup.": "Print the default configuration and exit; do not use for service startup.",
-  "Print the composed configuration and exit; do not use for service startup.": "Print the composed configuration and exit; do not use for service startup.",
-  "Use Runtime configuration patches for ordering, caching and failure protection.": "Use Runtime configuration patches for ordering, caching and failure protection.",
-  "Selected in Configuration and plugins; added automatically.": "Selected in Configuration and plugins; added automatically.",
-  "Do not open a browser; prefer the browser setting.": "Do not open a browser; prefer the browser setting.",
+  "Print the default configuration and exit; do not use for service startup.":
+    "Print the default configuration and exit; do not use for service startup.",
+  "Print the composed configuration and exit; do not use for service startup.":
+    "Print the composed configuration and exit; do not use for service startup.",
+  "Use Runtime configuration patches for ordering, caching and failure protection.":
+    "Use Runtime configuration patches for ordering, caching and failure protection.",
+  "Selected in Configuration and plugins; added automatically.":
+    "Selected in Configuration and plugins; added automatically.",
+  "Do not open a browser; prefer the browser setting.":
+    "Do not open a browser; prefer the browser setting.",
   "Listening port; prefer the Web port setting.": "Listening port; prefer the Web port setting.",
   "Terminal only": "Terminal only",
   "Managed by Nexus": "Managed by Nexus",
@@ -143,20 +180,27 @@ const english: Record<string, string> = {
   "Argument": "Argument",
   "Argument reference": "Argument reference",
   "Switch back to Nexus-managed Harness": "Switch back to Nexus-managed Harness",
-  "Choose a version and install it with the bundled runtime, or select an already built local directory.": "Choose a version and install it with the bundled runtime, or select an already built local directory.",
+  "Choose a version and install it with the bundled runtime, or select an already built local directory.":
+    "Choose a version and install it with the bundled runtime, or select an already built local directory.",
   "Choose version and install": "Choose version and install",
   "Use this external Harness": "Use this external Harness",
-  "Stop Harness before changing its program source.": "Stop Harness before changing its program source.",
+  "Stop Harness before changing its program source.":
+    "Stop Harness before changing its program source.",
   "Use bundled runtime": "Use bundled runtime",
   "Browse file": "Browse file",
   "Browse folder": "Browse folder",
   "No upstream tags found": "No upstream tags found",
   "Loaded {count} tags": "Loaded {count} tags",
-  "Save the upstream address before loading tags.": "Save the upstream address before loading tags.",
-  "Install or select a Harness version before continuing.": "Install or select a Harness version before continuing.",
-  "Harness is installed. Continue in Workbench to check and start it.": "Harness is installed. Continue in Workbench to check and start it.",
-  "The selected external program is used directly. Nexus does not install or build its files.": "The selected external program is used directly. Nexus does not install or build its files.",
-  "Data paths and the program source are managed in Settings. The default runtime is bundled; an external Harness must already be built.": "Data paths and the program source are managed in Settings. The default runtime is bundled; an external Harness must already be built.",
+  "Save the upstream address before loading tags.":
+    "Save the upstream address before loading tags.",
+  "Install or select a Harness version before continuing.":
+    "Install or select a Harness version before continuing.",
+  "Harness is installed. Continue in Workbench to check and start it.":
+    "Harness is installed. Continue in Workbench to check and start it.",
+  "The selected external program is used directly. Nexus does not install or build its files.":
+    "The selected external program is used directly. Nexus does not install or build its files.",
+  "Data paths and the program source are managed in Settings. The default runtime is bundled; an external Harness must already be built.":
+    "Data paths and the program source are managed in Settings. The default runtime is bundled; an external Harness must already be built.",
   "Open Workbench": "Open Workbench",
   "Previous step": "Previous step",
   "Next step": "Next step",
@@ -164,57 +208,79 @@ const english: Record<string, string> = {
   "Finish setup": "Finish setup",
   "Install Harness": "Install Harness",
   "Preparation": "Preparation",
-  "Prepare your settings, install a version, then continue in Workbench.": "Prepare your settings, install a version, then continue in Workbench.",
+  "Prepare your settings, install a version, then continue in Workbench.":
+    "Prepare your settings, install a version, then continue in Workbench.",
   "Install Harness step by step": "Install Harness step by step",
-"Recovery artifact ID":"Recovery artifact ID",
-"Recovery files were created, but the latest index could not be updated. Keep the artifact ID to reopen them.":"Recovery files were created, but the latest index could not be updated. Keep the artifact ID to reopen them.",
-"Unreadable or unsupported diagnostic record was preserved":"Unreadable or unsupported diagnostic record was preserved",
-"Checking startup inputs":"Checking startup inputs",
-"Checking startup compatibility":"Checking startup compatibility",
-"Creating Harness process; use Stop after startup":"Creating Harness process; use Stop after startup",
-"Startup cancelled. The previous instance is not restarted automatically.":"Startup cancelled. The previous instance is not restarted automatically.",
-"Startup preparation failed":"Startup preparation failed",
-"Cancellation requested; waiting for checks to stop safely":"Cancellation requested; waiting for checks to stop safely",
-"Cancel startup":"Cancel startup",
+  "Recovery artifact ID": "Recovery artifact ID",
+  "Recovery files were created, but the latest index could not be updated. Keep the artifact ID to reopen them.":
+    "Recovery files were created, but the latest index could not be updated. Keep the artifact ID to reopen them.",
+  "Unreadable or unsupported diagnostic record was preserved":
+    "Unreadable or unsupported diagnostic record was preserved",
+  "Checking startup inputs": "Checking startup inputs",
+  "Checking startup compatibility": "Checking startup compatibility",
+  "Creating Harness process; use Stop after startup":
+    "Creating Harness process; use Stop after startup",
+  "Startup cancelled. The previous instance is not restarted automatically.":
+    "Startup cancelled. The previous instance is not restarted automatically.",
+  "Startup preparation failed": "Startup preparation failed",
+  "Cancellation requested; waiting for checks to stop safely":
+    "Cancellation requested; waiting for checks to stop safely",
+  "Cancel startup": "Cancel startup",
 
-"More recovery records":"More recovery records",
-"Configured command: {program}":"Configured command: {program}",
-"After reopening Nexus, inspect and select an existing backup to continue verification. No files are replaced automatically.":"After reopening Nexus, inspect and select an existing backup to continue verification. No files are replaced automatically.",
-"Recovery record listing is incomplete. Additional or unsupported records remain protected.":"Recovery record listing is incomplete. Additional or unsupported records remain protected.",
-"Existing recovery backups":"Existing recovery backups",
-"Continue verification":"Continue verification",
-"Unsupported or unreadable record is preserved.":"Unsupported or unreadable record is preserved.",
+  "More recovery records": "More recovery records",
+  "Configured command: {program}": "Configured command: {program}",
+  "After reopening Nexus, inspect and select an existing backup to continue verification. No files are replaced automatically.":
+    "After reopening Nexus, inspect and select an existing backup to continue verification. No files are replaced automatically.",
+  "Recovery record listing is incomplete. Additional or unsupported records remain protected.":
+    "Recovery record listing is incomplete. Additional or unsupported records remain protected.",
+  "Existing recovery backups": "Existing recovery backups",
+  "Continue verification": "Continue verification",
+  "Unsupported or unreadable record is preserved.":
+    "Unsupported or unreadable record is preserved.",
   "Active program source": "Active program source",
-  "Preparing a version slot does not change the active external program source.": "Preparing a version slot does not change the active external program source.",
+  "Preparing a version slot does not change the active external program source.":
+    "Preparing a version slot does not change the active external program source.",
   "Choose program source in Settings": "Choose program source in Settings",
   "Prepare this version slot": "Prepare this version slot",
   "Prepared slot": "Prepared slot",
   "Install a managed version": "Install a managed version",
   "Use an already built directory": "Use an already built directory",
-  "Your drafts are retained. Return after fixing the issue to run the check again.": "Your drafts are retained. Return after fixing the issue to run the check again.",
+  "Your drafts are retained. Return after fixing the issue to run the check again.":
+    "Your drafts are retained. Return after fixing the issue to run the check again.",
   "Return and recheck": "Return and recheck",
   "Open the relevant repair page": "Open the relevant repair page",
-  "Stop Harness explicitly before running diagnostics. Your selection and settings are kept.": "Stop Harness explicitly before running diagnostics. Your selection and settings are kept.",
+  "Stop Harness explicitly before running diagnostics. Your selection and settings are kept.":
+    "Stop Harness explicitly before running diagnostics. Your selection and settings are kept.",
   "Stop Harness for diagnostics": "Stop Harness for diagnostics",
   "Return to Workbench": "Return to Workbench",
-  "Version-slot operation accepted. The external program source remains active.": "Version-slot operation accepted. The external program source remains active.",
+  "Version-slot operation accepted. The external program source remains active.":
+    "Version-slot operation accepted. The external program source remains active.",
 
-"Backup prepared. Replacement is a manual step; recheck file evidence afterwards.": "Backup prepared. Replacement is a manual step; recheck file evidence afterwards.",
-"Artifact path": "Artifact path",
-"Recheck recovery files": "Recheck recovery files",
-"Replacement matches. Restart Nexus to verify Agent health.": "Replacement matches. Restart Nexus to verify Agent health.",
-"Original is unchanged. Manual replacement remains pending.": "Original is unchanged. Manual replacement remains pending.",
-"Original changed or is unreadable. Inspect again before replacement.": "Original changed or is unreadable. Inspect again before replacement.",
-"{seconds} seconds": "{seconds} seconds",
-"Patch cache": "Patch cache",
-"Private recovery backups (protected)": "Private recovery backups (protected)",
-"Patch preview or download is active; cache is protected": "Patch preview or download is active; cache is protected",
-"Configuration transaction protects patch cache": "Configuration transaction protects patch cache",
-"Snapshots may reference patch cache; retained conservatively": "Snapshots may reference patch cache; retained conservatively",
-"Unrecognized patch cache file is preserved": "Unrecognized patch cache file is preserved",
-"Current or previous configuration references this patch": "Current or previous configuration references this patch",
-"Patch cache content identity does not match": "Patch cache content identity does not match",
-"Patch references could not be verified; cache is protected": "Patch references could not be verified; cache is protected",
+  "Backup prepared. Replacement is a manual step; recheck file evidence afterwards.":
+    "Backup prepared. Replacement is a manual step; recheck file evidence afterwards.",
+  "Artifact path": "Artifact path",
+  "Recheck recovery files": "Recheck recovery files",
+  "Replacement matches. Restart Nexus to verify Agent health.":
+    "Replacement matches. Restart Nexus to verify Agent health.",
+  "Original is unchanged. Manual replacement remains pending.":
+    "Original is unchanged. Manual replacement remains pending.",
+  "Original changed or is unreadable. Inspect again before replacement.":
+    "Original changed or is unreadable. Inspect again before replacement.",
+  "{seconds} seconds": "{seconds} seconds",
+  "Patch cache": "Patch cache",
+  "Private recovery backups (protected)": "Private recovery backups (protected)",
+  "Patch preview or download is active; cache is protected":
+    "Patch preview or download is active; cache is protected",
+  "Configuration transaction protects patch cache":
+    "Configuration transaction protects patch cache",
+  "Snapshots may reference patch cache; retained conservatively":
+    "Snapshots may reference patch cache; retained conservatively",
+  "Unrecognized patch cache file is preserved": "Unrecognized patch cache file is preserved",
+  "Current or previous configuration references this patch":
+    "Current or previous configuration references this patch",
+  "Patch cache content identity does not match": "Patch cache content identity does not match",
+  "Patch references could not be verified; cache is protected":
+    "Patch references could not be verified; cache is protected",
   "Selected Harness program source": "Selected Harness program source",
   "Select Harness source": "Select Harness source",
   "Harness program source": "Harness program source",
@@ -223,8 +289,10 @@ const english: Record<string, string> = {
   "External Harness directory": "External Harness directory",
   "Confirm external directory": "Confirm external directory",
   "Use installed version slots": "Use installed version slots",
-  "Nexus reads an already built Harness directory. It does not install, build, update, copy or remove that program. Harness and plugins retain their normal system permissions.": "Nexus reads an already built Harness directory. It does not install, build, update, copy or remove that program. Harness and plugins retain their normal system permissions.",
-  "Directory identity, file names, sizes and modification times are checked, with content hashes for key manifests and the CLI entry. Ordinary changes require confirmation again; this is not supply-chain authentication.": "Directory identity, file names, sizes and modification times are checked, with content hashes for key manifests and the CLI entry. Ordinary changes require confirmation again; this is not supply-chain authentication.",
+  "Nexus reads an already built Harness directory. It does not install, build, update, copy or remove that program. Harness and plugins retain their normal system permissions.":
+    "Nexus reads an already built Harness directory. It does not install, build, update, copy or remove that program. Harness and plugins retain their normal system permissions.",
+  "Directory identity, file names, sizes and modification times are checked, with content hashes for key manifests and the CLI entry. Ordinary changes require confirmation again; this is not supply-chain authentication.":
+    "Directory identity, file names, sizes and modification times are checked, with content hashes for key manifests and the CLI entry. Ordinary changes require confirmation again; this is not supply-chain authentication.",
   "Recent Canary diagnostics": "Recent Canary diagnostics",
   "Checking copy space": "Checking copy space",
   "Copying and probing": "Copying and probing",
@@ -234,9 +302,11 @@ const english: Record<string, string> = {
   "All enabled third-party plugins": "All enabled third-party plugins",
   "No third-party plugins": "No third-party plugins",
 
-  "No previous content is available for comparison. The preview shows candidate content, not a verified set of additions.": "No previous content is available for comparison. The preview shows candidate content, not a verified set of additions.",
+  "No previous content is available for comparison. The preview shows candidate content, not a verified set of additions.":
+    "No previous content is available for comparison. The preview shows candidate content, not a verified set of additions.",
   "Preview valid for {seconds} more seconds": "Preview valid for {seconds} more seconds",
-  "This patch preview has expired. Preview again before applying.": "This patch preview has expired. Preview again before applying.",
+  "This patch preview has expired. Preview again before applying.":
+    "This patch preview has expired. Preview again before applying.",
   "Passed": "Passed",
   "Reproduced plugin combination": "Reproduced plugin combination",
   "{count} probe rounds": "{count} probe rounds",
@@ -248,8 +318,10 @@ const english: Record<string, string> = {
   "Runtime and launch": "Runtime and launch",
   "Settings sections": "Settings sections",
   "Canary diagnostics": "Canary diagnostics",
-  "Tests a temporary profile and home. Plugins still have system and network access. Stop Harness first.": "Tests a temporary profile and home. Plugins still have system and network access. Stop Harness first.",
-  "Feature interactions are not verified. Results never disable plugins or modify the production profile.": "Feature interactions are not verified. Results never disable plugins or modify the production profile.",
+  "Tests a temporary profile and home. Plugins still have system and network access. Stop Harness first.":
+    "Tests a temporary profile and home. Plugins still have system and network access. Stop Harness first.",
+  "Feature interactions are not verified. Results never disable plugins or modify the production profile.":
+    "Feature interactions are not verified. Results never disable plugins or modify the production profile.",
   "Run isolated diagnostic": "Run isolated diagnostic",
   "Find failing plugin combination": "Find failing plugin combination",
   "Cancel and clean up": "Cancel and clean up",
@@ -257,27 +329,37 @@ const english: Record<string, string> = {
   "Canary report and original errors": "Canary report and original errors",
 
   "Record backup and repair guidance": "Record backup and repair guidance",
-  "This wizard creates private backups and replacement files only. It never overwrites the original record automatically.": "This wizard creates private backups and replacement files only. It never overwrites the original record automatically.",
+  "This wizard creates private backups and replacement files only. It never overwrites the original record automatically.":
+    "This wizard creates private backups and replacement files only. It never overwrites the original record automatically.",
   "Inspect recovery records": "Inspect recovery records",
   "Active profile name": "Active profile name",
   "Known profile names, one per line": "Known profile names, one per line",
   "Back up original record": "Back up original record",
   "Prepare validated replacement": "Prepare validated replacement",
-  "Original record was not replaced. Keep the private backup; it may contain sensitive information.": "Original record was not replaced. Keep the private backup; it may contain sensitive information.",
+  "Original record was not replaced. Keep the private backup; it may contain sensitive information.":
+    "Original record was not replaced. Keep the private backup; it may contain sensitive information.",
   "Original record": "Original record",
   "Private backup": "Private backup",
   "Original SHA256": "Original SHA256",
   "Validated replacement file": "Validated replacement file",
-  "Manual final step: stop Nexus and Harness, confirm the original SHA256 still matches, then copy the replacement file over the original path. If it changed, inspect again. Reopen Nexus and verify the active profile. Keep the backup; other damaged records may still need repair.": "Manual final step: stop Nexus and Harness, confirm the original SHA256 still matches, then copy the replacement file over the original path. If it changed, inspect again. Reopen Nexus and verify the active profile. Keep the backup; other damaged records may still need repair.",
-  "This record contains runtime or version evidence. Only backup is offered; repair it with diagnostics assistance.": "This record contains runtime or version evidence. Only backup is offered; repair it with diagnostics assistance.",
-  "Future or unknown formats cannot be reset. Use a compatible Nexus version or repair the original format.": "Future or unknown formats cannot be reset. Use a compatible Nexus version or repair the original format.",
-  "Process or transaction ownership is unresolved. Finish recovery before preparing a replacement.": "Process or transaction ownership is unresolved. Finish recovery before preparing a replacement.",
-  "This record is missing, unreadable, linked or too large. No backup or replacement was made.": "This record is missing, unreadable, linked or too large. No backup or replacement was made.",
-  "A validated profile catalog can be prepared. Harness profile files are never changed.": "A validated profile catalog can be prepared. Harness profile files are never changed.",
+  "Manual final step: stop Nexus and Harness, confirm the original SHA256 still matches, then copy the replacement file over the original path. If it changed, inspect again. Reopen Nexus and verify the active profile. Keep the backup; other damaged records may still need repair.":
+    "Manual final step: stop Nexus and Harness, confirm the original SHA256 still matches, then copy the replacement file over the original path. If it changed, inspect again. Reopen Nexus and verify the active profile. Keep the backup; other damaged records may still need repair.",
+  "This record contains runtime or version evidence. Only backup is offered; repair it with diagnostics assistance.":
+    "This record contains runtime or version evidence. Only backup is offered; repair it with diagnostics assistance.",
+  "Future or unknown formats cannot be reset. Use a compatible Nexus version or repair the original format.":
+    "Future or unknown formats cannot be reset. Use a compatible Nexus version or repair the original format.",
+  "Process or transaction ownership is unresolved. Finish recovery before preparing a replacement.":
+    "Process or transaction ownership is unresolved. Finish recovery before preparing a replacement.",
+  "This record is missing, unreadable, linked or too large. No backup or replacement was made.":
+    "This record is missing, unreadable, linked or too large. No backup or replacement was made.",
+  "A validated profile catalog can be prepared. Harness profile files are never changed.":
+    "A validated profile catalog can be prepared. Harness profile files are never changed.",
   "Agent is online in read-only recovery": "Agent is online in read-only recovery",
-  "Choose a valid recovery time to restore Nexus records. If no supported recovery point is available, export diagnostics. Normal editing and Harness startup remain blocked.": "Choose a valid recovery time to restore Nexus records. If no supported recovery point is available, export diagnostics. Normal editing and Harness startup remain blocked.",
+  "Choose a valid recovery time to restore Nexus records. If no supported recovery point is available, export diagnostics. Normal editing and Harness startup remain blocked.":
+    "Choose a valid recovery time to restore Nexus records. If no supported recovery point is available, export diagnostics. Normal editing and Harness startup remain blocked.",
   "No server receipt found": "No server receipt found",
-  "A local retry reference exists, but no server receipt was found. This does not prove the operation never ran. Inspect the current version and Recovery before allowing a new attempt.": "A local retry reference exists, but no server receipt was found. This does not prove the operation never ran. Inspect the current version and Recovery before allowing a new attempt.",
+  "A local retry reference exists, but no server receipt was found. This does not prove the operation never ran. Inspect the current version and Recovery before allowing a new attempt.":
+    "A local retry reference exists, but no server receipt was found. This does not prove the operation never ran. Inspect the current version and Recovery before allowing a new attempt.",
 
   "Runtime configuration patches": "Runtime configuration patches",
   "Apply previewed patches": "Apply previewed patches",
@@ -286,11 +368,13 @@ const english: Record<string, string> = {
   "More references": "More references",
   "Preview remote patch update": "Preview remote patch update",
   "Patch update preview": "Patch update preview",
-  "Preview downloads candidates but does not save settings. Apply uses these exact cached files without downloading again. Changes are a bounded, redacted line comparison; unchanged or sensitive text may be omitted.": "Preview downloads candidates but does not save settings. Apply uses these exact cached files without downloading again. Changes are a bounded, redacted line comparison; unchanged or sensitive text may be omitted.",
+  "Preview downloads candidates but does not save settings. Apply uses these exact cached files without downloading again. Changes are a bounded, redacted line comparison; unchanged or sensitive text may be omitted.":
+    "Preview downloads candidates but does not save settings. Apply uses these exact cached files without downloading again. Changes are a bounded, redacted line comparison; unchanged or sensitive text may be omitted.",
   "Previous SHA256": "Previous SHA256",
   "Candidate SHA256": "Candidate SHA256",
   "Preview truncated": "Preview truncated",
-  "Draft changed; create a new preview before applying.": "Draft changed; create a new preview before applying.",
+  "Draft changed; create a new preview before applying.":
+    "Draft changed; create a new preview before applying.",
   "Cancel preview": "Cancel preview",
   "GitHub reference type": "GitHub reference type",
   "GitHub reference name": "GitHub reference name",
@@ -299,44 +383,70 @@ const english: Record<string, string> = {
   "Branch": "Branch",
   "Tag": "Tag",
   "Commit": "Commit",
-  "Branches and tags are resolved only when you download explicitly. Startup uses the cached commit without contacting GitHub. After a patch failure, disable it and save before retrying. With patches enabled, automatic browser opening is suppressed; open Harness after its health check passes.": "Branches and tags are resolved only when you download explicitly. Startup uses the cached commit without contacting GitHub. After a patch failure, disable it and save before retrying. With patches enabled, automatic browser opening is suppressed; open Harness after its health check passes.",
-  "Applied from top to bottom after the profile configuration. Later patches act on the result of earlier patches. Save and restart Harness to apply changes.": "Applied from top to bottom after the profile configuration. Later patches act on the result of earlier patches. Save and restart Harness to apply changes.",
-  "Local absolute path or HTTPS / GitHub file URL": "Local absolute path or HTTPS / GitHub file URL",
+  "Branches and tags are resolved only when you download explicitly. Startup uses the cached commit without contacting GitHub. After a patch failure, disable it and save before retrying. With patches enabled, automatic browser opening is suppressed; open Harness after its health check passes.":
+    "Branches and tags are resolved only when you download explicitly. Startup uses the cached commit without contacting GitHub. After a patch failure, disable it and save before retrying. With patches enabled, automatic browser opening is suppressed; open Harness after its health check passes.",
+  "Applied from top to bottom after the profile configuration. Later patches act on the result of earlier patches. Save and restart Harness to apply changes.":
+    "Applied from top to bottom after the profile configuration. Later patches act on the result of earlier patches. Save and restart Harness to apply changes.",
+  "Local absolute path or HTTPS / GitHub file URL":
+    "Local absolute path or HTTPS / GitHub file URL",
   "Cached SHA256": "Cached SHA256",
   "Not downloaded": "Not downloaded",
   "Local file": "Local file",
   "Remove patch entry": "Remove patch entry",
   "Add patch": "Add patch",
   "Download enabled remote patches and save": "Download enabled remote patches and save",
-  "Remote patches are cached locally and never downloaded at startup. Preview downloads candidates; only Apply saves this draft. Failed downloads retain the previous configuration and block affected enabled patches. Only self-contained UTF-8 files up to 1 MiB are supported; relative remote file dependencies are not downloaded.": "Remote patches are cached locally and never downloaded at startup. Preview downloads candidates; only Apply saves this draft. Failed downloads retain the previous configuration and block affected enabled patches. Only self-contained UTF-8 files up to 1 MiB are supported; relative remote file dependencies are not downloaded.",
-  "This checks plugin loading only. Browser commands, panels and interactions have not been verified.": "This checks plugin loading only. Browser commands, panels and interactions have not been verified.",
-  "structured redaction failed; file omitted to avoid unsafe byte copying": "structured redaction failed; file omitted to avoid unsafe byte copying",
-  "invalid YAML; file omitted to avoid unsafe byte copying": "invalid YAML; file omitted to avoid unsafe byte copying",
-  "invalid JSON; file omitted to avoid unsafe byte copying": "invalid JSON; file omitted to avoid unsafe byte copying",
-  "Content truncated at {file} bytes per file and {response} bytes per response.": "Content truncated at {file} bytes per file and {response} bytes per response.",
+  "Remote patches are cached locally and never downloaded at startup. Preview downloads candidates; only Apply saves this draft. Failed downloads retain the previous configuration and block affected enabled patches. Only self-contained UTF-8 files up to 1 MiB are supported; relative remote file dependencies are not downloaded.":
+    "Remote patches are cached locally and never downloaded at startup. Preview downloads candidates; only Apply saves this draft. Failed downloads retain the previous configuration and block affected enabled patches. Only self-contained UTF-8 files up to 1 MiB are supported; relative remote file dependencies are not downloaded.",
+  "This checks plugin loading only. Browser commands, panels and interactions have not been verified.":
+    "This checks plugin loading only. Browser commands, panels and interactions have not been verified.",
+  "structured redaction failed; file omitted to avoid unsafe byte copying":
+    "structured redaction failed; file omitted to avoid unsafe byte copying",
+  "invalid YAML; file omitted to avoid unsafe byte copying":
+    "invalid YAML; file omitted to avoid unsafe byte copying",
+  "invalid JSON; file omitted to avoid unsafe byte copying":
+    "invalid JSON; file omitted to avoid unsafe byte copying",
+  "Content truncated at {file} bytes per file and {response} bytes per response.":
+    "Content truncated at {file} bytes per file and {response} bytes per response.",
   "node_program": "node_program",
   "Harness data (protected)": "Harness data (protected)",
-  "Choose a different port or stop the application using this port.": "Choose a different port or stop the application using this port.",
-  "Confirm this is the current Harness listener before restarting.": "Confirm this is the current Harness listener before restarting.",
-  "The current Harness session owns this same listener.": "The current Harness session owns this same listener.",
-  "Correct the launch readiness address in Settings.": "Correct the launch readiness address in Settings.",
-  "Check the emitted Web UI address after startup.": "Check the emitted Web UI address after startup.",
-  "No fixed listener is declared; Harness chooses it at startup.": "No fixed listener is declared; Harness chooses it at startup.",
-  "Custom command: package-manager checks are not required.": "Custom command: package-manager checks are not required.",
+  "Choose a different port or stop the application using this port.":
+    "Choose a different port or stop the application using this port.",
+  "Confirm this is the current Harness listener before restarting.":
+    "Confirm this is the current Harness listener before restarting.",
+  "The current Harness session owns this same listener.":
+    "The current Harness session owns this same listener.",
+  "Correct the launch readiness address in Settings.":
+    "Correct the launch readiness address in Settings.",
+  "Check the emitted Web UI address after startup.":
+    "Check the emitted Web UI address after startup.",
+  "No fixed listener is declared; Harness chooses it at startup.":
+    "No fixed listener is declared; Harness chooses it at startup.",
+  "Custom command: package-manager checks are not required.":
+    "Custom command: package-manager checks are not required.",
   "Correct the Node launch program.": "Correct the Node launch program.",
-  "Select a complete Node runtime or reinstall Harness.": "Select a complete Node runtime or reinstall Harness.",
-  "The configured Node launch program is missing.": "The configured Node launch program is missing.",
+  "Select a complete Node runtime or reinstall Harness.":
+    "Select a complete Node runtime or reinstall Harness.",
+  "The configured Node launch program is missing.":
+    "The configured Node launch program is missing.",
   "Verify custom listener ownership separately.": "Verify custom listener ownership separately.",
-  "Custom command: its readiness endpoint may belong to an external service.": "Custom command: its readiness endpoint may belong to an external service.",
-  "Custom command: Harness profile checks are not applied.": "Custom command: Harness profile checks are not applied.",
+  "Custom command: its readiness endpoint may belong to an external service.":
+    "Custom command: its readiness endpoint may belong to an external service.",
+  "Custom command: Harness profile checks are not applied.":
+    "Custom command: Harness profile checks are not applied.",
   "Repair the selected profile directory.": "Repair the selected profile directory.",
-  "Repair the profile manifest or select another profile.": "Repair the profile manifest or select another profile.",
-  "First startup initializes supported built-in profiles. For a custom profile, create it in Profiles first.": "First startup initializes supported built-in profiles. For a custom profile, create it in Profiles first.",
+  "Repair the profile manifest or select another profile.":
+    "Repair the profile manifest or select another profile.",
+  "First startup initializes supported built-in profiles. For a custom profile, create it in Profiles first.":
+    "First startup initializes supported built-in profiles. For a custom profile, create it in Profiles first.",
   "Correct the launch working directory.": "Correct the launch working directory.",
-  "Repair the selected version or launch working directory.": "Repair the selected version or launch working directory.",
-  "Select a usable version or correct the launch path.": "Select a usable version or correct the launch path.",
-  "Reinstall the selected version or correct the launch path.": "Reinstall the selected version or correct the launch path.",
-  "Clear unsupported overrides in Settings or select a verified Harness version and profile.": "Clear unsupported overrides in Settings or select a verified Harness version and profile.",
+  "Repair the selected version or launch working directory.":
+    "Repair the selected version or launch working directory.",
+  "Select a usable version or correct the launch path.":
+    "Select a usable version or correct the launch path.",
+  "Reinstall the selected version or correct the launch path.":
+    "Reinstall the selected version or correct the launch path.",
+  "Clear unsupported overrides in Settings or select a verified Harness version and profile.":
+    "Clear unsupported overrides in Settings or select a verified Harness version and profile.",
   "Correct the invalid Harness setting.": "Correct the invalid Harness setting.",
   "Repair the selected version or launch paths.": "Repair the selected version or launch paths.",
   "Custom command; no version slot required.": "Custom command; no version slot required.",
@@ -345,26 +455,39 @@ const english: Record<string, string> = {
   "Repair the launch configuration in Settings.": "Repair the launch configuration in Settings.",
   "Install or select a Harness version.": "Install or select a Harness version.",
   "No Harness launch command is configured.": "No Harness launch command is configured.",
-  "Choose a valid Harness data directory in Settings.": "Choose a valid Harness data directory in Settings.",
-  "Choose an accessible ordinary directory in Settings; no data is moved.": "Choose an accessible ordinary directory in Settings; no data is moved.",
+  "Choose a valid Harness data directory in Settings.":
+    "Choose a valid Harness data directory in Settings.",
+  "Choose an accessible ordinary directory in Settings; no data is moved.":
+    "Choose an accessible ordinary directory in Settings; no data is moved.",
   "Repair the profile selection.": "Repair the profile selection.",
   "Repair Nexus settings.": "Repair Nexus settings.",
-  "Export diagnostics before retrying installation.": "Export diagnostics before retrying installation.",
-  "Retry cancellation or restart Agent to reconcile installation.": "Retry cancellation or restart Agent to reconcile installation.",
-  "Installation publication or cleanup is pending.": "Installation publication or cleanup is pending.",
-  "Export diagnostics and repair the restore record.": "Export diagnostics and repair the restore record.",
+  "Export diagnostics before retrying installation.":
+    "Export diagnostics before retrying installation.",
+  "Retry cancellation or restart Agent to reconcile installation.":
+    "Retry cancellation or restart Agent to reconcile installation.",
+  "Installation publication or cleanup is pending.":
+    "Installation publication or cleanup is pending.",
+  "Export diagnostics and repair the restore record.":
+    "Export diagnostics and repair the restore record.",
   "No checkpoint restore is pending.": "No checkpoint restore is pending.",
-  "Retry or abort the pending restore in Checkpoints.": "Retry or abort the pending restore in Checkpoints.",
+  "Retry or abort the pending restore in Checkpoints.":
+    "Retry or abort the pending restore in Checkpoints.",
   "A checkpoint restore transaction is pending.": "A checkpoint restore transaction is pending.",
-  "Repair settings and run checks, then leave recovery mode before starting.": "Repair settings and run checks, then leave recovery mode before starting.",
+  "Repair settings and run checks, then leave recovery mode before starting.":
+    "Repair settings and run checks, then leave recovery mode before starting.",
   "Harness startup is paused in recovery mode.": "Harness startup is paused in recovery mode.",
-  "Export diagnostics and repair the recovery mode record.": "Export diagnostics and repair the recovery mode record.",
-  "Select a complete runtime in Settings or reinstall the bundled runtime.": "Select a complete runtime in Settings or reinstall the bundled runtime.",
-  "Retry the check; export diagnostics if it fails again.": "Retry the check; export diagnostics if it fails again.",
+  "Export diagnostics and repair the recovery mode record.":
+    "Export diagnostics and repair the recovery mode record.",
+  "Select a complete runtime in Settings or reinstall the bundled runtime.":
+    "Select a complete runtime in Settings or reinstall the bundled runtime.",
+  "Retry the check; export diagnostics if it fails again.":
+    "Retry the check; export diagnostics if it fails again.",
   "{address} is currently available": "{address} is currently available",
-  "parent access verified; directories will be created at startup": "parent access verified; directories will be created at startup",
+  "parent access verified; directories will be created at startup":
+    "parent access verified; directories will be created at startup",
   "read/write access verified": "read/write access verified",
-  "not initialized; the selected Harness must provide its built-in profile.": "not initialized; the selected Harness must provide its built-in profile.",
+  "not initialized; the selected Harness must provide its built-in profile.":
+    "not initialized; the selected Harness must provide its built-in profile.",
   "initialized": "initialized",
   "Native and PTC tools (both)": "Native and PTC tools (both)",
   "PTC tools (ptc)": "PTC tools (ptc)",
@@ -373,11 +496,14 @@ const english: Record<string, string> = {
   "Workspace write (workspace-write)": "Workspace write (workspace-write)",
   "Read only (read-only)": "Read only (read-only)",
   "Within the retention period": "Within the retention period",
-  "Unrecognized diagnostic contents are preserved": "Unrecognized diagnostic contents are preserved",
-  "Recent diagnostics and the last failure are retained": "Recent diagnostics and the last failure are retained",
+  "Unrecognized diagnostic contents are preserved":
+    "Unrecognized diagnostic contents are preserved",
+  "Recent diagnostics and the last failure are retained":
+    "Recent diagnostics and the last failure are retained",
   "Within the log retention period": "Within the log retention period",
   "Current or recent failure logs are retained": "Current or recent failure logs are retained",
-  "Referenced by the configured runtime or Harness launch path": "Referenced by the configured runtime or Harness launch path",
+  "Referenced by the configured runtime or Harness launch path":
+    "Referenced by the configured runtime or Harness launch path",
   "Current, rollback, or recovery version": "Current, rollback, or recovery version",
   "Harness home (protected)": "Harness home (protected)",
   "Agent program file": "Agent program file",
@@ -385,8 +511,10 @@ const english: Record<string, string> = {
   "Diagnostics and recovery backups": "Diagnostics and recovery backups",
   "Operation and recovery records": "Operation and recovery records",
   "Unrecognized recovery record is preserved": "Unrecognized recovery record is preserved",
-  "Current operation recovery record is protected": "Current operation recovery record is protected",
-  "Recent recovery records and records within retention are preserved": "Recent recovery records and records within retention are preserved",
+  "Current operation recovery record is protected":
+    "Current operation recovery record is protected",
+  "Recent recovery records and records within retention are preserved":
+    "Recent recovery records and records within retention are preserved",
   "Logs": "Logs",
   "Downloads (protected)": "Downloads (protected)",
   "Bundled runtimes": "Bundled runtimes",
@@ -402,59 +530,82 @@ const english: Record<string, string> = {
   "Present": "Present",
   "Removed": "Removed",
   "Deleting": "Deleting",
-  "Cleanup preview is scanning in the background. Its saved result will appear automatically; no files are being removed.": "Cleanup preview is scanning in the background. Its saved result will appear automatically; no files are being removed.",
+  "Cleanup preview is scanning in the background. Its saved result will appear automatically; no files are being removed.":
+    "Cleanup preview is scanning in the background. Its saved result will appear automatically; no files are being removed.",
   "Details": "Details",
-  "Runs plugin initialization in a temporary local process and closes it afterward. Recovery mode, the selected profile and the stopped Harness service remain unchanged. No browser is opened.": "Runs plugin initialization in a temporary local process and closes it afterward. Recovery mode, the selected profile and the stopped Harness service remain unchanged. No browser is opened.",
-  "Saved plugin choices have not been verified. The report below describes an earlier check.": "Saved plugin choices have not been verified. The report below describes an earlier check.",
+  "Runs plugin initialization in a temporary local process and closes it afterward. Recovery mode, the selected profile and the stopped Harness service remain unchanged. No browser is opened.":
+    "Runs plugin initialization in a temporary local process and closes it afterward. Recovery mode, the selected profile and the stopped Harness service remain unchanged. No browser is opened.",
+  "Saved plugin choices have not been verified. The report below describes an earlier check.":
+    "Saved plugin choices have not been verified. The report below describes an earlier check.",
   "Manual plugin verification": "Manual plugin verification",
   "Verify plugins": "Verify plugins",
-  "The previous operation may have changed data. Check the current version and Recovery first. Allow a new attempt with a new request reference?": "The previous operation may have changed data. Check the current version and Recovery first. Allow a new attempt with a new request reference?",
-  "The retry reference was cleared. The recorded operation and its data were not changed.": "The retry reference was cleared. The recorded operation and its data were not changed.",
+  "The previous operation may have changed data. Check the current version and Recovery first. Allow a new attempt with a new request reference?":
+    "The previous operation may have changed data. Check the current version and Recovery first. Allow a new attempt with a new request reference?",
+  "The retry reference was cleared. The recorded operation and its data were not changed.":
+    "The retry reference was cleared. The recorded operation and its data were not changed.",
   "Recent operation requests": "Recent operation requests",
-  "After a timeout, the same request checks its original receipt instead of repeating the operation. Accepted installations still have their own progress.": "After a timeout, the same request checks its original receipt instead of repeating the operation. Accepted installations still have their own progress.",
+  "After a timeout, the same request checks its original receipt instead of repeating the operation. Accepted installations still have their own progress.":
+    "After a timeout, the same request checks its original receipt instead of repeating the operation. Accepted installations still have their own progress.",
   "Check previous requests": "Check previous requests",
   "Completed": "Completed",
-  "The original request was accepted. Check the operation for its final result.": "The original request was accepted. Check the operation for its final result.",
+  "The original request was accepted. Check the operation for its final result.":
+    "The original request was accepted. Check the operation for its final result.",
   "Allow a new attempt": "Allow a new attempt",
   "Catching up": "Catching up",
   "Limited": "Limited",
   "Current log storage": "Current log storage",
-  "Old log contents are reclaimed while keeping the recent failure tail and session access. Logical file size can keep growing; allocated size is the actual disk space used.": "Old log contents are reclaimed while keeping the recent failure tail and session access. Logical file size can keep growing; allocated size is the actual disk space used.",
-  "Log scanning is catching up. Unscanned contents are kept until they can be processed safely.": "Log scanning is catching up. Unscanned contents are kept until they can be processed safely.",
-  "Some logs could not be reclaimed safely. Original logs are kept; export diagnostics to inspect the limitation.": "Some logs could not be reclaimed safely. Original logs are kept; export diagnostics to inspect the limitation.",
+  "Old log contents are reclaimed while keeping the recent failure tail and session access. Logical file size can keep growing; allocated size is the actual disk space used.":
+    "Old log contents are reclaimed while keeping the recent failure tail and session access. Logical file size can keep growing; allocated size is the actual disk space used.",
+  "Log scanning is catching up. Unscanned contents are kept until they can be processed safely.":
+    "Log scanning is catching up. Unscanned contents are kept until they can be processed safely.",
+  "Some logs could not be reclaimed safely. Original logs are kept; export diagnostics to inspect the limitation.":
+    "Some logs could not be reclaimed safely. Original logs are kept; export diagnostics to inspect the limitation.",
   "Allocated: {allocated}; logical: {logical}": "Allocated: {allocated}; logical: {logical}",
   "Waiting to scan: {size}": "Waiting to scan: {size}",
-  "The original request is still running. Check its progress before retrying.": "The original request is still running. Check its progress before retrying.",
-  "The original request already completed; it was not run again.": "The original request already completed; it was not run again.",
+  "The original request is still running. Check its progress before retrying.":
+    "The original request is still running. Check its progress before retrying.",
+  "The original request already completed; it was not run again.":
+    "The original request already completed; it was not run again.",
   "Original error": "Original error",
-  "A Harness dependency requires native build tools. Keep the original error below when seeking upstream help, or choose another Harness version.": "A Harness dependency requires native build tools. Keep the original error below when seeking upstream help, or choose another Harness version.",
-  "Configuration changed elsewhere. Your draft is retained. Cancel edits to load the saved values before trying again.": "Configuration changed elsewhere. Your draft is retained. Cancel edits to load the saved values before trying again.",
-  "Harness startup is paused. Repair the profile in Recovery, then check it before starting.": "Harness startup is paused. Repair the profile in Recovery, then check it before starting.",
-  "Runtime settings apply to the next Harness launch and dependency operation. Restore previous configuration can undo the last saved configuration.": "Runtime settings apply to the next Harness launch and dependency operation. Restore previous configuration can undo the last saved configuration.",
+  "A Harness dependency requires native build tools. Keep the original error below when seeking upstream help, or choose another Harness version.":
+    "A Harness dependency requires native build tools. Keep the original error below when seeking upstream help, or choose another Harness version.",
+  "Configuration changed elsewhere. Your draft is retained. Cancel edits to load the saved values before trying again.":
+    "Configuration changed elsewhere. Your draft is retained. Cancel edits to load the saved values before trying again.",
+  "Harness startup is paused. Repair the profile in Recovery, then check it before starting.":
+    "Harness startup is paused. Repair the profile in Recovery, then check it before starting.",
+  "Runtime settings apply to the next Harness launch and dependency operation. Restore previous configuration can undo the last saved configuration.":
+    "Runtime settings apply to the next Harness launch and dependency operation. Restore previous configuration can undo the last saved configuration.",
 
   "Copy error": "Copy error",
   "Select the error text and copy it manually.": "Select the error text and copy it manually.",
   "Check": "Check",
-  "Harness failed to start or crashed. Check the Overview page for details.": "Harness failed to start or crashed. Check the Overview page for details.",
+  "Harness failed to start or crashed. Check the Overview page for details.":
+    "Harness failed to start or crashed. Check the Overview page for details.",
   "Data and disk space": "Data and disk space",
-  "Preview disk use and select old files to remove. Harness data, project files, recovery backups, and active versions are protected. No data is moved.": "Preview disk use and select old files to remove. Harness data, project files, recovery backups, and active versions are protected. No data is moved.",
-  "Sizes are logical file sizes. Overlapping directories are shown separately and must not be added together. Unknown means inspection was incomplete.": "Sizes are logical file sizes. Overlapping directories are shown separately and must not be added together. Unknown means inspection was incomplete.",
+  "Preview disk use and select old files to remove. Harness data, project files, recovery backups, and active versions are protected. No data is moved.":
+    "Preview disk use and select old files to remove. Harness data, project files, recovery backups, and active versions are protected. No data is moved.",
+  "Sizes are logical file sizes. Overlapping directories are shown separately and must not be added together. Unknown means inspection was incomplete.":
+    "Sizes are logical file sizes. Overlapping directories are shown separately and must not be added together. Unknown means inspection was incomplete.",
   "Keep logs and diagnostics for at least (days)": "Keep logs and diagnostics for at least (days)",
   "Working…": "Working…",
   "Preview cleanup": "Preview cleanup",
   "Refresh saved result": "Refresh saved result",
-  "This preview expires after 15 minutes. Changed files are preserved. Stop Harness before cleanup. The newest logs and latest failure diagnostics are always retained.": "This preview expires after 15 minutes. Changed files are preserved. Stop Harness before cleanup. The newest logs and latest failure diagnostics are always retained.",
+  "This preview expires after 15 minutes. Changed files are preserved. Stop Harness before cleanup. The newest logs and latest failure diagnostics are always retained.":
+    "This preview expires after 15 minutes. Changed files are preserved. Stop Harness before cleanup. The newest logs and latest failure diagnostics are always retained.",
   "No cleanup candidates": "No cleanup candidates",
-  "Unrecognized downloads and local recovery backups are preserved.": "Unrecognized downloads and local recovery backups are preserved.",
+  "Unrecognized downloads and local recovery backups are preserved.":
+    "Unrecognized downloads and local recovery backups are preserved.",
   "Can be removed": "Can be removed",
   "Remove selected files": "Remove selected files",
   "Last cleanup result": "Last cleanup result",
   "No files selected": "No files selected",
   "Save update source": "Save update source",
   "Installation": "Installation",
-  "Harness always runs in Node mode from the active release slot. The executable, entry, and profile wiring are managed by Nexus.": "Harness always runs in Node mode from the active release slot. The executable, entry, and profile wiring are managed by Nexus.",
+  "Harness always runs in Node mode from the active release slot. The executable, entry, and profile wiring are managed by Nexus.":
+    "Harness always runs in Node mode from the active release slot. The executable, entry, and profile wiring are managed by Nexus.",
   "Additional arguments": "Additional arguments",
-  "The profile argument always follows the active profile and is added automatically.": "The profile argument always follows the active profile and is added automatically.",
+  "The profile argument always follows the active profile and is added automatically.":
+    "The profile argument always follows the active profile and is added automatically.",
   "Value (optional)": "Value (optional)",
   "Add argument": "Add argument",
   "Retry offline operation": "Retry offline operation",
@@ -462,17 +613,23 @@ const english: Record<string, string> = {
   "Operation log and details": "Operation log and details",
   "Operation output": "Operation output",
   "Package exported; cleanup required": "Package exported; cleanup required",
-  "The package was exported. The selected version is unchanged.": "The package was exported. The selected version is unchanged.",
-  "The package was exported. Temporary-file cleanup still needs attention.": "The package was exported. Temporary-file cleanup still needs attention.",
-  "This is the saved result of the last offline package operation.": "This is the saved result of the last offline package operation.",
-  "Offline package request accepted. Follow the current stage to confirm completion.": "Offline package request accepted. Follow the current stage to confirm completion.",
-  "Harness startup requested. Check its status and Web entry to confirm readiness.": "Harness startup requested. Check its status and Web entry to confirm readiness.",
+  "The package was exported. The selected version is unchanged.":
+    "The package was exported. The selected version is unchanged.",
+  "The package was exported. Temporary-file cleanup still needs attention.":
+    "The package was exported. Temporary-file cleanup still needs attention.",
+  "This is the saved result of the last offline package operation.":
+    "This is the saved result of the last offline package operation.",
+  "Offline package request accepted. Follow the current stage to confirm completion.":
+    "Offline package request accepted. Follow the current stage to confirm completion.",
+  "Harness startup requested. Check its status and Web entry to confirm readiness.":
+    "Harness startup requested. Check its status and Web entry to confirm readiness.",
   "Select the path and copy it manually.": "Select the path and copy it manually.",
   "Path copied": "Path copied",
   "Copy path": "Copy path",
   "Archive path": "Archive path",
   "Exported package path": "Exported package path",
-  "Choose a new file outside Nexus-managed data. Existing files are never overwritten. Export does not change the selected version.": "Choose a new file outside Nexus-managed data. Existing files are never overwritten. Export does not change the selected version.",
+  "Choose a new file outside Nexus-managed data. Existing files are never overwritten. Export does not change the selected version.":
+    "Choose a new file outside Nexus-managed data. Existing files are never overwritten. Export does not change the selected version.",
   "Export destination (full .tar.gz path)": "Export destination (full .tar.gz path)",
   "Select an installed version": "Select an installed version",
   "Version to export": "Version to export",
@@ -480,31 +637,44 @@ const english: Record<string, string> = {
   "Import package": "Import package",
   "Offline package export": "Offline package export",
   "Offline package import": "Offline package import",
-  "Import selects the verified version as current. Harness stays stopped; run startup checks before starting it.": "Import selects the verified version as current. Harness stays stopped; run startup checks before starting it.",
-  "Only selected contents are imported. The current version changes only when program and runtime are selected. Harness stays stopped.": "Only selected contents are imported. The current version changes only when program and runtime are selected. Harness stays stopped.",
-  "Only selected data is imported. Program and runtime are unchanged. Harness stays stopped.": "Only selected data is imported. Program and runtime are unchanged. Harness stays stopped.",
+  "Import selects the verified version as current. Harness stays stopped; run startup checks before starting it.":
+    "Import selects the verified version as current. Harness stays stopped; run startup checks before starting it.",
+  "Only selected contents are imported. The current version changes only when program and runtime are selected. Harness stays stopped.":
+    "Only selected contents are imported. The current version changes only when program and runtime are selected. Harness stays stopped.",
+  "Only selected data is imported. Program and runtime are unchanged. Harness stays stopped.":
+    "Only selected data is imported. Program and runtime are unchanged. Harness stays stopped.",
   "Package to import (full .tar.gz path)": "Package to import (full .tar.gz path)",
-  "Integrity checks detect damaged packages; they do not authenticate the publisher. Only import packages from sources you trust.": "Integrity checks detect damaged packages; they do not authenticate the publisher. Only import packages from sources you trust.",
-  "A package contains a built Windows x64 Harness version and its complete Node/npm/pnpm runtime, without user data. Dependency installation and builds are not performed; version probes will run.": "A package contains a built Windows x64 Harness version and its complete Node/npm/pnpm runtime, without user data. Dependency installation and builds are not performed; version probes will run.",
+  "Integrity checks detect damaged packages; they do not authenticate the publisher. Only import packages from sources you trust.":
+    "Integrity checks detect damaged packages; they do not authenticate the publisher. Only import packages from sources you trust.",
+  "A package contains a built Windows x64 Harness version and its complete Node/npm/pnpm runtime, without user data. Dependency installation and builds are not performed; version probes will run.":
+    "A package contains a built Windows x64 Harness version and its complete Node/npm/pnpm runtime, without user data. Dependency installation and builds are not performed; version probes will run.",
   "Import or export an offline package": "Import or export an offline package",
   "Offline packages": "Offline packages",
   "Undo plugin order": "Undo plugin order",
-  "Undo restores only the last saved plugin order. Removing a plugin requires reinstalling it; configuration snapshots do not restore deleted dependencies.": "Undo restores only the last saved plugin order. Removing a plugin requires reinstalling it; configuration snapshots do not restore deleted dependencies.",
+  "Undo restores only the last saved plugin order. Removing a plugin requires reinstalling it; configuration snapshots do not restore deleted dependencies.":
+    "Undo restores only the last saved plugin order. Removing a plugin requires reinstalling it; configuration snapshots do not restore deleted dependencies.",
 
   "Configuration recovery": "Configuration recovery",
-  "Retry the interrupted settings save, or keep the current valid configuration and previous backup exactly as they are. This does not repair invalid configuration files or start Harness.": "Retry the interrupted settings save, or keep the current valid configuration and previous backup exactly as they are. This does not repair invalid configuration files or start Harness.",
+  "Retry the interrupted settings save, or keep the current valid configuration and previous backup exactly as they are. This does not repair invalid configuration files or start Harness.":
+    "Retry the interrupted settings save, or keep the current valid configuration and previous backup exactly as they are. This does not repair invalid configuration files or start Harness.",
 
   "Publication recovery": "Publication recovery",
   "Retry recovery": "Retry recovery",
   "Keep current and end recovery": "Keep current and end recovery",
-  "Retry interrupted publication, or keep current configuration and every existing version and candidate file. Keeping current ends this recovery without compiling or starting Harness. Retained candidate files are not automatically cleaned.": "Retry interrupted publication, or keep current configuration and every existing version and candidate file. Keeping current ends this recovery without compiling or starting Harness. Retained candidate files are not automatically cleaned.",
+  "Retry interrupted publication, or keep current configuration and every existing version and candidate file. Keeping current ends this recovery without compiling or starting Harness. Retained candidate files are not automatically cleaned.":
+    "Retry interrupted publication, or keep current configuration and every existing version and candidate file. Keeping current ends this recovery without compiling or starting Harness. Retained candidate files are not automatically cleaned.",
 
   "Verification pending": "Verification pending",
-  "Snapshot inventory refreshes after capture finishes. Existing snapshots have not been removed.": "Snapshot inventory refreshes after capture finishes. Existing snapshots have not been removed.",
-  "Saved capture result could not be read. Existing snapshots are unchanged.": "Saved capture result could not be read. Existing snapshots are unchanged.",
-  "Capture result could not be saved. This status may be lost after restarting Agent.": "Capture result could not be saved. This status may be lost after restarting Agent.",
-  "Cleanup is incomplete. Open installation details to retry cleanup.": "Cleanup is incomplete. Open installation details to retry cleanup.",
-  "Restore requires attention. Open the recovery controls to continue or abort.": "Restore requires attention. Open the recovery controls to continue or abort.",
+  "Snapshot inventory refreshes after capture finishes. Existing snapshots have not been removed.":
+    "Snapshot inventory refreshes after capture finishes. Existing snapshots have not been removed.",
+  "Saved capture result could not be read. Existing snapshots are unchanged.":
+    "Saved capture result could not be read. Existing snapshots are unchanged.",
+  "Capture result could not be saved. This status may be lost after restarting Agent.":
+    "Capture result could not be saved. This status may be lost after restarting Agent.",
+  "Cleanup is incomplete. Open installation details to retry cleanup.":
+    "Cleanup is incomplete. Open installation details to retry cleanup.",
+  "Restore requires attention. Open the recovery controls to continue or abort.":
+    "Restore requires attention. Open the recovery controls to continue or abort.",
   "Open operation details": "Open operation details",
   "Partially failed": "Partially failed",
   "Data cleanup": "Data cleanup",
@@ -518,12 +688,16 @@ const english: Record<string, string> = {
   "Installed version unavailable": "Installed version unavailable",
   "Cleanup required": "Cleanup required",
   "Cold switch": "Cold switch",
-  "Saved results remain visible until replaced or explicitly cleared. Open details to use the operation's recovery controls.": "Saved results remain visible until replaced or explicitly cleared. Open details to use the operation's recovery controls.",
+  "Saved results remain visible until replaced or explicitly cleared. Open details to use the operation's recovery controls.":
+    "Saved results remain visible until replaced or explicitly cleared. Open details to use the operation's recovery controls.",
   "Operation status": "Operation status",
   "Restore previous configuration": "Restore previous configuration",
-  "Restore the previous valid Nexus configuration? Harness will stay stopped.": "Restore the previous valid Nexus configuration? Harness will stay stopped.",
-  "Restores the previous valid Nexus settings without starting Harness or moving data. It cannot repair an unreadable configuration whose data paths cannot be verified.": "Restores the previous valid Nexus settings without starting Harness or moving data. It cannot repair an unreadable configuration whose data paths cannot be verified.",
-  "Reset backups contain original private configuration. Keep them local; use diagnostic export for a redacted bundle to share.": "Reset backups contain original private configuration. Keep them local; use diagnostic export for a redacted bundle to share.",
+  "Restore the previous valid Nexus configuration? Harness will stay stopped.":
+    "Restore the previous valid Nexus configuration? Harness will stay stopped.",
+  "Restores the previous valid Nexus settings without starting Harness or moving data. It cannot repair an unreadable configuration whose data paths cannot be verified.":
+    "Restores the previous valid Nexus settings without starting Harness or moving data. It cannot repair an unreadable configuration whose data paths cannot be verified.",
+  "Reset backups contain original private configuration. Keep them local; use diagnostic export for a redacted bundle to share.":
+    "Reset backups contain original private configuration. Keep them local; use diagnostic export for a redacted bundle to share.",
 
   "Launch arguments": "Launch arguments",
   "DSH_HOME environment": "DSH_HOME environment",
@@ -547,7 +721,8 @@ const english: Record<string, string> = {
   "Inherited process directory": "Inherited process directory",
   "Resolved launch configuration": "Resolved launch configuration",
   "Launcher environment or launch configuration": "Launcher environment or launch configuration",
-  "These are launch inputs, not the final configuration after Harness applies patches. Inherited values have not been inspected.": "These are launch inputs, not the final configuration after Harness applies patches. Inherited values have not been inspected.",
+  "These are launch inputs, not the final configuration after Harness applies patches. Inherited values have not been inspected.":
+    "These are launch inputs, not the final configuration after Harness applies patches. Inherited values have not been inspected.",
   "Changes apply on the next explicit launch.": "Changes apply on the next explicit launch.",
   "Observed current port": "Observed current port",
   "Current instance launch inputs": "Current instance launch inputs",
@@ -558,125 +733,169 @@ const english: Record<string, string> = {
   "Unsaved changes": "Unsaved changes",
   "Display and window behavior": "Display and window behavior",
   "Page zoom": "Page zoom",
-  "Use Ctrl + / Ctrl - to zoom and Ctrl 0 to reset. Returning to this window refreshes service status.": "Use Ctrl + / Ctrl - to zoom and Ctrl 0 to reset. Returning to this window refreshes service status.",
-  "Closing the window keeps Nexus in the tray. The tray menu lets you exit the launcher while keeping services running, or stop services and exit.": "Closing the window keeps Nexus in the tray. The tray menu lets you exit the launcher while keeping services running, or stop services and exit.",
+  "Use Ctrl + / Ctrl - to zoom and Ctrl 0 to reset. Returning to this window refreshes service status.":
+    "Use Ctrl + / Ctrl - to zoom and Ctrl 0 to reset. Returning to this window refreshes service status.",
+  "Closing the window keeps Nexus in the tray. The tray menu lets you exit the launcher while keeping services running, or stop services and exit.":
+    "Closing the window keeps Nexus in the tray. The tray menu lets you exit the launcher while keeping services running, or stop services and exit.",
   "Repair and enter recovery mode": "Repair and enter recovery mode",
-  "The invalid pause record will be preserved before repair. Unsafe files cannot be repaired automatically.": "The invalid pause record will be preserved before repair. Unsafe files cannot be repaired automatically.",
+  "The invalid pause record will be preserved before repair. Unsafe files cannot be repaired automatically.":
+    "The invalid pause record will be preserved before repair. Unsafe files cannot be repaired automatically.",
 
   "Harness recovery mode": "Harness recovery mode",
   "Harness startup is paused": "Harness startup is paused",
   "Enter recovery mode": "Enter recovery mode",
   "Leave recovery mode": "Leave recovery mode",
-  "Agent stays available. Repair profiles, plugins or configuration, run checks, then leave recovery mode. Leaving does not start Harness.": "Agent stays available. Repair profiles, plugins or configuration, run checks, then leave recovery mode. Leaving does not start Harness.",
-  "Pause Harness startup and stop it to repair profiles, plugins or configuration. This pause survives restarting Nexus.": "Pause Harness startup and stop it to repair profiles, plugins or configuration. This pause survives restarting Nexus.",
-  "Harness startup is paused. Checks remain available; leave recovery mode before starting.": "Harness startup is paused. Checks remain available; leave recovery mode before starting.",
-  "Re-enter the complete argument list. Previous arguments that are not entered again will be removed.": "Re-enter the complete argument list. Previous arguments that are not entered again will be removed.",
-  "Snapshots restore bounded profile and Harness settings files plus the pointer to an installed program version. Project files, full session data, runtimes and complete program copies are excluded. Install a missing version first. Use Retry or Abort for an interrupted restore.": "Snapshots restore bounded profile and Harness settings files plus the pointer to an installed program version. Project files, full session data, runtimes and complete program copies are excluded. Install a missing version first. Use Retry or Abort for an interrupted restore.",
+  "Agent stays available. Repair profiles, plugins or configuration, run checks, then leave recovery mode. Leaving does not start Harness.":
+    "Agent stays available. Repair profiles, plugins or configuration, run checks, then leave recovery mode. Leaving does not start Harness.",
+  "Pause Harness startup and stop it to repair profiles, plugins or configuration. This pause survives restarting Nexus.":
+    "Pause Harness startup and stop it to repair profiles, plugins or configuration. This pause survives restarting Nexus.",
+  "Harness startup is paused. Checks remain available; leave recovery mode before starting.":
+    "Harness startup is paused. Checks remain available; leave recovery mode before starting.",
+  "Re-enter the complete argument list. Previous arguments that are not entered again will be removed.":
+    "Re-enter the complete argument list. Previous arguments that are not entered again will be removed.",
+  "Snapshots restore bounded profile and Harness settings files plus the pointer to an installed program version. Project files, full session data, runtimes and complete program copies are excluded. Install a missing version first. Use Retry or Abort for an interrupted restore.":
+    "Snapshots restore bounded profile and Harness settings files plus the pointer to an installed program version. Project files, full session data, runtimes and complete program copies are excluded. Install a missing version first. Use Retry or Abort for an interrupted restore.",
 
-  "Invalid startup check response. Retry the check or export diagnostics.": "Invalid startup check response. Retry the check or export diagnostics.",
+  "Invalid startup check response. Retry the check or export diagnostics.":
+    "Invalid startup check response. Retry the check or export diagnostics.",
   "Basic startup checks": "Basic startup checks",
   "Run basic checks": "Run basic checks",
   "Checking…": "Checking…",
-  "Checks files, data access, profile, runtime, port and pending recovery. Does not compile or start Harness.": "Checks files, data access, profile, runtime, port and pending recovery. Does not compile or start Harness.",
+  "Checks files, data access, profile, runtime, port and pending recovery. Does not compile or start Harness.":
+    "Checks files, data access, profile, runtime, port and pending recovery. Does not compile or start Harness.",
   "No blocking issues found": "No blocking issues found",
   "Resolve the blocking issues before startup": "Resolve the blocking issues before startup",
-  "Results describe this check only. Startup protection and plugin compatibility checks still apply.": "Results describe this check only. Startup protection and plugin compatibility checks still apply.",
+  "Results describe this check only. Startup protection and plugin compatibility checks still apply.":
+    "Results describe this check only. Startup protection and plugin compatibility checks still apply.",
   "Release identity": "Release identity",
   "Build": "Build",
   "Bundled runtime": "Bundled runtime",
   "Harness installation is incomplete": "Harness installation is incomplete",
-  "Agent is available. Reinstall Harness from the setup guide; existing data and remaining files are preserved.": "Agent is available. Reinstall Harness from the setup guide; existing data and remaining files are preserved.",
+  "Agent is available. Reinstall Harness from the setup guide; existing data and remaining files are preserved.":
+    "Agent is available. Reinstall Harness from the setup guide; existing data and remaining files are preserved.",
   "Reinstall Harness": "Reinstall Harness",
   "Inherit upstream default": "Inherit upstream default",
   "Save Harness preferences": "Save Harness preferences",
   "Harness preferences": "Harness preferences",
-  "Blank fields inherit upstream behavior. Changes apply on the next launch.": "Blank fields inherit upstream behavior. Changes apply on the next launch.",
+  "Blank fields inherit upstream behavior. Changes apply on the next launch.":
+    "Blank fields inherit upstream behavior. Changes apply on the next launch.",
   "Harness data directory": "Harness data directory",
-  "Changing this path only changes where Harness looks for data. Existing files are not moved or deleted.": "Changing this path only changes where Harness looks for data. Existing files are not moved or deleted.",
+  "Changing this path only changes where Harness looks for data. Existing files are not moved or deleted.":
+    "Changing this path only changes where Harness looks for data. Existing files are not moved or deleted.",
   "Web port": "Web port",
-  "Web profiles only. Default 3080; 0 selects an available port.": "Web profiles only. Default 3080; 0 selects an available port.",
+  "Web profiles only. Default 3080; 0 selects an available port.":
+    "Web profiles only. Default 3080; 0 selects an available port.",
   "Open browser after launch": "Open browser after launch (Web only)",
   "Disable session telemetry": "Disable session telemetry",
-  "Disabling telemetry stops session sharing. Inherited upstream behavior shares session records when feedback is submitted.": "Enable this switch to stop session sharing. Disabling the switch follows the upstream telemetry mode; by default, records are shared when feedback is submitted.",
+  "Disabling telemetry stops session sharing. Inherited upstream behavior shares session records when feedback is submitted.":
+    "Enable this switch to stop session sharing. Disabling the switch follows the upstream telemetry mode; by default, records are shared when feedback is submitted.",
   "Advanced Harness preferences": "Advanced Harness preferences",
   "DeepSeek model API address": "DeepSeek model API address",
   "DeepSeek search API address": "DeepSeek search API address",
   "Search provider ID": "Search provider ID",
-  "The named provider must already be installed and available.": "The named provider must already be installed and available.",
+  "The named provider must already be installed and available.":
+    "The named provider must already be installed and available.",
   "Web fetch provider ID": "Web fetch provider ID",
   "Shared agent skills directory": "Shared agent skills directory",
   "Bundled skills directory": "Bundled skills directory",
   "Permission mode": "Permission mode",
   "Tool mode (temporary upstream option)": "Tool mode (temporary upstream option)",
-  "Danger full access removes the default sandbox restrictions and automatic approval prompts. Tool mode applies to web and headless profiles.": "This sets the default Harness tool permission policy; session presets may override it. danger-full-access disables its default sandbox/approval policy, but does not grant Windows administrator rights. Tool mode applies only to Web/headless; PTC is an experimental upstream interface.",
-  "Additional patch files, one absolute path per line": "Additional patch files, one absolute path per line",
-  "Patch files customize plugins and are applied in the listed order. Select only files you trust.": "Patch files customize plugins and are applied in the listed order. Select only files you trust.",
+  "Danger full access removes the default sandbox restrictions and automatic approval prompts. Tool mode applies to web and headless profiles.":
+    "This sets the default Harness tool permission policy; session presets may override it. danger-full-access disables its default sandbox/approval policy, but does not grant Windows administrator rights. Tool mode applies only to Web/headless; PTC is an experimental upstream interface.",
+  "Additional patch files, one absolute path per line":
+    "Additional patch files, one absolute path per line",
+  "Patch files customize plugins and are applied in the listed order. Select only files you trust.":
+    "Patch files customize plugins and are applied in the listed order. Select only files you trust.",
   "Context window (sdk-minimal only)": "Context window (sdk-minimal only)",
   "Treat token limit as success (sdk only)": "Treat token limit as success (sdk only)",
   "System prompt (sdk-minimal only)": "System prompt (sdk-minimal only)",
-  "Stop Harness and wait for updates and cleanup to finish before changing preferences.": "Stop Harness and wait for updates and cleanup to finish before changing preferences.",
+  "Stop Harness and wait for updates and cleanup to finish before changing preferences.":
+    "Stop Harness and wait for updates and cleanup to finish before changing preferences.",
   "Discard changes": "Discard changes",
   "Switch profile separately": "Switch profile separately",
   "Keep current profile": "Keep current profile",
   "Switch profile": "Switch profile",
-  "Save or discard preference edits before switching profiles. Profiles are managed separately from these preferences.": "Save or discard preference edits before switching profiles. Profiles are managed separately from these preferences.",
+  "Save or discard preference edits before switching profiles. Profiles are managed separately from these preferences.":
+    "Save or discard preference edits before switching profiles. Profiles are managed separately from these preferences.",
   "Port must be an integer from 0 to 65535.": "Port must be an integer from 0 to 65535.",
   "Context window must be a positive integer.": "Context window must be a positive integer.",
   "Last installation": "Last installation",
-  "This is a saved installation record, not a new error from reinstalling Nexus.": "This is a saved installation record, not a new error from reinstalling Nexus.",
+  "This is a saved installation record, not a new error from reinstalling Nexus.":
+    "This is a saved installation record, not a new error from reinstalling Nexus.",
   "Installation log and details": "Installation log and details",
   "Retry installation": "Retry installation",
   "Clear finished record": "Clear finished record",
-  "Clearing this record keeps installed versions and Harness data.": "Clearing this record keeps installed versions and Harness data.",
+  "Clearing this record keeps installed versions and Harness data.":
+    "Clearing this record keeps installed versions and Harness data.",
   "Environment and versions": "Environment and versions",
   "Startup check failed": "Startup check failed",
-  "The task reports completion, but its version slot is unavailable. Refresh to verify installation before starting Harness.": "The task reports completion, but its version slot is unavailable. Refresh to verify installation before starting Harness.",
+  "The task reports completion, but its version slot is unavailable. Refresh to verify installation before starting Harness.":
+    "The task reports completion, but its version slot is unavailable. Refresh to verify installation before starting Harness.",
   "Verifying installed version": "Verifying installed version",
-  "Cancellation requested. Waiting for cleanup to finish.": "Cancellation requested. Waiting for cleanup to finish.",
-  "Installation request accepted. Follow the current stage below to confirm completion.": "Installation request accepted. Follow the current stage below to confirm completion.",
+  "Cancellation requested. Waiting for cleanup to finish.":
+    "Cancellation requested. Waiting for cleanup to finish.",
+  "Installation request accepted. Follow the current stage below to confirm completion.":
+    "Installation request accepted. Follow the current stage below to confirm completion.",
   "Connection details": "Connection details",
   "Advanced source settings": "Advanced source settings",
   "Advanced settings": "Advanced settings",
-  "Inspect errors and diagnostics, or adjust advanced settings.": "Inspect errors and diagnostics, or adjust advanced settings.",
-  "Installing a version also selects it. Start Harness when installation and compatibility checks finish.": "Installing a version also selects it. Start Harness when installation and compatibility checks finish.",
-  "Install a version above before starting Harness.": "Install a version above before starting Harness.",
+  "Inspect errors and diagnostics, or adjust advanced settings.":
+    "Inspect errors and diagnostics, or adjust advanced settings.",
+  "Installing a version also selects it. Start Harness when installation and compatibility checks finish.":
+    "Installing a version also selects it. Start Harness when installation and compatibility checks finish.",
+  "Install a version above before starting Harness.":
+    "Install a version above before starting Harness.",
   "Current version": "Current version",
   "Start and use": "Start and use",
   "Save": "Save",
   "Dependency registry": "Dependency registry",
-  "Only used when Harness dependencies are downloaded. Nexus never downloads Node, pnpm, or Git.": "Only used when Harness dependencies are downloaded. Nexus never downloads Node, pnpm, or Git.",
-  "Node, npm and pnpm must form a complete combination. Explicit paths take priority, otherwise Nexus uses its bundled runtime and checks each Harness version against it.": "Node, npm and pnpm must form a complete combination. Explicit paths take priority, otherwise Nexus uses its bundled runtime and checks each Harness version against it.",
+  "Only used when Harness dependencies are downloaded. Nexus never downloads Node, pnpm, or Git.":
+    "Only used when Harness dependencies are downloaded. Nexus never downloads Node, pnpm, or Git.",
+  "Node, npm and pnpm must form a complete combination. Explicit paths take priority, otherwise Nexus uses its bundled runtime and checks each Harness version against it.":
+    "Node, npm and pnpm must form a complete combination. Explicit paths take priority, otherwise Nexus uses its bundled runtime and checks each Harness version against it.",
   "Bundled": "Bundled",
   "Launch on system startup": "Launch on system startup",
   "Repair & reset": "Repair & reset",
-  "Reset repairs broken Nexus state. Harness data under .dsh is never touched; installed version slots stay on disk.": "Reset repairs broken Nexus state. Harness data under .dsh is never touched; installed version slots stay on disk.",
+  "Reset repairs broken Nexus state. Harness data under .dsh is never touched; installed version slots stay on disk.":
+    "Reset repairs broken Nexus state. Harness data under .dsh is never touched; installed version slots stay on disk.",
   "Reset Nexus configuration": "Reset Nexus configuration",
   "Reset configuration and slot registry": "Reset configuration and slot registry",
   "Click again to confirm": "Click again to confirm",
-  "Click the same button again to run the reset. Harness must be stopped.": "Click the same button again to run the reset. Harness must be stopped.",
+  "Click the same button again to run the reset. Harness must be stopped.":
+    "Click the same button again to run the reset. Harness must be stopped.",
   "Help": "Help",
   "Open DSH terminal": "Open DSH terminal",
   "Install output": "Install output",
-  "The DSH terminal opens in the active profile directory with dsh and pnpm on PATH.": "The DSH terminal opens in the active profile directory with dsh and pnpm on PATH.",
+  "The DSH terminal opens in the active profile directory with dsh and pnpm on PATH.":
+    "The DSH terminal opens in the active profile directory with dsh and pnpm on PATH.",
   "Upstream documentation": "Upstream documentation",
   "Diagnostics and logs": "Diagnostics and logs",
-  "Runtime logs and diagnostic bundles are collected on the Diagnostics page.": "Runtime logs and diagnostic bundles are collected on the Diagnostics page.",
+  "Runtime logs and diagnostic bundles are collected on the Diagnostics page.":
+    "Runtime logs and diagnostic bundles are collected on the Diagnostics page.",
   "Agent log level": "Agent log level",
-  "The log level applies the next time the Agent starts.": "The log level applies the next time the Agent starts.",
+  "The log level applies the next time the Agent starts.":
+    "The log level applies the next time the Agent starts.",
   "Harness fails to start": "Harness fails to start",
-  "Open the startup log from the Overview or Diagnostics page. Plugin mismatches are expected across versions; use Recovery to remove the affected plugin or restore a healthy snapshot.": "Open the startup log from the Overview or Diagnostics page. Plugin mismatches are expected across versions; use Recovery to remove the affected plugin or restore a healthy snapshot.",
+  "Open the startup log from the Overview or Diagnostics page. Plugin mismatches are expected across versions; use Recovery to remove the affected plugin or restore a healthy snapshot.":
+    "Open the startup log from the Overview or Diagnostics page. Plugin mismatches are expected across versions; use Recovery to remove the affected plugin or restore a healthy snapshot.",
   "Dependency download is slow or times out": "Dependency download is slow or times out",
-  "Switch the dependency registry to npmmirror in Settings, then retry the install.": "Switch the dependency registry to npmmirror in Settings, then retry the install.",
+  "Switch the dependency registry to npmmirror in Settings, then retry the install.":
+    "Switch the dependency registry to npmmirror in Settings, then retry the install.",
   "Node, pnpm, or Git is missing": "Node, pnpm, or Git is missing",
-  "Nexus defaults to its complete bundled runtime. Explicit paths in Runtime settings take priority; system discovery is only used without a bundle.": "Nexus defaults to its complete bundled runtime. Explicit paths in Runtime settings take priority; system discovery is only used without a bundle.",
+  "Nexus defaults to its complete bundled runtime. Explicit paths in Runtime settings take priority; system discovery is only used without a bundle.":
+    "Nexus defaults to its complete bundled runtime. Explicit paths in Runtime settings take priority; system discovery is only used without a bundle.",
   "Disabled": "Disabled",
-  "Using the bundled pnpm: it differs from the release's exact pnpm pin, but the major version matches.": "Using the bundled pnpm: it differs from the release's exact pnpm pin, but the major version matches.",
-  "Upstream dependency installation failed, usually a network issue. Switch the dependency registry to npmmirror in Settings, then retry.": "Upstream dependency installation failed, usually a network issue. Switch the dependency registry to npmmirror in Settings, then retry.",
+  "Using the bundled pnpm: it differs from the release's exact pnpm pin, but the major version matches.":
+    "Using the bundled pnpm: it differs from the release's exact pnpm pin, but the major version matches.",
+  "Upstream dependency installation failed, usually a network issue. Switch the dependency registry to npmmirror in Settings, then retry.":
+    "Upstream dependency installation failed, usually a network issue. Switch the dependency registry to npmmirror in Settings, then retry.",
   "Hide dependency registry": "Hide dependency registry",
   "Change dependency registry": "Change dependency registry",
-  "Explicit paths take priority. Leave blank to use the complete bundled Node/npm/pnpm combination; system discovery is used only when no bundle is present.": "Explicit paths take priority. Leave blank to use the complete bundled Node/npm/pnpm combination; system discovery is used only when no bundle is present.",
+  "Explicit paths take priority. Leave blank to use the complete bundled Node/npm/pnpm combination; system discovery is used only when no bundle is present.":
+    "Explicit paths take priority. Leave blank to use the complete bundled Node/npm/pnpm combination; system discovery is used only when no bundle is present.",
   "Download preferences": "Download preferences",
-  "Node and pnpm are required. After you choose a version, Nexus checks its exact requirements and installs missing runtimes in the same flow.": "Node and pnpm are required. After you choose a version, Nexus checks its exact requirements and installs missing runtimes in the same flow.",
+  "Node and pnpm are required. After you choose a version, Nexus checks its exact requirements and installs missing runtimes in the same flow.":
+    "Node and pnpm are required. After you choose a version, Nexus checks its exact requirements and installs missing runtimes in the same flow.",
   "Check environment": "Check environment",
   "Not checked": "Not checked",
   "Will be prepared for the selected version": "Will be prepared for the selected version",
@@ -690,7 +909,8 @@ const english: Record<string, string> = {
   "Checking": "Checking",
   "Runtime environment": "Runtime environment",
   "Setup progress": "Setup progress",
-  "Check the environment, choose a version, then start Harness. Everything stays on this page.": "Check the environment, choose a version, then start Harness. Everything stays on this page.",
+  "Check the environment, choose a version, then start Harness. Everything stays on this page.":
+    "Check the environment, choose a version, then start Harness. Everything stays on this page.",
   "Set up your Harness": "Set up your Harness",
   "Manage your Harness": "Manage your Harness",
   "Maintenance": "Maintenance",
@@ -699,24 +919,35 @@ const english: Record<string, string> = {
   "Setup guide": "Setup guide",
   "Harness is ready": "Harness is ready",
   "Set up Harness automatically": "Set up Harness automatically",
-  "Environment checks run automatically; install a version, then press Start once. Starting Harness always needs your explicit click.": "Environment checks run automatically; install a version, then press Start once. Starting Harness always needs your explicit click.",
+  "Environment checks run automatically; install a version, then press Start once. Starting Harness always needs your explicit click.":
+    "Environment checks run automatically; install a version, then press Start once. Starting Harness always needs your explicit click.",
   "Environment ready": "Environment ready",
   "Version installed": "Version installed",
   "Start Harness": "Start Harness",
   "Waiting for Agent": "Waiting for Agent",
-  "Service status at a glance: Agent, Harness, active profile, and the Harness web UI.": "Service status at a glance: Agent, Harness, active profile, and the Harness web UI.",
-  "Inspect errors, collect diagnostics, and recover from startup failures.": "Inspect errors, collect diagnostics, and recover from startup failures.",
-  "Profiles own checkpoints and the plugin inventory: select a profile, manage its checkpoints, then adjust its plugins. Profile deletion is unavailable in this release.": "Profiles own checkpoints and the plugin inventory: select a profile, manage its checkpoints, then adjust its plugins. Profile deletion is unavailable in this release.",
-  "Cleanup is incomplete. Retry cleanup before starting another update.": "Cleanup is incomplete. Retry cleanup before starting another update.",
+  "Service status at a glance: Agent, Harness, active profile, and the Harness web UI.":
+    "Service status at a glance: Agent, Harness, active profile, and the Harness web UI.",
+  "Inspect errors, collect diagnostics, and recover from startup failures.":
+    "Inspect errors, collect diagnostics, and recover from startup failures.",
+  "Profiles own checkpoints and the plugin inventory: select a profile, manage its checkpoints, then adjust its plugins. Profile deletion is unavailable in this release.":
+    "Profiles own checkpoints and the plugin inventory: select a profile, manage its checkpoints, then adjust its plugins. Profile deletion is unavailable in this release.",
+  "Cleanup is incomplete. Retry cleanup before starting another update.":
+    "Cleanup is incomplete. Retry cleanup before starting another update.",
   "Update progress": "Update progress",
   "Current stage": "Current stage",
-  "Nexus prefers system Git and falls back to embedded Git when unavailable or unsuccessful. Embedded Git does not provide a git command for plugins.": "Nexus prefers system Git and falls back to embedded Git when unavailable or unsuccessful. Embedded Git does not provide a git command for plugins.",
-  "No local Harness is installed. Select a version here to install it.": "No local Harness is installed. Select a version here to install it.",
+  "Nexus prefers system Git and falls back to embedded Git when unavailable or unsuccessful. Embedded Git does not provide a git command for plugins.":
+    "Nexus prefers system Git and falls back to embedded Git when unavailable or unsuccessful. Embedded Git does not provide a git command for plugins.",
+  "No local Harness is installed. Select a version here to install it.":
+    "No local Harness is installed. Select a version here to install it.",
   "Plugin load order": "Plugin load order",
-  "Load order saved. It takes effect on the next Harness startup.": "Load order saved. It takes effect on the next Harness startup.",
-  "Built-in plugins come from the profile template. Installed plugins are dependency-managed even when included in the load list.": "Built-in plugins come from the profile template. Installed plugins are dependency-managed even when included in the load list.",
-  "Drag plugins to change loading order, or use the arrow buttons. dsh-base and dsh-web-app stay in positions 1 and 2.": "Drag plugins to change loading order, or use the arrow buttons. dsh-base and dsh-web-app stay in positions 1 and 2.",
-  "This is a generated isolation profile. Edit plugin order in source profile {profile}.": "This is a generated isolation profile. Edit plugin order in source profile {profile}.",
+  "Load order saved. It takes effect on the next Harness startup.":
+    "Load order saved. It takes effect on the next Harness startup.",
+  "Built-in plugins come from the profile template. Installed plugins are dependency-managed even when included in the load list.":
+    "Built-in plugins come from the profile template. Installed plugins are dependency-managed even when included in the load list.",
+  "Drag plugins to change loading order, or use the arrow buttons. dsh-base and dsh-web-app stay in positions 1 and 2.":
+    "Drag plugins to change loading order, or use the arrow buttons. dsh-base and dsh-web-app stay in positions 1 and 2.",
+  "This is a generated isolation profile. Edit plugin order in source profile {profile}.":
+    "This is a generated isolation profile. Edit plugin order in source profile {profile}.",
   "Drag to reorder": "Drag to reorder",
   "Fixed load position": "Fixed load position",
   "Loading order unavailable": "Loading order unavailable",
@@ -728,13 +959,17 @@ const english: Record<string, string> = {
   "During profile switch": "During profile switch",
   "Retry profile switch": "Retry profile switch",
   "Retry Harness startup": "Retry Harness startup",
-  "Checking plugin compatibility. You can close this dialog; the check continues in the background.": "Checking plugin compatibility. You can close this dialog; the check continues in the background.",
-  "Harness startup failed. The preflight result below does not mean this startup succeeded.": "Harness startup failed. The preflight result below does not mean this startup succeeded.",
+  "Checking plugin compatibility. You can close this dialog; the check continues in the background.":
+    "Checking plugin compatibility. You can close this dialog; the check continues in the background.",
+  "Harness startup failed. The preflight result below does not mean this startup succeeded.":
+    "Harness startup failed. The preflight result below does not mean this startup succeeded.",
   "No compatibility check result yet.": "No compatibility check result yet.",
 
   "Operation in progress": "Operation in progress",
-  "Version or startup operation in progress. Please wait; update progress remains available.": "Version or startup operation in progress. Please wait; update progress remains available.",
-  "Version or startup operation in progress. Showing the last confirmed catalogs; Harness access is temporarily unavailable. Update progress continues to refresh.": "Version or startup operation in progress. Showing the last confirmed catalogs; Harness access is temporarily unavailable. Update progress continues to refresh.",
+  "Version or startup operation in progress. Please wait; update progress remains available.":
+    "Version or startup operation in progress. Please wait; update progress remains available.",
+  "Version or startup operation in progress. Showing the last confirmed catalogs; Harness access is temporarily unavailable. Update progress continues to refresh.":
+    "Version or startup operation in progress. Showing the last confirmed catalogs; Harness access is temporarily unavailable. Update progress continues to refresh.",
   "During version switch": "During version switch",
   "Before startup or restart": "Before startup or restart",
   "Legacy record: trigger not recorded": "Legacy record: trigger not recorded",
@@ -742,7 +977,8 @@ const english: Record<string, string> = {
   "Reused previous check result": "Reused previous check result",
   "New check result": "New check result",
   "Last used": "Last used",
-  "Plugin errors below were recorded during this check; they are not new errors from viewing this page.": "Plugin errors below were recorded during this check; they are not new errors from viewing this page.",
+  "Plugin errors below were recorded during this check; they are not new errors from viewing this page.":
+    "Plugin errors below were recorded during this check; they are not new errors from viewing this page.",
 
   "Saved plugin choices; effective on next check": "Saved plugin choices; effective on next check",
   "Choose how to handle plugin errors": "Choose how to handle plugin errors",
@@ -750,24 +986,32 @@ const english: Record<string, string> = {
   "Restore plugin on next check": "Restore plugin on next check",
   "Enable on next check": "Enable on next check",
   "Disable on next check": "Disable on next check",
-  "Select the source profile and run its compatibility check to manage plugin choices.": "Select the source profile and run its compatibility check to manage plugin choices.",
-  "Plugin choices apply to the isolated profile on the next compatibility check. Nothing is uninstalled, the source profile stays unchanged, and running Harness is not changed immediately.": "Plugin choices apply to the isolated profile on the next compatibility check. Nothing is uninstalled, the source profile stays unchanged, and running Harness is not changed immediately.",
+  "Select the source profile and run its compatibility check to manage plugin choices.":
+    "Select the source profile and run its compatibility check to manage plugin choices.",
+  "Plugin choices apply to the isolated profile on the next compatibility check. Nothing is uninstalled, the source profile stays unchanged, and running Harness is not changed immediately.":
+    "Plugin choices apply to the isolated profile on the next compatibility check. Nothing is uninstalled, the source profile stays unchanged, and running Harness is not changed immediately.",
   "Disabled by user": "Disabled by user",
   "Retry version switch": "Retry version switch",
   "Select all third-party plugins": "Select all third-party plugins",
   "Save disabled plugins": "Save disabled plugins",
-  "Choose plugins to disable, then retry. Unattributed plugins are options, not confirmed faults. Nothing is uninstalled.": "Choose plugins to disable, then retry. Unattributed plugins are options, not confirmed faults. Nothing is uninstalled.",
-  "Saved choices apply to isolated profiles until restored. The original profile remains intact.": "Saved choices apply to isolated profiles until restored. The original profile remains intact.",
-  "After saving, select the upstream version again to retry.": "After saving, select the upstream version again to retry.",
-  "Stop Harness before changing plugin isolation.": "Stop Harness before changing plugin isolation.",
+  "Choose plugins to disable, then retry. Unattributed plugins are options, not confirmed faults. Nothing is uninstalled.":
+    "Choose plugins to disable, then retry. Unattributed plugins are options, not confirmed faults. Nothing is uninstalled.",
+  "Saved choices apply to isolated profiles until restored. The original profile remains intact.":
+    "Saved choices apply to isolated profiles until restored. The original profile remains intact.",
+  "After saving, select the upstream version again to retry.":
+    "After saving, select the upstream version again to retry.",
+  "Stop Harness before changing plugin isolation.":
+    "Stop Harness before changing plugin isolation.",
   "DSH reported a loader error for this plugin": "DSH reported a loader error for this plugin",
-  "Not identified as faulty; optional isolation for troubleshooting": "Not identified as faulty; optional isolation for troubleshooting",
+  "Not identified as faulty; optional isolation for troubleshooting":
+    "Not identified as faulty; optional isolation for troubleshooting",
   "Startup compatibility check": "Startup compatibility check",
   "Source profile": "Source profile",
   "Effective isolated profile": "Effective isolated profile",
   "Started with isolated plugins": "Started with isolated plugins",
   "Startup check passed": "Startup check passed",
-  "Checks plugin loading and initialization, not every runtime feature. Original profile and data remain unchanged.": "Checks plugin loading and initialization, not every runtime feature. Original profile and data remain unchanged.",
+  "Checks plugin loading and initialization, not every runtime feature. Original profile and data remain unchanged.":
+    "Checks plugin loading and initialization, not every runtime feature. Original profile and data remain unchanged.",
 
   "NEXUS": "NEXUS",
   "LOCAL CONTROL": "LOCAL CONTROL",
@@ -817,7 +1061,8 @@ const english: Record<string, string> = {
   "Harness configuration cleared": "Harness configuration cleared",
   "Runtime / Overview": "Runtime / Overview",
   "Local control plane": "Local control plane",
-  "Observe and operate the independent Agent and its immutable Harness runtime.": "Observe and operate the independent Agent and its immutable Harness runtime.",
+  "Observe and operate the independent Agent and its immutable Harness runtime.":
+    "Observe and operate the independent Agent and its immutable Harness runtime.",
   "Running": "Running",
   "Standby": "Standby",
   "Healthy": "Healthy",
@@ -865,7 +1110,8 @@ const english: Record<string, string> = {
   "{count} saved": "{count} saved",
   "Update queue idle": "Update queue idle",
   "Agent operations": "Agent operations",
-  "The Agent remains a separate process. Launcher controls are explicit and recoverable.": "The Agent remains a separate process. Launcher controls are explicit and recoverable.",
+  "The Agent remains a separate process. Launcher controls are explicit and recoverable.":
+    "The Agent remains a separate process. Launcher controls are explicit and recoverable.",
   "Start Agent": "Start Agent",
   "Restart": "Restart",
   "Stop Agent": "Stop Agent",
@@ -878,19 +1124,28 @@ const english: Record<string, string> = {
   "Activity signal": "Activity signal",
   "Agent runtime ready": "Agent runtime ready",
   "Agent program pending": "Agent program pending",
-  "The native side will report the resolved Agent program after startup.": "The native side will report the resolved Agent program after startup.",
+  "The native side will report the resolved Agent program after startup.":
+    "The native side will report the resolved Agent program after startup.",
   "Harness controls": "Harness controls",
   "Configure Harness": "Configure Harness",
   "Start": "Start",
   "Stop": "Stop",
-  "Harness is running outside this Agent process. Manage it from its owning Agent; lifecycle controls are disabled here.": "Harness is running outside this Agent process. Manage it from its owning Agent; lifecycle controls are disabled here.",
-  "Harness is detached. Configure it in Settings, then start it from the control panel.": "Harness is detached. Configure it in Settings, then start it from the control panel.",
-  "Harness is already running; no lifecycle change was made.": "Harness is already running; no lifecycle change was made.",
-  "Harness is running outside this Agent. Its status is read-only until it reconnects.": "Harness is running outside this Agent. Its status is read-only until it reconnects.",
-  "Harness log session is unavailable. Restart Harness to establish a safe token boundary.": "Harness log session is unavailable. Restart Harness to establish a safe token boundary.",
-  "Harness log session is invalid. Restart Harness to establish a safe token boundary.": "Harness log session is invalid. Restart Harness to establish a safe token boundary.",
-  "No current Harness authentication token was found for this run.": "No current Harness authentication token was found for this run.",
-  "Harness changed state while its token was being observed. Refresh after it is running.": "Harness changed state while its token was being observed. Refresh after it is running.",
+  "Harness is running outside this Agent process. Manage it from its owning Agent; lifecycle controls are disabled here.":
+    "Harness is running outside this Agent process. Manage it from its owning Agent; lifecycle controls are disabled here.",
+  "Harness is detached. Configure it in Settings, then start it from the control panel.":
+    "Harness is detached. Configure it in Settings, then start it from the control panel.",
+  "Harness is already running; no lifecycle change was made.":
+    "Harness is already running; no lifecycle change was made.",
+  "Harness is running outside this Agent. Its status is read-only until it reconnects.":
+    "Harness is running outside this Agent. Its status is read-only until it reconnects.",
+  "Harness log session is unavailable. Restart Harness to establish a safe token boundary.":
+    "Harness log session is unavailable. Restart Harness to establish a safe token boundary.",
+  "Harness log session is invalid. Restart Harness to establish a safe token boundary.":
+    "Harness log session is invalid. Restart Harness to establish a safe token boundary.",
+  "No current Harness authentication token was found for this run.":
+    "No current Harness authentication token was found for this run.",
+  "Harness changed state while its token was being observed. Refresh after it is running.":
+    "Harness changed state while its token was being observed. Refresh after it is running.",
   "Process ID": "Process ID",
   "Not attached": "Not attached",
   "Exit code": "Exit code",
@@ -901,9 +1156,11 @@ const english: Record<string, string> = {
   "Latest loopback token": "Latest loopback token",
   "Hide": "Hide",
   "Reveal": "Reveal",
-  "Read from a bounded Nexus-owned Harness log tail. It is not written to Nexus state.": "Read from a bounded Nexus-owned Harness log tail. It is not written to Nexus state.",
+  "Read from a bounded Nexus-owned Harness log tail. It is not written to Nexus state.":
+    "Read from a bounded Nexus-owned Harness log tail. It is not written to Nexus state.",
   "No token observed": "No token observed",
-  "Start Harness and refresh when its loopback URL is ready.": "Start Harness and refresh when its loopback URL is ready.",
+  "Start Harness and refresh when its loopback URL is ready.":
+    "Start Harness and refresh when its loopback URL is ready.",
   "Source": "Source",
   "Observed": "Observed",
   "Not available": "Not available",
@@ -912,28 +1169,36 @@ const english: Record<string, string> = {
   "Embedded Harness Web": "Embedded Harness Web",
   "Harness Web interface": "Harness Web interface",
   "Harness view is not ready": "Harness view is not ready",
-  "A validated loopback HTTP URL will appear here when Harness reports its web interface.": "A validated loopback HTTP URL will appear here when Harness reports its web interface.",
-  "Harness authentication requires a system browser": "Harness authentication requires a system browser",
-  "This session needs top-level browser authentication. Open the validated Harness page in your system browser to sign in.": "This session needs top-level browser authentication. Open the validated Harness page in your system browser to sign in.",
+  "A validated loopback HTTP URL will appear here when Harness reports its web interface.":
+    "A validated loopback HTTP URL will appear here when Harness reports its web interface.",
+  "Harness authentication requires a system browser":
+    "Harness authentication requires a system browser",
+  "This session needs top-level browser authentication. Open the validated Harness page in your system browser to sign in.":
+    "This session needs top-level browser authentication. Open the validated Harness page in your system browser to sign in.",
   "Control / Profiles": "Control / Profiles",
-  "Nexus-owned profile names are passed to Harness only through explicit launch configuration.": "Nexus-owned profile names are passed to Harness only through explicit launch configuration.",
+  "Nexus-owned profile names are passed to Harness only through explicit launch configuration.":
+    "Nexus-owned profile names are passed to Harness only through explicit launch configuration.",
   "Profile catalog": "Profile catalog",
   "No profiles configured": "No profiles configured",
-  "The Agent will expose profiles after its catalog is initialized.": "The Agent will expose profiles after its catalog is initialized.",
+  "The Agent will expose profiles after its catalog is initialized.":
+    "The Agent will expose profiles after its catalog is initialized.",
   "Unnamed profile": "Unnamed profile",
   "Active": "Active",
   "Selected by Agent": "Selected by Agent",
   "Available": "Available",
   "State / Checkpoints": "State / Checkpoints",
-  "Checkpoint manifests contain only Harness profile/release selection. Agent lifecycle and Harness runtime are never saved or restored.": "Checkpoint manifests contain only Harness profile/release selection. Agent lifecycle and Harness runtime are never saved or restored.",
+  "Checkpoint manifests contain only Harness profile/release selection. Agent lifecycle and Harness runtime are never saved or restored.":
+    "Checkpoint manifests contain only Harness profile/release selection. Agent lifecycle and Harness runtime are never saved or restored.",
   "Saved checkpoints": "Saved checkpoints",
   "Create checkpoint": "Create checkpoint",
   "No checkpoints yet": "No checkpoints yet",
-  "Create a checkpoint after the Agent has a stable profile and release state.": "Create a checkpoint after the Agent has a stable profile and release state.",
+  "Create a checkpoint after the Agent has a stable profile and release state.":
+    "Create a checkpoint after the Agent has a stable profile and release state.",
   "Checkpoint": "Checkpoint",
   "No profile": "No profile",
   "Releases / Updates": "Releases / Updates",
-  "Release installation is external and explicit. Promotion stays separate from downloading and verification.": "Release installation is external and explicit. Promotion stays separate from downloading and verification.",
+  "Release installation is external and explicit. Promotion stays separate from downloading and verification.":
+    "Release installation is external and explicit. Promotion stays separate from downloading and verification.",
   "Update status": "Update status",
   "No active update": "No active update",
   "New profile name": "New profile name",
@@ -942,21 +1207,35 @@ const english: Record<string, string> = {
   "Edit profile patch": "Edit profile patch",
   "Edit plugin manifest": "Edit plugin manifest",
   "Open profile directory": "Open profile directory",
-  "Plugins failed to load, likely a version mismatch between installed plugins and this Harness build. Open Recovery to remove the affected plugins or restore a healthy snapshot.": "Plugins failed to load, likely a version mismatch between installed plugins and this Harness build. Open Recovery to remove the affected plugins or restore a healthy snapshot.",
-  "A plugin expects module APIs this Harness build does not have: the installed plugin set and the Harness version are out of sync. Restore a healthy snapshot or update the plugins.": "A plugin expects module APIs this Harness build does not have: the installed plugin set and the Harness version are out of sync. Restore a healthy snapshot or update the plugins.",
-  "A profile plugin duplicates a plugin this Harness now ships built-in. Remove the older copy from the profile's plugin inventory.": "A profile plugin duplicates a plugin this Harness now ships built-in. Remove the older copy from the profile's plugin inventory.",
-  "A path is invalid, likely a leftover from a previous version switch. Restore a healthy snapshot to rebuild the profile.": "A path is invalid, likely a leftover from a previous version switch. Restore a healthy snapshot to rebuild the profile.",
-  "External source protection history is full. Keep the current source or choose a previously confirmed directory, then save again. Existing directory protection is retained.": "External source protection history is full. Keep the current source or choose a previously confirmed directory, then save again. Existing directory protection is retained.",
-  "All release slots are full. Remove a slot you no longer need, then try again.": "All release slots are full. Remove a slot you no longer need, then try again.",
-  "That slot is still in use (current or last-known-good). Switch to another version first.": "That slot is still in use (current or last-known-good). Switch to another version first.",
-  "This snapshot's Harness version is not installed. Cold-switch to that tag first, then restore.": "This snapshot's Harness version is not installed. Cold-switch to that tag first, then restore.",
-  "A directory was used where a file was expected, usually a leftover from a crashed run. Restore a healthy snapshot to rebuild the profile.": "A directory was used where a file was expected, usually a leftover from a crashed run. Restore a healthy snapshot to rebuild the profile.",
-  "The local service is not responding. Retry, and check the Agent status on the Overview page.": "The local service is not responding. Retry, and check the Agent status on the Overview page.",
-  "The operation timed out, often a network issue. Check your connection or proxy settings, then retry.": "The operation timed out, often a network issue. Check your connection or proxy settings, then retry.",
-  "Access denied: the file may be locked by another process. Close programs using it and retry.": "Access denied: the file may be locked by another process. Close programs using it and retry.",
+  "Plugins failed to load, likely a version mismatch between installed plugins and this Harness build. Open Recovery to remove the affected plugins or restore a healthy snapshot.":
+    "Plugins failed to load, likely a version mismatch between installed plugins and this Harness build. Open Recovery to remove the affected plugins or restore a healthy snapshot.",
+  "A plugin expects module APIs this Harness build does not have: the installed plugin set and the Harness version are out of sync. Restore a healthy snapshot or update the plugins.":
+    "A plugin expects module APIs this Harness build does not have: the installed plugin set and the Harness version are out of sync. Restore a healthy snapshot or update the plugins.",
+  "A profile plugin duplicates a plugin this Harness now ships built-in. Remove the older copy from the profile's plugin inventory.":
+    "A profile plugin duplicates a plugin this Harness now ships built-in. Remove the older copy from the profile's plugin inventory.",
+  "A path is invalid, likely a leftover from a previous version switch. Restore a healthy snapshot to rebuild the profile.":
+    "A path is invalid, likely a leftover from a previous version switch. Restore a healthy snapshot to rebuild the profile.",
+  "External source protection history is full. Keep the current source or choose a previously confirmed directory, then save again. Existing directory protection is retained.":
+    "External source protection history is full. Keep the current source or choose a previously confirmed directory, then save again. Existing directory protection is retained.",
+  "All release slots are full. Remove a slot you no longer need, then try again.":
+    "All release slots are full. Remove a slot you no longer need, then try again.",
+  "That slot is still in use (current or last-known-good). Switch to another version first.":
+    "That slot is still in use (current or last-known-good). Switch to another version first.",
+  "This snapshot's Harness version is not installed. Cold-switch to that tag first, then restore.":
+    "This snapshot's Harness version is not installed. Cold-switch to that tag first, then restore.",
+  "A directory was used where a file was expected, usually a leftover from a crashed run. Restore a healthy snapshot to rebuild the profile.":
+    "A directory was used where a file was expected, usually a leftover from a crashed run. Restore a healthy snapshot to rebuild the profile.",
+  "The local service is not responding. Retry, and check the Agent status on the Overview page.":
+    "The local service is not responding. Retry, and check the Agent status on the Overview page.",
+  "The operation timed out, often a network issue. Check your connection or proxy settings, then retry.":
+    "The operation timed out, often a network issue. Check your connection or proxy settings, then retry.",
+  "Access denied: the file may be locked by another process. Close programs using it and retry.":
+    "Access denied: the file may be locked by another process. Close programs using it and retry.",
   "Restore snapshot": "Restore snapshot",
-  "Restore this snapshot? Harness must be stopped.": "Restore this snapshot? Harness must be stopped.",
-  "Finish or remove the empty argument row before saving.": "Finish or remove the empty argument row before saving.",
+  "Restore this snapshot? Harness must be stopped.":
+    "Restore this snapshot? Harness must be stopped.",
+  "Finish or remove the empty argument row before saving.":
+    "Finish or remove the empty argument row before saving.",
   "Show startup log": "Show startup log",
   "Startup log tail": "Startup log tail",
   "Fetch this tag": "Fetch this tag",
@@ -966,13 +1245,16 @@ const english: Record<string, string> = {
   "View": "View",
   "Viewing": "Viewing",
   "Belongs to profile": "Belongs to profile",
-  "The Agent starts and stops with the Launcher. Only force-restart remains for recovery.": "The Agent starts and stops with the Launcher. Only force-restart remains for recovery.",
+  "The Agent starts and stops with the Launcher. Only force-restart remains for recovery.":
+    "The Agent starts and stops with the Launcher. Only force-restart remains for recovery.",
   "Runtime & cold switch": "Runtime & cold switch",
   "Change runtime source or install mode": "Change runtime source or install mode",
   "Hide source and install mode": "Hide source and install mode",
   "Leave blank for automatic discovery": "Leave blank for automatic discovery",
-  "Manual paths are saved as system pins. Leave blank to let Nexus resolve automatically.": "Manual paths are saved as system pins. Leave blank to let Nexus resolve automatically.",
-  "These settings only matter when runtimes must be installed or replaced.": "These settings only matter when runtimes must be installed or replaced.",
+  "Manual paths are saved as system pins. Leave blank to let Nexus resolve automatically.":
+    "Manual paths are saved as system pins. Leave blank to let Nexus resolve automatically.",
+  "These settings only matter when runtimes must be installed or replaced.":
+    "These settings only matter when runtimes must be installed or replaced.",
   "Switch to tag": "Switch to tag",
   "Release slot": "Release slot",
   "Current": "Current",
@@ -990,12 +1272,14 @@ const english: Record<string, string> = {
   "Last known good": "Last known good",
   "Release slots": "Release slots",
   "No release slots": "No release slots",
-  "Register an immutable slot through the Agent API before promotion.": "Register an immutable slot through the Agent API before promotion.",
+  "Register an immutable slot through the Agent API before promotion.":
+    "Register an immutable slot through the Agent API before promotion.",
   "Release": "Release",
   "Unknown version": "Unknown version",
   "Registered": "Registered",
   "Observability / Diagnostics": "Observability / Diagnostics",
-  "Bundles are bounded, redacted, and limited to Nexus-owned metadata and text logs.": "Bundles are bounded, redacted, and limited to Nexus-owned metadata and text logs.",
+  "Bundles are bounded, redacted, and limited to Nexus-owned metadata and text logs.":
+    "Bundles are bounded, redacted, and limited to Nexus-owned metadata and text logs.",
   "Open file": "Open file",
   "Open file location": "Open file location",
   "Open bundle manifest": "Open bundle manifest",
@@ -1005,60 +1289,76 @@ const english: Record<string, string> = {
   "{count} plugin bundles": "{count} plugin bundles",
   "Collect diagnostics": "Collect diagnostics",
   "Export diagnostics": "Export diagnostics",
-  "Diagnostic export returned no usable file path.": "Diagnostic export returned no usable file path.",
+  "Diagnostic export returned no usable file path.":
+    "Diagnostic export returned no usable file path.",
   "Diagnostic file exported: {path}": "Diagnostic file exported: {path}",
-  "Diagnostic file exported; open its folder manually: {path}": "Diagnostic file exported; open its folder manually: {path}",
-  "The exported JSON is one portable file containing the redacted diagnostic context and logs.": "The exported JSON is one portable file containing the redacted diagnostic context and logs.",
+  "Diagnostic file exported; open its folder manually: {path}":
+    "Diagnostic file exported; open its folder manually: {path}",
+  "The exported JSON is one portable file containing the redacted diagnostic context and logs.":
+    "The exported JSON is one portable file containing the redacted diagnostic context and logs.",
   "No diagnostic bundles": "No diagnostic bundles",
-  "Collect a bounded bundle when a runtime issue needs review.": "Collect a bounded bundle when a runtime issue needs review.",
+  "Collect a bounded bundle when a runtime issue needs review.":
+    "Collect a bounded bundle when a runtime issue needs review.",
   "Bundle": "Bundle",
   "{count} files": "{count} files",
   "System / Settings": "System / Settings",
-  "Configuration remains Agent-owned. This view intentionally exposes metadata, not credentials or raw environment values.": "Configuration remains Agent-owned. This view intentionally exposes metadata, not credentials or raw environment values.",
+  "Configuration remains Agent-owned. This view intentionally exposes metadata, not credentials or raw environment values.":
+    "Configuration remains Agent-owned. This view intentionally exposes metadata, not credentials or raw environment values.",
   "Appearance": "Appearance",
   "Theme": "Theme",
   "System": "System",
   "Light": "Light",
   "Dark": "Dark",
-  "System follows the operating system preference. Your choice is saved locally.": "System follows the operating system preference. Your choice is saved locally.",
+  "System follows the operating system preference. Your choice is saved locally.":
+    "System follows the operating system preference. Your choice is saved locally.",
   "Language": "Language",
   "English": "English",
   "Chinese": "中文",
   "idle": "idle",
-  "Choose the language used by the Launcher interface.": "Choose the language used by the Launcher interface.",
+  "Choose the language used by the Launcher interface.":
+    "Choose the language used by the Launcher interface.",
   "Harness configuration": "Harness configuration",
   "Harness is not configured": "Harness is not configured",
-  "Configure the external Harness here. Editing config.json is only a fallback.": "Configure the external Harness here. Editing config.json is only a fallback.",
-  "Environment variables override part of this Harness configuration. Saved file values remain in place, but the override wins at launch time.": "Environment variables override part of this Harness configuration. Saved file values remain in place, but the override wins at launch time.",
+  "Configure the external Harness here. Editing config.json is only a fallback.":
+    "Configure the external Harness here. Editing config.json is only a fallback.",
+  "Environment variables override part of this Harness configuration. Saved file values remain in place, but the override wins at launch time.":
+    "Environment variables override part of this Harness configuration. Saved file values remain in place, but the override wins at launch time.",
   "Automatic detection": "Automatic detection",
-  "The Agent remains usable as a control plane until an external Harness is configured.": "The Agent remains usable as a control plane until an external Harness is configured.",
+  "The Agent remains usable as a control plane until an external Harness is configured.":
+    "The Agent remains usable as a control plane until an external Harness is configured.",
   "Edit configuration": "Edit configuration",
-  "Automatic detection is preferred. Select a detected Harness or use manual configuration below.": "Automatic detection is preferred. Select a detected Harness or use manual configuration below.",
+  "Automatic detection is preferred. Select a detected Harness or use manual configuration below.":
+    "Automatic detection is preferred. Select a detected Harness or use manual configuration below.",
   "Detect Harness": "Detect Harness",
   "Detecting Harness installations...": "Detecting Harness installations...",
   "Detected candidates": "Detected candidates",
   "No Harness candidates found": "No Harness candidates found",
-  "No installation was found in the bounded local search paths. You can still specify a path or command manually.": "No installation was found in the bounded local search paths. You can still specify a path or command manually.",
+  "No installation was found in the bounded local search paths. You can still specify a path or command manually.":
+    "No installation was found in the bounded local search paths. You can still specify a path or command manually.",
   "Harness detection failed: {message}": "Harness detection failed: {message}",
   "Use this Harness": "Use this Harness",
   "Use this Harness: {name}": "Use this Harness: {name}",
   "Selected": "Selected",
   "Choose a Harness installation": "Choose a Harness installation",
-  "Multiple Harness installations were found. Choose one before saving.": "Multiple Harness installations were found. Choose one before saving.",
-  "A candidate is selected. You can change it before saving.": "A candidate is selected. You can change it before saving.",
+  "Multiple Harness installations were found. Choose one before saving.":
+    "Multiple Harness installations were found. Choose one before saving.",
+  "A candidate is selected. You can change it before saving.":
+    "A candidate is selected. You can change it before saving.",
   "Close candidate picker": "Close candidate picker",
   "Manual configuration": "Manual configuration",
   "Launch mode": "Launch mode",
   "Direct executable": "Direct executable",
   "Node runtime": "Node runtime",
-  "Select how the external Harness is started. Direct runs the executable or command; Node runs the selected entry through the Node runtime.": "Select how the external Harness is started. Direct runs the executable or command; Node runs the selected entry through the Node runtime.",
+  "Select how the external Harness is started. Direct runs the executable or command; Node runs the selected entry through the Node runtime.":
+    "Select how the external Harness is started. Direct runs the executable or command; Node runs the selected entry through the Node runtime.",
   "Node executable": "Node executable",
   "Node executable path or command": "Node executable path or command",
   "Harness entry": "Harness entry",
   "Harness entry script or package": "Harness entry script or package",
   "Node project directory": "Node project directory",
   "Node arguments": "Node arguments",
-  "Arguments passed to the Node Harness entry, one per line. Use {profile}, {release}, or {release_root} when needed.": "Arguments passed to the Node Harness entry, one per line. Use {profile}, {release}, or {release_root} when needed.",
+  "Arguments passed to the Node Harness entry, one per line. Use {profile}, {release}, or {release_root} when needed.":
+    "Arguments passed to the Node Harness entry, one per line. Use {profile}, {release}, or {release_root} when needed.",
   "Detected": "Detected",
   "Path": "Path",
   "Entry": "Entry",
@@ -1072,7 +1372,8 @@ const english: Record<string, string> = {
   "PATH": "PATH",
   "Local search": "Local search",
   "No version reported": "No version reported",
-  "Run a scan to refresh the local candidate list.": "Run a scan to refresh the local candidate list.",
+  "Run a scan to refresh the local candidate list.":
+    "Run a scan to refresh the local candidate list.",
   "Program path or command": "Program path or command",
   "Agent default": "Agent default",
   "Program": "Program",
@@ -1080,12 +1381,16 @@ const english: Record<string, string> = {
   "Readiness URL": "Readiness URL",
   "Readiness URL example": "http://127.0.0.1:3080/",
   "Arguments": "Arguments",
-  "One argument per line. Use {profile}, {release}, or {release_root} when needed.": "One argument per line. Use {profile}, {release}, or {release_root} when needed.",
+  "One argument per line. Use {profile}, {release}, or {release_root} when needed.":
+    "One argument per line. Use {profile}, {release}, or {release_root} when needed.",
   "Optional": "Optional",
   "Readiness timeout (seconds)": "Readiness timeout (seconds)",
-  "Require a fresh Harness token before accepting readiness": "Require a fresh Harness token before accepting readiness",
-  "Enable this for token-protected Harness services. A listener alone is not enough; the Agent must observe a fresh URL in its current Harness log session.": "Enable this for token-protected Harness services. A listener alone is not enough; the Agent must observe a fresh URL in its current Harness log session.",
-  "This Agent does not advertise the explicit Node Harness configuration contract. Update Agent before saving Node mode.": "This Agent does not advertise the explicit Node Harness configuration contract. Update Agent before saving Node mode.",
+  "Require a fresh Harness token before accepting readiness":
+    "Require a fresh Harness token before accepting readiness",
+  "Enable this for token-protected Harness services. A listener alone is not enough; the Agent must observe a fresh URL in its current Harness log session.":
+    "Enable this for token-protected Harness services. A listener alone is not enough; the Agent must observe a fresh URL in its current Harness log session.",
+  "This Agent does not advertise the explicit Node Harness configuration contract. Update Agent before saving Node mode.":
+    "This Agent does not advertise the explicit Node Harness configuration contract. Update Agent before saving Node mode.",
   "Leave blank to use the Agent default.": "Leave blank to use the Agent default.",
   "Save configuration": "Save configuration",
   "Clear configuration": "Clear configuration",
@@ -1093,30 +1398,42 @@ const english: Record<string, string> = {
   "A program path is required.": "A program path is required.",
   "A Harness entry is required for Node mode.": "A Harness entry is required for Node mode.",
   "Readiness URL must be an HTTP loopback URL.": "Readiness URL must be an HTTP loopback URL.",
-  "Readiness target must be an HTTP or TCP loopback URL.": "Readiness target must be an HTTP or TCP loopback URL.",
+  "Readiness target must be an HTTP or TCP loopback URL.":
+    "Readiness target must be an HTTP or TCP loopback URL.",
   "Node mode requires a Node runtime executable.": "Node mode requires a Node runtime executable.",
-  "Readiness target must use HTTP or TCP loopback.": "Readiness target must use HTTP or TCP loopback.",
+  "Readiness target must use HTTP or TCP loopback.":
+    "Readiness target must use HTTP or TCP loopback.",
   "TCP readiness targets cannot contain a path.": "TCP readiness targets cannot contain a path.",
   "TCP readiness targets cannot contain a query.": "TCP readiness targets cannot contain a query.",
   "Readiness targets cannot contain a fragment.": "Readiness targets cannot contain a fragment.",
-  "TCP readiness targets require an explicit port.": "TCP readiness targets require an explicit port.",
+  "TCP readiness targets require an explicit port.":
+    "TCP readiness targets require an explicit port.",
   "Readiness target must include a host.": "Readiness target must include a host.",
   "Readiness target has an invalid port or host.": "Readiness target has an invalid port or host.",
   "Readiness target must use a loopback host.": "Readiness target must use a loopback host.",
-  "Token-bound readiness requires a readiness URL.": "Token-bound readiness requires a readiness URL.",
-  "Use an HTTP loopback URL for a 2xx check, or tcp://127.0.0.1:PORT when the Harness protects its page with authentication.": "Use an HTTP loopback URL for a 2xx check, or tcp://127.0.0.1:PORT when the Harness protects its page with authentication.",
+  "Token-bound readiness requires a readiness URL.":
+    "Token-bound readiness requires a readiness URL.",
+  "Use an HTTP loopback URL for a 2xx check, or tcp://127.0.0.1:PORT when the Harness protects its page with authentication.":
+    "Use an HTTP loopback URL for a 2xx check, or tcp://127.0.0.1:PORT when the Harness protects its page with authentication.",
   "Timeout must be a positive integer.": "Timeout must be a positive integer.",
-  "Existing sensitive arguments are hidden. Enable replacement before saving.": "Existing sensitive arguments are hidden. Enable replacement before saving.",
+  "Existing sensitive arguments are hidden. Enable replacement before saving.":
+    "Existing sensitive arguments are hidden. Enable replacement before saving.",
   "Replace hidden arguments": "Replace hidden arguments",
   "Replace hidden arguments before saving.": "Replace hidden arguments before saving.",
-  "Stop Harness before changing its launch configuration.": "Stop Harness before changing its launch configuration.",
-  "Remove the Harness launch configuration? Harness must be stopped first.": "Remove the Harness launch configuration? Harness must be stopped first.",
-  "Harness is not configured. Open Settings to configure it.": "Harness is not configured. Open Settings to configure it.",
-  "Harness must be stopped before changing its configuration.": "Harness must be stopped before changing its configuration.",
+  "Stop Harness before changing its launch configuration.":
+    "Stop Harness before changing its launch configuration.",
+  "Remove the Harness launch configuration? Harness must be stopped first.":
+    "Remove the Harness launch configuration? Harness must be stopped first.",
+  "Harness is not configured. Open Settings to configure it.":
+    "Harness is not configured. Open Settings to configure it.",
+  "Harness must be stopped before changing its configuration.":
+    "Harness must be stopped before changing its configuration.",
   "Update configuration": "Update configuration",
-  "Environment variables override part of this update configuration.": "Environment variables override part of this update configuration.",
+  "Environment variables override part of this update configuration.":
+    "Environment variables override part of this update configuration.",
   "Updates are not configured": "Updates are not configured",
-  "Release metadata and current runtime remain available without an update source.": "Release metadata and current runtime remain available without an update source.",
+  "Release metadata and current runtime remain available without an update source.":
+    "Release metadata and current runtime remain available without an update source.",
   "Ref": "Ref",
   "Git program": "Git program",
   "Native integration": "Native integration",
@@ -1127,26 +1444,32 @@ const english: Record<string, string> = {
   "API transport": "API transport",
   "Rust loopback proxy": "Rust loopback proxy",
   "Runtime status": "Runtime status",
-  "Runtime status is checked manually. It never downloads or installs tools.": "Runtime status is checked manually. It never downloads or installs tools.",
+  "Runtime status is checked manually. It never downloads or installs tools.":
+    "Runtime status is checked manually. It never downloads or installs tools.",
   "Manual check": "Manual check",
   "Check runtime": "Check runtime",
   "Refresh runtime status": "Refresh runtime status",
   "Checking runtime...": "Checking runtime...",
   "Reading the Agent runtime status.": "Reading the Agent runtime status.",
   "Runtime status not checked": "Runtime status not checked",
-  "Click Check runtime to inspect Git, Node, and pnpm.": "Click Check runtime to inspect Git, Node, and pnpm.",
+  "Click Check runtime to inspect Git, Node, and pnpm.":
+    "Click Check runtime to inspect Git, Node, and pnpm.",
   "Runtime tools": "Runtime tools",
   "API {version}": "API {version}",
   "Unavailable": "Unavailable",
-  "The Agent is unavailable. Reconnect the Agent before checking runtime status.": "The Agent is unavailable. Reconnect the Agent before checking runtime status.",
+  "The Agent is unavailable. Reconnect the Agent before checking runtime status.":
+    "The Agent is unavailable. Reconnect the Agent before checking runtime status.",
   "Runtime status unavailable": "Runtime status unavailable",
   "Runtime status request failed: {message}": "Runtime status request failed: {message}",
   "Runtime status response is invalid.": "Runtime status response is invalid.",
-  "Runtime tool was not found. Install it or configure its path, then retry.": "Runtime tool was not found. Install it or configure its path, then retry.",
-  "Corepack shim could not be verified; pnpm status cannot be confirmed.": "Corepack shim could not be verified; pnpm status cannot be confirmed.",
+  "Runtime tool was not found. Install it or configure its path, then retry.":
+    "Runtime tool was not found. Install it or configure its path, then retry.",
+  "Corepack shim could not be verified; pnpm status cannot be confirmed.":
+    "Corepack shim could not be verified; pnpm status cannot be confirmed.",
   "This runtime could not be verified.": "This runtime could not be verified.",
   "No runtime tools reported": "No runtime tools reported",
-  "The Agent returned no tool entries to display.": "The Agent returned no tool entries to display.",
+  "The Agent returned no tool entries to display.":
+    "The Agent returned no tool entries to display.",
   "Git": "Git",
   "Node": "Node",
   "pnpm": "pnpm",
@@ -1154,18 +1477,23 @@ const english: Record<string, string> = {
   "Nexus source": "Nexus",
   "Recovery": "Recovery",
   "Manual / Recovery": "Manual / Recovery",
-  "Manual recovery remains available when Harness is unhealthy or cannot start.": "Manual recovery remains available when Harness is unhealthy or cannot start.",
-  "Recovery status is unavailable. Refresh to retry.": "Recovery status is unavailable. Refresh to retry.",
+  "Manual recovery remains available when Harness is unhealthy or cannot start.":
+    "Manual recovery remains available when Harness is unhealthy or cannot start.",
+  "Recovery status is unavailable. Refresh to retry.":
+    "Recovery status is unavailable. Refresh to retry.",
   "Reconnect the Agent to use recovery actions.": "Reconnect the Agent to use recovery actions.",
-  "Harness must be stopped before profile, plugin, or rollback changes. Diagnostics remain available.": "Harness must be stopped before profile, plugin, or rollback changes. Diagnostics remain available.",
+  "Harness must be stopped before profile, plugin, or rollback changes. Diagnostics remain available.":
+    "Harness must be stopped before profile, plugin, or rollback changes. Diagnostics remain available.",
   "Stop Harness": "Stop Harness",
   "Plugins": "Plugins",
   "Rollback": "Rollback",
   "Native profiles": "Native profiles",
   "Plugin inventory": "Plugin inventory",
-  "Built-in plugins belong to profile bundles. Only packages marked removable can be removed.": "Built-in plugins belong to profile bundles. Only packages marked removable can be removed.",
+  "Built-in plugins belong to profile bundles. Only packages marked removable can be removed.":
+    "Built-in plugins belong to profile bundles. Only packages marked removable can be removed.",
   "No plugins reported": "No plugins reported",
-  "Select a valid native profile to inspect its inventory.": "Select a valid native profile to inspect its inventory.",
+  "Select a valid native profile to inspect its inventory.":
+    "Select a valid native profile to inspect its inventory.",
   "Built-in": "Built-in",
   "Removable": "Removable",
   "Protected": "Protected",
@@ -1183,15 +1511,19 @@ const english: Record<string, string> = {
   "Manual recovery collection": "Manual recovery collection",
   "Bounded redacted log tail": "Bounded redacted log tail",
   "No recovery log tail": "No recovery log tail",
-  "No current Nexus-owned Harness log session is available.": "No current Nexus-owned Harness log session is available.",
+  "No current Nexus-owned Harness log session is available.":
+    "No current Nexus-owned Harness log session is available.",
   "Log truncated by the Agent response limit.": "Log truncated by the Agent response limit.",
-  "Select an existing manifest-backed profile. Profile creation and deletion are unavailable in this release.": "Select an existing manifest-backed profile. Profile creation and deletion are unavailable in this release.",
-  "Stop Harness before switching profiles or removing plugins.": "Stop Harness before switching profiles or removing plugins.",
+  "Select an existing manifest-backed profile. Profile creation and deletion are unavailable in this release.":
+    "Select an existing manifest-backed profile. Profile creation and deletion are unavailable in this release.",
+  "Stop Harness before switching profiles or removing plugins.":
+    "Stop Harness before switching profiles or removing plugins.",
   "No valid native profiles": "No valid native profiles",
   "Only valid profile manifests are selectable.": "Only valid profile manifests are selectable.",
   "Profile selection": "Profile selection",
   "Select": "Select",
-  "Manual checkpoints contain a bounded redacted snapshot. Legacy entries restore selection metadata only.": "Manual checkpoints contain a bounded redacted snapshot. Legacy entries restore selection metadata only.",
+  "Manual checkpoints contain a bounded redacted snapshot. Legacy entries restore selection metadata only.":
+    "Manual checkpoints contain a bounded redacted snapshot. Legacy entries restore selection metadata only.",
   "Healthy snapshot capture failed": "Healthy snapshot capture failed",
   "Pending restore": "Pending restore",
   "State": "State",
@@ -1211,8 +1543,10 @@ const english: Record<string, string> = {
   "No snapshot files": "No snapshot files",
   "No bounded file content was returned.": "No bounded file content was returned.",
   "Redacted fields": "Redacted fields",
-  "Content truncated by the Agent response limit.": "Content truncated by the Agent response limit.",
-  "Cold switches are asynchronous and never start Harness automatically.": "Cold switches test an isolated profile first; the working profile is not started automatically.",
+  "Content truncated by the Agent response limit.":
+    "Content truncated by the Agent response limit.",
+  "Cold switches are asynchronous and never start Harness automatically.":
+    "Cold switches test an isolated profile first; the working profile is not started automatically.",
   "Runtime settings": "Runtime settings",
   "Official": "Official",
   "Install mode": "Install mode",
@@ -1221,10 +1555,14 @@ const english: Record<string, string> = {
   "pin": "pin",
   "Not pinned": "Not pinned",
   "Save runtime settings": "Save runtime settings",
-  "Harness must be positively stopped before saving runtime settings.": "Harness must be positively stopped before saving runtime settings.",
-  "Wait for the update to become idle before saving runtime settings.": "Wait for the update to become idle before saving runtime settings.",
-  "Wait for the cold switch to finish before saving runtime settings.": "Wait for the cold switch to finish before saving runtime settings.",
-  "Retry cold cleanup before saving runtime settings.": "Retry cold cleanup before saving runtime settings.",
+  "Harness must be positively stopped before saving runtime settings.":
+    "Harness must be positively stopped before saving runtime settings.",
+  "Wait for the update to become idle before saving runtime settings.":
+    "Wait for the update to become idle before saving runtime settings.",
+  "Wait for the cold switch to finish before saving runtime settings.":
+    "Wait for the cold switch to finish before saving runtime settings.",
+  "Retry cold cleanup before saving runtime settings.":
+    "Retry cold cleanup before saving runtime settings.",
   "Cleanup error": "Cleanup error",
   "Owner quiescent": "Owner quiescent",
   "Cleanup pending": "Cleanup pending",
@@ -1235,44 +1573,59 @@ const english: Record<string, string> = {
   "Confirm runtime supply plan": "Confirm runtime supply plan",
   "Destination": "Destination",
   "Plan ID": "Plan ID",
-  "System mode may show an installer or elevation prompt and can require restart verification.": "System mode may show an installer or elevation prompt and can require restart verification.",
-  "Portable mode writes only to the Nexus-owned runtime destination.": "Portable mode writes only to the Nexus-owned runtime destination.",
+  "System mode may show an installer or elevation prompt and can require restart verification.":
+    "System mode may show an installer or elevation prompt and can require restart verification.",
+  "Portable mode writes only to the Nexus-owned runtime destination.":
+    "Portable mode writes only to the Nexus-owned runtime destination.",
   "Confirm cold switch": "Confirm cold switch",
   "Confirm exact plan": "Confirm exact plan",
-  "A successful cold switch registers and promotes its immutable slot without starting Harness.": "A successful cold switch registers and promotes its immutable slot without starting Harness.",
+  "A successful cold switch registers and promotes its immutable slot without starting Harness.":
+    "A successful cold switch registers and promotes its immutable slot without starting Harness.",
   "Snapshot inventory": "Snapshot inventory",
   "No snapshots reported": "No snapshots reported",
-  "Healthy and manual snapshots appear here after capture.": "Healthy and manual snapshots appear here after capture.",
+  "Healthy and manual snapshots appear here after capture.":
+    "Healthy and manual snapshots appear here after capture.",
   "files": "files",
   "System effects": "System effects",
   "No credentials leave this device": "No credentials leave this device",
-  "The Agent API is not responding on its loopback port.": "The Agent API is not responding on its loopback port.",
+  "The Agent API is not responding on its loopback port.":
+    "The Agent API is not responding on its loopback port.",
   "Set NEXUS_AGENT_BIN or build the Rust Agent.": "Set NEXUS_AGENT_BIN or build the Rust Agent.",
-  "Launcher controls are disabled until the Agent identity is verified.": "Launcher controls are disabled until the Agent identity is verified.",
+  "Launcher controls are disabled until the Agent identity is verified.":
+    "Launcher controls are disabled until the Agent identity is verified.",
   "The native bridge returned an unknown error": "The native bridge returned an unknown error",
   "Backend error: {message}": "Backend error: {message}",
   "Native bridge": "Native bridge",
 };
 
 const chinese: Record<string, string> = {
-  "Version prepared only. Your current selection is unchanged. Select the prepared version in Release slots to review the rollback warning and confirm a manual switch.": "新版本已准备，当前版本保持不变。请在版本列表选择新版本，阅读回滚风险后确认手动切换。",
-  "There is no verified rollback version. Switch manually to {version} anyway? If it fails, automatic rollback will be unavailable. Harness will stay stopped.": "当前没有已验证的回滚版本。仍要手动切换到 {version} 吗？如果新版本失败，将无法自动回滚。Harness 会保持停止。",
+  "Version prepared only. Your current selection is unchanged. Select the prepared version in Release slots to review the rollback warning and confirm a manual switch.":
+    "新版本已准备，当前版本保持不变。请在版本列表选择新版本，阅读回滚风险后确认手动切换。",
+  "There is no verified rollback version. Switch manually to {version} anyway? If it fails, automatic rollback will be unavailable. Harness will stay stopped.":
+    "当前没有已验证的回滚版本。仍要手动切换到 {version} 吗？如果新版本失败，将无法自动回滚。Harness 会保持停止。",
   "Credential conflicts": "凭据冲突处理",
   "Keep existing local credentials": "保留已有本地凭据",
   "Replace with package credentials": "使用包中凭据替换",
   "Credential recovery record": "凭据恢复记录",
-  "Some incoming configuration values were not applied to preserve your local credentials. To use the package values, review the credential conflict option before importing again.": "为保留本地凭据，部分包内配置值未被应用。如需使用包内值，请检查凭据冲突选项后重新导入。",
-  "This archive is not encrypted. Replacing credentials changes the accounts used by this environment. Original files remain in the previous data directory; a recovery record identifies them.": "归档未加密。替换凭据会改变此环境使用的账号。原文件保留在原数据目录，恢复记录会列明其位置。",
-  "This archive is not encrypted and includes account credentials. Anyone who can read it can use those accounts, including recipients of a shared-folder copy.": "归档未加密，包含账号凭据。任何能读取它的人都可能使用这些账号，包括共享目录中的接收方。",
-  "Original credential files remain in the previous data directory. The record lists their locations; stop Harness before restoring them.": "原凭据文件仍保留在原数据目录，记录中列明了文件位置。恢复前请停止 Harness。",
+  "Some incoming configuration values were not applied to preserve your local credentials. To use the package values, review the credential conflict option before importing again.":
+    "为保留本地凭据，部分包内配置值未被应用。如需使用包内值，请检查凭据冲突选项后重新导入。",
+  "This archive is not encrypted. Replacing credentials changes the accounts used by this environment. Original files remain in the previous data directory; a recovery record identifies them.":
+    "归档未加密。替换凭据会改变此环境使用的账号。原文件保留在原数据目录，恢复记录会列明其位置。",
+  "This archive is not encrypted and includes account credentials. Anyone who can read it can use those accounts, including recipients of a shared-folder copy.":
+    "归档未加密，包含账号凭据。任何能读取它的人都可能使用这些账号，包括共享目录中的接收方。",
+  "Original credential files remain in the previous data directory. The record lists their locations; stop Harness before restoring them.":
+    "原凭据文件仍保留在原数据目录，记录中列明了文件位置。恢复前请停止 Harness。",
   "Select this profile before creating a checkpoint.": "请先选择此配置档，再创建检查点。",
   "Import": "导入",
   "Export": "导出",
-  "Choose a package, read its contents, then select what to import. No dependency downloads or builds are needed.": "选择运行包，读取清单后勾选要导入的内容。无需下载依赖或构建。",
-  "Select what to export, then choose where to save the package. Program and runtime are optional.": "勾选要导出的内容，再选择保存位置。可单独迁移数据，无需携带程序与运行时。",
+  "Choose a package, read its contents, then select what to import. No dependency downloads or builds are needed.":
+    "选择运行包，读取清单后勾选要导入的内容。无需下载依赖或构建。",
+  "Select what to export, then choose where to save the package. Program and runtime are optional.":
+    "勾选要导出的内容，再选择保存位置。可单独迁移数据，无需携带程序与运行时。",
   "Plugins belong to the selected profiles.": "插件随所选配置档一起迁移。",
   "Choose contents to import": "选择导入内容",
-  "Only selected contents are applied. Unselected local data and the previous data directory are preserved.": "仅应用勾选内容，保留未选中的本地数据和原数据目录。",
+  "Only selected contents are applied. Unselected local data and the previous data directory are preserved.":
+    "仅应用勾选内容，保留未选中的本地数据和原数据目录。",
   "Recent activity": "最近日志",
   "Resolve issue": "处理问题",
   "View progress": "查看进度",
@@ -1283,21 +1636,30 @@ const chinese: Record<string, string> = {
   "Shared environment settings": "环境配置（settings.yaml 等）",
   "Session history and attachments": "会话记录与附件",
   "Account credentials and .env": "账号凭据与 .env",
-  "Choose exactly what to transfer. Program and runtime are optional; profiles, environment settings and sessions can be transferred separately. Import needs no dependency downloads or builds.": "勾选需要迁移的内容。程序与运行时为可选项，配置档、环境配置和会话可单独迁移。导入无需下载依赖或构建。",
-  "Session messages and associated storage are copied unchanged and may contain private content. Project files are not included.": "会话消息及关联存储按原样复制，可能包含私人内容；不包含项目文件。",
-  "Data-only transfer keeps the target program and runtime. Unselected local data is retained; the previous data directory is preserved.": "仅迁移数据时，保留接收方的程序与运行时，以及未选择的本地数据；原数据目录仍会保留。",
-  "Data import completed. Your program and runtime are unchanged.": "数据导入完成，程序与运行时保持不变。",
+  "Choose exactly what to transfer. Program and runtime are optional; profiles, environment settings and sessions can be transferred separately. Import needs no dependency downloads or builds.":
+    "勾选需要迁移的内容。程序与运行时为可选项，配置档、环境配置和会话可单独迁移。导入无需下载依赖或构建。",
+  "Session messages and associated storage are copied unchanged and may contain private content. Project files are not included.":
+    "会话消息及关联存储按原样复制，可能包含私人内容；不包含项目文件。",
+  "Data-only transfer keeps the target program and runtime. Unselected local data is retained; the previous data directory is preserved.":
+    "仅迁移数据时，保留接收方的程序与运行时，以及未选择的本地数据；原数据目录仍会保留。",
+  "Data import completed. Your program and runtime are unchanged.":
+    "数据导入完成，程序与运行时保持不变。",
   "Yes": "是",
   "Choose save location": "选择保存位置",
   "Additional export contents": "额外导出内容",
-  "Select profiles to include. Leave all unchecked for a runtime-only package.": "勾选要携带的配置档。不勾选时只导出基础运行包。",
+  "Select profiles to include. Leave all unchecked for a runtime-only package.":
+    "勾选要携带的配置档。不勾选时只导出基础运行包。",
   "Profile and shared configuration": "配置档与共享配置",
   "Installed plugins and complete dependencies": "已安装插件及完整依赖",
   "Include account credentials and .env": "携带账号凭据及 .env",
-  "The package will contain account credentials. Share it only with recipients who may use those accounts.": "运行包将包含账号凭据，请仅交给有权使用这些账号的接收者。",
-  "Recognized key, password and token fields are excluded. Custom plugin configuration may use other names; review it before sharing.": "排除可识别的密钥、密码和令牌字段。自定义插件可能使用其他字段名称，分享前请检查其配置。",
-  "Conversation history and project files are not included. Import keeps the previous data directory and activates a separate imported environment.": "不包含对话历史和项目文件。导入会保留原数据目录，并启用独立的导入环境。",
-  "Packages include a built Windows x64 Harness and complete Node/npm/pnpm runtime. Optionally include selected profiles, installed plugins and credentials. Import needs no dependency downloads or builds.": "运行包包含已构建的 Windows x64 Harness 和完整 Node/npm/pnpm 运行时，可额外携带所选配置档、插件与凭据。导入无需下载依赖或构建。",
+  "The package will contain account credentials. Share it only with recipients who may use those accounts.":
+    "运行包将包含账号凭据，请仅交给有权使用这些账号的接收者。",
+  "Recognized key, password and token fields are excluded. Custom plugin configuration may use other names; review it before sharing.":
+    "排除可识别的密钥、密码和令牌字段。自定义插件可能使用其他字段名称，分享前请检查其配置。",
+  "Conversation history and project files are not included. Import keeps the previous data directory and activates a separate imported environment.":
+    "不包含对话历史和项目文件。导入会保留原数据目录，并启用独立的导入环境。",
+  "Packages include a built Windows x64 Harness and complete Node/npm/pnpm runtime. Optionally include selected profiles, installed plugins and credentials. Import needs no dependency downloads or builds.":
+    "运行包包含已构建的 Windows x64 Harness 和完整 Node/npm/pnpm 运行时，可额外携带所选配置档、插件与凭据。导入无需下载依赖或构建。",
   "Preparing package": "准备运行包",
   "Scanning Harness files": "扫描 Harness 文件",
   "Scanning runtime files": "扫描运行时文件",
@@ -1322,7 +1684,8 @@ const chinese: Record<string, string> = {
   "Reading package contents": "正在读取包内清单",
   "Read package contents": "读取包内清单",
   "Package contents": "包内清单",
-  "This is the package manifest. Every file is verified during import before activation.": "此处显示运行包声明的内容。导入时会逐一校验文件，通过后才启用。",
+  "This is the package manifest. Every file is verified during import before activation.":
+    "此处显示运行包声明的内容。导入时会逐一校验文件，通过后才启用。",
   "cold_switch": "安装或切换版本",
   "harness_restart": "重启 Harness",
   "rollback": "回退版本",
@@ -1343,38 +1706,52 @@ const chinese: Record<string, string> = {
   "Select all removable items": "全选可清理项",
   "No removable items in this category": "此分类暂无可清理项",
   "Appearance and display": "外观与显示",
-  "Move profile {name} to Deleted profiles? Its files are kept for restoration. Checkpoints and other profiles are unchanged.": "将配置档 {name} 移入“已删除配置档”？文件将保留以供还原，检查点和其他配置档不变。",
+  "Move profile {name} to Deleted profiles? Its files are kept for restoration. Checkpoints and other profiles are unchanged.":
+    "将配置档 {name} 移入“已删除配置档”？文件将保留以供还原，检查点和其他配置档不变。",
   "Delete profile": "删除配置档",
   "Delete": "删除",
-  "Select a profile to manage its checkpoints and plugins. Deleted profiles are kept for restoration; the current profile cannot be deleted.": "选择配置档以管理检查点和插件。删除后可还原，当前配置档不能删除。",
+  "Select a profile to manage its checkpoints and plugins. Deleted profiles are kept for restoration; the current profile cannot be deleted.":
+    "选择配置档以管理检查点和插件。删除后可还原，当前配置档不能删除。",
   "Deleted profiles": "已删除配置档",
-  "Deleting moves the complete profile into a local recovery folder. Close DSH terminals first. Restoring never overwrites an existing profile.": "删除后完整文件会保留在本地恢复目录中。请先关闭 DSH 终端，还原不会覆盖同名配置档。",
+  "Deleting moves the complete profile into a local recovery folder. Close DSH terminals first. Restoring never overwrites an existing profile.":
+    "删除后完整文件会保留在本地恢复目录中。请先关闭 DSH 终端，还原不会覆盖同名配置档。",
   "Restore deleted profile": "还原已删除配置档",
   "A profile with this name already exists": "已有同名配置档",
   "No deleted profiles": "暂无已删除配置档",
   "Restore Nexus records": "恢复 Nexus 记录",
-  "Choose a time and restore. This restores the active profile and known profile names only; Harness files, plugins and conversations are not changed.": "选择时间后恢复当前配置档选择和已知配置档名称，不改动 Harness 文件、插件或会话内容。",
+  "Choose a time and restore. This restores the active profile and known profile names only; Harness files, plugins and conversations are not changed.":
+    "选择时间后恢复当前配置档选择和已知配置档名称，不改动 Harness 文件、插件或会话内容。",
   "Recovery time": "恢复时间",
   "Choose a recovery time": "选择要恢复的时间",
-  "No valid recovery history is available. Nexus cannot restore a time that was never backed up.": "暂无有效的历史恢复点，无法恢复到尚未备份过的时间。",
-  "The current record is backed up first. Harness remains stopped after recovery.": "恢复前自动备份当前记录，恢复后 Harness 保持停止。",
+  "No valid recovery history is available. Nexus cannot restore a time that was never backed up.":
+    "暂无有效的历史恢复点，无法恢复到尚未备份过的时间。",
+  "The current record is backed up first. Harness remains stopped after recovery.":
+    "恢复前自动备份当前记录，恢复后 Harness 保持停止。",
   "Restore with one click": "一键恢复",
   "Nexus record restored. Harness has not been started.": "Nexus 记录已恢复，Harness 未启动。",
   "Harness could not be stopped. No record was restored.": "未能停止 Harness，尚未恢复任何记录。",
-  "Record restored. Agent restart failed; retry restarting Agent.": "记录已恢复，但 Agent 重启失败，请重试重启 Agent。",
+  "Record restored. Agent restart failed; retry restarting Agent.":
+    "记录已恢复，但 Agent 重启失败，请重试重启 Agent。",
   "Technical details": "技术详情",
   "{count} profiles": "{count} 个配置档",
-  "Profile arguments are managed automatically. Select the profile in Configuration and plugins.": "配置档参数由 Nexus 自动管理，请在“配置与插件”中选择配置档。",
+  "Profile arguments are managed automatically. Select the profile in Configuration and plugins.":
+    "配置档参数由 Nexus 自动管理，请在“配置与插件”中选择配置档。",
   "Save startup parameters": "保存启动参数",
   "Advanced startup parameters": "高级启动参数",
-  "Current version is unverified. This reference describes 0.1.2-rc.1; automatic suggestions are disabled.": "当前版本尚未验证。此说明对应 0.1.2-rc.1，暂不自动建议参数。",
-  "Reference verified for Harness 0.1.2-rc.1. Profile-specific arguments may differ.": "此说明已按 Harness 0.1.2-rc.1 核对，不同配置档的参数可能不同。",
+  "Current version is unverified. This reference describes 0.1.2-rc.1; automatic suggestions are disabled.":
+    "当前版本尚未验证。此说明对应 0.1.2-rc.1，暂不自动建议参数。",
+  "Reference verified for Harness 0.1.2-rc.1. Profile-specific arguments may differ.":
+    "此说明已按 Harness 0.1.2-rc.1 核对，不同配置档的参数可能不同。",
   "Show the version and exit.": "显示版本后退出。",
   "Show command help and exit.": "显示命令帮助后退出。",
-  "Print the default configuration and exit; do not use for service startup.": "输出默认配置后退出，不用于服务启动。",
-  "Print the composed configuration and exit; do not use for service startup.": "输出合成配置后退出，不用于服务启动。",
-  "Use Runtime configuration patches for ordering, caching and failure protection.": "请使用“运行配置补丁”，以保留顺序、缓存和失败阻断保护。",
-  "Selected in Configuration and plugins; added automatically.": "在“配置与插件”选择配置档，由 Nexus 自动添加。",
+  "Print the default configuration and exit; do not use for service startup.":
+    "输出默认配置后退出，不用于服务启动。",
+  "Print the composed configuration and exit; do not use for service startup.":
+    "输出合成配置后退出，不用于服务启动。",
+  "Use Runtime configuration patches for ordering, caching and failure protection.":
+    "请使用“运行配置补丁”，以保留顺序、缓存和失败阻断保护。",
+  "Selected in Configuration and plugins; added automatically.":
+    "在“配置与插件”选择配置档，由 Nexus 自动添加。",
   "Do not open a browser; prefer the browser setting.": "不自动打开浏览器。建议使用浏览器开关。",
   "Listening port; prefer the Web port setting.": "监听端口。建议在 Web 端口设置中填写。",
   "Terminal only": "仅用于终端",
@@ -1385,7 +1762,8 @@ const chinese: Record<string, string> = {
   "Argument": "参数",
   "Argument reference": "启动参数说明",
   "Switch back to Nexus-managed Harness": "改用 Nexus 管理的版本",
-  "Choose a version and install it with the bundled runtime, or select an already built local directory.": "选择版本后使用内置运行时完成安装，或者选择已经构建好的本地目录。",
+  "Choose a version and install it with the bundled runtime, or select an already built local directory.":
+    "选择版本后使用内置运行时完成安装，或者选择已经构建好的本地目录。",
   "Choose version and install": "选择版本并安装",
   "Use this external Harness": "使用此外部 Harness",
   "Stop Harness before changing its program source.": "请先停止 Harness，再切换程序来源。",
@@ -1396,9 +1774,12 @@ const chinese: Record<string, string> = {
   "Loaded {count} tags": "已加载 {count} 个标签",
   "Save the upstream address before loading tags.": "请先保存上游地址，再拉取标签。",
   "Install or select a Harness version before continuing.": "请先安装或选择 Harness 版本。",
-  "Harness is installed. Continue in Workbench to check and start it.": "Harness 已安装。请前往工作台检查并启动。",
-  "The selected external program is used directly. Nexus does not install or build its files.": "直接使用已选择的外部程序。Nexus 不会安装或构建其中的文件。",
-  "Data paths and the program source are managed in Settings. The default runtime is bundled; an external Harness must already be built.": "数据目录和程序来源在设置中管理。默认使用内置运行时；外部 Harness 须由用户提前构建完成。",
+  "Harness is installed. Continue in Workbench to check and start it.":
+    "Harness 已安装。请前往工作台检查并启动。",
+  "The selected external program is used directly. Nexus does not install or build its files.":
+    "直接使用已选择的外部程序。Nexus 不会安装或构建其中的文件。",
+  "Data paths and the program source are managed in Settings. The default runtime is bundled; an external Harness must already be built.":
+    "数据目录和程序来源在设置中管理。默认使用内置运行时；外部 Harness 须由用户提前构建完成。",
   "Open Workbench": "前往工作台",
   "Previous step": "上一步",
   "Next step": "下一步",
@@ -1406,57 +1787,69 @@ const chinese: Record<string, string> = {
   "Finish setup": "完成引导",
   "Install Harness": "安装 Harness",
   "Preparation": "准备",
-  "Prepare your settings, install a version, then continue in Workbench.": "确认设置、安装版本，完成后前往工作台使用。",
+  "Prepare your settings, install a version, then continue in Workbench.":
+    "确认设置、安装版本，完成后前往工作台使用。",
   "Install Harness step by step": "分步安装 Harness",
-"Recovery artifact ID":"恢复产物 ID",
-"Recovery files were created, but the latest index could not be updated. Keep the artifact ID to reopen them.":"恢复文件已生成，但最新索引无法更新。请保留产物 ID，以便再次打开。",
-"Unreadable or unsupported diagnostic record was preserved":"无法读取或不支持的诊断记录已保留",
-"Checking startup inputs":"正在检查启动条件",
-"Checking startup compatibility":"正在检查启动兼容性",
-"Creating Harness process; use Stop after startup":"正在创建 Harness 进程；启动后请使用停止",
-"Startup cancelled. The previous instance is not restarted automatically.":"启动已取消。不会自动重启之前的实例。",
-"Startup preparation failed":"启动准备失败",
-"Cancellation requested; waiting for checks to stop safely":"已请求取消，正在等待检查安全退出",
-"Cancel startup":"取消启动",
+  "Recovery artifact ID": "恢复产物 ID",
+  "Recovery files were created, but the latest index could not be updated. Keep the artifact ID to reopen them.":
+    "恢复文件已生成，但最新索引无法更新。请保留产物 ID，以便再次打开。",
+  "Unreadable or unsupported diagnostic record was preserved": "无法读取或不支持的诊断记录已保留",
+  "Checking startup inputs": "正在检查启动条件",
+  "Checking startup compatibility": "正在检查启动兼容性",
+  "Creating Harness process; use Stop after startup": "正在创建 Harness 进程；启动后请使用停止",
+  "Startup cancelled. The previous instance is not restarted automatically.":
+    "启动已取消。不会自动重启之前的实例。",
+  "Startup preparation failed": "启动准备失败",
+  "Cancellation requested; waiting for checks to stop safely": "已请求取消，正在等待检查安全退出",
+  "Cancel startup": "取消启动",
 
-"More recovery records":"更多恢复记录",
-"Configured command: {program}":"已配置命令：{program}",
-"After reopening Nexus, inspect and select an existing backup to continue verification. No files are replaced automatically.":"重开 Nexus 后，检查并选择已有备份继续核对。系统不会自动替换文件。",
-"Recovery record listing is incomplete. Additional or unsupported records remain protected.":"恢复记录列表未完整显示，其他或不支持的记录仍受保护。",
-"Existing recovery backups":"已有恢复备份",
-"Continue verification":"继续核对",
-"Unsupported or unreadable record is preserved.":"不支持或无法读取的记录已保留。",
+  "More recovery records": "更多恢复记录",
+  "Configured command: {program}": "已配置命令：{program}",
+  "After reopening Nexus, inspect and select an existing backup to continue verification. No files are replaced automatically.":
+    "重开 Nexus 后，检查并选择已有备份继续核对。系统不会自动替换文件。",
+  "Recovery record listing is incomplete. Additional or unsupported records remain protected.":
+    "恢复记录列表未完整显示，其他或不支持的记录仍受保护。",
+  "Existing recovery backups": "已有恢复备份",
+  "Continue verification": "继续核对",
+  "Unsupported or unreadable record is preserved.": "不支持或无法读取的记录已保留。",
   "Active program source": "当前启动程序来源",
-  "Preparing a version slot does not change the active external program source.": "准备版本槽不会改变当前外部程序来源。",
+  "Preparing a version slot does not change the active external program source.":
+    "准备版本槽不会改变当前外部程序来源。",
   "Choose program source in Settings": "在设置中选择程序来源",
   "Prepare this version slot": "准备此版本槽",
   "Prepared slot": "已准备的版本槽",
   "Install a managed version": "安装 Nexus 管理的版本",
   "Use an already built directory": "使用已构建的目录",
-  "Your drafts are retained. Return after fixing the issue to run the check again.": "草稿已保留。修复后返回，即可重新检查。",
+  "Your drafts are retained. Return after fixing the issue to run the check again.":
+    "草稿已保留。修复后返回，即可重新检查。",
   "Return and recheck": "返回并重新检查",
   "Open the relevant repair page": "打开对应修复页面",
-  "Stop Harness explicitly before running diagnostics. Your selection and settings are kept.": "请先手动停止 Harness 再运行诊断，版本选择和设置会保留。",
+  "Stop Harness explicitly before running diagnostics. Your selection and settings are kept.":
+    "请先手动停止 Harness 再运行诊断，版本选择和设置会保留。",
   "Stop Harness for diagnostics": "停止 Harness 后诊断",
   "Return to Workbench": "返回工作站",
-  "Version-slot operation accepted. The external program source remains active.": "已接受版本槽操作，当前仍使用外部程序来源。",
+  "Version-slot operation accepted. The external program source remains active.":
+    "已接受版本槽操作，当前仍使用外部程序来源。",
 
-"Backup prepared. Replacement is a manual step; recheck file evidence afterwards.": "备份已生成。替换需手工完成，之后请重新核对文件。",
-"Artifact path": "恢复文件路径",
-"Recheck recovery files": "重新核对恢复文件",
-"Replacement matches. Restart Nexus to verify Agent health.": "原件已匹配替代文件。请重启 Nexus 验证 Agent 状态。",
-"Original is unchanged. Manual replacement remains pending.": "原件尚未变化，仍待手工替换。",
-"Original changed or is unreadable. Inspect again before replacement.": "原件已变化或无法读取，请重新检查后再替换。",
-"{seconds} seconds": "{seconds} 秒",
-"Patch cache": "补丁缓存",
-"Private recovery backups (protected)": "私有恢复备份（受保护）",
-"Patch preview or download is active; cache is protected": "补丁预览或下载正在进行，缓存受保护",
-"Configuration transaction protects patch cache": "配置事务保护补丁缓存",
-"Snapshots may reference patch cache; retained conservatively": "快照可能引用补丁缓存，保守保留",
-"Unrecognized patch cache file is preserved": "无法识别的补丁缓存文件已保留",
-"Current or previous configuration references this patch": "当前或上一份配置引用此补丁",
-"Patch cache content identity does not match": "补丁缓存内容标识不匹配",
-"Patch references could not be verified; cache is protected": "无法验证补丁引用，缓存受保护",
+  "Backup prepared. Replacement is a manual step; recheck file evidence afterwards.":
+    "备份已生成。替换需手工完成，之后请重新核对文件。",
+  "Artifact path": "恢复文件路径",
+  "Recheck recovery files": "重新核对恢复文件",
+  "Replacement matches. Restart Nexus to verify Agent health.":
+    "原件已匹配替代文件。请重启 Nexus 验证 Agent 状态。",
+  "Original is unchanged. Manual replacement remains pending.": "原件尚未变化，仍待手工替换。",
+  "Original changed or is unreadable. Inspect again before replacement.":
+    "原件已变化或无法读取，请重新检查后再替换。",
+  "{seconds} seconds": "{seconds} 秒",
+  "Patch cache": "补丁缓存",
+  "Private recovery backups (protected)": "私有恢复备份（受保护）",
+  "Patch preview or download is active; cache is protected": "补丁预览或下载正在进行，缓存受保护",
+  "Configuration transaction protects patch cache": "配置事务保护补丁缓存",
+  "Snapshots may reference patch cache; retained conservatively": "快照可能引用补丁缓存，保守保留",
+  "Unrecognized patch cache file is preserved": "无法识别的补丁缓存文件已保留",
+  "Current or previous configuration references this patch": "当前或上一份配置引用此补丁",
+  "Patch cache content identity does not match": "补丁缓存内容标识不匹配",
+  "Patch references could not be verified; cache is protected": "无法验证补丁引用，缓存受保护",
   "Selected Harness program source": "已选 Harness 程序来源",
   "Select Harness source": "选择 Harness 来源",
   "Harness program source": "Harness 程序来源",
@@ -1465,8 +1858,10 @@ const chinese: Record<string, string> = {
   "External Harness directory": "外部 Harness 目录",
   "Confirm external directory": "确认外部目录",
   "Use installed version slots": "使用已安装版本槽",
-  "Nexus reads an already built Harness directory. It does not install, build, update, copy or remove that program. Harness and plugins retain their normal system permissions.": "Nexus 只读取已经构建好的 Harness 目录，不安装、编译、更新、复制或删除该程序。Harness 和插件仍拥有正常的系统权限。",
-  "Directory identity, file names, sizes and modification times are checked, with content hashes for key manifests and the CLI entry. Ordinary changes require confirmation again; this is not supply-chain authentication.": "检查目录身份、文件名称、大小及修改时间，并校验关键清单和 CLI 入口的内容摘要。常规修改后需要重新确认；这不是供应链身份认证。",
+  "Nexus reads an already built Harness directory. It does not install, build, update, copy or remove that program. Harness and plugins retain their normal system permissions.":
+    "Nexus 只读取已经构建好的 Harness 目录，不安装、编译、更新、复制或删除该程序。Harness 和插件仍拥有正常的系统权限。",
+  "Directory identity, file names, sizes and modification times are checked, with content hashes for key manifests and the CLI entry. Ordinary changes require confirmation again; this is not supply-chain authentication.":
+    "检查目录身份、文件名称、大小及修改时间，并校验关键清单和 CLI 入口的内容摘要。常规修改后需要重新确认；这不是供应链身份认证。",
   "Recent Canary diagnostics": "近期 Canary 诊断",
   "Checking copy space": "正在检查复制空间",
   "Copying and probing": "正在复制并探测",
@@ -1476,9 +1871,11 @@ const chinese: Record<string, string> = {
   "All enabled third-party plugins": "全部已启用第三方插件",
   "No third-party plugins": "不含第三方插件",
 
-  "No previous content is available for comparison. The preview shows candidate content, not a verified set of additions.": "没有可比较的旧内容。这里展示候选内容，不代表这些内容全部是新增修改。",
+  "No previous content is available for comparison. The preview shows candidate content, not a verified set of additions.":
+    "没有可比较的旧内容。这里展示候选内容，不代表这些内容全部是新增修改。",
   "Preview valid for {seconds} more seconds": "预览还有 {seconds} 秒有效",
-  "This patch preview has expired. Preview again before applying.": "补丁预览已过期，请重新预览后应用。",
+  "This patch preview has expired. Preview again before applying.":
+    "补丁预览已过期，请重新预览后应用。",
   "Passed": "通过",
   "Reproduced plugin combination": "已复现的插件组合",
   "{count} probe rounds": "已执行 {count} 轮探测",
@@ -1490,8 +1887,10 @@ const chinese: Record<string, string> = {
   "Runtime and launch": "运行时与启动",
   "Settings sections": "设置分类",
   "Canary diagnostics": "Canary 隔离诊断",
-  "Tests a temporary profile and home. Plugins still have system and network access. Stop Harness first.": "使用临时 profile 和数据目录测试。插件仍可访问系统和网络，请先停止 Harness。",
-  "Feature interactions are not verified. Results never disable plugins or modify the production profile.": "尚不验证具体功能交互。结果不会禁用插件或修改生产 profile。",
+  "Tests a temporary profile and home. Plugins still have system and network access. Stop Harness first.":
+    "使用临时 profile 和数据目录测试。插件仍可访问系统和网络，请先停止 Harness。",
+  "Feature interactions are not verified. Results never disable plugins or modify the production profile.":
+    "尚不验证具体功能交互。结果不会禁用插件或修改生产 profile。",
   "Run isolated diagnostic": "运行隔离诊断",
   "Find failing plugin combination": "定位失败插件组合",
   "Cancel and clean up": "取消并清理",
@@ -1499,27 +1898,37 @@ const chinese: Record<string, string> = {
   "Canary report and original errors": "Canary 报告及原始错误",
 
   "Record backup and repair guidance": "记录备份与修复指引",
-  "This wizard creates private backups and replacement files only. It never overwrites the original record automatically.": "此向导仅生成私有备份和替代文件，不会自动覆盖原记录。",
+  "This wizard creates private backups and replacement files only. It never overwrites the original record automatically.":
+    "此向导仅生成私有备份和替代文件，不会自动覆盖原记录。",
   "Inspect recovery records": "检查恢复记录",
   "Active profile name": "当前 profile 名称",
   "Known profile names, one per line": "已知 profile 名称，每行一个",
   "Back up original record": "备份原记录",
   "Prepare validated replacement": "生成已验证的替代文件",
-  "Original record was not replaced. Keep the private backup; it may contain sensitive information.": "原记录未被替换。请保留私有备份，其中可能包含敏感信息。",
+  "Original record was not replaced. Keep the private backup; it may contain sensitive information.":
+    "原记录未被替换。请保留私有备份，其中可能包含敏感信息。",
   "Original record": "原记录",
   "Private backup": "私有备份",
   "Original SHA256": "原文件 SHA256",
   "Validated replacement file": "已验证的替代文件",
-  "Manual final step: stop Nexus and Harness, confirm the original SHA256 still matches, then copy the replacement file over the original path. If it changed, inspect again. Reopen Nexus and verify the active profile. Keep the backup; other damaged records may still need repair.": "最后一步需手动完成：停止 Nexus 和 Harness，确认原文件 SHA256 仍一致，再将替代文件复制到原路径。原文件若已变化，请重新检查。重新打开 Nexus 后核对当前 profile，并保留备份；其他损坏记录可能仍需修复。",
-  "This record contains runtime or version evidence. Only backup is offered; repair it with diagnostics assistance.": "此记录包含运行或版本证据，仅提供备份，请结合诊断协助修复。",
-  "Future or unknown formats cannot be reset. Use a compatible Nexus version or repair the original format.": "未来或未知格式不能重置。请使用兼容的 Nexus 版本，或修复原格式。",
-  "Process or transaction ownership is unresolved. Finish recovery before preparing a replacement.": "尚未确认进程或事务已结束。请先完成恢复，再生成替代文件。",
-  "This record is missing, unreadable, linked or too large. No backup or replacement was made.": "此记录缺失、不可读、属于链接或超过大小限制，未生成备份或替代文件。",
-  "A validated profile catalog can be prepared. Harness profile files are never changed.": "可生成经过验证的 profile 名称目录，Harness 的 profile 文件不会被修改。",
+  "Manual final step: stop Nexus and Harness, confirm the original SHA256 still matches, then copy the replacement file over the original path. If it changed, inspect again. Reopen Nexus and verify the active profile. Keep the backup; other damaged records may still need repair.":
+    "最后一步需手动完成：停止 Nexus 和 Harness，确认原文件 SHA256 仍一致，再将替代文件复制到原路径。原文件若已变化，请重新检查。重新打开 Nexus 后核对当前 profile，并保留备份；其他损坏记录可能仍需修复。",
+  "This record contains runtime or version evidence. Only backup is offered; repair it with diagnostics assistance.":
+    "此记录包含运行或版本证据，仅提供备份，请结合诊断协助修复。",
+  "Future or unknown formats cannot be reset. Use a compatible Nexus version or repair the original format.":
+    "未来或未知格式不能重置。请使用兼容的 Nexus 版本，或修复原格式。",
+  "Process or transaction ownership is unresolved. Finish recovery before preparing a replacement.":
+    "尚未确认进程或事务已结束。请先完成恢复，再生成替代文件。",
+  "This record is missing, unreadable, linked or too large. No backup or replacement was made.":
+    "此记录缺失、不可读、属于链接或超过大小限制，未生成备份或替代文件。",
+  "A validated profile catalog can be prepared. Harness profile files are never changed.":
+    "可生成经过验证的 profile 名称目录，Harness 的 profile 文件不会被修改。",
   "Agent is online in read-only recovery": "Agent 在线，已进入只读恢复模式",
-  "Choose a valid recovery time to restore Nexus records. If no supported recovery point is available, export diagnostics. Normal editing and Harness startup remain blocked.": "选择有效的恢复时间以恢复 Nexus 记录；没有受支持的恢复点时，请导出诊断。常规编辑和 Harness 启动仍被阻止。",
+  "Choose a valid recovery time to restore Nexus records. If no supported recovery point is available, export diagnostics. Normal editing and Harness startup remain blocked.":
+    "选择有效的恢复时间以恢复 Nexus 记录；没有受支持的恢复点时，请导出诊断。常规编辑和 Harness 启动仍被阻止。",
   "No server receipt found": "未找到服务器记录",
-  "A local retry reference exists, but no server receipt was found. This does not prove the operation never ran. Inspect the current version and Recovery before allowing a new attempt.": "本地存在重试引用，但未找到服务器记录。这不代表操作从未执行。允许新尝试前，请检查当前版本和恢复状态。",
+  "A local retry reference exists, but no server receipt was found. This does not prove the operation never ran. Inspect the current version and Recovery before allowing a new attempt.":
+    "本地存在重试引用，但未找到服务器记录。这不代表操作从未执行。允许新尝试前，请检查当前版本和恢复状态。",
 
   "Runtime configuration patches": "运行配置补丁",
   "Apply previewed patches": "应用已预览补丁",
@@ -1528,7 +1937,8 @@ const chinese: Record<string, string> = {
   "More references": "更多引用",
   "Preview remote patch update": "预览远程补丁更新",
   "Patch update preview": "补丁更新预览",
-  "Preview downloads candidates but does not save settings. Apply uses these exact cached files without downloading again. Changes are a bounded, redacted line comparison; unchanged or sensitive text may be omitted.": "预览会下载候选文件，但不保存设置。确认应用时使用这些缓存文件，不会再次下载。差异为有长度限制的脱敏逐行对比，未变更或敏感内容可能省略。",
+  "Preview downloads candidates but does not save settings. Apply uses these exact cached files without downloading again. Changes are a bounded, redacted line comparison; unchanged or sensitive text may be omitted.":
+    "预览会下载候选文件，但不保存设置。确认应用时使用这些缓存文件，不会再次下载。差异为有长度限制的脱敏逐行对比，未变更或敏感内容可能省略。",
   "Previous SHA256": "原 SHA256",
   "Candidate SHA256": "候选 SHA256",
   "Preview truncated": "预览已截断",
@@ -1541,8 +1951,10 @@ const chinese: Record<string, string> = {
   "Branch": "分支",
   "Tag": "标签",
   "Commit": "提交",
-  "Branches and tags are resolved only when you download explicitly. Startup uses the cached commit without contacting GitHub. After a patch failure, disable it and save before retrying. With patches enabled, automatic browser opening is suppressed; open Harness after its health check passes.": "只有主动下载时才解析分支或标签。启动使用本地缓存，不访问 GitHub。补丁失败后，请禁用它并保存，再重试。启用补丁时不会自动打开浏览器；请在健康检查通过后打开 Harness。",
-  "Applied from top to bottom after the profile configuration. Later patches act on the result of earlier patches. Save and restart Harness to apply changes.": "在 profile 配置之后按从上到下顺序应用，后面的补丁作用于前面补丁处理后的结果。保存并重启 Harness 后生效。",
+  "Branches and tags are resolved only when you download explicitly. Startup uses the cached commit without contacting GitHub. After a patch failure, disable it and save before retrying. With patches enabled, automatic browser opening is suppressed; open Harness after its health check passes.":
+    "只有主动下载时才解析分支或标签。启动使用本地缓存，不访问 GitHub。补丁失败后，请禁用它并保存，再重试。启用补丁时不会自动打开浏览器；请在健康检查通过后打开 Harness。",
+  "Applied from top to bottom after the profile configuration. Later patches act on the result of earlier patches. Save and restart Harness to apply changes.":
+    "在 profile 配置之后按从上到下顺序应用，后面的补丁作用于前面补丁处理后的结果。保存并重启 Harness 后生效。",
   "Local absolute path or HTTPS / GitHub file URL": "本地绝对路径或 HTTPS / GitHub 文件地址",
   "Cached SHA256": "缓存 SHA256",
   "Not downloaded": "尚未下载",
@@ -1550,35 +1962,50 @@ const chinese: Record<string, string> = {
   "Remove patch entry": "移除补丁项",
   "Add patch": "添加补丁",
   "Download enabled remote patches and save": "下载已启用的远程补丁并保存",
-  "Remote patches are cached locally and never downloaded at startup. Preview downloads candidates; only Apply saves this draft. Failed downloads retain the previous configuration and block affected enabled patches. Only self-contained UTF-8 files up to 1 MiB are supported; relative remote file dependencies are not downloaded.": "远程补丁缓存到本地，启动时不联网。预览下载候选，只有确认应用才保存草稿。下载失败保留原配置并阻断受影响的启用补丁。仅支持最大 1 MiB 的独立 UTF-8 文件，不下载相对依赖。",
-  "This checks plugin loading only. Browser commands, panels and interactions have not been verified.": "此检查仅验证插件加载，尚未验证浏览器中的命令、面板和交互功能。",
-  "structured redaction failed; file omitted to avoid unsafe byte copying": "结构化脱敏失败；为避免不安全的字节复制，未收录此文件。",
-  "invalid YAML; file omitted to avoid unsafe byte copying": "YAML 无效；为避免不安全的字节复制，未收录此文件。",
-  "invalid JSON; file omitted to avoid unsafe byte copying": "JSON 无效；为避免不安全的字节复制，未收录此文件。",
-  "Content truncated at {file} bytes per file and {response} bytes per response.": "内容已截断：每个文件上限 {file} 字节，每次响应上限 {response} 字节。",
+  "Remote patches are cached locally and never downloaded at startup. Preview downloads candidates; only Apply saves this draft. Failed downloads retain the previous configuration and block affected enabled patches. Only self-contained UTF-8 files up to 1 MiB are supported; relative remote file dependencies are not downloaded.":
+    "远程补丁缓存到本地，启动时不联网。预览下载候选，只有确认应用才保存草稿。下载失败保留原配置并阻断受影响的启用补丁。仅支持最大 1 MiB 的独立 UTF-8 文件，不下载相对依赖。",
+  "This checks plugin loading only. Browser commands, panels and interactions have not been verified.":
+    "此检查仅验证插件加载，尚未验证浏览器中的命令、面板和交互功能。",
+  "structured redaction failed; file omitted to avoid unsafe byte copying":
+    "结构化脱敏失败；为避免不安全的字节复制，未收录此文件。",
+  "invalid YAML; file omitted to avoid unsafe byte copying":
+    "YAML 无效；为避免不安全的字节复制，未收录此文件。",
+  "invalid JSON; file omitted to avoid unsafe byte copying":
+    "JSON 无效；为避免不安全的字节复制，未收录此文件。",
+  "Content truncated at {file} bytes per file and {response} bytes per response.":
+    "内容已截断：每个文件上限 {file} 字节，每次响应上限 {response} 字节。",
   "node_program": "Node 启动程序",
   "Harness data (protected)": "Harness 数据（受保护）",
-  "Choose a different port or stop the application using this port.": "请选择其他端口，或停止占用此端口的应用。",
-  "Confirm this is the current Harness listener before restarting.": "重启前请确认该监听地址属于当前 Harness。",
+  "Choose a different port or stop the application using this port.":
+    "请选择其他端口，或停止占用此端口的应用。",
+  "Confirm this is the current Harness listener before restarting.":
+    "重启前请确认该监听地址属于当前 Harness。",
   "The current Harness session owns this same listener.": "该监听地址属于当前 Harness 会话。",
   "Correct the launch readiness address in Settings.": "请在设置中修正启动就绪检查地址。",
   "Check the emitted Web UI address after startup.": "请在启动后查看实际输出的 Web 界面地址。",
-  "No fixed listener is declared; Harness chooses it at startup.": "未指定固定监听地址；由 Harness 在启动时选择。",
+  "No fixed listener is declared; Harness chooses it at startup.":
+    "未指定固定监听地址；由 Harness 在启动时选择。",
   "Custom command: package-manager checks are not required.": "自定义命令：无需检查包管理器。",
   "Correct the Node launch program.": "请修正 Node 启动程序。",
-  "Select a complete Node runtime or reinstall Harness.": "请选择完整的 Node 运行时或重新安装 Harness。",
+  "Select a complete Node runtime or reinstall Harness.":
+    "请选择完整的 Node 运行时或重新安装 Harness。",
   "The configured Node launch program is missing.": "配置的 Node 启动程序不存在。",
   "Verify custom listener ownership separately.": "请另行确认自定义监听地址所属的服务。",
-  "Custom command: its readiness endpoint may belong to an external service.": "自定义命令：就绪检查地址可能属于外部服务。",
-  "Custom command: Harness profile checks are not applied.": "自定义命令：不执行 Harness 配置档检查。",
+  "Custom command: its readiness endpoint may belong to an external service.":
+    "自定义命令：就绪检查地址可能属于外部服务。",
+  "Custom command: Harness profile checks are not applied.":
+    "自定义命令：不执行 Harness 配置档检查。",
   "Repair the selected profile directory.": "请修复所选配置档目录。",
   "Repair the profile manifest or select another profile.": "请修复配置档清单或选择其他配置档。",
-  "First startup initializes supported built-in profiles. For a custom profile, create it in Profiles first.": "首次启动会初始化受支持的内置配置档；自定义配置档请先在配置档页面创建。",
+  "First startup initializes supported built-in profiles. For a custom profile, create it in Profiles first.":
+    "首次启动会初始化受支持的内置配置档；自定义配置档请先在配置档页面创建。",
   "Correct the launch working directory.": "请修正启动工作目录。",
   "Repair the selected version or launch working directory.": "请修复所选版本或启动工作目录。",
   "Select a usable version or correct the launch path.": "请选择可用版本或修正启动路径。",
-  "Reinstall the selected version or correct the launch path.": "请重新安装所选版本或修正启动路径。",
-  "Clear unsupported overrides in Settings or select a verified Harness version and profile.": "请在设置中清除不支持的覆盖项，或选择已验证的 Harness 版本和配置档。",
+  "Reinstall the selected version or correct the launch path.":
+    "请重新安装所选版本或修正启动路径。",
+  "Clear unsupported overrides in Settings or select a verified Harness version and profile.":
+    "请在设置中清除不支持的覆盖项，或选择已验证的 Harness 版本和配置档。",
   "Correct the invalid Harness setting.": "请修正无效的 Harness 设置。",
   "Repair the selected version or launch paths.": "请修复所选版本或启动路径。",
   "Custom command; no version slot required.": "使用自定义命令；无需版本槽。",
@@ -1588,25 +2015,31 @@ const chinese: Record<string, string> = {
   "Install or select a Harness version.": "请安装或选择 Harness 版本。",
   "No Harness launch command is configured.": "尚未配置 Harness 启动命令。",
   "Choose a valid Harness data directory in Settings.": "请在设置中选择有效的 Harness 数据目录。",
-  "Choose an accessible ordinary directory in Settings; no data is moved.": "请在设置中选择可访问的普通目录；不会移动数据。",
+  "Choose an accessible ordinary directory in Settings; no data is moved.":
+    "请在设置中选择可访问的普通目录；不会移动数据。",
   "Repair the profile selection.": "请修复配置档选择。",
   "Repair Nexus settings.": "请修复 Nexus 设置。",
   "Export diagnostics before retrying installation.": "请先导出诊断，再重试安装。",
-  "Retry cancellation or restart Agent to reconcile installation.": "请重试取消，或重启 Agent 以恢复安装状态。",
+  "Retry cancellation or restart Agent to reconcile installation.":
+    "请重试取消，或重启 Agent 以恢复安装状态。",
   "Installation publication or cleanup is pending.": "版本启用或安装清理尚未完成。",
   "Export diagnostics and repair the restore record.": "请导出诊断并修复恢复记录。",
   "No checkpoint restore is pending.": "没有待处理的检查点恢复。",
   "Retry or abort the pending restore in Checkpoints.": "请在检查点中重试或中止待处理的恢复。",
   "A checkpoint restore transaction is pending.": "有检查点恢复事务尚未完成。",
-  "Repair settings and run checks, then leave recovery mode before starting.": "请修复设置并运行检查，再退出恢复模式后启动。",
+  "Repair settings and run checks, then leave recovery mode before starting.":
+    "请修复设置并运行检查，再退出恢复模式后启动。",
   "Harness startup is paused in recovery mode.": "恢复模式已暂停 Harness 启动。",
   "Export diagnostics and repair the recovery mode record.": "请导出诊断并修复恢复模式记录。",
-  "Select a complete runtime in Settings or reinstall the bundled runtime.": "请在设置中选择完整运行时，或重新安装内置运行时。",
+  "Select a complete runtime in Settings or reinstall the bundled runtime.":
+    "请在设置中选择完整运行时，或重新安装内置运行时。",
   "Retry the check; export diagnostics if it fails again.": "请重试检查；若仍失败，请导出诊断。",
   "{address} is currently available": "{address} 当前可用",
-  "parent access verified; directories will be created at startup": "已验证父目录权限；启动时将创建目录",
+  "parent access verified; directories will be created at startup":
+    "已验证父目录权限；启动时将创建目录",
   "read/write access verified": "已验证读写权限",
-  "not initialized; the selected Harness must provide its built-in profile.": "尚未初始化；所选 Harness 必须提供该内置配置档。",
+  "not initialized; the selected Harness must provide its built-in profile.":
+    "尚未初始化；所选 Harness 必须提供该内置配置档。",
   "initialized": "已初始化",
   "Native and PTC tools (both)": "原生与 PTC 工具（both）",
   "PTC tools (ptc)": "PTC 工具（ptc）",
@@ -1619,7 +2052,8 @@ const chinese: Record<string, string> = {
   "Recent diagnostics and the last failure are retained": "保留近期诊断和最近一次故障诊断",
   "Within the log retention period": "仍在日志保留期内",
   "Current or recent failure logs are retained": "保留当前会话及近期故障日志",
-  "Referenced by the configured runtime or Harness launch path": "被运行时配置或 Harness 启动路径引用",
+  "Referenced by the configured runtime or Harness launch path":
+    "被运行时配置或 Harness 启动路径引用",
   "Current, rollback, or recovery version": "当前、回退或恢复所需的版本",
   "Harness home (protected)": "Harness 数据目录（受保护）",
   "Agent program file": "Agent 程序文件",
@@ -1628,7 +2062,8 @@ const chinese: Record<string, string> = {
   "Operation and recovery records": "操作与恢复记录",
   "Unrecognized recovery record is preserved": "无法识别的恢复记录已保留",
   "Current operation recovery record is protected": "当前操作的恢复记录受到保护",
-  "Recent recovery records and records within retention are preserved": "保留最近的恢复记录及保留期限内的记录",
+  "Recent recovery records and records within retention are preserved":
+    "保留最近的恢复记录及保留期限内的记录",
   "Logs": "日志",
   "Downloads (protected)": "下载文件（受保护）",
   "Bundled runtimes": "内置运行时",
@@ -1644,55 +2079,76 @@ const chinese: Record<string, string> = {
   "Present": "已收录",
   "Removed": "已删除",
   "Deleting": "正在删除",
-  "Cleanup preview is scanning in the background. Its saved result will appear automatically; no files are being removed.": "清理预览正在后台扫描，完成后会自动显示已保存的结果；当前不会删除文件。",
+  "Cleanup preview is scanning in the background. Its saved result will appear automatically; no files are being removed.":
+    "清理预览正在后台扫描，完成后会自动显示已保存的结果；当前不会删除文件。",
   "Details": "详细信息",
-  "The previous operation may have changed data. Check the current version and Recovery first. Allow a new attempt with a new request reference?": "上次操作可能已改变数据。请先检查当前版本和恢复状态。是否允许以新请求编号重新尝试？",
-  "The retry reference was cleared. The recorded operation and its data were not changed.": "已清除本地重试引用，原操作记录和数据保持不变。",
+  "The previous operation may have changed data. Check the current version and Recovery first. Allow a new attempt with a new request reference?":
+    "上次操作可能已改变数据。请先检查当前版本和恢复状态。是否允许以新请求编号重新尝试？",
+  "The retry reference was cleared. The recorded operation and its data were not changed.":
+    "已清除本地重试引用，原操作记录和数据保持不变。",
   "Recent operation requests": "最近操作请求",
-  "After a timeout, the same request checks its original receipt instead of repeating the operation. Accepted installations still have their own progress.": "请求超时后，重试会查询原操作回执。安装请求被接纳后，仍需查看安装进度。",
+  "After a timeout, the same request checks its original receipt instead of repeating the operation. Accepted installations still have their own progress.":
+    "请求超时后，重试会查询原操作回执。安装请求被接纳后，仍需查看安装进度。",
   "Check previous requests": "查询之前的请求",
   "Completed": "已完成",
-  "The original request was accepted. Check the operation for its final result.": "原请求已接纳，请查看操作进度确认最终结果。",
+  "The original request was accepted. Check the operation for its final result.":
+    "原请求已接纳，请查看操作进度确认最终结果。",
   "Allow a new attempt": "允许重新尝试",
   "Catching up": "正在处理积压",
   "Limited": "受到限制",
   "Current log storage": "当前日志占用",
-  "Old log contents are reclaimed while keeping the recent failure tail and session access. Logical file size can keep growing; allocated size is the actual disk space used.": "回收旧日志内容，保留最近故障尾部和会话入口。逻辑文件长度可能继续增长；实际分配量才是磁盘占用。",
-  "Log scanning is catching up. Unscanned contents are kept until they can be processed safely.": "正在追赶日志扫描进度。未扫描的内容会保留，直到能够安全处理。",
-  "Some logs could not be reclaimed safely. Original logs are kept; export diagnostics to inspect the limitation.": "部分日志无法安全回收，已保留原内容。可导出诊断查看限制原因。",
+  "Old log contents are reclaimed while keeping the recent failure tail and session access. Logical file size can keep growing; allocated size is the actual disk space used.":
+    "回收旧日志内容，保留最近故障尾部和会话入口。逻辑文件长度可能继续增长；实际分配量才是磁盘占用。",
+  "Log scanning is catching up. Unscanned contents are kept until they can be processed safely.":
+    "正在追赶日志扫描进度。未扫描的内容会保留，直到能够安全处理。",
+  "Some logs could not be reclaimed safely. Original logs are kept; export diagnostics to inspect the limitation.":
+    "部分日志无法安全回收，已保留原内容。可导出诊断查看限制原因。",
   "Allocated: {allocated}; logical: {logical}": "实际占用：{allocated}；逻辑长度：{logical}",
   "Waiting to scan: {size}": "等待扫描：{size}",
-  "The original request is still running. Check its progress before retrying.": "原请求仍在执行，请先查看进度。",
-  "The original request already completed; it was not run again.": "原请求已经完成，本次没有重复执行。",
+  "The original request is still running. Check its progress before retrying.":
+    "原请求仍在执行，请先查看进度。",
+  "The original request already completed; it was not run again.":
+    "原请求已经完成，本次没有重复执行。",
   "Original error": "原始错误",
-  "A Harness dependency requires native build tools. Keep the original error below when seeking upstream help, or choose another Harness version.": "Harness 的某个依赖需要原生构建工具。向上游求助时请保留下面的原始错误，也可以选择其他 Harness 版本。",
-  "Configuration changed elsewhere. Your draft is retained. Cancel edits to load the saved values before trying again.": "配置已在其他窗口或命令行中修改。你的草稿仍保留；请先取消编辑以载入已保存的值，再重新修改。",
-  "Harness startup is paused. Repair the profile in Recovery, then check it before starting.": "Harness 启动已暂停。请在恢复页面修复 profile，检查通过后再启动。",
-  "Runtime settings apply to the next Harness launch and dependency operation. Restore previous configuration can undo the last saved configuration.": "运行时设置用于下一次 Harness 启动和依赖操作。“恢复上一份配置”可撤销最近一次配置保存。",
+  "A Harness dependency requires native build tools. Keep the original error below when seeking upstream help, or choose another Harness version.":
+    "Harness 的某个依赖需要原生构建工具。向上游求助时请保留下面的原始错误，也可以选择其他 Harness 版本。",
+  "Configuration changed elsewhere. Your draft is retained. Cancel edits to load the saved values before trying again.":
+    "配置已在其他窗口或命令行中修改。你的草稿仍保留；请先取消编辑以载入已保存的值，再重新修改。",
+  "Harness startup is paused. Repair the profile in Recovery, then check it before starting.":
+    "Harness 启动已暂停。请在恢复页面修复 profile，检查通过后再启动。",
+  "Runtime settings apply to the next Harness launch and dependency operation. Restore previous configuration can undo the last saved configuration.":
+    "运行时设置用于下一次 Harness 启动和依赖操作。“恢复上一份配置”可撤销最近一次配置保存。",
 
   "Copy error": "复制错误",
   "Select the error text and copy it manually.": "请选择错误文本并手动复制。",
   "Check": "检查",
-  "Harness failed to start or crashed. Check the Overview page for details.": "Harness 启动失败或已崩溃。请查看工作站中的详细信息。",
+  "Harness failed to start or crashed. Check the Overview page for details.":
+    "Harness 启动失败或已崩溃。请查看工作站中的详细信息。",
   "Data and disk space": "数据与磁盘空间",
-  "Preview disk use and select old files to remove. Harness data, project files, recovery backups, and active versions are protected. No data is moved.": "预览磁盘占用并选择要删除的旧文件。Harness 数据、项目文件、恢复备份和使用中的版本会受到保护。不会移动数据。",
-  "Sizes are logical file sizes. Overlapping directories are shown separately and must not be added together. Unknown means inspection was incomplete.": "容量按文件逻辑大小统计。相互重叠的目录单独显示，请勿将其相加。“未知”表示检查未完成。",
+  "Preview disk use and select old files to remove. Harness data, project files, recovery backups, and active versions are protected. No data is moved.":
+    "预览磁盘占用并选择要删除的旧文件。Harness 数据、项目文件、恢复备份和使用中的版本会受到保护。不会移动数据。",
+  "Sizes are logical file sizes. Overlapping directories are shown separately and must not be added together. Unknown means inspection was incomplete.":
+    "容量按文件逻辑大小统计。相互重叠的目录单独显示，请勿将其相加。“未知”表示检查未完成。",
   "Keep logs and diagnostics for at least (days)": "日志与诊断至少保留（天）",
   "Working…": "处理中…",
   "Preview cleanup": "预览清理",
   "Refresh saved result": "刷新已保存的结果",
-  "This preview expires after 15 minutes. Changed files are preserved. Stop Harness before cleanup. The newest logs and latest failure diagnostics are always retained.": "预览在 15 分钟后过期。已发生变化的文件会保留。清理前请停止 Harness。最新日志和最近一次失败诊断始终保留。",
+  "This preview expires after 15 minutes. Changed files are preserved. Stop Harness before cleanup. The newest logs and latest failure diagnostics are always retained.":
+    "预览在 15 分钟后过期。已发生变化的文件会保留。清理前请停止 Harness。最新日志和最近一次失败诊断始终保留。",
   "No cleanup candidates": "没有可清理的文件",
-  "Unrecognized downloads and local recovery backups are preserved.": "无法识别的下载内容和本地恢复备份会保留。",
+  "Unrecognized downloads and local recovery backups are preserved.":
+    "无法识别的下载内容和本地恢复备份会保留。",
   "Can be removed": "可删除",
   "Remove selected files": "删除所选文件",
   "Last cleanup result": "上次清理结果",
   "No files selected": "未选择文件",
   "Save update source": "保存更新源",
   "Installation": "安装",
-  "Harness always runs in Node mode from the active release slot. The executable, entry, and profile wiring are managed by Nexus.": "Harness 始终以 Node 模式从当前版本运行。可执行程序、入口和 profile 参数由 Nexus 管理。",
+  "Harness always runs in Node mode from the active release slot. The executable, entry, and profile wiring are managed by Nexus.":
+    "Harness 始终以 Node 模式从当前版本运行。可执行程序、入口和 profile 参数由 Nexus 管理。",
   "Additional arguments": "附加参数",
-  "The profile argument always follows the active profile and is added automatically.": "profile 参数始终跟随当前 profile，并由系统自动添加。",
+  "The profile argument always follows the active profile and is added automatically.":
+    "profile 参数始终跟随当前 profile，并由系统自动添加。",
   "Value (optional)": "值（可选）",
   "Add argument": "添加参数",
   "Retry offline operation": "重试离线操作",
@@ -1700,17 +2156,23 @@ const chinese: Record<string, string> = {
   "Operation log and details": "操作日志与详情",
   "Operation output": "操作输出",
   "Package exported; cleanup required": "运行包已导出，仍需清理",
-  "The package was exported. The selected version is unchanged.": "运行包已导出，当前选中的版本未改变。",
-  "The package was exported. Temporary-file cleanup still needs attention.": "运行包已导出，临时文件清理仍需处理。",
-  "This is the saved result of the last offline package operation.": "这是最近一次离线运行包操作的保存结果。",
-  "Offline package request accepted. Follow the current stage to confirm completion.": "已接受离线运行包请求，请查看当前阶段确认是否完成。",
-  "Harness startup requested. Check its status and Web entry to confirm readiness.": "已请求启动 Harness，请查看运行状态和 Web 入口确认是否就绪。",
+  "The package was exported. The selected version is unchanged.":
+    "运行包已导出，当前选中的版本未改变。",
+  "The package was exported. Temporary-file cleanup still needs attention.":
+    "运行包已导出，临时文件清理仍需处理。",
+  "This is the saved result of the last offline package operation.":
+    "这是最近一次离线运行包操作的保存结果。",
+  "Offline package request accepted. Follow the current stage to confirm completion.":
+    "已接受离线运行包请求，请查看当前阶段确认是否完成。",
+  "Harness startup requested. Check its status and Web entry to confirm readiness.":
+    "已请求启动 Harness，请查看运行状态和 Web 入口确认是否就绪。",
   "Select the path and copy it manually.": "请选择路径并手动复制。",
   "Path copied": "路径已复制",
   "Copy path": "复制路径",
   "Archive path": "归档文件路径",
   "Exported package path": "已导出运行包路径",
-  "Choose a new file outside Nexus-managed data. Existing files are never overwritten. Export does not change the selected version.": "请选择 Nexus 管理的数据目录之外的新文件路径，不会覆盖已有文件。导出不会改变当前选中的版本。",
+  "Choose a new file outside Nexus-managed data. Existing files are never overwritten. Export does not change the selected version.":
+    "请选择 Nexus 管理的数据目录之外的新文件路径，不会覆盖已有文件。导出不会改变当前选中的版本。",
   "Export destination (full .tar.gz path)": "导出目标（完整 .tar.gz 路径）",
   "Select an installed version": "选择已安装版本",
   "Version to export": "待导出版本",
@@ -1718,31 +2180,44 @@ const chinese: Record<string, string> = {
   "Import package": "导入运行包",
   "Offline package export": "离线运行包导出",
   "Offline package import": "离线运行包导入",
-  "Import selects the verified version as current. Harness stays stopped; run startup checks before starting it.": "导入会将校验后的版本设为当前版本，Harness 保持停止。请先运行启动检查，再启动 Harness。",
-  "Only selected contents are imported. The current version changes only when program and runtime are selected. Harness stays stopped.": "仅导入勾选的内容；勾选程序与运行时时才会切换版本。导入后 Harness 保持停止。",
-  "Only selected data is imported. Program and runtime are unchanged. Harness stays stopped.": "仅导入勾选的数据，程序与运行时保持不变。导入后 Harness 保持停止。",
+  "Import selects the verified version as current. Harness stays stopped; run startup checks before starting it.":
+    "导入会将校验后的版本设为当前版本，Harness 保持停止。请先运行启动检查，再启动 Harness。",
+  "Only selected contents are imported. The current version changes only when program and runtime are selected. Harness stays stopped.":
+    "仅导入勾选的内容；勾选程序与运行时时才会切换版本。导入后 Harness 保持停止。",
+  "Only selected data is imported. Program and runtime are unchanged. Harness stays stopped.":
+    "仅导入勾选的数据，程序与运行时保持不变。导入后 Harness 保持停止。",
   "Package to import (full .tar.gz path)": "待导入运行包（完整 .tar.gz 路径）",
-  "Integrity checks detect damaged packages; they do not authenticate the publisher. Only import packages from sources you trust.": "完整性校验用于检测运行包损坏，不认证发布者身份。请仅导入来源可信的运行包。",
-  "A package contains a built Windows x64 Harness version and its complete Node/npm/pnpm runtime, without user data. Dependency installation and builds are not performed; version probes will run.": "运行包包含已构建的 Windows x64 Harness 版本及完整 Node/npm/pnpm 运行时，不含用户数据。不执行依赖安装或构建，但会运行版本探针。",
+  "Integrity checks detect damaged packages; they do not authenticate the publisher. Only import packages from sources you trust.":
+    "完整性校验用于检测运行包损坏，不认证发布者身份。请仅导入来源可信的运行包。",
+  "A package contains a built Windows x64 Harness version and its complete Node/npm/pnpm runtime, without user data. Dependency installation and builds are not performed; version probes will run.":
+    "运行包包含已构建的 Windows x64 Harness 版本及完整 Node/npm/pnpm 运行时，不含用户数据。不执行依赖安装或构建，但会运行版本探针。",
   "Import or export an offline package": "导入或导出离线运行包",
   "Offline packages": "离线运行包",
   "Undo plugin order": "撤销插件排序",
-  "Undo restores only the last saved plugin order. Removing a plugin requires reinstalling it; configuration snapshots do not restore deleted dependencies.": "撤销只恢复上一次保存的插件顺序。卸载插件后需要重新安装，配置快照不会恢复已删除的依赖。",
+  "Undo restores only the last saved plugin order. Removing a plugin requires reinstalling it; configuration snapshots do not restore deleted dependencies.":
+    "撤销只恢复上一次保存的插件顺序。卸载插件后需要重新安装，配置快照不会恢复已删除的依赖。",
 
   "Configuration recovery": "配置恢复",
-  "Retry the interrupted settings save, or keep the current valid configuration and previous backup exactly as they are. This does not repair invalid configuration files or start Harness.": "可以重试中断的配置保存，或原样保留当前有效配置和上一份备份并结束恢复。此操作不会修复无效配置文件，也不会启动 Harness。",
+  "Retry the interrupted settings save, or keep the current valid configuration and previous backup exactly as they are. This does not repair invalid configuration files or start Harness.":
+    "可以重试中断的配置保存，或原样保留当前有效配置和上一份备份并结束恢复。此操作不会修复无效配置文件，也不会启动 Harness。",
 
   "Publication recovery": "版本发布恢复",
   "Retry recovery": "重试恢复",
   "Keep current and end recovery": "保留当前并结束恢复",
-  "Retry interrupted publication, or keep current configuration and every existing version and candidate file. Keeping current ends this recovery without compiling or starting Harness. Retained candidate files are not automatically cleaned.": "可以重试中断的发布，或保留当前配置以及全部现有版本和候选文件并结束恢复。此操作不会编译或启动 Harness，保留的候选文件不会自动清理。",
+  "Retry interrupted publication, or keep current configuration and every existing version and candidate file. Keeping current ends this recovery without compiling or starting Harness. Retained candidate files are not automatically cleaned.":
+    "可以重试中断的发布，或保留当前配置以及全部现有版本和候选文件并结束恢复。此操作不会编译或启动 Harness，保留的候选文件不会自动清理。",
 
   "Verification pending": "待验证",
-  "Snapshot inventory refreshes after capture finishes. Existing snapshots have not been removed.": "采集结束后将刷新快照清单，现有快照没有被删除。",
-  "Saved capture result could not be read. Existing snapshots are unchanged.": "无法读取已保存的采集结果；现有快照不受影响。",
-  "Capture result could not be saved. This status may be lost after restarting Agent.": "无法保存采集结果；重启 Agent 后可能无法继续查看此状态。",
-  "Cleanup is incomplete. Open installation details to retry cleanup.": "清理尚未完成，请打开安装详情重试清理。",
-  "Restore requires attention. Open the recovery controls to continue or abort.": "恢复尚待处理，请打开恢复操作以继续或中止。",
+  "Snapshot inventory refreshes after capture finishes. Existing snapshots have not been removed.":
+    "采集结束后将刷新快照清单，现有快照没有被删除。",
+  "Saved capture result could not be read. Existing snapshots are unchanged.":
+    "无法读取已保存的采集结果；现有快照不受影响。",
+  "Capture result could not be saved. This status may be lost after restarting Agent.":
+    "无法保存采集结果；重启 Agent 后可能无法继续查看此状态。",
+  "Cleanup is incomplete. Open installation details to retry cleanup.":
+    "清理尚未完成，请打开安装详情重试清理。",
+  "Restore requires attention. Open the recovery controls to continue or abort.":
+    "恢复尚待处理，请打开恢复操作以继续或中止。",
   "Open operation details": "打开操作详情",
   "Partially failed": "部分失败",
   "Data cleanup": "数据清理",
@@ -1756,12 +2231,16 @@ const chinese: Record<string, string> = {
   "Installed version unavailable": "已安装版本不可用",
   "Cleanup required": "需要完成清理",
   "Cold switch": "版本安装与切换",
-  "Saved results remain visible until replaced or explicitly cleared. Open details to use the operation's recovery controls.": "保存的结果会保留，直到被新结果替换或明确清除。打开详情可使用对应的恢复操作。",
+  "Saved results remain visible until replaced or explicitly cleared. Open details to use the operation's recovery controls.":
+    "保存的结果会保留，直到被新结果替换或明确清除。打开详情可使用对应的恢复操作。",
   "Operation status": "操作状态",
   "Restore previous configuration": "恢复上一份配置",
-  "Restore the previous valid Nexus configuration? Harness will stay stopped.": "恢复上一份有效的 Nexus 配置？Harness 将保持停止。",
-  "Restores the previous valid Nexus settings without starting Harness or moving data. It cannot repair an unreadable configuration whose data paths cannot be verified.": "恢复上一份有效的 Nexus 设置，不启动 Harness，也不迁移数据。当前配置无法读取且数据路径无法确认时，不能使用此操作修复。",
-  "Reset backups contain original private configuration. Keep them local; use diagnostic export for a redacted bundle to share.": "重置备份包含原始私密配置，请仅在本机保管。需要分享时，请使用诊断导出生成脱敏包。",
+  "Restore the previous valid Nexus configuration? Harness will stay stopped.":
+    "恢复上一份有效的 Nexus 配置？Harness 将保持停止。",
+  "Restores the previous valid Nexus settings without starting Harness or moving data. It cannot repair an unreadable configuration whose data paths cannot be verified.":
+    "恢复上一份有效的 Nexus 设置，不启动 Harness，也不迁移数据。当前配置无法读取且数据路径无法确认时，不能使用此操作修复。",
+  "Reset backups contain original private configuration. Keep them local; use diagnostic export for a redacted bundle to share.":
+    "重置备份包含原始私密配置，请仅在本机保管。需要分享时，请使用诊断导出生成脱敏包。",
 
   "Launch arguments": "启动参数",
   "DSH_HOME environment": "DSH_HOME 环境变量",
@@ -1785,7 +2264,8 @@ const chinese: Record<string, string> = {
   "Inherited process directory": "继承进程工作目录",
   "Resolved launch configuration": "解析后的启动配置",
   "Launcher environment or launch configuration": "启动器环境或启动配置",
-  "These are launch inputs, not the final configuration after Harness applies patches. Inherited values have not been inspected.": "这里展示启动输入，不代表 Harness 应用补丁后的最终配置。沿用上游的值尚未读取。",
+  "These are launch inputs, not the final configuration after Harness applies patches. Inherited values have not been inspected.":
+    "这里展示启动输入，不代表 Harness 应用补丁后的最终配置。沿用上游的值尚未读取。",
   "Changes apply on the next explicit launch.": "修改将在下一次手动启动时使用。",
   "Observed current port": "当前实际端口",
   "Current instance launch inputs": "当前实例启动输入",
@@ -1796,46 +2276,62 @@ const chinese: Record<string, string> = {
   "Unsaved changes": "尚未保存的修改",
   "Display and window behavior": "显示与窗口行为",
   "Page zoom": "页面缩放",
-  "Use Ctrl + / Ctrl - to zoom and Ctrl 0 to reset. Returning to this window refreshes service status.": "按 Ctrl + / Ctrl - 缩放，Ctrl 0 重置。回到此窗口时会刷新服务状态。",
-  "Closing the window keeps Nexus in the tray. The tray menu lets you exit the launcher while keeping services running, or stop services and exit.": "关闭窗口后 Nexus 留在托盘。托盘菜单可选择仅退出启动器并保持服务运行，或停止服务并退出。",
+  "Use Ctrl + / Ctrl - to zoom and Ctrl 0 to reset. Returning to this window refreshes service status.":
+    "按 Ctrl + / Ctrl - 缩放，Ctrl 0 重置。回到此窗口时会刷新服务状态。",
+  "Closing the window keeps Nexus in the tray. The tray menu lets you exit the launcher while keeping services running, or stop services and exit.":
+    "关闭窗口后 Nexus 留在托盘。托盘菜单可选择仅退出启动器并保持服务运行，或停止服务并退出。",
   "Repair and enter recovery mode": "修复并进入恢复模式",
-  "The invalid pause record will be preserved before repair. Unsafe files cannot be repaired automatically.": "修复前将保留损坏的暂停记录。不安全的文件无法自动修复。",
+  "The invalid pause record will be preserved before repair. Unsafe files cannot be repaired automatically.":
+    "修复前将保留损坏的暂停记录。不安全的文件无法自动修复。",
 
   "Harness recovery mode": "Harness 恢复模式",
   "Harness startup is paused": "Harness 启动已暂停",
   "Enter recovery mode": "进入恢复模式",
   "Leave recovery mode": "离开恢复模式",
-  "Agent stays available. Repair profiles, plugins or configuration, run checks, then leave recovery mode. Leaving does not start Harness.": "Agent 保持可用。修复档案、插件或配置，运行检查后离开恢复模式；离开不会自动启动 Harness。",
-  "Pause Harness startup and stop it to repair profiles, plugins or configuration. This pause survives restarting Nexus.": "暂停 Harness 启动并停止运行，以修复档案、插件或配置。重启 Nexus 后仍保持暂停。",
-  "Harness startup is paused. Checks remain available; leave recovery mode before starting.": "Harness 启动已暂停。仍可进行检查；启动前请先离开恢复模式。",
-  "Re-enter the complete argument list. Previous arguments that are not entered again will be removed.": "请重新输入完整参数；未重新输入的旧参数将被移除。",
-  "Snapshots restore bounded profile and Harness settings files plus the pointer to an installed program version. Project files, full session data, runtimes and complete program copies are excluded. Install a missing version first. Use Retry or Abort for an interrupted restore.": "快照恢复限定范围的档案及 Harness 设置文件，以及已安装程序版本的指向。不包含项目文件、完整会话数据、运行时或整套程序副本。缺失版本需先安装；恢复中断时可重试或撤回。",
+  "Agent stays available. Repair profiles, plugins or configuration, run checks, then leave recovery mode. Leaving does not start Harness.":
+    "Agent 保持可用。修复档案、插件或配置，运行检查后离开恢复模式；离开不会自动启动 Harness。",
+  "Pause Harness startup and stop it to repair profiles, plugins or configuration. This pause survives restarting Nexus.":
+    "暂停 Harness 启动并停止运行，以修复档案、插件或配置。重启 Nexus 后仍保持暂停。",
+  "Harness startup is paused. Checks remain available; leave recovery mode before starting.":
+    "Harness 启动已暂停。仍可进行检查；启动前请先离开恢复模式。",
+  "Re-enter the complete argument list. Previous arguments that are not entered again will be removed.":
+    "请重新输入完整参数；未重新输入的旧参数将被移除。",
+  "Snapshots restore bounded profile and Harness settings files plus the pointer to an installed program version. Project files, full session data, runtimes and complete program copies are excluded. Install a missing version first. Use Retry or Abort for an interrupted restore.":
+    "快照恢复限定范围的档案及 Harness 设置文件，以及已安装程序版本的指向。不包含项目文件、完整会话数据、运行时或整套程序副本。缺失版本需先安装；恢复中断时可重试或撤回。",
 
-  "Invalid startup check response. Retry the check or export diagnostics.": "启动检查返回了无效结果，请重试检查或导出诊断。",
+  "Invalid startup check response. Retry the check or export diagnostics.":
+    "启动检查返回了无效结果，请重试检查或导出诊断。",
   "Basic startup checks": "基础启动检查",
   "Run basic checks": "执行基础检查",
   "Checking…": "正在检查…",
-  "Checks files, data access, profile, runtime, port and pending recovery. Does not compile or start Harness.": "集中检查版本文件、数据目录访问、配置档案、运行时、端口及待恢复事务。不会编译或启动 Harness。",
+  "Checks files, data access, profile, runtime, port and pending recovery. Does not compile or start Harness.":
+    "集中检查版本文件、数据目录访问、配置档案、运行时、端口及待恢复事务。不会编译或启动 Harness。",
   "No blocking issues found": "本次检查未发现阻断项",
   "Resolve the blocking issues before startup": "请先处理以下启动阻断项",
-  "Results describe this check only. Startup protection and plugin compatibility checks still apply.": "结果仅代表本次检查时的状态；实际启动仍会执行保护及插件兼容性检查。",
+  "Results describe this check only. Startup protection and plugin compatibility checks still apply.":
+    "结果仅代表本次检查时的状态；实际启动仍会执行保护及插件兼容性检查。",
   "Release identity": "安装包身份",
   "Build": "构建编号",
   "Bundled runtime": "内置运行时",
   "Harness installation is incomplete": "Harness 安装文件缺失",
-  "Agent is available. Reinstall Harness from the setup guide; existing data and remaining files are preserved.": "Agent 仍可用。请在引导页重新安装 Harness；现有数据及残留文件会保留。",
+  "Agent is available. Reinstall Harness from the setup guide; existing data and remaining files are preserved.":
+    "Agent 仍可用。请在引导页重新安装 Harness；现有数据及残留文件会保留。",
   "Reinstall Harness": "重新安装 Harness",
   "Inherit upstream default": "沿用上游默认行为",
   "Save Harness preferences": "保存 Harness 偏好",
   "Harness preferences": "Harness 偏好设置",
-  "Blank fields inherit upstream behavior. Changes apply on the next launch.": "留空表示沿用上游行为；修改在下次启动时生效。",
+  "Blank fields inherit upstream behavior. Changes apply on the next launch.":
+    "留空表示沿用上游行为；修改在下次启动时生效。",
   "Harness data directory": "Harness 数据目录",
-  "Changing this path only changes where Harness looks for data. Existing files are not moved or deleted.": "修改路径仅改变 Harness 的数据指向，不移动或删除已有文件。",
+  "Changing this path only changes where Harness looks for data. Existing files are not moved or deleted.":
+    "修改路径仅改变 Harness 的数据指向，不移动或删除已有文件。",
   "Web port": "Web 端口",
-  "Web profiles only. Default 3080; 0 selects an available port.": "仅适用于 Web 配置。默认 3080；填写 0 自动选择可用端口。",
+  "Web profiles only. Default 3080; 0 selects an available port.":
+    "仅适用于 Web 配置。默认 3080；填写 0 自动选择可用端口。",
   "Open browser after launch": "启动后打开浏览器（仅 Web）",
   "Disable session telemetry": "强制关闭会话遥测",
-  "Disabling telemetry stops session sharing. Inherited upstream behavior shares session records when feedback is submitted.": "启用此开关会停止会话共享。关闭此开关表示不强制禁用，仍遵循上游遥测模式；上游默认在提交反馈时共享会话记录。",
+  "Disabling telemetry stops session sharing. Inherited upstream behavior shares session records when feedback is submitted.":
+    "启用此开关会停止会话共享。关闭此开关表示不强制禁用，仍遵循上游遥测模式；上游默认在提交反馈时共享会话记录。",
   "Advanced Harness preferences": "高级 Harness 偏好",
   "DeepSeek model API address": "DeepSeek 模型接口地址",
   "DeepSeek search API address": "DeepSeek 搜索接口地址",
@@ -1846,75 +2342,99 @@ const chinese: Record<string, string> = {
   "Bundled skills directory": "捆绑技能目录",
   "Permission mode": "权限模式",
   "Tool mode (temporary upstream option)": "工具模式（上游临时选项）",
-  "Danger full access removes the default sandbox restrictions and automatic approval prompts. Tool mode applies to web and headless profiles.": "此项设置 Harness 工具的默认权限策略，会话预设可覆盖它。danger-full-access 关闭默认沙箱和审批策略，但不授予 Windows 管理员权限。工具模式仅适用于 Web/headless；PTC 是上游临时接口。",
+  "Danger full access removes the default sandbox restrictions and automatic approval prompts. Tool mode applies to web and headless profiles.":
+    "此项设置 Harness 工具的默认权限策略，会话预设可覆盖它。danger-full-access 关闭默认沙箱和审批策略，但不授予 Windows 管理员权限。工具模式仅适用于 Web/headless；PTC 是上游临时接口。",
   "Additional patch files, one absolute path per line": "额外补丁文件，每行一个绝对路径",
-  "Patch files customize plugins and are applied in the listed order. Select only files you trust.": "补丁文件用于定制插件，按列表顺序应用。请选择可信文件。",
+  "Patch files customize plugins and are applied in the listed order. Select only files you trust.":
+    "补丁文件用于定制插件，按列表顺序应用。请选择可信文件。",
   "Context window (sdk-minimal only)": "上下文窗口（仅 sdk-minimal）",
   "Treat token limit as success (sdk only)": "达到 Token 上限视为成功（仅 sdk）",
   "System prompt (sdk-minimal only)": "系统提示词（仅 sdk-minimal）",
-  "Stop Harness and wait for updates and cleanup to finish before changing preferences.": "修改偏好前，请停止 Harness，并等待更新和清理结束。",
+  "Stop Harness and wait for updates and cleanup to finish before changing preferences.":
+    "修改偏好前，请停止 Harness，并等待更新和清理结束。",
   "Discard changes": "放弃修改",
   "Switch profile separately": "单独切换配置",
   "Keep current profile": "保持当前配置",
   "Switch profile": "切换配置",
-  "Save or discard preference edits before switching profiles. Profiles are managed separately from these preferences.": "切换配置前请保存或放弃偏好修改。运行配置与这些偏好分别管理。",
+  "Save or discard preference edits before switching profiles. Profiles are managed separately from these preferences.":
+    "切换配置前请保存或放弃偏好修改。运行配置与这些偏好分别管理。",
   "Port must be an integer from 0 to 65535.": "端口必须是 0 到 65535 之间的整数。",
   "Context window must be a positive integer.": "上下文窗口必须是正整数。",
   "Last installation": "上次安装",
-  "This is a saved installation record, not a new error from reinstalling Nexus.": "这是保存的历史安装记录，并非重装 Nexus 后产生的新错误。",
+  "This is a saved installation record, not a new error from reinstalling Nexus.":
+    "这是保存的历史安装记录，并非重装 Nexus 后产生的新错误。",
   "Installation log and details": "安装日志与详情",
   "Retry installation": "重新安装此版本",
   "Clear finished record": "清除已结束记录",
-  "Clearing this record keeps installed versions and Harness data.": "清除记录会保留已安装版本和 Harness 数据。",
+  "Clearing this record keeps installed versions and Harness data.":
+    "清除记录会保留已安装版本和 Harness 数据。",
   "Environment and versions": "环境与版本管理",
   "Startup check failed": "启动检查失败",
-  "The task reports completion, but its version slot is unavailable. Refresh to verify installation before starting Harness.": "任务报告已完成，但未读取到对应版本槽位。请刷新核实安装结果后再启动 Harness。",
+  "The task reports completion, but its version slot is unavailable. Refresh to verify installation before starting Harness.":
+    "任务报告已完成，但未读取到对应版本槽位。请刷新核实安装结果后再启动 Harness。",
   "Verifying installed version": "待核实已安装版本",
   "Cancellation requested. Waiting for cleanup to finish.": "已请求取消，正在等待清理完成。",
-  "Installation request accepted. Follow the current stage below to confirm completion.": "安装请求已受理，尚不代表安装完成。请查看下方的当前阶段。",
+  "Installation request accepted. Follow the current stage below to confirm completion.":
+    "安装请求已受理，尚不代表安装完成。请查看下方的当前阶段。",
   "Connection details": "连接详情",
   "Advanced source settings": "上游地址设置",
   "Advanced settings": "高级设置",
-  "Inspect errors and diagnostics, or adjust advanced settings.": "查看错误、日志和诊断包，或调整高级设置。",
-  "Installing a version also selects it. Start Harness when installation and compatibility checks finish.": "版本安装成功后会自动选中。等待安装和兼容性检查结束，即可启动 Harness。",
-  "Install a version above before starting Harness.": "请先在上方安装一个上游版本，再启动 Harness。",
+  "Inspect errors and diagnostics, or adjust advanced settings.":
+    "查看错误、日志和诊断包，或调整高级设置。",
+  "Installing a version also selects it. Start Harness when installation and compatibility checks finish.":
+    "版本安装成功后会自动选中。等待安装和兼容性检查结束，即可启动 Harness。",
+  "Install a version above before starting Harness.":
+    "请先在上方安装一个上游版本，再启动 Harness。",
   "Current version": "当前版本",
   "Start and use": "启动与使用",
   "Save": "保存",
   "Dependency registry": "依赖安装源",
-  "Only used when Harness dependencies are downloaded. Nexus never downloads Node, pnpm, or Git.": "仅在上游依赖需要下载时使用。Nexus 不会下载 Node、pnpm 或 Git。",
-  "Node, npm and pnpm must form a complete combination. Explicit paths take priority, otherwise Nexus uses its bundled runtime and checks each Harness version against it.": "Node、npm 和 pnpm 必须组成完整组合。显式路径优先，否则使用内置运行时，并按 Harness 版本检查。",
+  "Only used when Harness dependencies are downloaded. Nexus never downloads Node, pnpm, or Git.":
+    "仅在上游依赖需要下载时使用。Nexus 不会下载 Node、pnpm 或 Git。",
+  "Node, npm and pnpm must form a complete combination. Explicit paths take priority, otherwise Nexus uses its bundled runtime and checks each Harness version against it.":
+    "Node、npm 和 pnpm 必须组成完整组合。显式路径优先，否则使用内置运行时，并按 Harness 版本检查。",
   "Bundled": "内置",
   "Launch on system startup": "开机自动启动 Nexus",
   "Repair & reset": "修复与重置",
-  "Reset repairs broken Nexus state. Harness data under .dsh is never touched; installed version slots stay on disk.": "重置用于修复 Nexus 自身的异常状态。.dsh 中的 Harness 数据不会被触碰；已安装的版本槽位文件保留在磁盘上。",
+  "Reset repairs broken Nexus state. Harness data under .dsh is never touched; installed version slots stay on disk.":
+    "重置用于修复 Nexus 自身的异常状态。.dsh 中的 Harness 数据不会被触碰；已安装的版本槽位文件保留在磁盘上。",
   "Reset Nexus configuration": "重置 Nexus 配置",
   "Reset configuration and slot registry": "重置配置与版本槽位记录",
   "Click again to confirm": "再次点击确认",
-  "Click the same button again to run the reset. Harness must be stopped.": "再次点击同一按钮执行重置。重置前需要先停止 Harness。",
+  "Click the same button again to run the reset. Harness must be stopped.":
+    "再次点击同一按钮执行重置。重置前需要先停止 Harness。",
   "Help": "帮助",
   "Open DSH terminal": "打开 DSH 终端",
   "Install output": "安装输出",
-  "The DSH terminal opens in the active profile directory with dsh and pnpm on PATH.": "DSH 终端会在当前配置档目录打开，并已把 dsh 与 pnpm 加入 PATH。",
+  "The DSH terminal opens in the active profile directory with dsh and pnpm on PATH.":
+    "DSH 终端会在当前配置档目录打开，并已把 dsh 与 pnpm 加入 PATH。",
   "Upstream documentation": "上游文档",
   "Diagnostics and logs": "诊断与日志",
-  "Runtime logs and diagnostic bundles are collected on the Diagnostics page.": "运行日志与诊断包在「诊断」页收集。",
+  "Runtime logs and diagnostic bundles are collected on the Diagnostics page.":
+    "运行日志与诊断包在「诊断」页收集。",
   "Agent log level": "Agent 日志级别",
   "The log level applies the next time the Agent starts.": "日志级别在下次 Agent 启动时生效。",
   "Harness fails to start": "Harness 无法启动",
-  "Open the startup log from the Overview or Diagnostics page. Plugin mismatches are expected across versions; use Recovery to remove the affected plugin or restore a healthy snapshot.": "在概览或诊断页查看启动日志。插件与版本不匹配是已知行为；请用恢复模式移除受影响插件，或恢复健康快照。",
+  "Open the startup log from the Overview or Diagnostics page. Plugin mismatches are expected across versions; use Recovery to remove the affected plugin or restore a healthy snapshot.":
+    "在概览或诊断页查看启动日志。插件与版本不匹配是已知行为；请用恢复模式移除受影响插件，或恢复健康快照。",
   "Dependency download is slow or times out": "依赖下载慢或超时",
-  "Switch the dependency registry to npmmirror in Settings, then retry the install.": "在设置页把依赖安装源切换为 npmmirror，然后重试安装。",
+  "Switch the dependency registry to npmmirror in Settings, then retry the install.":
+    "在设置页把依赖安装源切换为 npmmirror，然后重试安装。",
   "Node, pnpm, or Git is missing": "缺少 Node、pnpm 或 Git",
-  "Nexus defaults to its complete bundled runtime. Explicit paths in Runtime settings take priority; system discovery is only used without a bundle.": "Nexus 默认使用完整内置运行时。运行时设置中的显式路径优先；仅无内置包时发现系统工具。",
+  "Nexus defaults to its complete bundled runtime. Explicit paths in Runtime settings take priority; system discovery is only used without a bundle.":
+    "Nexus 默认使用完整内置运行时。运行时设置中的显式路径优先；仅无内置包时发现系统工具。",
   "Disabled": "已关闭",
-  "Using the bundled pnpm: it differs from the release's exact pnpm pin, but the major version matches.": "正在使用内置 pnpm：与该版本精确要求的 pnpm 不同，但主版本一致，已放行。",
-  "Upstream dependency installation failed, usually a network issue. Switch the dependency registry to npmmirror in Settings, then retry.": "上游依赖安装失败，通常是网络问题。到设置页把依赖安装源切换为 npmmirror 后重试。",
+  "Using the bundled pnpm: it differs from the release's exact pnpm pin, but the major version matches.":
+    "正在使用内置 pnpm：与该版本精确要求的 pnpm 不同，但主版本一致，已放行。",
+  "Upstream dependency installation failed, usually a network issue. Switch the dependency registry to npmmirror in Settings, then retry.":
+    "上游依赖安装失败，通常是网络问题。到设置页把依赖安装源切换为 npmmirror 后重试。",
   "Hide dependency registry": "收起依赖安装源",
   "Change dependency registry": "更改依赖安装源",
-  "Explicit paths take priority. Leave blank to use the complete bundled Node/npm/pnpm combination; system discovery is used only when no bundle is present.": "显式路径优先。留空使用完整内置 Node/npm/pnpm 组合；仅无内置包的开发环境才发现系统工具。",
+  "Explicit paths take priority. Leave blank to use the complete bundled Node/npm/pnpm combination; system discovery is used only when no bundle is present.":
+    "显式路径优先。留空使用完整内置 Node/npm/pnpm 组合；仅无内置包的开发环境才发现系统工具。",
   "Download preferences": "下载偏好",
-  "Node and pnpm are required. After you choose a version, Nexus checks its exact requirements and installs missing runtimes in the same flow.": "Node 和 pnpm 是必需的。选择上游版本后，Nexus 会读取其具体要求，并在安装流程中补齐缺少的运行时。",
+  "Node and pnpm are required. After you choose a version, Nexus checks its exact requirements and installs missing runtimes in the same flow.":
+    "Node 和 pnpm 是必需的。选择上游版本后，Nexus 会读取其具体要求，并在安装流程中补齐缺少的运行时。",
   "Check environment": "检查环境",
   "Not checked": "尚未检查",
   "Will be prepared for the selected version": "按所选版本补齐",
@@ -1928,7 +2448,8 @@ const chinese: Record<string, string> = {
   "Checking": "正在检查",
   "Runtime environment": "运行环境",
   "Setup progress": "准备进度",
-  "Check the environment, choose a version, then start Harness. Everything stays on this page.": "检查环境、安装上游版本、启动 Harness，在这一页完成。",
+  "Check the environment, choose a version, then start Harness. Everything stays on this page.":
+    "检查环境、安装上游版本、启动 Harness，在这一页完成。",
   "Set up your Harness": "开始使用 Harness",
   "Manage your Harness": "当前工作环境",
   "Maintenance": "维护",
@@ -1937,24 +2458,35 @@ const chinese: Record<string, string> = {
   "Setup guide": "引导",
   "Harness is ready": "Harness 已就绪",
   "Set up Harness automatically": "自动完成 Harness 安装",
-  "Environment checks run automatically; install a version, then press Start once. Starting Harness always needs your explicit click.": "环境检测自动进行；选择版本安装完成后，点一次「启动」即可。启动 Harness 始终需要你亲手点击。",
+  "Environment checks run automatically; install a version, then press Start once. Starting Harness always needs your explicit click.":
+    "环境检测自动进行；选择版本安装完成后，点一次「启动」即可。启动 Harness 始终需要你亲手点击。",
   "Environment ready": "环境就绪",
   "Version installed": "版本已安装",
   "Start Harness": "启动 Harness",
   "Waiting for Agent": "等待 Agent 就绪",
-  "Service status at a glance: Agent, Harness, active profile, and the Harness web UI.": "一览各服务状态：Agent、Harness、当前配置档与 Harness 网页界面。",
-  "Inspect errors, collect diagnostics, and recover from startup failures.": "查看错误、收集诊断包，并从启动故障中恢复。",
-  "Profiles own checkpoints and the plugin inventory: select a profile, manage its checkpoints, then adjust its plugins. Profile deletion is unavailable in this release.": "配置档拥有检查点与插件清单：选择配置档、管理其检查点，再调整其插件。本版本暂不支持删除配置档。",
-  "Cleanup is incomplete. Retry cleanup before starting another update.": "清理尚未完成，请先重试清理，再开始下一次更新。",
+  "Service status at a glance: Agent, Harness, active profile, and the Harness web UI.":
+    "一览各服务状态：Agent、Harness、当前配置档与 Harness 网页界面。",
+  "Inspect errors, collect diagnostics, and recover from startup failures.":
+    "查看错误、收集诊断包，并从启动故障中恢复。",
+  "Profiles own checkpoints and the plugin inventory: select a profile, manage its checkpoints, then adjust its plugins. Profile deletion is unavailable in this release.":
+    "配置档拥有检查点与插件清单：选择配置档、管理其检查点，再调整其插件。本版本暂不支持删除配置档。",
+  "Cleanup is incomplete. Retry cleanup before starting another update.":
+    "清理尚未完成，请先重试清理，再开始下一次更新。",
   "Update progress": "更新进度",
   "Current stage": "当前阶段",
-  "Nexus prefers system Git and falls back to embedded Git when unavailable or unsuccessful. Embedded Git does not provide a git command for plugins.": "Nexus 优先使用系统 Git，不可用或执行失败时使用内置 Git。内置实现不向插件提供 git 命令行。",
-  "No local Harness is installed. Select a version here to install it.": "尚未安装本地 Harness，请在此选择版本并安装。",
+  "Nexus prefers system Git and falls back to embedded Git when unavailable or unsuccessful. Embedded Git does not provide a git command for plugins.":
+    "Nexus 优先使用系统 Git，不可用或执行失败时使用内置 Git。内置实现不向插件提供 git 命令行。",
+  "No local Harness is installed. Select a version here to install it.":
+    "尚未安装本地 Harness，请在此选择版本并安装。",
   "Plugin load order": "插件加载顺序",
-  "Load order saved. It takes effect on the next Harness startup.": "加载顺序已保存，下次启动 Harness 时生效。",
-  "Built-in plugins come from the profile template. Installed plugins are dependency-managed even when included in the load list.": "内置插件随配置档模板提供。后续安装的插件由依赖清单管理，出现在加载列表中不代表内置。",
-  "Drag plugins to change loading order, or use the arrow buttons. dsh-base and dsh-web-app stay in positions 1 and 2.": "拖动插件或使用上下箭头调整加载顺序。dsh-base 和 dsh-web-app 固定在第 1、2 位。",
-  "This is a generated isolation profile. Edit plugin order in source profile {profile}.": "这是自动生成的隔离配置档，请在源配置档 {profile} 中调整插件顺序。",
+  "Load order saved. It takes effect on the next Harness startup.":
+    "加载顺序已保存，下次启动 Harness 时生效。",
+  "Built-in plugins come from the profile template. Installed plugins are dependency-managed even when included in the load list.":
+    "内置插件随配置档模板提供。后续安装的插件由依赖清单管理，出现在加载列表中不代表内置。",
+  "Drag plugins to change loading order, or use the arrow buttons. dsh-base and dsh-web-app stay in positions 1 and 2.":
+    "拖动插件或使用上下箭头调整加载顺序。dsh-base 和 dsh-web-app 固定在第 1、2 位。",
+  "This is a generated isolation profile. Edit plugin order in source profile {profile}.":
+    "这是自动生成的隔离配置档，请在源配置档 {profile} 中调整插件顺序。",
   "Drag to reorder": "拖动调整顺序",
   "Fixed load position": "固定加载位置",
   "Loading order unavailable": "当前不可调整加载顺序",
@@ -1966,13 +2498,17 @@ const chinese: Record<string, string> = {
   "During profile switch": "切换配置档时",
   "Retry profile switch": "重试切换配置档",
   "Retry Harness startup": "重试启动 Harness",
-  "Checking plugin compatibility. You can close this dialog; the check continues in the background.": "正在检查插件兼容性。可以关闭弹窗，检查会在后台继续。",
-  "Harness startup failed. The preflight result below does not mean this startup succeeded.": "Harness 实际启动失败。下面的预检结果不代表本次启动成功，请查看启动日志。",
+  "Checking plugin compatibility. You can close this dialog; the check continues in the background.":
+    "正在检查插件兼容性。可以关闭弹窗，检查会在后台继续。",
+  "Harness startup failed. The preflight result below does not mean this startup succeeded.":
+    "Harness 实际启动失败。下面的预检结果不代表本次启动成功，请查看启动日志。",
   "No compatibility check result yet.": "尚无兼容性检查结果。",
 
   "Operation in progress": "操作进行中",
-  "Version or startup operation in progress. Please wait; update progress remains available.": "版本切换或启动操作正在进行，请稍候；仍可查看更新进度。",
-  "Version or startup operation in progress. Showing the last confirmed catalogs; Harness access is temporarily unavailable. Update progress continues to refresh.": "正在切换版本或检查启动兼容性。当前显示最近确认的目录信息，Harness 入口暂不可用；更新进度会继续刷新。",
+  "Version or startup operation in progress. Please wait; update progress remains available.":
+    "版本切换或启动操作正在进行，请稍候；仍可查看更新进度。",
+  "Version or startup operation in progress. Showing the last confirmed catalogs; Harness access is temporarily unavailable. Update progress continues to refresh.":
+    "正在切换版本或检查启动兼容性。当前显示最近确认的目录信息，Harness 入口暂不可用；更新进度会继续刷新。",
   "During version switch": "切换上游版本时",
   "Before startup or restart": "启动或重启前",
   "Legacy record: trigger not recorded": "旧记录未记录触发来源",
@@ -1980,36 +2516,45 @@ const chinese: Record<string, string> = {
   "Reused previous check result": "复用此前检查结果",
   "New check result": "本次执行了检查",
   "Last used": "最近使用时间",
-  "Plugin errors below were recorded during this check; they are not new errors from viewing this page.": "下列插件错误是上述检查记录的隔离原因，不表示打开此页面时再次报错。",
+  "Plugin errors below were recorded during this check; they are not new errors from viewing this page.":
+    "下列插件错误是上述检查记录的隔离原因，不表示打开此页面时再次报错。",
 
   "Choose how to handle plugin errors": "请选择插件错误的处理方式",
   "Saved plugin choices; effective on next check": "已保存的停用选择；下次检查生效",
   "Disable plugin in isolated profiles": "在隔离配置中停用插件",
   "Restore plugin on next check": "下次检查时恢复插件",
   "Enable on next check": "下次检查时启用",
-  "Runs plugin initialization in a temporary local process and closes it afterward. Recovery mode, the selected profile and the stopped Harness service remain unchanged. No browser is opened.": "会使用临时本地进程执行插件初始化，结束后关闭。恢复模式、所选配置及正式 Harness 的停止状态保持不变，不打开浏览器。",
-  "Saved plugin choices have not been verified. The report below describes an earlier check.": "已保存的插件选择尚未验证。下方报告来自此前的检查。",
+  "Runs plugin initialization in a temporary local process and closes it afterward. Recovery mode, the selected profile and the stopped Harness service remain unchanged. No browser is opened.":
+    "会使用临时本地进程执行插件初始化，结束后关闭。恢复模式、所选配置及正式 Harness 的停止状态保持不变，不打开浏览器。",
+  "Saved plugin choices have not been verified. The report below describes an earlier check.":
+    "已保存的插件选择尚未验证。下方报告来自此前的检查。",
   "Manual plugin verification": "手动验证插件",
   "Verify plugins": "验证插件",
   "Disable on next check": "下次检查时禁用",
-  "Select the source profile and run its compatibility check to manage plugin choices.": "请选中源 profile 并运行其兼容检查，再管理插件启用状态。",
-  "Plugin choices apply to the isolated profile on the next compatibility check. Nothing is uninstalled, the source profile stays unchanged, and running Harness is not changed immediately.": "插件选择将在下次兼容检查生成的隔离 profile 中生效。不会卸载插件或修改源 profile，也不会立即改变运行中的 Harness。",
+  "Select the source profile and run its compatibility check to manage plugin choices.":
+    "请选中源 profile 并运行其兼容检查，再管理插件启用状态。",
+  "Plugin choices apply to the isolated profile on the next compatibility check. Nothing is uninstalled, the source profile stays unchanged, and running Harness is not changed immediately.":
+    "插件选择将在下次兼容检查生成的隔离 profile 中生效。不会卸载插件或修改源 profile，也不会立即改变运行中的 Harness。",
   "Disabled by user": "用户选择停用",
   "Retry version switch": "重试版本切换",
   "Select all third-party plugins": "选择全部第三方插件",
   "Save disabled plugins": "保存停用选择",
-  "Choose plugins to disable, then retry. Unattributed plugins are options, not confirmed faults. Nothing is uninstalled.": "选择要停用的插件后重试。未定位的插件仅供排查选择，不代表已确认有故障。不会卸载任何插件。",
-  "Saved choices apply to isolated profiles until restored. The original profile remains intact.": "停用选择持续用于隔离配置，直到手动恢复；原配置保持不变。",
+  "Choose plugins to disable, then retry. Unattributed plugins are options, not confirmed faults. Nothing is uninstalled.":
+    "选择要停用的插件后重试。未定位的插件仅供排查选择，不代表已确认有故障。不会卸载任何插件。",
+  "Saved choices apply to isolated profiles until restored. The original profile remains intact.":
+    "停用选择持续用于隔离配置，直到手动恢复；原配置保持不变。",
   "After saving, select the upstream version again to retry.": "保存后重新选择上游版本即可重试。",
   "Stop Harness before changing plugin isolation.": "请先停止 Harness，再调整插件停用选择。",
   "DSH reported a loader error for this plugin": "DSH 加载器报告此插件出错",
-  "Not identified as faulty; optional isolation for troubleshooting": "尚未确认故障，可主动停用以排查",
+  "Not identified as faulty; optional isolation for troubleshooting":
+    "尚未确认故障，可主动停用以排查",
   "Startup compatibility check": "启动兼容性自检",
   "Source profile": "原配置档",
   "Effective isolated profile": "实际隔离配置档",
   "Started with isolated plugins": "隔离不兼容插件后启动检查通过",
   "Startup check passed": "启动兼容性检查通过",
-  "Checks plugin loading and initialization, not every runtime feature. Original profile and data remain unchanged.": "检查插件加载和初始化，不代表所有运行功能均兼容。原配置档和数据保持不变。",
+  "Checks plugin loading and initialization, not every runtime feature. Original profile and data remain unchanged.":
+    "检查插件加载和初始化，不代表所有运行功能均兼容。原配置档和数据保持不变。",
 
   "Harness configuration saved": "Harness 配置已保存",
   "Harness configuration cleared": "Harness 配置已清除",
@@ -2062,7 +2607,8 @@ const chinese: Record<string, string> = {
   "Clear Harness configuration": "清除 Harness 配置",
   "Runtime / Overview": "运行时 / 概览",
   "Local control plane": "本地控制平面",
-  "Observe and operate the independent Agent and its immutable Harness runtime.": "查看并操作独立 Agent 及其不可变 Harness 运行时。",
+  "Observe and operate the independent Agent and its immutable Harness runtime.":
+    "查看并操作独立 Agent 及其不可变 Harness 运行时。",
   "Running": "运行中",
   "Standby": "待机",
   "Healthy": "正常",
@@ -2110,7 +2656,8 @@ const chinese: Record<string, string> = {
   "{count} saved": "已保存 {count} 个",
   "Update queue idle": "更新队列空闲",
   "Agent operations": "Agent 操作",
-  "The Agent remains a separate process. Launcher controls are explicit and recoverable.": "Agent 保持为独立进程，Launcher 操作都有明确的可恢复边界。",
+  "The Agent remains a separate process. Launcher controls are explicit and recoverable.":
+    "Agent 保持为独立进程，Launcher 操作都有明确的可恢复边界。",
   "Start Agent": "启动 Agent",
   "Restart": "重启",
   "Stop Agent": "停止 Agent",
@@ -2123,19 +2670,28 @@ const chinese: Record<string, string> = {
   "Activity signal": "活动信号",
   "Agent runtime ready": "Agent 运行时已就绪",
   "Agent program pending": "等待 Agent 程序路径",
-  "The native side will report the resolved Agent program after startup.": "原生侧将在启动后报告已解析的 Agent 程序。",
+  "The native side will report the resolved Agent program after startup.":
+    "原生侧将在启动后报告已解析的 Agent 程序。",
   "Harness controls": "Harness 控制",
   "Configure Harness": "配置 Harness",
   "Start": "启动",
   "Stop": "停止",
-  "Harness is running outside this Agent process. Manage it from its owning Agent; lifecycle controls are disabled here.": "Harness 正在此 Agent 之外运行，请在其所属 Agent 中管理；此处已禁用生命周期操作。",
-  "Harness is detached. Configure it in Settings, then start it from the control panel.": "Harness 当前未连接，请在设置中配置后从控制面板启动。",
-  "Harness is already running; no lifecycle change was made.": "Harness 已在运行，本次没有发生生命周期变化。",
-  "Harness is running outside this Agent. Its status is read-only until it reconnects.": "Harness 正在此 Agent 之外运行；重新连接前只能查看状态。",
-  "Harness log session is unavailable. Restart Harness to establish a safe token boundary.": "Harness 日志会话不可用，请重启 Harness 以建立安全的令牌边界。",
-  "Harness log session is invalid. Restart Harness to establish a safe token boundary.": "Harness 日志会话无效，请重启 Harness 以建立安全的令牌边界。",
-  "No current Harness authentication token was found for this run.": "本次运行未找到当前 Harness 认证令牌。",
-  "Harness changed state while its token was being observed. Refresh after it is running.": "观察令牌期间 Harness 状态发生变化，请待其运行后刷新。",
+  "Harness is running outside this Agent process. Manage it from its owning Agent; lifecycle controls are disabled here.":
+    "Harness 正在此 Agent 之外运行，请在其所属 Agent 中管理；此处已禁用生命周期操作。",
+  "Harness is detached. Configure it in Settings, then start it from the control panel.":
+    "Harness 当前未连接，请在设置中配置后从控制面板启动。",
+  "Harness is already running; no lifecycle change was made.":
+    "Harness 已在运行，本次没有发生生命周期变化。",
+  "Harness is running outside this Agent. Its status is read-only until it reconnects.":
+    "Harness 正在此 Agent 之外运行；重新连接前只能查看状态。",
+  "Harness log session is unavailable. Restart Harness to establish a safe token boundary.":
+    "Harness 日志会话不可用，请重启 Harness 以建立安全的令牌边界。",
+  "Harness log session is invalid. Restart Harness to establish a safe token boundary.":
+    "Harness 日志会话无效，请重启 Harness 以建立安全的令牌边界。",
+  "No current Harness authentication token was found for this run.":
+    "本次运行未找到当前 Harness 认证令牌。",
+  "Harness changed state while its token was being observed. Refresh after it is running.":
+    "观察令牌期间 Harness 状态发生变化，请待其运行后刷新。",
   "Process ID": "进程 ID",
   "Not attached": "未连接",
   "Exit code": "退出码",
@@ -2146,9 +2702,11 @@ const chinese: Record<string, string> = {
   "Latest loopback token": "最近的本机回环令牌",
   "Hide": "隐藏",
   "Reveal": "显示",
-  "Read from a bounded Nexus-owned Harness log tail. It is not written to Nexus state.": "令牌读取自 Nexus 管理的有限 Harness 日志尾部，不会写入 Nexus 状态。",
+  "Read from a bounded Nexus-owned Harness log tail. It is not written to Nexus state.":
+    "令牌读取自 Nexus 管理的有限 Harness 日志尾部，不会写入 Nexus 状态。",
   "No token observed": "未观察到令牌",
-  "Start Harness and refresh when its loopback URL is ready.": "启动 Harness，待本机回环 URL 就绪后刷新。",
+  "Start Harness and refresh when its loopback URL is ready.":
+    "启动 Harness，待本机回环 URL 就绪后刷新。",
   "Source": "来源",
   "Observed": "观察时间",
   "Not available": "不可用",
@@ -2157,28 +2715,35 @@ const chinese: Record<string, string> = {
   "Embedded Harness Web": "内嵌 Harness Web",
   "Harness Web interface": "Harness Web 界面",
   "Harness view is not ready": "Harness 视图未就绪",
-  "A validated loopback HTTP URL will appear here when Harness reports its web interface.": "Harness 报告 Web 界面后，经过校验的本机回环 HTTP URL 会显示在这里。",
+  "A validated loopback HTTP URL will appear here when Harness reports its web interface.":
+    "Harness 报告 Web 界面后，经过校验的本机回环 HTTP URL 会显示在这里。",
   "Harness authentication requires a system browser": "Harness 认证需要系统浏览器",
-  "This session needs top-level browser authentication. Open the validated Harness page in your system browser to sign in.": "本次会话需要顶层浏览器认证，请在系统浏览器中打开经过校验的 Harness 页面并登录。",
+  "This session needs top-level browser authentication. Open the validated Harness page in your system browser to sign in.":
+    "本次会话需要顶层浏览器认证，请在系统浏览器中打开经过校验的 Harness 页面并登录。",
   "Control / Profiles": "控制 / 配置档",
-  "Nexus-owned profile names are passed to Harness only through explicit launch configuration.": "Nexus 管理的配置档名称只会通过明确的启动配置传递给 Harness。",
+  "Nexus-owned profile names are passed to Harness only through explicit launch configuration.":
+    "Nexus 管理的配置档名称只会通过明确的启动配置传递给 Harness。",
   "Profile catalog": "配置档目录",
   "No profiles configured": "未配置配置档",
-  "The Agent will expose profiles after its catalog is initialized.": "Agent 初始化目录后会提供配置档。",
+  "The Agent will expose profiles after its catalog is initialized.":
+    "Agent 初始化目录后会提供配置档。",
   "Unnamed profile": "未命名配置档",
   "Active": "当前",
   "Selected by Agent": "由 Agent 选中",
   "Available": "可用",
   "State / Checkpoints": "状态 / 检查点",
-  "Checkpoint manifests contain only Harness profile/release selection. Agent lifecycle and Harness runtime are never saved or restored.": "检查点清单只包含 Harness 的配置档和版本选择，不保存或恢复 Agent 生命周期及 Harness 运行时。",
+  "Checkpoint manifests contain only Harness profile/release selection. Agent lifecycle and Harness runtime are never saved or restored.":
+    "检查点清单只包含 Harness 的配置档和版本选择，不保存或恢复 Agent 生命周期及 Harness 运行时。",
   "Saved checkpoints": "已保存检查点",
   "Create checkpoint": "创建检查点",
   "No checkpoints yet": "暂无检查点",
-  "Create a checkpoint after the Agent has a stable profile and release state.": "Agent 的配置档和版本状态稳定后再创建检查点。",
+  "Create a checkpoint after the Agent has a stable profile and release state.":
+    "Agent 的配置档和版本状态稳定后再创建检查点。",
   "Checkpoint": "检查点",
   "No profile": "无配置档",
   "Releases / Updates": "版本 / 更新",
-  "Release installation is external and explicit. Promotion stays separate from downloading and verification.": "版本安装由外部流程明确执行，发布提升与下载、校验保持分离。",
+  "Release installation is external and explicit. Promotion stays separate from downloading and verification.":
+    "版本安装由外部流程明确执行，发布提升与下载、校验保持分离。",
   "Update status": "更新状态",
   "No active update": "无活动更新",
   "New profile name": "新配置档名称",
@@ -2187,21 +2752,34 @@ const chinese: Record<string, string> = {
   "Edit profile patch": "编辑 Profile 补丁",
   "Edit plugin manifest": "编辑插件清单",
   "Open profile directory": "打开 Profile 目录",
-  "Plugins failed to load, likely a version mismatch between installed plugins and this Harness build. Open Recovery to remove the affected plugins or restore a healthy snapshot.": "插件加载失败：已安装插件与当前 Harness 构建可能版本不兼容。请打开恢复模式移除问题插件，或恢复健康快照。",
-  "A plugin expects module APIs this Harness build does not have: the installed plugin set and the Harness version are out of sync. Restore a healthy snapshot or update the plugins.": "插件要求的模块 API 当前 Harness 构建不具备：插件集与 Harness 版本不同步。请恢复健康快照或更新插件。",
-  "A profile plugin duplicates a plugin this Harness now ships built-in. Remove the older copy from the profile's plugin inventory.": "配置档插件与新版 Harness 内置功能重复，请从配置档插件清单中移除旧副本。",
-  "A path is invalid, likely a leftover from a previous version switch. Restore a healthy snapshot to rebuild the profile.": "路径无效，可能是上次版本切换的残留。请恢复健康快照以重建配置档。",
-  "External source protection history is full. Keep the current source or choose a previously confirmed directory, then save again. Existing directory protection is retained.": "外部 Harness 目录保护记录已满。请保留当前来源，或选择以前确认过的目录后重新保存。已有目录的保护不会被移除。",
-  "All release slots are full. Remove a slot you no longer need, then try again.": "版本槽位已满，请先释放不再需要的槽位后重试。",
-  "That slot is still in use (current or last-known-good). Switch to another version first.": "该槽位仍在使用中（当前/上次可用版本），请先切换到其他版本。",
-  "This snapshot's Harness version is not installed. Cold-switch to that tag first, then restore.": "该快照对应的 Harness 版本未安装，请先冷切换到该标签再恢复。",
-  "A directory was used where a file was expected, usually a leftover from a crashed run. Restore a healthy snapshot to rebuild the profile.": "把目录当作文件使用了，通常是某次崩溃的残留。请恢复健康快照以重建配置档。",
-  "The local service is not responding. Retry, and check the Agent status on the Overview page.": "本地服务未响应，请重试并在概览页检查 Agent 状态。",
-  "The operation timed out, often a network issue. Check your connection or proxy settings, then retry.": "操作超时，多为网络问题。请检查网络或代理设置后重试。",
-  "Access denied: the file may be locked by another process. Close programs using it and retry.": "访问被拒绝：文件可能被其他程序占用，请关闭相关程序后重试。",
+  "Plugins failed to load, likely a version mismatch between installed plugins and this Harness build. Open Recovery to remove the affected plugins or restore a healthy snapshot.":
+    "插件加载失败：已安装插件与当前 Harness 构建可能版本不兼容。请打开恢复模式移除问题插件，或恢复健康快照。",
+  "A plugin expects module APIs this Harness build does not have: the installed plugin set and the Harness version are out of sync. Restore a healthy snapshot or update the plugins.":
+    "插件要求的模块 API 当前 Harness 构建不具备：插件集与 Harness 版本不同步。请恢复健康快照或更新插件。",
+  "A profile plugin duplicates a plugin this Harness now ships built-in. Remove the older copy from the profile's plugin inventory.":
+    "配置档插件与新版 Harness 内置功能重复，请从配置档插件清单中移除旧副本。",
+  "A path is invalid, likely a leftover from a previous version switch. Restore a healthy snapshot to rebuild the profile.":
+    "路径无效，可能是上次版本切换的残留。请恢复健康快照以重建配置档。",
+  "External source protection history is full. Keep the current source or choose a previously confirmed directory, then save again. Existing directory protection is retained.":
+    "外部 Harness 目录保护记录已满。请保留当前来源，或选择以前确认过的目录后重新保存。已有目录的保护不会被移除。",
+  "All release slots are full. Remove a slot you no longer need, then try again.":
+    "版本槽位已满，请先释放不再需要的槽位后重试。",
+  "That slot is still in use (current or last-known-good). Switch to another version first.":
+    "该槽位仍在使用中（当前/上次可用版本），请先切换到其他版本。",
+  "This snapshot's Harness version is not installed. Cold-switch to that tag first, then restore.":
+    "该快照对应的 Harness 版本未安装，请先冷切换到该标签再恢复。",
+  "A directory was used where a file was expected, usually a leftover from a crashed run. Restore a healthy snapshot to rebuild the profile.":
+    "把目录当作文件使用了，通常是某次崩溃的残留。请恢复健康快照以重建配置档。",
+  "The local service is not responding. Retry, and check the Agent status on the Overview page.":
+    "本地服务未响应，请重试并在概览页检查 Agent 状态。",
+  "The operation timed out, often a network issue. Check your connection or proxy settings, then retry.":
+    "操作超时，多为网络问题。请检查网络或代理设置后重试。",
+  "Access denied: the file may be locked by another process. Close programs using it and retry.":
+    "访问被拒绝：文件可能被其他程序占用，请关闭相关程序后重试。",
   "Restore snapshot": "恢复快照",
   "Restore this snapshot? Harness must be stopped.": "恢复此快照？需要先停止 Harness。",
-  "Finish or remove the empty argument row before saving.": "请先填写或删除未填完的参数行，再保存。",
+  "Finish or remove the empty argument row before saving.":
+    "请先填写或删除未填完的参数行，再保存。",
   "Show startup log": "查看启动日志",
   "Startup log tail": "启动日志尾随",
   "Fetch this tag": "拉取此标签",
@@ -2211,13 +2789,16 @@ const chinese: Record<string, string> = {
   "View": "查看",
   "Viewing": "查看中",
   "Belongs to profile": "属于配置档",
-  "The Agent starts and stops with the Launcher. Only force-restart remains for recovery.": "Agent 随 Launcher 启动与退出，日常无需手动操作；仅保留强制重启用于恢复。",
+  "The Agent starts and stops with the Launcher. Only force-restart remains for recovery.":
+    "Agent 随 Launcher 启动与退出，日常无需手动操作；仅保留强制重启用于恢复。",
   "Runtime & cold switch": "运行时与冷切换",
   "Change runtime source or install mode": "更换运行时来源或安装模式",
   "Hide source and install mode": "收起来源与安装模式",
   "Leave blank for automatic discovery": "留空则自动发现",
-  "Manual paths are saved as system pins. Leave blank to let Nexus resolve automatically.": "手动路径会保存为系统级固定；留空则由 Nexus 自动解析。",
-  "These settings only matter when runtimes must be installed or replaced.": "这些设置仅在需要安装或更换运行时 时才会用到。",
+  "Manual paths are saved as system pins. Leave blank to let Nexus resolve automatically.":
+    "手动路径会保存为系统级固定；留空则由 Nexus 自动解析。",
+  "These settings only matter when runtimes must be installed or replaced.":
+    "这些设置仅在需要安装或更换运行时 时才会用到。",
   "Switch to tag": "切换到此标签",
   "Release slot": "释放槽位",
   "Current": "当前使用",
@@ -2235,12 +2816,14 @@ const chinese: Record<string, string> = {
   "Last known good": "最近可用版本",
   "Release slots": "版本槽位",
   "No release slots": "暂无版本槽位",
-  "Register an immutable slot through the Agent API before promotion.": "请先通过 Agent API 登记不可变版本槽位，再执行提升。",
+  "Register an immutable slot through the Agent API before promotion.":
+    "请先通过 Agent API 登记不可变版本槽位，再执行提升。",
   "Release": "版本",
   "Unknown version": "未知版本",
   "Registered": "已登记",
   "Observability / Diagnostics": "可观测性 / 诊断",
-  "Bundles are bounded, redacted, and limited to Nexus-owned metadata and text logs.": "诊断包有大小限制，已脱敏，并且只包含 Nexus 管理的元数据和文本日志。",
+  "Bundles are bounded, redacted, and limited to Nexus-owned metadata and text logs.":
+    "诊断包有大小限制，已脱敏，并且只包含 Nexus 管理的元数据和文本日志。",
   "Open file": "打开文件",
   "Open file location": "打开文件位置",
   "Open bundle manifest": "打开诊断包清单",
@@ -2252,56 +2835,69 @@ const chinese: Record<string, string> = {
   "Export diagnostics": "导出诊断",
   "Diagnostic export returned no usable file path.": "诊断导出没有返回有效文件路径，请重试。",
   "Diagnostic file exported: {path}": "诊断文件已导出：{path}",
-  "Diagnostic file exported; open its folder manually: {path}": "诊断文件已导出，请手动打开所在目录：{path}",
-  "The exported JSON is one portable file containing the redacted diagnostic context and logs.": "导出的 JSON 是一个可直接发送的文件，包含脱敏后的诊断信息和日志。",
+  "Diagnostic file exported; open its folder manually: {path}":
+    "诊断文件已导出，请手动打开所在目录：{path}",
+  "The exported JSON is one portable file containing the redacted diagnostic context and logs.":
+    "导出的 JSON 是一个可直接发送的文件，包含脱敏后的诊断信息和日志。",
   "No diagnostic bundles": "暂无诊断包",
-  "Collect a bounded bundle when a runtime issue needs review.": "需要排查运行时问题时收集有限诊断包。",
+  "Collect a bounded bundle when a runtime issue needs review.":
+    "需要排查运行时问题时收集有限诊断包。",
   "Bundle": "诊断包",
   "{count} files": "{count} 个文件",
   "System / Settings": "系统 / 设置",
-  "Configuration remains Agent-owned. This view intentionally exposes metadata, not credentials or raw environment values.": "配置仍由 Agent 管理。此页面只展示元数据，不展示凭据或原始环境变量。",
+  "Configuration remains Agent-owned. This view intentionally exposes metadata, not credentials or raw environment values.":
+    "配置仍由 Agent 管理。此页面只展示元数据，不展示凭据或原始环境变量。",
   "Appearance": "外观",
   "Theme": "主题",
   "System": "跟随系统",
   "Light": "浅色",
   "Dark": "深色",
-  "System follows the operating system preference. Your choice is saved locally.": "跟随操作系统偏好，选择会保存在本机。",
+  "System follows the operating system preference. Your choice is saved locally.":
+    "跟随操作系统偏好，选择会保存在本机。",
   "Language": "语言",
   "idle": "空闲",
   "Choose the language used by the Launcher interface.": "选择 Launcher 界面语言。",
   "Harness configuration": "Harness 配置",
   "Harness is not configured": "Harness 尚未配置",
-  "Configure the external Harness here. Editing config.json is only a fallback.": "在这里配置外部 Harness，手动编辑 config.json 仅作为后备手段。",
-  "Environment variables override part of this Harness configuration. Saved file values remain in place, but the override wins at launch time.": "环境变量会覆盖此 Harness 配置的一部分。已保存的文件值仍然保留，但启动时以覆盖值为准。",
+  "Configure the external Harness here. Editing config.json is only a fallback.":
+    "在这里配置外部 Harness，手动编辑 config.json 仅作为后备手段。",
+  "Environment variables override part of this Harness configuration. Saved file values remain in place, but the override wins at launch time.":
+    "环境变量会覆盖此 Harness 配置的一部分。已保存的文件值仍然保留，但启动时以覆盖值为准。",
   "Automatic detection": "自动识别",
-  "The Agent remains usable as a control plane until an external Harness is configured.": "在配置外部 Harness 前，Agent 仍可作为控制平面使用。",
+  "The Agent remains usable as a control plane until an external Harness is configured.":
+    "在配置外部 Harness 前，Agent 仍可作为控制平面使用。",
   "Edit configuration": "编辑配置",
-  "Automatic detection is preferred. Select a detected Harness or use manual configuration below.": "优先自动识别。请选择已发现的 Harness，或在下方使用手动配置。",
+  "Automatic detection is preferred. Select a detected Harness or use manual configuration below.":
+    "优先自动识别。请选择已发现的 Harness，或在下方使用手动配置。",
   "Detect Harness": "识别 Harness",
   "Detecting Harness installations...": "正在识别 Harness 安装...",
   "Detected candidates": "已发现的候选项",
   "No Harness candidates found": "未发现 Harness 候选项",
-  "No installation was found in the bounded local search paths. You can still specify a path or command manually.": "在限定的本机搜索路径中未找到安装项，你仍可以手动指定路径或命令。",
+  "No installation was found in the bounded local search paths. You can still specify a path or command manually.":
+    "在限定的本机搜索路径中未找到安装项，你仍可以手动指定路径或命令。",
   "Harness detection failed: {message}": "Harness 识别失败：{message}",
   "Use this Harness": "使用此 Harness",
   "Use this Harness: {name}": "使用此 Harness：{name}",
   "Selected": "已选择",
   "Choose a Harness installation": "选择 Harness 安装",
-  "Multiple Harness installations were found. Choose one before saving.": "发现多个 Harness 安装，请在保存前选择一个。",
+  "Multiple Harness installations were found. Choose one before saving.":
+    "发现多个 Harness 安装，请在保存前选择一个。",
   "A candidate is selected. You can change it before saving.": "已选择一个候选项；保存前仍可更换。",
   "Close candidate picker": "关闭候选项选择器",
   "Manual configuration": "手动配置",
   "Launch mode": "启动方式",
   "Direct executable": "直接可执行文件",
   "Node runtime": "Node 运行时",
-  "Select how the external Harness is started. Direct runs the executable or command; Node runs the selected entry through the Node runtime.": "选择外部 Harness 的启动方式。直接模式运行可执行文件或命令；Node 模式通过 Node 运行时运行指定入口。",
+  "Select how the external Harness is started. Direct runs the executable or command; Node runs the selected entry through the Node runtime.":
+    "选择外部 Harness 的启动方式。直接模式运行可执行文件或命令；Node 模式通过 Node 运行时运行指定入口。",
   "Node executable": "Node 可执行文件",
   "Node executable path or command": "Node 可执行文件路径或命令",
   "Harness entry": "Harness 入口",
   "Harness entry script or package": "Harness 入口脚本或包",
   "Node project directory": "Node 项目目录",
   "Node arguments": "Node 参数",
-  "Arguments passed to the Node Harness entry, one per line. Use {profile}, {release}, or {release_root} when needed.": "传递给 Node Harness 入口的参数，每行一个，需要时可使用 {profile}、{release} 或 {release_root}。",
+  "Arguments passed to the Node Harness entry, one per line. Use {profile}, {release}, or {release_root} when needed.":
+    "传递给 Node Harness 入口的参数，每行一个，需要时可使用 {profile}、{release} 或 {release_root}。",
   "Detected": "已发现",
   "Path": "路径",
   "Entry": "入口",
@@ -2323,12 +2919,16 @@ const chinese: Record<string, string> = {
   "Readiness URL": "就绪检测 URL",
   "Readiness URL example": "http://127.0.0.1:3080/",
   "Arguments": "启动参数",
-  "One argument per line. Use {profile}, {release}, or {release_root} when needed.": "每行填写一个参数，需要时可使用 {profile}、{release} 或 {release_root}。",
+  "One argument per line. Use {profile}, {release}, or {release_root} when needed.":
+    "每行填写一个参数，需要时可使用 {profile}、{release} 或 {release_root}。",
   "Optional": "可选",
   "Readiness timeout (seconds)": "就绪超时（秒）",
-  "Require a fresh Harness token before accepting readiness": "只有观察到新的 Harness 令牌后才接受就绪",
-  "Enable this for token-protected Harness services. A listener alone is not enough; the Agent must observe a fresh URL in its current Harness log session.": "对于受令牌保护的 Harness 服务请启用此项。仅有监听端口不足以证明身份，Agent 必须在当前 Harness 日志会话中观察到新的 URL。",
-  "This Agent does not advertise the explicit Node Harness configuration contract. Update Agent before saving Node mode.": "此 Agent 未声明显式 Node Harness 配置协议，请先更新 Agent 再保存 Node 模式。",
+  "Require a fresh Harness token before accepting readiness":
+    "只有观察到新的 Harness 令牌后才接受就绪",
+  "Enable this for token-protected Harness services. A listener alone is not enough; the Agent must observe a fresh URL in its current Harness log session.":
+    "对于受令牌保护的 Harness 服务请启用此项。仅有监听端口不足以证明身份，Agent 必须在当前 Harness 日志会话中观察到新的 URL。",
+  "This Agent does not advertise the explicit Node Harness configuration contract. Update Agent before saving Node mode.":
+    "此 Agent 未声明显式 Node Harness 配置协议，请先更新 Agent 再保存 Node 模式。",
   "Leave blank to use the Agent default.": "留空则使用 Agent 默认值。",
   "Save configuration": "保存配置",
   "Clear configuration": "清除配置",
@@ -2336,7 +2936,8 @@ const chinese: Record<string, string> = {
   "A program path is required.": "必须填写程序路径。",
   "A Harness entry is required for Node mode.": "Node 模式必须填写 Harness 入口。",
   "Readiness URL must be an HTTP loopback URL.": "就绪检测 URL 必须是 HTTP 本机回环地址。",
-  "Readiness target must be an HTTP or TCP loopback URL.": "就绪目标必须是 HTTP 或 TCP 本机回环地址。",
+  "Readiness target must be an HTTP or TCP loopback URL.":
+    "就绪目标必须是 HTTP 或 TCP 本机回环地址。",
   "Node mode requires a Node runtime executable.": "Node 模式必须使用 Node 运行时可执行文件。",
   "Readiness target must use HTTP or TCP loopback.": "就绪目标必须使用 HTTP 或 TCP 本机回环地址。",
   "TCP readiness targets cannot contain a path.": "TCP 就绪目标不能包含路径。",
@@ -2347,19 +2948,26 @@ const chinese: Record<string, string> = {
   "Readiness target has an invalid port or host.": "就绪目标的端口或主机无效。",
   "Readiness target must use a loopback host.": "就绪目标必须使用本机回环主机。",
   "Token-bound readiness requires a readiness URL.": "令牌绑定就绪必须配置就绪 URL。",
-  "Use an HTTP loopback URL for a 2xx check, or tcp://127.0.0.1:PORT when the Harness protects its page with authentication.": "需要 2xx 检查时使用 HTTP 回环地址；Harness 页面需要认证时，使用 tcp://127.0.0.1:PORT 检查监听状态。",
+  "Use an HTTP loopback URL for a 2xx check, or tcp://127.0.0.1:PORT when the Harness protects its page with authentication.":
+    "需要 2xx 检查时使用 HTTP 回环地址；Harness 页面需要认证时，使用 tcp://127.0.0.1:PORT 检查监听状态。",
   "Timeout must be a positive integer.": "超时必须是正整数。",
-  "Existing sensitive arguments are hidden. Enable replacement before saving.": "现有敏感参数已隐藏，保存前请启用替换。",
+  "Existing sensitive arguments are hidden. Enable replacement before saving.":
+    "现有敏感参数已隐藏，保存前请启用替换。",
   "Replace hidden arguments": "替换隐藏参数",
   "Replace hidden arguments before saving.": "保存前请替换所有隐藏参数。",
   "Stop Harness before changing its launch configuration.": "修改启动配置前请先停止 Harness。",
-  "Remove the Harness launch configuration? Harness must be stopped first.": "确定移除 Harness 启动配置吗？必须先停止 Harness。",
-  "Harness is not configured. Open Settings to configure it.": "Harness 尚未配置，请打开设置完成配置。",
-  "Harness must be stopped before changing its configuration.": "修改 Harness 配置前必须先停止 Harness。",
+  "Remove the Harness launch configuration? Harness must be stopped first.":
+    "确定移除 Harness 启动配置吗？必须先停止 Harness。",
+  "Harness is not configured. Open Settings to configure it.":
+    "Harness 尚未配置，请打开设置完成配置。",
+  "Harness must be stopped before changing its configuration.":
+    "修改 Harness 配置前必须先停止 Harness。",
   "Update configuration": "更新配置",
-  "Environment variables override part of this update configuration.": "环境变量会覆盖此更新配置的一部分。",
+  "Environment variables override part of this update configuration.":
+    "环境变量会覆盖此更新配置的一部分。",
   "Updates are not configured": "尚未配置更新",
-  "Release metadata and current runtime remain available without an update source.": "没有更新源时，版本元数据和当前运行时仍然可用。",
+  "Release metadata and current runtime remain available without an update source.":
+    "没有更新源时，版本元数据和当前运行时仍然可用。",
   "Ref": "分支/引用",
   "Git program": "Git 程序",
   "Native integration": "原生集成",
@@ -2370,7 +2978,8 @@ const chinese: Record<string, string> = {
   "API transport": "API 传输",
   "Rust loopback proxy": "Rust 本机回环代理",
   "Runtime status": "运行时状态",
-  "Runtime status is checked manually. It never downloads or installs tools.": "运行时状态仅在手动操作时检查，不会下载或安装工具。",
+  "Runtime status is checked manually. It never downloads or installs tools.":
+    "运行时状态仅在手动操作时检查，不会下载或安装工具。",
   "Manual check": "手动检查",
   "Check runtime": "检查运行时",
   "Refresh runtime status": "刷新运行时状态",
@@ -2381,12 +2990,15 @@ const chinese: Record<string, string> = {
   "Runtime tools": "运行时工具",
   "API {version}": "API {version}",
   "Unavailable": "不可用",
-  "The Agent is unavailable. Reconnect the Agent before checking runtime status.": "Agent 不可用，请先重新连接 Agent，再检查运行时状态。",
+  "The Agent is unavailable. Reconnect the Agent before checking runtime status.":
+    "Agent 不可用，请先重新连接 Agent，再检查运行时状态。",
   "Runtime status unavailable": "运行时状态不可用",
   "Runtime status request failed: {message}": "运行时状态请求失败：{message}",
   "Runtime status response is invalid.": "运行时状态响应无效。",
-  "Runtime tool was not found. Install it or configure its path, then retry.": "未找到运行时工具，请安装或配置其路径后重试。",
-  "Corepack shim could not be verified; pnpm status cannot be confirmed.": "无法验证 Corepack shim，暂时无法确认 pnpm 状态。",
+  "Runtime tool was not found. Install it or configure its path, then retry.":
+    "未找到运行时工具，请安装或配置其路径后重试。",
+  "Corepack shim could not be verified; pnpm status cannot be confirmed.":
+    "无法验证 Corepack shim，暂时无法确认 pnpm 状态。",
   "This runtime could not be verified.": "无法验证此运行时。",
   "No runtime tools reported": "没有报告运行时工具",
   "The Agent returned no tool entries to display.": "Agent 没有返回可显示的工具条目。",
@@ -2397,16 +3009,19 @@ const chinese: Record<string, string> = {
   "Nexus source": "Nexus",
   "Recovery": "恢复",
   "Manual / Recovery": "手动 / 恢复",
-  "Manual recovery remains available when Harness is unhealthy or cannot start.": "即使 Harness 不健康或无法启动，仍可进入手动恢复。",
+  "Manual recovery remains available when Harness is unhealthy or cannot start.":
+    "即使 Harness 不健康或无法启动，仍可进入手动恢复。",
   "Recovery status is unavailable. Refresh to retry.": "恢复状态不可用，请刷新重试。",
   "Reconnect the Agent to use recovery actions.": "请重新连接 Agent 后执行恢复操作。",
-  "Harness must be stopped before profile, plugin, or rollback changes. Diagnostics remain available.": "修改配置档、插件或回滚前必须停止 Harness；诊断仍可使用。",
+  "Harness must be stopped before profile, plugin, or rollback changes. Diagnostics remain available.":
+    "修改配置档、插件或回滚前必须停止 Harness；诊断仍可使用。",
   "Stop Harness": "停止 Harness",
   "Plugins": "插件",
   "Rollback": "回滚",
   "Native profiles": "原生配置档",
   "Plugin inventory": "插件清单",
-  "Built-in plugins belong to profile bundles. Only packages marked removable can be removed.": "内置插件属于配置档 bundle；只能移除标记为可移除的软件包。",
+  "Built-in plugins belong to profile bundles. Only packages marked removable can be removed.":
+    "内置插件属于配置档 bundle；只能移除标记为可移除的软件包。",
   "No plugins reported": "未报告插件",
   "Select a valid native profile to inspect its inventory.": "请选择有效原生配置档以查看其清单。",
   "Built-in": "内置",
@@ -2426,15 +3041,19 @@ const chinese: Record<string, string> = {
   "Manual recovery collection": "手动恢复诊断",
   "Bounded redacted log tail": "有限且已脱敏的日志尾部",
   "No recovery log tail": "无恢复日志尾部",
-  "No current Nexus-owned Harness log session is available.": "当前没有 Nexus 管理的 Harness 日志会话。",
+  "No current Nexus-owned Harness log session is available.":
+    "当前没有 Nexus 管理的 Harness 日志会话。",
   "Log truncated by the Agent response limit.": "日志因 Agent 响应大小限制而截断。",
-  "Select an existing manifest-backed profile. Profile creation and deletion are unavailable in this release.": "选择已有且有有效清单的配置档；此版本不提供创建和删除。",
-  "Stop Harness before switching profiles or removing plugins.": "切换配置档或移除插件前请先停止 Harness。",
+  "Select an existing manifest-backed profile. Profile creation and deletion are unavailable in this release.":
+    "选择已有且有有效清单的配置档；此版本不提供创建和删除。",
+  "Stop Harness before switching profiles or removing plugins.":
+    "切换配置档或移除插件前请先停止 Harness。",
   "No valid native profiles": "无有效原生配置档",
   "Only valid profile manifests are selectable.": "只能选择清单有效的配置档。",
   "Profile selection": "选择配置档",
   "Select": "选择",
-  "Manual checkpoints contain a bounded redacted snapshot. Legacy entries restore selection metadata only.": "手动检查点包含有限且已脱敏的快照；旧检查点只恢复选择元数据。",
+  "Manual checkpoints contain a bounded redacted snapshot. Legacy entries restore selection metadata only.":
+    "手动检查点包含有限且已脱敏的快照；旧检查点只恢复选择元数据。",
   "Healthy snapshot capture failed": "健康快照捕获失败",
   "Pending restore": "待处理恢复",
   "State": "状态",
@@ -2455,7 +3074,8 @@ const chinese: Record<string, string> = {
   "No bounded file content was returned.": "未返回有限文件内容。",
   "Redacted fields": "已脱敏字段",
   "Content truncated by the Agent response limit.": "内容因 Agent 响应大小限制而截断。",
-  "Cold switches are asynchronous and never start Harness automatically.": "冷切换会试启动隔离副本进行兼容性自检；切换完成后不自动启动工作配置档。",
+  "Cold switches are asynchronous and never start Harness automatically.":
+    "冷切换会试启动隔离副本进行兼容性自检；切换完成后不自动启动工作配置档。",
   "Runtime settings": "运行时设置",
   "Official": "官方",
   "Install mode": "安装模式",
@@ -2464,9 +3084,12 @@ const chinese: Record<string, string> = {
   "pin": "固定路径",
   "Not pinned": "未固定",
   "Save runtime settings": "保存运行时设置",
-  "Harness must be positively stopped before saving runtime settings.": "必须确认 Harness 已停止后才能保存运行时设置。",
-  "Wait for the update to become idle before saving runtime settings.": "请等待更新进入空闲状态后再保存运行时设置。",
-  "Wait for the cold switch to finish before saving runtime settings.": "请等待冷切换完成后再保存运行时设置。",
+  "Harness must be positively stopped before saving runtime settings.":
+    "必须确认 Harness 已停止后才能保存运行时设置。",
+  "Wait for the update to become idle before saving runtime settings.":
+    "请等待更新进入空闲状态后再保存运行时设置。",
+  "Wait for the cold switch to finish before saving runtime settings.":
+    "请等待冷切换完成后再保存运行时设置。",
   "Retry cold cleanup before saving runtime settings.": "请先重试冷切换清理后再保存运行时设置。",
   "Cleanup error": "清理错误",
   "Owner quiescent": "所有者已静默",
@@ -2478,20 +3101,25 @@ const chinese: Record<string, string> = {
   "Confirm runtime supply plan": "确认运行时供应计划",
   "Destination": "目标目录",
   "Plan ID": "计划 ID",
-  "System mode may show an installer or elevation prompt and can require restart verification.": "系统模式可能显示安装或提权提示，并可能需要重启后验证。",
-  "Portable mode writes only to the Nexus-owned runtime destination.": "便携模式只写入 Nexus 管理的运行时目标目录。",
+  "System mode may show an installer or elevation prompt and can require restart verification.":
+    "系统模式可能显示安装或提权提示，并可能需要重启后验证。",
+  "Portable mode writes only to the Nexus-owned runtime destination.":
+    "便携模式只写入 Nexus 管理的运行时目标目录。",
   "Confirm cold switch": "确认冷切换",
   "Confirm exact plan": "确认此精确计划",
-  "A successful cold switch registers and promotes its immutable slot without starting Harness.": "冷切换成功后会登记并提升不可变槽位，但不会启动 Harness。",
+  "A successful cold switch registers and promotes its immutable slot without starting Harness.":
+    "冷切换成功后会登记并提升不可变槽位，但不会启动 Harness。",
   "Snapshot inventory": "快照清单",
   "No snapshots reported": "未报告快照",
-  "Healthy and manual snapshots appear here after capture.": "健康快照和手动快照会在捕获后显示于此。",
+  "Healthy and manual snapshots appear here after capture.":
+    "健康快照和手动快照会在捕获后显示于此。",
   "files": "个文件",
   "System effects": "系统影响",
   "No credentials leave this device": "凭据不会离开本机",
   "The Agent API is not responding on its loopback port.": "Agent API 未在本机回环端口响应。",
   "Set NEXUS_AGENT_BIN or build the Rust Agent.": "请设置 NEXUS_AGENT_BIN，或构建 Rust Agent。",
-  "Launcher controls are disabled until the Agent identity is verified.": "验证 Agent 身份前，Launcher 操作已禁用。",
+  "Launcher controls are disabled until the Agent identity is verified.":
+    "验证 Agent 身份前，Launcher 操作已禁用。",
   "The native bridge returned an unknown error": "原生桥接返回了未知错误",
   "Backend error: {message}": "后端错误：{message}",
 };
@@ -2512,13 +3140,13 @@ export function localeFromLanguage(language: string): Locale {
 
 function interpolate(value: string, params?: TranslationParams): string {
   if (!params) return value;
-  return value.replace(/\{([a-zA-Z0-9_]+)\}/g, (match, key: string) => (
-    params[key] === undefined ? match : String(params[key])
-  ));
+  return value.replace(/\{([a-zA-Z0-9_]+)\}/g, (match, key: string) =>
+    params[key] === undefined ? match : String(params[key]),
+  );
 }
 
 function translate(locale: Locale, key: string, params?: TranslationParams): string {
-  const value = locale === "zh" ? chinese[key] ?? english[key] ?? key : english[key] ?? key;
+  const value = locale === "zh" ? (chinese[key] ?? english[key] ?? key) : (english[key] ?? key);
   return interpolate(value, params);
 }
 
@@ -2534,7 +3162,13 @@ const I18nContext = createContext<I18nContextValue>({
   t: (key, params) => translate("en", key, params),
 });
 
-export function I18nProvider({ children, initialLocale }: { children: ReactNode; initialLocale?: Locale }) {
+export function I18nProvider({
+  children,
+  initialLocale,
+}: {
+  children: ReactNode;
+  initialLocale?: Locale;
+}) {
   const [locale, setLocale] = useState<Locale>(() => initialLocale ?? detectLocale());
   useEffect(() => {
     document.documentElement.lang = locale === "zh" ? "zh-CN" : "en";

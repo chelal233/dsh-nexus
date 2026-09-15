@@ -155,13 +155,12 @@ test("process death releases the kernel lock but never invents completion of run
   }
 });
 
-test("localized MSI artifacts never overwrite or omit a configured language", () => {
-  const outputs = packageOutputs("0.1.2", "acceptance-build", ["en-US", "zh-CN"]);
-  assert.equal(outputs.length, 3);
-  assert.equal(new Set(outputs.map(output => output.file)).size, 3);
-  assert.deepEqual(outputs.filter(output => output.kind === "msi").map(output => output.locale), ["en-US", "zh-CN"]);
-  assert.ok(outputs.every(output => output.file.includes("acceptance-build")));
-  for (const invalid of [[], ["en-US", "en-US"], ["../unsafe"], "en-US"]) assert.throws(() => packageOutputs("0.1.2", "acceptance-build", invalid));
+test("local release produces one multilingual EXE", () => {
+  assert.deepEqual(packageOutputs("0.1.2", "acceptance-build"), [{
+    kind: "nsis", locale: "multilingual",
+    source: "Nexus Launcher_0.1.2_x64-setup.exe",
+    file: "NexusLauncher_0.1.2_acceptance-build_x64.exe",
+  }]);
 });
 
 test("release identity rejects unsafe and development identifiers", () => {

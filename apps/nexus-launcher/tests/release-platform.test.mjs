@@ -10,7 +10,9 @@ test('all products select their native Node archive and packaging format', () =>
   const x86 = selectPlatform('i686-pc-windows-msvc', 'win32', 'x64');
   assert.equal(x86.nodeVersion, '22.23.2');
   assert.equal(x86.archive, 'win-x86.zip');
-  assert.deepEqual(targets['aarch64-pc-windows-msvc'].bundles, ['nsis']);
+  for (const spec of Object.values(targets)) {
+    assert.deepEqual(spec.bundles, spec.platform === 'win32' ? ['nsis'] : ['dmg']);
+  }
 });
 
 test('unsupported or mismatched targets fail before staging host binaries', () => {

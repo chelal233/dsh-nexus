@@ -2,7 +2,7 @@ import { createHash } from 'node:crypto';
 import { copyFile, mkdir, readdir, readFile, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { selectPlatform } from './release-platform.mjs';
+import { bundleFormats, selectPlatform } from './release-platform.mjs';
 
 const app = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
 const root = path.resolve(app, '../..');
@@ -17,11 +17,10 @@ await mkdir(destination, { recursive: true });
 if ((await readdir(destination)).length) throw new Error('Release output must be empty; use a new build directory');
 const files = [];
 for (const kind of spec.bundles) {
-  const extension = { nsis: '.exe', msi: '.msi', dmg: '.dmg' }[kind];
+  const { extension, count } = bundleFormats[kind];
   const directory = path.join(source, kind);
   const entries = (await readdir(directory, { withFileTypes: true })).filter(e => e.isFile() && e.name.endsWith(extension));
-  const expected = kind === 'msi' ? 2 : 1;
-  if (entries.length !== expected) throw new Error(`Expected ${expected} ${kind} packages; found ${entries.length}`);
+  if (entries.length !== count) throw new Error(`Expected ${count} ${kind} packages; found ${entries.length}`);
   for (const entry of entries) {
     const name = `${spec.target}_${identity.buildId}_${entry.name.replaceAll(' ', '')}`;
     const bytes = await readFile(path.join(directory, entry.name));

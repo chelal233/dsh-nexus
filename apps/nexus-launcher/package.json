@@ -4,6 +4,9 @@
   "private": true,
   "type": "module",
   "scripts": {
+    "format": "prettier --write src",
+    "format:check": "prettier --check src",
+    "test:ab": "node scripts/ab-check.mjs",
     "release:gate": "node src-tauri/scripts/release-gate.mjs",
     "dev": "vite",
     "test": "node --experimental-strip-types --test --test-concurrency=4 tests/*.test.ts",
@@ -34,6 +37,7 @@
     "@types/react-dom": "^19.1.7",
     "@vitejs/plugin-react": "^4.7.0",
     "jsdom": "26.1.0",
+    "prettier": "3.9.6",
     "typescript": "^5.9.2",
     "vite": "^7.1.3"
   }

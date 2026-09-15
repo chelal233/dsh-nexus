@@ -1155,19 +1155,7 @@ async fn proxy_agent_request(
 }
 
 fn agent_proxy_success_response(response: AgentResponse<Vec<u8>>) -> Response {
-    let status = StatusCode::from_u16(response.status.as_u16()).unwrap_or(StatusCode::BAD_GATEWAY);
-    let mut builder = Response::builder().status(status);
-    if !response.body.is_empty() {
-        builder = builder.header("content-type", "application/json");
-    }
-    builder
-        .body(Body::from(response.body))
-        .unwrap_or_else(|error| {
-            launcher_error_response(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                format!("Launcher proxy response failed: {error}"),
-            )
-        })
+    agent_proxy_raw_response(response.status, response.body)
 }
 
 fn agent_proxy_error_response(error: AgentClientError) -> Response {

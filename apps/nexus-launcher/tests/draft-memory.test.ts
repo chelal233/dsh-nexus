@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
-import { readFileSync } from "node:fs";
+import { readFileSync, readdirSync } from "node:fs";
 import { createDraftMemory, DraftMemoryContext, useDraftState, useDraftReference } from "../src/draft-memory.ts";
 
 // Remount real hooks with changed server data, as navigation/error rendering does.
@@ -31,10 +31,15 @@ test("App retains editor memory without retaining stale runtime snapshots or bro
   const app = readFileSync(new URL("../src/App.tsx", import.meta.url), "utf8");
   const memory = readFileSync(new URL("../src/draft-memory.ts", import.meta.url), "utf8");
   assert.match(app, /setSnapshot\(failClosedSnapshot\(emptySnapshot\)\)/);
-  assert.match(app, /<DraftMemoryContext.Provider key=\{draftRoot.current\}/);
+  assert.match(app, /<DraftMemoryContext.Provider\s+key=\{draftRoot.current\}/);
   assert.match(app, /contentMode === "error"[\s\S]*?<ErrorState/);
   assert.doesNotMatch(memory, /(?:localStorage|sessionStorage)\./);
-  for (const line of app.split("\n").filter(line => /useDraftState|useDraftReference/.test(line))) {
+  const sourceRoot = new URL("../src/", import.meta.url);
+  const editors = readdirSync(sourceRoot, { recursive: true })
+    .filter(file => file.endsWith(".tsx"))
+    .map(file => readFileSync(new URL(file.replaceAll("\\", "/"), sourceRoot), "utf8"))
+    .join("\n");
+  for (const line of editors.split("\n").filter(line => /useDraftState|useDraftReference/.test(line))) {
     assert.doesNotMatch(line, /harnessUi|["'](?:token|snapshot|health)["']/);
   }
 });

@@ -6,7 +6,7 @@ import os from "node:os";
 import { spawnSync } from "node:child_process";
 
 test("terminal uses exact paths and profile only after durable registration", { skip: process.platform !== "win32" }, () => {
-  const source = fs.readFileSync(new URL("../../../crates/nexus-agent/src/lib.rs", import.meta.url), "utf8");
+  const source = fs.readFileSync(new URL("../../../crates/nexus-agent/src/profile_api.rs", import.meta.url), "utf8");
   const init = source.match(/const DSH_TERMINAL_INIT: &str = r#"([\s\S]*?)"#;/)![1];
   const wait = source.match(/const DSH_TERMINAL_WAIT: &str = r#"([\s\S]*?)"#;/)![1];
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "nexus-terminal-regression-"));

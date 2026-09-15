@@ -1,8 +1,7 @@
 {
   "bundle": {
     "targets": [
-      "nsis",
-      "msi"
+      "nsis"
     ],
     "resources": {
       "resources/nexus-agent.exe": "nexus-agent.exe",
@@ -17,18 +16,6 @@
         ],
         "displayLanguageSelector": true,
         "installerHooks": "installers/shutdown.nsh"
-      },
-      "wix": {
-        "language": [
-          "en-US",
-          "zh-CN"
-        ],
-        "fragmentPaths": [
-          "installers/shutdown.wxs"
-        ],
-        "componentGroupRefs": [
-          "NexusInstallerShutdown"
-        ]
       },
       "webviewInstallMode": {
         "type": "offlineInstaller"

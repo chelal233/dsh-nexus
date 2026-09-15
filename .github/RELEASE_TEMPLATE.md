@@ -8,7 +8,7 @@ Nexus Launcher 开发预发布。
 - macOS Intel：选择 `x86_64-apple-darwin` 的 `.dmg`。
 - macOS Apple Silicon：选择 `aarch64-apple-darwin` 的 `.dmg`。
 
-每次只需下载匹配系统的一个安装包。Windows x86/x64 的 MSI 是替代安装方式，`en-US` / `zh-CN` 分别为英文和中文安装界面，无需全部下载。Windows 包含 WebView2 离线安装器及 Node/npm/pnpm，体积大于单独的程序。Windows x86 内置 Node 22，其余内置 Node 24。macOS 最低版本为 13.5。
+每次只需下载匹配系统的一个安装包。Windows 每个架构只提供一个 EXE，运行后可选择简体中文或 English，不再按语言分开发包。Windows 包含 WebView2 离线安装器及 Node/npm/pnpm，体积大于单独的程序。Windows x86 内置 Node 22，其余内置 Node 24。macOS 最低版本为 13.5。
 
 离线安装是发行要求：Windows 保持 `offlineInstaller`，不依赖安装时联网下载 WebView2。Nexus 自身可离线安装；Harness 的离线安装、恢复和运行需要预先准备对应离线材料，不能将空白机器上的首次在线获取依赖称为完全离线。
 

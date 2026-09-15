@@ -70,6 +70,7 @@ jobs:
       - name: Frontend and platform regression tests
         working-directory: apps/nexus-launcher
         run: |
+          pnpm format:check
           pnpm typecheck
           pnpm test
           node --test tests/release-platform.test.mjs
@@ -91,7 +92,7 @@ jobs:
       - name: Build installers
         working-directory: apps/nexus-launcher
         env:
-          BUNDLES: ${{ contains(matrix.target, 'apple') && 'dmg' || matrix.target == 'aarch64-pc-windows-msvc' && 'nsis' || 'nsis,msi' }}
+          BUNDLES: ${{ contains(matrix.target, 'apple') && 'dmg' || 'nsis' }}
         run: pnpm tauri build --target "$CARGO_BUILD_TARGET" --bundles "$BUNDLES" -- --locked
       - name: Windows installed package smoke
         if: runner.os == 'Windows'
@@ -109,17 +110,6 @@ jobs:
           $process = Start-Process -FilePath "$install/uninstall.exe" -ArgumentList '/S' -WindowStyle Hidden -Wait -PassThru
           if ($process.ExitCode -ne 0) { throw "Uninstaller exited $($process.ExitCode)" }
           if (Test-Path -LiteralPath "$install/nexus-launcher-app.exe") { throw 'Uninstall left the GUI binary behind' }
-          if (Test-Path -LiteralPath (Join-Path $bundle 'msi')) {
-            foreach ($msi in Get-ChildItem -LiteralPath (Join-Path $bundle 'msi') -Filter '*.msi') {
-              $extract = Join-Path $env:RUNNER_TEMP $msi.BaseName
-              $process = Start-Process msiexec.exe -ArgumentList "/a `"$($msi.FullName)`" /qn TARGETDIR=`"$extract`"" -WindowStyle Hidden -Wait -PassThru
-              if ($process.ExitCode -ne 0) { throw "MSI extraction exited $($process.ExitCode)" }
-              $manifest = @(Get-ChildItem -LiteralPath $extract -Filter release-manifest.json -Recurse)
-              if ($manifest.Count -ne 1) { throw 'Expected one packaged resource manifest' }
-              node apps/nexus-launcher/src-tauri/scripts/verify-installed.mjs $manifest[0].DirectoryName
-              if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-            }
-          }
       - name: macOS installed package smoke
         if: runner.os == 'macOS'
         run: |

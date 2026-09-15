@@ -10,8 +10,8 @@ Nexus 是面向 Windows 和 macOS 的 Harness 启动器，提供安装与版本�
 
 | 系统 | CPU | 安装包 | 内置 Node | 系统要求 |
 | --- | --- | --- | --- | --- |
-| Windows | x64 / AMD64 | EXE、英文/中文 MSI | 24.20.0 | Windows 10/11 x64 |
-| Windows | x86 / 32 位 | EXE、英文/中文 MSI | 22.23.2 | Windows 10 x86，或支持 x86 应用的 x64 系统 |
+| Windows | x64 / AMD64 | EXE（安装时选择语言） | 24.20.0 | Windows 10/11 x64 |
+| Windows | x86 / 32 位 | EXE（安装时选择语言） | 22.23.2 | Windows 10 x86，或支持 x86 应用的 x64 系统 |
 | Windows | ARM64 / aarch64 | EXE | 24.20.0 | Windows 11 ARM64 |
 | macOS | Intel x64 | DMG | 24.20.0 | macOS 13.5 或更新 |
 | macOS | Apple Silicon ARM64 | DMG | 24.20.0 | macOS 13.5 或更新 |

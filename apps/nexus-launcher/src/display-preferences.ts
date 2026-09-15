@@ -7,14 +7,20 @@ export function displayZoom(): number {
   if (sessionZoom !== undefined) return sessionZoom;
   try {
     const value = Number(window.localStorage.getItem(KEY));
-    return sessionZoom = ZOOM_LEVELS.includes(value) ? value : 100;
-  } catch { return 100; }
+    return (sessionZoom = ZOOM_LEVELS.includes(value) ? value : 100);
+  } catch {
+    return 100;
+  }
 }
 
 export function setDisplayZoom(value: number): void {
   if (!ZOOM_LEVELS.includes(value)) return;
   sessionZoom = value;
   document.documentElement.style.zoom = String(value / 100);
-  try { window.localStorage.setItem(KEY, String(value)); } catch { /* The current page can still scale without storage. */ }
+  try {
+    window.localStorage.setItem(KEY, String(value));
+  } catch {
+    /* The current page can still scale without storage. */
+  }
   window.dispatchEvent(new CustomEvent(ZOOM_CHANGED, { detail: value }));
 }

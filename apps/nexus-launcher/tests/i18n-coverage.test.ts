@@ -8,6 +8,16 @@ import ts from "typescript";
 import { dynamicTranslationKeys } from "./dynamic-i18n-keys.ts";
 
 const root = fileURLToPath(new URL("../src/", import.meta.url));
+// Formatting may wrap a call; its file and expression tokens remain the review boundary.
+function dynamicCallId(id: string): string {
+  const separator = id.indexOf(":");
+  const scanner = ts.createScanner(ts.ScriptTarget.Latest, true, ts.LanguageVariant.Standard, id.slice(separator + 1));
+  const tokens: string[] = [];
+  while (scanner.scan() !== ts.SyntaxKind.EndOfFileToken) tokens.push(scanner.getTokenText());
+  return id.slice(0, separator) + ":" + JSON.stringify(tokens);
+}
+const registeredDynamicCalls = new Map(Object.entries(dynamicTranslationKeys)
+  .map(([id, value]) => [dynamicCallId(id), value]));
 function parse(file: string) {
   return ts.createSourceFile(file, readFileSync(file, "utf8"), ts.ScriptTarget.Latest, true,
     file.endsWith(".tsx") ? ts.ScriptKind.TSX : ts.ScriptKind.TS);
@@ -70,17 +80,17 @@ test("translation tables agree and all static UI translation keys are registered
         }
         if (!staticExpression(node.arguments[0])) {
           const id=path.relative(root,file).replaceAll("\\","/")+":"+node.arguments[0].getText();
-          const registered=dynamicTranslationKeys[id];
+          const registered=registeredDynamicCalls.get(dynamicCallId(id));
           assert.ok(registered?.reason, "Unregistered dynamic translation call: "+id);
           for(const key of registered.keys??[]) assert.ok(english.has(key), "Unregistered dynamic translation key: "+key);
-          dynamicSeen.add(id);
+          dynamicSeen.add(dynamicCallId(id));
         }
       });
     }
   }
   scan(root);
   assert.deepEqual(missing, [], "Unregistered translation keys");
-  assert.deepEqual([...dynamicSeen].sort(),Object.keys(dynamicTranslationKeys).sort(),"Remove stale dynamic key registrations");
+  assert.deepEqual([...dynamicSeen].sort(),[...registeredDynamicCalls.keys()].sort(),"Remove stale dynamic key registrations");
 });
 
 // Deliberately narrow: product names, units, protocol/argument examples and
@@ -124,6 +134,9 @@ test("visible JSX prose and accessibility labels cannot bypass translation", () 
 });
 
 test("dynamic variable and interpolated template calls require registration", () => {
+  assert.equal(dynamicCallId('view.tsx:stringValue(row, "name") || "Unknown"'), dynamicCallId('view.tsx:stringValue(\nrow, "name"\n) || "Unknown"'));
+  assert.notEqual(dynamicCallId('view.tsx:"a b"'), dynamicCallId('view.tsx:"ab"'));
+  assert.notEqual(dynamicCallId('one.tsx:key'), dynamicCallId('two.tsx:key'));
   const source=ts.createSourceFile("nested/component.tsx", 't("Known"); t(`Known`); t(statusKey); t(`Harness ${action}`); t(ok ? "Known" : otherKey)',ts.ScriptTarget.Latest,true,ts.ScriptKind.TSX);
   assert.deepEqual(dynamicCalls(source),["statusKey","`Harness ${action}`",'ok ? "Known" : otherKey']);
   assert.equal(dynamicTranslationKeys["nested/component.tsx:statusKey"],undefined);
@@ -141,5 +154,6 @@ test("installer languages explicitly offer Simplified Chinese rather than generi
   const config=JSON.parse(readFileSync(path.join(root,"../src-tauri/tauri.windows.conf.json"),"utf8"));
   assert.deepEqual(config.bundle.windows.nsis.languages,["English","SimpChinese"]);
   assert.equal(config.bundle.windows.nsis.displayLanguageSelector,true);
-  assert.deepEqual(config.bundle.windows.wix.language,["en-US","zh-CN"]);
+  assert.deepEqual(config.bundle.targets,["nsis"]);
+  assert.equal(config.bundle.windows.webviewInstallMode.type,"offlineInstaller");
 });
