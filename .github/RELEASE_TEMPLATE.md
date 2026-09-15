@@ -1,14 +1,19 @@
-Nexus Launcher 开发预发布，尚未声明稳定版支持。
+Nexus Launcher 开发预发布。
 
-附件按 Rust target 标明操作系统和架构：Windows x86、x64、ARM64；macOS Intel x64、Apple Silicon ARM64。Windows x86 内置 Node 22，其余内置 Node 24。安装要求见仓库 README 和 docs/github-release.md。
+## 下载选择
 
-各目标附 SHA256SUMS 与 build.json，可核对提交、版本、构建编号及校验值。CI 执行编译、自动化测试和资源校验；这些不代表真实机器安装、升级、卸载与 Harness 工作流验收。
+- Windows x64：选择 `x86_64-pc-windows-msvc` 的 `setup.exe`。
+- Windows x86：选择 `i686-pc-windows-msvc` 的 `setup.exe`。
+- Windows ARM64：选择 `aarch64-pc-windows-msvc` 的 `setup.exe`。
+- macOS Intel：选择 `x86_64-apple-darwin` 的 `.dmg`。
+- macOS Apple Silicon：选择 `aarch64-apple-darwin` 的 `.dmg`。
 
-维护者公开草稿前填写：
+每次只需下载匹配系统的一个安装包。Windows x86/x64 的 MSI 是替代安装方式，`en-US` / `zh-CN` 分别为英文和中文安装界面，无需全部下载。Windows 包含 WebView2 离线安装器及 Node/npm/pnpm，体积大于单独的程序。Windows x86 内置 Node 22，其余内置 Node 24。macOS 最低版本为 13.5。
 
-- 本版变化：待填写。
-- 各架构实际机器验收及已知限制：待填写。
-- 第三方许可材料核对结果：待填写。
-- Windows 安装包未签名；macOS 仅 ad-hoc 签名，未 Apple 公证。签名发行暂未配置。
+离线安装是发行要求：Windows 保持 `offlineInstaller`，不依赖安装时联网下载 WebView2。Nexus 自身可离线安装；Harness 的离线安装、恢复和运行需要预先准备对应离线材料，不能将空白机器上的首次在线获取依赖称为完全离线。
 
-不要把完整 CI 日志、诊断目录或私有配置作为 Release 附件。
+## 验证与限制
+
+五个架构均通过编译、自动化回归、安装包资源哈希校验、Agent/CLI 通信及 GUI 进程启动检查。每个平台附 `SHA256SUMS.txt` 和 `build.json`，记录来源提交、构建编号、运行时和校验值。
+
+CI 不代表完整 Harness 业务、升级、数据保留或用户交互真机验收。Windows 未商业签名；macOS 仅 ad-hoc 签名，未 Apple 公证。macOS 的 DSH 交互终端尚未实现。第三方许可材料已包含在安装包内，仍有 `reviewRequired` 项待核对。本版本不声明稳定版或各平台功能完全对等。

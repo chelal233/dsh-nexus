@@ -1,6 +1,6 @@
 # GitHub 构建与发布
 
-配置已准备；未推送、未创建远端 Release，也未执行 GitHub CI。配置存在不代表各目标已编译通过或完成实际机器验收。
+五架构 CI 已在提交 `03a7922` 全部通过：[构建与安装启动验证](https://github.com/chelal233/dsh-nexus/actions/runs/34932049352)。`v0.1.2` 复用该次产物发布下载，不重新编译。CI 启动验证不等于完整 Harness 真机验收。
 
 ## 平台矩阵
 
@@ -28,7 +28,9 @@ Windows x86 在 x64 runner 上编译并运行 x86 Rust 测试及内置 Node 探�
 
 `Desktop build` 在 main push、PR 和手动触发时执行五个目标。步骤包括前端检查、目标架构 Rust 测试、兼容性检查、辅助程序编译、匹配架构 Node/npm/pnpm 准备与嵌套命令测试、许可材料收集、原生桥接测试、Tauri 打包、资源校验与附件收集。矩阵一项失败不会取消其他项，但整体不允许生成 Release 草稿。PR 仅有只读仓库权限，不使用发布密钥。
 
-`Draft release` 在 `v*` 标签 push 后复用完整矩阵；标签必须精确等于 `v<package version>`。五个目标全部成功才下载附件、复核 SHA-256，并创建 **draft + prerelease**。它不会公开草稿，也不会覆盖已有同名 Release；重跑应先检查已有草稿状态。普通构建只保留 Actions artifacts 14 天。
+`Publish release` 在 `v*` 标签 push 后自动提供 Release 下载；标签必须精确等于 `v<package version>`。先查找同一提交已成功且包含全部五架构、未过期附件的 Desktop build；找到则直接复用，否则执行完整矩阵。随后验证五个目标的版本、提交、安装启动结果、安装包数量和 SHA-256，上传全部附件到草稿，上传成功才发布为 prerelease。已有同名 Release 不自动覆盖，失败后应先检查草稿和附件。普通构建保留 Actions artifacts 14 天；Release 附件供用户分别下载，不要求下载整个 Actions ZIP。私有仓库的 Release 下载仍需要仓库访问权限。
+
+日常开发只需运行必要的目标；发布时推送版本 tag 即包含上传和发布下载流程。复用要求完全相同的提交，不能用旧提交的产物冒充新 tag。发布工作流自身仍消耗少量 Linux runner 时间；额度耗尽时不要反复触发。首次 `v0.1.2` 通过本地 GitHub CLI 发布已验证产物，临时停用旧的 tag 工作流以避免重复构建，完成后恢复。
 
 产物文件名包含 Rust target 和唯一 run/attempt 构建编号。每个平台附 `SHA256SUMS.txt` 和 `build.json`，只含版本、提交、构建编号、运行时版本、签名/机器验收状态及哈希；不上传完整测试日志或诊断目录。
 
@@ -72,7 +74,7 @@ DSH 交互终端入口及终端租约目前仅在 Windows 实现；macOS 调用�
 3. 先执行 Desktop build，排除任何目标失败；核对生成的 `notices/components.json`，补齐 `reviewRequired` 项及嵌套组件许可义务。
 4. 对每个目标完成安装、首次启动、Agent 身份、Harness 安装/启动/停止、升级、卸载及数据保留验收；macOS 增查 DMG 挂载、复制到 Applications 后启动、资源可执行权限和系统权限提示。使用 [现有验收清单](manual-acceptance-0.1.2.md) 并记录平台差异。
 5. 同步根 Cargo、GUI Cargo、两个 Cargo.lock 中本项目包版本、package.json 和 tauri.conf.json；本次准备未递增 0.1.2。对已审核提交创建对应标签并显式 push 标签。
-6. 工作流成功后填写草稿的变化、许可核对、各架构验收和已知问题，检查附件完整性，再由维护者公开。
+6. 打 tag 前更新 `.github/RELEASE_TEMPLATE.md` 中的下载说明、验证范围和已知问题。工作流成功后自动发布预发布版及各架构独立下载附件，维护者核对 Release 结果；稳定版发布需独立确认验收与签名状态。
 
 校验下载文件：Windows 使用 `Get-FileHash <安装包> -Algorithm SHA256`；macOS 在附件目录执行 `shasum -a 256 -c <target>_SHA256SUMS.txt`。
 
@@ -85,4 +87,4 @@ DSH 交互终端入口及终端租约目前仅在 Windows 实现；macOS 调用�
 - Windows x64 三个辅助程序 Release 编译与静态 CRT/PE 导入检查通过；2,986 项资源清单生成和复核通过。
 - actionlint 1.7.12 通过；两平台合并配置通过 Tauri schema 结构校验（不代替原生打包）。
 - 许可收集生成 575 项记录，40 项 `reviewRequired` 待核对。
-- 本轮未执行完整 GUI 安装包构建、Rust 全量测试、GitHub 远端矩阵或实际安装验收；这些是工作流和发布前验收的待执行项。
+- 后续 GitHub 五架构矩阵已全部通过完整编译、Rust 回归与 CI 安装启动检查；九个安装文件已下载且 SHA-256 一致。完整用户交互、Harness 工作流和升级数据保留验收仍待执行。
