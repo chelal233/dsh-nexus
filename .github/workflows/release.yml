@@ -26,6 +26,7 @@ jobs:
         run: |
           set -euo pipefail
           test "$RELEASE_TAG" = "v$(node -p "require('./apps/nexus-launcher/package.json').version")"
+          node -e "require('node:assert/strict').equal(require('./apps/nexus-launcher/src-tauri/tauri.windows.conf.json').bundle.windows.webviewInstallMode.type, 'offlineInstaller')"
           sha=$(git rev-parse HEAD)
           runs=$(gh run list --repo "$GITHUB_REPOSITORY" --workflow build.yml --commit "$sha" --status success --limit 100 --json databaseId --jq '.[].databaseId')
           for run in $runs; do

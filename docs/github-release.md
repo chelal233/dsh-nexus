@@ -23,6 +23,7 @@ Windows x86 在 x64 runner 上编译并运行 x86 Rust 测试及内置 Node 探�
 - macOS：Xcode Command Line Tools；应用最低系统版本为 macOS 13.5，同时覆盖内置 Node 的要求。
 - 用户：安装预编译包，不需要 Rust、Xcode、MSVC、系统 Node/pnpm。Windows 使用包内 WebView2 离线安装器；macOS 使用系统 WKWebView。受管 Harness 首次安装仍可能联网安装依赖并构建，其原生依赖失败会保留原始错误。
 - Windows 未配置 Authenticode；macOS 使用 ad-hoc 签名，未配置 Developer ID 与公证。面向普通用户的签名发布需要维护者证书和独立验收；当前产物定位为开发预发布，不自动提供绕过平台保护的操作。
+- 离线安装是发行要求，发布工作流强制检查 Windows 使用 `offlineInstaller`；不以减小包体积为由改回联网安装 WebView2。Harness 离线使用仍需预先准备对应离线材料。
 
 ## 工作流
 
