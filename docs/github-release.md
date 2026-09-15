@@ -59,7 +59,11 @@ pnpm tauri build --target "$CARGO_BUILD_TARGET" --bundles dmg -- --locked
 
 构建自动准备辅助程序、运行时、许可材料、版本身份及前端。使用显式 target 时，安装包位于 Cargo target 目录的 `<target>/release/bundle/`。`CARGO_TARGET_DIR` 可指定独立输出目录。`collect-release.mjs` 只用于检查已通过的干净提交构建，拒绝 dirty checkout；它本身不执行测试。
 
-原有 `pnpm release:gate` 保留为 **Windows x64 本地门禁**，使用前清除 `CARGO_BUILD_TARGET` 和 `NEXUS_BUILD_ID` 环境变量。它与跨平台 CI 的包收集流程分开；CI 资源哈希验证不代表安装器提取、签名验真或真实机器安装测试。
+原有 `pnpm release:gate` 保留为 **Windows x64 本地门禁**，使用前清除 `CARGO_BUILD_TARGET` 和 `NEXUS_BUILD_ID` 环境变量。它与跨平台 CI 的包收集流程分开；CI 会执行 NSIS 静默安装/卸载、MSI 管理提取、DMG 挂载复制、包内哈希校验、Agent/CLI 身份验证和 GUI 进程启动检查；这仍不代表真实用户交互、Gatekeeper/SmartScreen 信任或完整 Harness 真机验收。
+
+## 已知平台功能差异
+
+DSH 交互终端入口及终端租约目前仅在 Windows 实现；macOS 调用会返回 `terminal_unsupported`，尚不具备此入口的功能对等性。自动构建和包启动成功不能抹去此限制。
 
 ## 首次发布操作
 

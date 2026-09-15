@@ -49,6 +49,11 @@ jobs:
           package-manager-cache: false
       - name: Prepare tools
         run: |
+          if [[ "$RUNNER_OS" == "macOS" ]]; then
+            # /var is a macOS symlink. Tests must use an ordinary data-root
+            # ancestry so they exercise, rather than weaken, no-link guards.
+            echo "TMPDIR=$(cd "$RUNNER_TEMP" && pwd -P)/" >> "$GITHUB_ENV"
+          fi
           npm install --global pnpm@11.7.0
           rustup toolchain install 1.98.0 --profile minimal
           rustup default 1.98.0
@@ -56,6 +61,12 @@ jobs:
       - name: Install locked frontend dependencies
         working-directory: apps/nexus-launcher
         run: pnpm install --frozen-lockfile
+      - uses: actions/cache/restore@v5
+        id: cargo-cache
+        with:
+          path: target-rtest
+          key: rust-1.98-${{ matrix.target }}-${{ hashFiles('Cargo.lock', 'apps/nexus-launcher/src-tauri/Cargo.lock') }}-${{ github.sha }}-${{ github.run_attempt }}
+          restore-keys: rust-1.98-${{ matrix.target }}-${{ hashFiles('Cargo.lock', 'apps/nexus-launcher/src-tauri/Cargo.lock') }}-
       - name: Frontend and platform regression tests
         working-directory: apps/nexus-launcher
         run: |
@@ -136,3 +147,8 @@ jobs:
           path: target/release-assets/${{ matrix.target }}/*
           if-no-files-found: error
           retention-days: 14
+      - uses: actions/cache/save@v5
+        if: always() && !cancelled() && steps.cargo-cache.outputs.cache-hit != 'true'
+        with:
+          path: target-rtest
+          key: rust-1.98-${{ matrix.target }}-${{ hashFiles('Cargo.lock', 'apps/nexus-launcher/src-tauri/Cargo.lock') }}-${{ github.sha }}-${{ github.run_attempt }}
