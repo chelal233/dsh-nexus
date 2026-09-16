@@ -3,6 +3,9 @@ const platform = process.platform === 'win32' ? 'windows' : 'macos';
 if (!['win32', 'darwin'].includes(process.platform) || !['x64', 'arm64'].includes(process.arch)) {
   throw new Error('Electron release supports Windows/macOS x64 and ARM64');
 }
+// electron-builder 26.15's 7z auto-filters can silently lose PE files in the
+// bundled NSIS decoder. BCJ is supported on both Windows targets (#9983).
+if (process.platform === 'win32') process.env.ELECTRON_BUILDER_7Z_FILTER = 'BCJ';
 module.exports = {
   appId: 'com.nexus.launcher', productName: 'Nexus Launcher',
   directories: { output: 'electron-dist' },
