@@ -58,7 +58,9 @@ try {
   assert.equal(await evaluate('typeof process'), 'undefined');
   assert.equal(await evaluate('window.nexusDesktop.invoke("exec", {}).then(()=>false,()=>true)'), true);
   assert.equal(await evaluate('window.nexusDesktop.invoke("proxy_request", {method:"GET",path:"/etc/passwd"}).then(()=>false,()=>true)'), true);
-  const state = await evaluate('window.nexusDesktop.invoke("proxy_request", {method:"GET",path:"/v1/state"})');
+  // The renderer also reads state during startup. Both reads reconcile recovery
+  // under the lifecycle gate, so wait for the explicit transient busy response.
+  const state = await until(() => evaluate('window.nexusDesktop.invoke("proxy_request", {method:"GET",path:"/v1/state"}).catch(error=>{if(error.code==="lifecycle_busy")return null;throw error})'));
   assert.equal(state.state.lifecycle, 'running');
   const screenshot = await cdp('Page.captureScreenshot', { format: 'png' });
   await writeFile(path.join(fixture, 'launcher.png'), Buffer.from(screenshot.data, 'base64'));

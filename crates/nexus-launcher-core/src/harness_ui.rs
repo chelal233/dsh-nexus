@@ -540,7 +540,8 @@ mod retention_tests {
         let mut restarted = HarnessLogObserver::default();
         assert_eq!(read_harness_ui_info_with_observer(&paths, &mut restarted, Some(&session)).token.as_deref(), Some("PRIVATE_SENTINEL"));
         let mut healthy = session.clone(); healthy.healthy_snapshot_attempted = true;
-        assert_eq!(read_harness_ui_info_with_observer(&paths, &mut HarnessLogObserver::default(), Some(&healthy)).token.as_deref(), Some("PRIVATE_SENTINEL"));
+        let restored = read_harness_ui_info_with_observer(&paths, &mut HarnessLogObserver::default(), Some(&healthy));
+        assert_eq!(restored.token.as_deref(), Some("PRIVATE_SENTINEL"), "restoration result: {restored:?}");
         // No new URL in the tail can rescue a changed generation.
         let mut other = session.clone(); other.generation += 1;
         assert!(!read_harness_ui_info_with_observer(&paths, &mut HarnessLogObserver::default(), Some(&other)).available);
