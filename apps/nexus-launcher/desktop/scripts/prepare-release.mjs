@@ -29,7 +29,12 @@ export async function inventoryResources(root, names) {
     const entry = entries.find(item => item.name === path.basename(relative));
     if (!entry || entry.isSymbolicLink()) throw new Error(`Missing or linked release resource: ${relative}`);
     if (entry.isDirectory()) {
-      for (const child of (await readdir(path.join(root, relative))).sort()) await visit(path.join(relative, child));
+      for (const child of (await readdir(path.join(root, relative))).sort()) {
+        // electron-builder's copy walker always omits these metadata files,
+        // including inside bundled packages. They are not runtime resources.
+        if (child === '.gitkeep' || child === '.DS_Store') continue;
+        await visit(path.join(relative, child));
+      }
     } else if (entry.isFile()) {
       result.push({ path: relative.replaceAll("\\", "/"), ...await digest(path.join(root, relative)) });
     } else throw new Error(`Unsupported release resource: ${relative}`);

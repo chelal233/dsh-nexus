@@ -37,8 +37,12 @@ test("release inventory detects swapped old binaries and transitive runtime chan
     await mkdir(path.join(root, "runtime/node"), { recursive: true });
     await writeFile(path.join(root, "agent.exe"), "new executable");
     await writeFile(path.join(root, "runtime/node/npm.js"), "complete npm");
+    await writeFile(path.join(root, "runtime/node/.gitkeep"), "");
+    await writeFile(path.join(root, "runtime/node/.DS_Store"), "metadata");
     const files = await inventoryResources(root, ["agent.exe", "runtime"]);
     assert.equal(files.length, 2);
+    await rm(path.join(root, "runtime/node/.gitkeep"));
+    await rm(path.join(root, "runtime/node/.DS_Store"));
     await verifyInventory(root, files);
     await writeFile(path.join(root, "agent.exe"), "old executable");
     await assert.rejects(verifyInventory(root, files), /changed: agent.exe/);

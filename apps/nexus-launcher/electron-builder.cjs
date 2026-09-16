@@ -9,7 +9,9 @@ module.exports = {
   artifactName: `dsh-nexus_${version}_${platform}_\${arch}.\${ext}`,
   asar: true,
   files: ['dist/**', 'electron/**', 'desktop/icons/**', 'package.json'],
-  extraResources: [{ from: 'desktop/resources', to: '.', filter: ['**/*', '!*.gitkeep'] }],
+  // Preserve the staged runtime tree. Its manifest omits only the metadata
+  // files that electron-builder's copy walker always excludes.
+  extraResources: [{ from: 'desktop/resources', to: '.', filter: ['**/*'] }],
   // Signing is mandatory for release builds. Local unsigned smoke builds are explicit.
   forceCodeSigning: process.env.NEXUS_UNSIGNED_SMOKE !== '1',
   // Versions are identified by published GitHub Release tags (v<package version>).
