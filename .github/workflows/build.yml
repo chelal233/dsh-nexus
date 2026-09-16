@@ -88,7 +88,15 @@ jobs:
           $process = Start-Process -FilePath $setup[0].FullName -ArgumentList "/S /D=$install" -WindowStyle Hidden -Wait -PassThru
           if ($process.ExitCode -ne 0) { throw 'Installer failed' }
           node desktop/scripts/verify-installed.mjs "$install/resources"
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          if ($LASTEXITCODE -ne 0) {
+            $verificationExit = $LASTEXITCODE
+            Get-ChildItem -LiteralPath "$install/resources" -ErrorAction Continue | Select-Object Name,Length,Attributes
+            Get-ChildItem -Path 'electron-dist/win*-unpacked/resources/nexus-*.exe' -ErrorAction Continue | Select-Object FullName,Length
+            try {
+              Get-MpThreatDetection -ErrorAction Stop | Select-Object InitialDetectionTime,ThreatID,Resources,ActionSuccess | ConvertTo-Json -Depth 4
+            } catch { Write-Host "Threat diagnostic unavailable: $($_.Exception.Message)" }
+            exit $verificationExit
+          }
           $env:NEXUS_SMOKE_EXECUTABLE = "$install/Nexus Launcher.exe"
           node scripts/electron-smoke.mjs
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }

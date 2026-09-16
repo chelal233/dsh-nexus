@@ -732,7 +732,9 @@ mod tests {
         fs::remove_dir_all(&paths.root).unwrap();
     }
     fn fixture() -> (NexusPaths, MaintenanceStore) {
-        let root = std::env::temp_dir().join(format!("nexus-space-{}", new_instance_id()));
+        let unique = crate::agent_auth::random_hex().unwrap();
+        // Keep room for quarantine and transaction names under Windows MAX_PATH.
+        let root = std::env::temp_dir().join(format!("nexus-space-{}", &unique[..20]));
         let paths = NexusPaths::from_root(root); paths.ensure_directories().unwrap();
         let default_home = Some(paths.root.join("test-user-home").join(".dsh"));
         (paths.clone(), MaintenanceStore { paths, default_home })
@@ -765,7 +767,8 @@ mod tests {
     }
     fn preview(store: &MaintenanceStore) -> CleanupPreview { store.preview(30, &[]).unwrap().preview.unwrap() }
     fn selected(preview: &CleanupPreview, name: &str) -> String {
-        preview.items.iter().find(|item| item.name == name && item.eligible).unwrap().id.clone()
+        preview.items.iter().find(|item| item.name == name && item.eligible)
+            .unwrap_or_else(|| panic!("Expected eligible item {name}; preview: {preview:?}")).id.clone()
     }
     fn diagnostic_fixture(paths: &NexusPaths, name: &str, age: u64) -> PathBuf {
         let dir = paths.diagnostics_dir.join(name);
