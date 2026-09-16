@@ -152,12 +152,17 @@ select:focus-visible {
 }
 .sidebar-footer {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: 8px;
   margin-top: auto;
   padding: 10px 11px 0;
   color: var(--subtle);
   font-size: 11px;
+}
+.desktop-update-warning {
+  flex-basis: 100%;
+  line-height: 1.5;
 }
 .workspace {
   display: flex;

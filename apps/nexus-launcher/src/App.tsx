@@ -253,6 +253,10 @@ function App() {
   ]);
   const [busyAction, setBusyAction] = useState<string | null>(null);
   const desktopUpdate = useDesktopUpdate();
+  const updateRuntime = harnessRuntimeValue(snapshot.harnessRuntime);
+  const updateNeedsHarnessStop =
+    stringValue(updateRuntime, "state") === "running" ||
+    (numberValue(updateRuntime, "pid") ?? 0) > 0;
   const actionInFlight = useRef(false);
   const [credentialInvalidationPending, setCredentialInvalidationPending] = useState(false);
   const refreshInFlight = useRef<Promise<void> | null>(null);
@@ -927,13 +931,23 @@ function App() {
               ["available", "downloading", "ready", "installing"].includes(desktopUpdate.phase) && (
                 <button
                   className="button secondary small"
-                  title={t("Update and restart")}
+                  title={t(
+                    updateNeedsHarnessStop
+                      ? "Stop Harness before updating; running tasks will be interrupted."
+                      : "Update and restart",
+                  )}
                   disabled={desktopUpdate.phase !== "ready"}
-                  onClick={() =>
+                  onClick={() => {
+                    if (updateNeedsHarnessStop) {
+                      setError(
+                        t("Stop Harness before updating; running tasks will be interrupted."),
+                      );
+                      return;
+                    }
                     void invoke("update_install").catch((error) =>
                       setError(error.message || String(error)),
-                    )
-                  }
+                    );
+                  }}
                 >
                   {desktopUpdate.phase === "ready"
                     ? t("Update")
@@ -946,6 +960,13 @@ function App() {
                           ),
                         })}
                 </button>
+              )}
+            {desktopUpdate &&
+              updateNeedsHarnessStop &&
+              ["available", "downloading", "ready"].includes(desktopUpdate.phase) && (
+                <span className="desktop-update-warning">
+                  {t("Stop Harness before updating; running tasks will be interrupted.")}
+                </span>
               )}
           </div>
         </aside>

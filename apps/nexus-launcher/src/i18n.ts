@@ -20,6 +20,10 @@ const english: Record<string, string> = {
   "Downloading {percent}%": "Downloading {percent}%",
   "Update": "Update",
   "Update and restart": "Update and restart",
+  "Stop Harness before updating; running tasks will be interrupted.":
+    "Stop Harness before updating; running tasks will be interrupted.",
+  "Background downloads do not interrupt Harness. Stop Harness before applying an update; running tasks will be interrupted. Restart Harness manually after updating.":
+    "Background downloads do not interrupt Harness. Stop Harness before applying an update; running tasks will be interrupted. Restart Harness manually after updating.",
   "Version prepared only. Your current selection is unchanged. Select the prepared version in Release slots to review the rollback warning and confirm a manual switch.":
     "Version prepared only. Your current selection is unchanged. Select the prepared version in Release slots to review the rollback warning and confirm a manual switch.",
   "There is no verified rollback version. Switch manually to {version} anyway? If it fails, automatic rollback will be unavailable. Harness will stay stopped.":
@@ -1613,6 +1617,10 @@ const chinese: Record<string, string> = {
   "Downloading {percent}%": "下载中 {percent}%",
   "Update": "更新",
   "Update and restart": "更新并重启",
+  "Stop Harness before updating; running tasks will be interrupted.":
+    "更新前请先停止 Harness，正在执行的任务会中断。",
+  "Background downloads do not interrupt Harness. Stop Harness before applying an update; running tasks will be interrupted. Restart Harness manually after updating.":
+    "后台下载不会影响 Harness 运行。安装更新前请先停止 Harness，正在执行的任务会中断；更新后需手动启动 Harness。",
   "Version prepared only. Your current selection is unchanged. Select the prepared version in Release slots to review the rollback warning and confirm a manual switch.":
     "新版本已准备，当前版本保持不变。请在版本列表选择新版本，阅读回滚风险后确认手动切换。",
   "There is no verified rollback version. Switch manually to {version} anyway? If it fails, automatic rollback will be unavailable. Harness will stay stopped.":

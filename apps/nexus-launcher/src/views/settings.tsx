@@ -1916,6 +1916,11 @@ export function SettingsView({
                           : t("Check for updates")}
                   </button>
                 </div>
+                <p className="field-help">
+                  {t(
+                    "Background downloads do not interrupt Harness. Stop Harness before applying an update; running tasks will be interrupted. Restart Harness manually after updating.",
+                  )}
+                </p>
               </>
             )}
             <div>
