@@ -84,7 +84,7 @@ struct Options {
 enum LauncherCommand {
     Start,
     Run,
-    /// Headless loopback API for the native Tauri shell.
+    /// Headless loopback API for the native Electron shell.
     Api,
     /// Compatibility alias for older scripts. It never serves HTML.
     Console,
@@ -373,7 +373,7 @@ where
         index += 1;
     }
 
-    // The native Tauri shell owns the visible window. A no-argument launcher
+    // The native Electron shell owns the visible window. A no-argument launcher
     // invocation therefore starts only the headless API and never serves HTML.
     let command = command.unwrap_or(LauncherCommand::Api);
     let launcher_capability_value = env::var(LAUNCHER_CAPABILITY_ENV);
@@ -1636,7 +1636,7 @@ Usage:
 With no command, the launcher enters `api`. The headless Launcher API starts or
 reconnects to the loopback Agent, starts a configured Harness, binds the
 configured loopback API port, and supervises Agent availability. It never
-serves HTML or opens a browser. The native Tauri shell can open the latest
+serves HTML or opens a browser. The native Electron shell can open the latest
 loopback Harness authentication URL observed in the bounded Harness log tail
 and display its token without reading `$HOME/.dsh` or changing Harness source.
 `start`/`run`/`stop`/`status`/`logs` remain script and recovery fallbacks. The

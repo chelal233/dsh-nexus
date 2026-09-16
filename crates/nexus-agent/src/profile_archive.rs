@@ -167,6 +167,11 @@ pub(crate) fn recover_if_present(paths: &NexusPaths, store: &ProfileStore) -> io
         let entry = entry?;
         let id = entry.file_name().to_string_lossy().into_owned();
         if unstarted(&entry.path())? {
+            // A kill between mkdir and journal publication leaves an empty
+            // reservation. Never recursively remove unjournaled evidence.
+            if fs::read_dir(entry.path())?.next().is_none() {
+                fs::remove_dir(entry.path())?;
+            }
             continue;
         }
         let (directory, mut record) = read(paths, &home, &id)?;
@@ -594,9 +599,26 @@ mod tests {
         }
         assert_eq!(
             fs::read_dir(parent).unwrap().count(),
-            1,
-            "only the unstarted directory remains"
+            0,
+            "empty reservations and finished journals are reclaimed"
         );
+    }
+    #[test]
+    fn unstarted_recovery_preserves_evidence_and_reclaims_capacity() {
+        let f = Fixture::new();
+        let parent = root(&f.paths, &f.home).unwrap();
+        fs::create_dir_all(&parent).unwrap();
+        for index in 0..255 {
+            fs::create_dir(parent.join(format!("interrupted-{index}"))).unwrap();
+        }
+        let evidence = parent.join("interrupted-with-evidence");
+        fs::create_dir(&evidence).unwrap();
+        fs::write(evidence.join("record.tmp"), b"partial journal").unwrap();
+        recover_if_present(&f.paths, &f.store).unwrap();
+        recover_if_present(&f.paths, &f.store).unwrap();
+        assert_eq!(fs::read_dir(&parent).unwrap().count(), 1);
+        assert_eq!(fs::read(evidence.join("record.tmp")).unwrap(), b"partial journal");
+        f.change("old", false).unwrap();
     }
     #[cfg(windows)]
     #[test]

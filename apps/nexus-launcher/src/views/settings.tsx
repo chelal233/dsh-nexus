@@ -59,7 +59,8 @@ import {
   notificationsEnabledPreference,
   setNotificationsEnabledPreference,
 } from "../notifications";
-import { invoke } from "@tauri-apps/api/core";
+import { invoke } from "../desktop";
+import { useDesktopUpdate } from "../desktop-update";
 
 export function HarnessArgumentReference({ snapshot }: { snapshot: Snapshot }) {
   const { t } = useI18n();
@@ -991,6 +992,8 @@ export function SettingsView({
     notificationsEnabledPreference(),
   );
   const [autostartEnabled, setAutostartEnabled] = useState<boolean | null>(null);
+  const desktopUpdate = useDesktopUpdate();
+  const [desktopUpdateError, setDesktopUpdateError] = useState("");
   const [buildIdentity, setBuildIdentity] = useState<Record<string, unknown>>({});
   useEffect(() => {
     void invoke<Record<string, unknown>>("build_identity")
@@ -1864,6 +1867,57 @@ export function SettingsView({
         </Panel>
         <Panel title={t("Native integration")} icon={<Bell size={18} />}>
           <div className="integration-list">
+            {desktopUpdate && (
+              <>
+                <div>
+                  <CheckCircle size={18} />
+                  <span>{t("Automatic Launcher updates")}</span>
+                  <label className="form-check">
+                    <input
+                      type="checkbox"
+                      checked={desktopUpdate.enabled}
+                      disabled={desktopUpdate.phase === "installing"}
+                      onChange={(event) => {
+                        setDesktopUpdateError("");
+                        void invoke("update_settings", { enabled: event.target.checked }).catch(
+                          (error) => setDesktopUpdateError(error.message || String(error)),
+                        );
+                      }}
+                    />
+                    <span>{desktopUpdate.enabled ? t("Enabled") : t("Disabled")}</span>
+                  </label>
+                </div>
+                <div>
+                  <CheckCircle size={18} />
+                  <span>{t("Launcher updates")}</span>
+                  <button
+                    className="button secondary small"
+                    disabled={["checking", "downloading", "ready", "installing"].includes(
+                      desktopUpdate.phase,
+                    )}
+                    onClick={() => {
+                      setDesktopUpdateError("");
+                      void invoke("update_check")
+                        .then(() => setDesktopUpdateError(t("Update check completed")))
+                        .catch((error) => setDesktopUpdateError(error.message || String(error)));
+                    }}
+                  >
+                    {desktopUpdate.phase === "checking"
+                      ? t("Checking…")
+                      : desktopUpdate.phase === "ready"
+                        ? t("Update and restart")
+                        : desktopUpdate.phase === "downloading"
+                          ? t("Downloading {percent}%", {
+                              percent: Math.min(
+                                100,
+                                Math.max(0, Math.floor(desktopUpdate.percent ?? 0)),
+                              ),
+                            })
+                          : t("Check for updates")}
+                  </button>
+                </div>
+              </>
+            )}
             <div>
               <CheckCircle size={18} />
               <span>{t("Single instance guard")}</span>
@@ -1909,6 +1963,7 @@ export function SettingsView({
               </label>
             </div>
           </div>
+          {desktopUpdateError && <p role="alert">{desktopUpdateError}</p>}
         </Panel>
       </section>
     </>

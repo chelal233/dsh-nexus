@@ -139,6 +139,8 @@ impl StateResponse {
 #[serde(rename_all = "snake_case")]
 pub enum LifecycleAction {
     Shutdown,
+    /// Desktop replacement may proceed only after Agent positively proves idle.
+    ShutdownIfIdle,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -1204,6 +1206,8 @@ pub enum CredentialConflictPolicy { #[default] Preserve, Replace }
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 pub struct ColdOperation {
+    #[serde(default)]
+    pub process_owner_version: u32,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub credential_recovery_path: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -1330,6 +1334,8 @@ pub struct UpdateResponse {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 pub struct InstallOperation {
+    #[serde(default)]
+    pub process_owner_version: u32,
     pub operation_id: String,
     #[serde(default)]
     pub job_name: Option<String>,

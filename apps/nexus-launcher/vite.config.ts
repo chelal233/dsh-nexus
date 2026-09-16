@@ -2,14 +2,15 @@ import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
 
 export default defineConfig({
+  base: "./",
   plugins: [react()],
   clearScreen: false,
   server: {
     port: 1420,
     strictPort: true,
     // Browser-only development preview: same-origin proxy to an Agent
-    // started outside Tauri (no CORS involvement). Production runs inside
-    // the launcher and uses the Tauri command instead.
+    // started outside Electron (no CORS involvement). Production runs inside
+    // the launcher and uses the Electron command instead.
     proxy: {
       "/agent": {
         // Override via NEXUS_DEV_AGENT_URL when needed; hardcoded so the

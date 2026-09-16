@@ -8,7 +8,7 @@ import { Readable } from "node:stream";
 import { pipeline } from "node:stream/promises";
 import { fileURLToPath } from "node:url";
 
-// Stages the bundled runtimes into src-tauri/resources/runtime/ for Tauri
+// Stages the bundled runtimes into desktop/resources/runtime/ for Electron
 // packaging. The runtime/ directory maps to <install dir>/runtime/ in the
 // produced installers, which is exactly what nexus-core::bundled_runtime_dir
 // observes at run time:
@@ -27,7 +27,7 @@ import { fileURLToPath } from "node:url";
 // engines.node ^22.19.0 || >=24.0.0 and packageManager pnpm@11.7.0.
 const appRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
 const repositoryRoot = path.resolve(appRoot, "..", "..");
-const resourceRuntime = path.join(appRoot, "src-tauri", "resources", "runtime");
+const resourceRuntime = path.join(appRoot, "desktop", "resources", "runtime");
 const cacheRoot = path.join(repositoryRoot, "target", "bundled-runtime-cache");
 
 const spec = selectPlatform(process.env.CARGO_BUILD_TARGET);

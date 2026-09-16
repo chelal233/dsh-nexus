@@ -279,6 +279,7 @@ pub struct HarnessSupervisor {
     releases: ReleaseStore,
     inner: Arc<Mutex<SupervisorInner>>,
     lifecycle: Arc<Mutex<()>>,
+    desktop_shutdown: Arc<std::sync::atomic::AtomicBool>,
     startup_operation: Arc<Mutex<Option<StartupOperation>>>,
     #[cfg(test)]
     lifecycle_wait_observer: Arc<Mutex<Option<oneshot::Sender<()>>>>,
@@ -357,6 +358,7 @@ impl HarnessSupervisor {
                 verified_health: None,
             })),
             lifecycle: Arc::new(Mutex::new(())),
+            desktop_shutdown: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             startup_operation: Arc::new(Mutex::new(None)),
             #[cfg(test)]
             lifecycle_wait_observer: Arc::new(Mutex::new(None)),
@@ -756,6 +758,10 @@ impl HarnessSupervisor {
             .map(|guard| HarnessLifecycleGuard { _guard: guard })
     }
 
+    pub(crate) fn seal_for_desktop_update(&self, _guard: &HarnessLifecycleGuard) {
+        self.desktop_shutdown.store(true, std::sync::atomic::Ordering::Release);
+    }
+
     pub(crate) async fn acquire_lifecycle(&self) -> HarnessLifecycleGuard {
         let acquire = Arc::clone(&self.lifecycle).lock_owned();
         #[cfg(test)]
@@ -833,6 +839,9 @@ impl HarnessSupervisor {
         profile: &str,
         prepared: Option<crate::preflight::PreparedStart>,
     ) -> Result<HarnessRuntimeInfo, HarnessSupervisorError> {
+        if self.desktop_shutdown.load(std::sync::atomic::Ordering::Acquire) {
+            return Err(HarnessSupervisorError::Busy);
+        }
         crate::recovery_mode::ensure_start_allowed(&self.paths)?;
         validate_profile_name(profile)
             .map_err(|error| HarnessSupervisorError::InvalidProfile(error.to_string()))?;

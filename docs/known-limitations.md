@@ -17,7 +17,7 @@ R1～R4 外部 Review 循环已关闭，无未决分歧。R4 的 21 个文件及
 - `cargo test --workspace --locked -j2 -- --test-threads=4`：19 个套件摘要，合计 533 通过、0 失败（含 4 个子进程测试，7 个既有 ignored），退出码 0。
 - 前端 `npm.cmd test`：113/113；`npm.cmd run typecheck`：通过。
 - 离线空间与迁移脚本：9/9，包含真实 YAML、`slot: null`、8 种组件选择组合和凭据保留／替换。
-- 发布脚本：5/5；Tauri 原生测试：10/10。
+- 发布脚本：5/5；旧桌面宿主原生测试（该宿主已移除）：10/10。
 - KL 外部 reviewer 已完成 `before/` + `KL.diff` 逐 hunk 复审，21/21 文件哈希双向一致，独立复跑 Rust 533/0、前端 113/113、TypeScript 通过；KL-07/08 为 PASS-WITH-NOTES，其余适用项 PASS。此结论不等同于用户真机验收。
 
 ## 终审备注的处置
@@ -61,8 +61,8 @@ R1～R4 外部 Review 循环已关闭，无未决分歧。R4 的 21 个文件及
 | --- | --- | --- |
 | KL-N01 | **已修复**：路径键识别增加 `dirs`、`directories`、`files`、`paths`、`roots`、`homes`，支持其数组值及 camelCase／下划线／连字符字段。沿用路径边界判断，不改写不透明密钥或相邻目录。 | `crates/nexus-agent/scripts/offline-package.mjs`，`pathKey` |
 | KL-N02 | **已修复**：仅当新旧值都符合普通控制项的名称与类型时才接受配置更新；任何一侧被识别为凭据，都保留接收方旧值。覆盖数值／布尔与字符串／对象之间的变化、嵌套对象和具名数组项。 | `crates/nexus-agent/scripts/offline-package.mjs`，`keepCredentials` |
-| KL-N03 | **已修复**：核对全部不可变 attempt 报告；没有成功或不确定证据阻止时允许同 ID 重新完整验证。KA 后续将原始 latest 副本的保存移到准入通过后，并按内容去重。不可变报告损坏、未知状态、成功或未完成的记录仍拒绝重用；不会从损坏报告推定验证已通过。 | `apps/nexus-launcher/src-tauri/scripts/release-gate.mjs`，`admitVerification` |
-| KL-N04 | **已修复**：KN 的操作系统 IPC 锁已由 KA 改为文件锁。真实输出目录及路径别名、不同 build ID 共用锁；持锁进程退出后锁由内核释放。磁盘 `active.lock` 仅作为诊断，取得互斥后保留陈旧标记并自动退役，无须手工删除。锁释放不证明构建子孙进程已结束，因此原有未完成报告继续阻止同 ID 重试。 | `apps/nexus-launcher/src-tauri/scripts/release-gate.mjs`，`verificationLock` |
+| KL-N03 | **已修复**：核对全部不可变 attempt 报告；没有成功或不确定证据阻止时允许同 ID 重新完整验证。KA 后续将原始 latest 副本的保存移到准入通过后，并按内容去重。不可变报告损坏、未知状态、成功或未完成的记录仍拒绝重用；不会从损坏报告推定验证已通过。 | `apps/nexus-launcher/desktop/scripts/release-gate.mjs`，`admitVerification` |
+| KL-N04 | **已修复**：KN 的操作系统 IPC 锁已由 KA 改为文件锁。真实输出目录及路径别名、不同 build ID 共用锁；持锁进程退出后锁由内核释放。磁盘 `active.lock` 仅作为诊断，取得互斥后保留陈旧标记并自动退役，无须手工删除。锁释放不证明构建子孙进程已结束，因此原有未完成报告继续阻止同 ID 重试。 | `apps/nexus-launcher/desktop/scripts/release-gate.mjs`，`verificationLock` |
 | KL-N05 | **已加固并补回归**：原执行阶段已有所有权／指纹保护，本轮将普通目录检查提前至候选准入，即使存在 ownership，替换文件或 reparse 对象仍不可选。只有目标确实缺失且存在合法 ownership 时才允许退役残留记录，保持中断续清理能力。 | `crates/nexus-core/src/maintenance.rs`，隔离对象候选分支 |
 | KL-N06 | **已修复**：历史逐项流式读取，内存最多保留 10 条摘要，查询保持只读。正常归档后按时间及 ID 稳定排序裁剪；KA 后续增加 64 条容量门槛，到限后须先完成裁剪才可追加。128 条积压及重复归档失败后恢复已覆盖。 | `crates/nexus-agent/src/canary.rs`，`visit_history` / `archive` |
 
@@ -78,10 +78,10 @@ KN 外部验收：Reviewer 基于 `before/` + `KN.diff` 逐 hunk 复审，7/7 �
 
 | 编号 | 级别 | 已知行为与影响 | 代码位置 |
 | --- | --- | --- | --- |
-| KN-A01 | 低 | **已修复**：只有通过全部准入检查的尝试才保留旧报告，副本按 SHA-256 内容去重并核对原始字节。重复拒绝不再向已有构建目录增加副本。拒绝本身仍保存独立失败报告。 | `apps/nexus-launcher/src-tauri/scripts/release-gate.mjs`，`admitVerification` |
+| KN-A01 | 低 | **已修复**：只有通过全部准入检查的尝试才保留旧报告，副本按 SHA-256 内容去重并核对原始字节。重复拒绝不再向已有构建目录增加副本。拒绝本身仍保存独立失败报告。 | `apps/nexus-launcher/desktop/scripts/release-gate.mjs`，`admitVerification` |
 | KN-A02 | 低 | **已修复**：历史达到 64 条时先清理旧记录，清理持续失败便拒绝新增历史文件；正常保存的最新操作结果仍可查询，恢复删除权限后历史收敛至最近 10 条。已有超额积压先裁剪，不继续增加。 | `crates/nexus-agent/src/canary.rs`，`archive_with_cleanup` |
 | KN-A03 | 信息 | **已修复**：实际包内值因凭据保护未应用时，成功导入结果提供中英文说明及冲突选项指引。只传递计数和固定提示，不输出字段名或凭据值；缺省字段、相同值、替换策略不误报。 | `crates/nexus-agent/scripts/offline-package.mjs`、`src/offline.rs`；`apps/nexus-launcher/src/App.tsx`、`i18n.ts` |
-| KN-A04 | 信息 | **已修复**：使用 Node 24 内置 SQLite 的排他文件锁，移除可预测的 IPC 名称；保留别名及跨 ID 互斥、进程退出释放和 running 证据保护。Windows 继承构建目录 ACL；Unix guard 仅限所有者。此处不提供针对能修改构建目录或控制同用户进程的对抗安全隔离。 | `apps/nexus-launcher/src-tauri/scripts/release-gate.mjs`，`verificationLock` |
+| KN-A04 | 信息 | **已修复**：使用 Node 24 内置 SQLite 的排他文件锁，移除可预测的 IPC 名称；保留别名及跨 ID 互斥、进程退出释放和 running 证据保护。Windows 继承构建目录 ACL；Unix guard 仅限所有者。此处不提供针对能修改构建目录或控制同用户进程的对抗安全隔离。 | `apps/nexus-launcher/desktop/scripts/release-gate.mjs`，`verificationLock` |
 
 KA 的修改前副本、增量差异、文件哈希、测试日志与 `KA-fixes.md` 保存在 `target-rtest/review-ka-20260911/`，未覆盖已验收 KN 产物。具体测试结果见该报告。新增发布锁在 Windows / Node 24 上实测，未声称完成 Linux 或虚拟机验收。
 

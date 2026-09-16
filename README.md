@@ -11,14 +11,13 @@ Nexus 是面向 Windows 和 macOS 的 Harness 启动器，提供安装与版本�
 | 系统 | CPU | 安装包 | 内置 Node | 系统要求 |
 | --- | --- | --- | --- | --- |
 | Windows | x64 / AMD64 | EXE（安装时选择语言） | 24.20.0 | Windows 10/11 x64 |
-| Windows | x86 / 32 位 | EXE（安装时选择语言） | 22.23.2 | Windows 10 x86，或支持 x86 应用的 x64 系统 |
 | Windows | ARM64 / aarch64 | EXE | 24.20.0 | Windows 11 ARM64 |
 | macOS | Intel x64 | DMG | 24.20.0 | macOS 13.5 或更新 |
 | macOS | Apple Silicon ARM64 | DMG | 24.20.0 | macOS 13.5 或更新 |
 
 安装包统一命名为 `dsh-nexus_<版本>_<系统>_<架构>.<扩展名>`，例如 `dsh-nexus_0.1.3_windows_x64.exe`。构建编号和精确 Rust target 保留在同名前缀的 `_build.json` 中。
 
-macOS 不提供 x86 32 位版本；其他架构及 Linux 尚未纳入发行矩阵。Windows 包含 WebView2 离线安装器，macOS 使用系统 WKWebView。Windows 包未签名；macOS 使用 ad-hoc 签名但未 Apple 公证，当前为开发预发布候选。不要混用不同构建的附件。
+发行目标为 Windows/macOS x64 和 ARM64，不再提供 32 位版本。Electron 自带 Chromium，不依赖系统 WebView。当前本地包用于验收，跨平台与签名更新结果以对应构建记录为准。
 
 1. 安装并打开 Nexus，确认 Agent 正常。
 2. 在引导页安装一个受支持的 Harness 版本，或选择自己已经准备好的外部 Harness 程序目录。
@@ -65,7 +64,7 @@ pnpm prepare:agent
 pnpm prepare:runtime
 pnpm prepare:notices
 pnpm prepare:release
-pnpm tauri dev
+pnpm dev
 ```
 
 Windows x64 本地完整门禁：在 `apps/nexus-launcher` 执行 `pnpm release:gate`。结果写入仓库 `target-rtest/release/verify-<构建编号>`，候选安装包保存在对应 `verify-<构建编号>/attempt-*` 验证目录中，避免同版本的多次构建互相覆盖。完整记录可能含本机路径和测试输出，**不要整目录上传到公开 Release**。

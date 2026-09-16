@@ -12,7 +12,7 @@ for (const systemRootKey of (process.platform === 'win32' ? ['SystemRoot', 'SYST
   skip: !['win32', 'darwin'].includes(process.platform),
 }, () => {
   const runtime = process.env.NEXUS_TEST_RUNTIME_DIR
-    || fileURLToPath(new URL('../src-tauri/resources/runtime/', import.meta.url));
+    || fileURLToPath(new URL('../desktop/resources/runtime/', import.meta.url));
   const node = path.join(runtime, process.platform === 'win32' ? 'node/node.exe' : 'node/node');
   const pnpm = path.join(runtime, 'pnpm/bin/pnpm.cjs');
   const fixture = mkdtempSync(path.join(tmpdir(), 'nexus runtime 用户 '));

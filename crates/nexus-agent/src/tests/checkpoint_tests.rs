@@ -1562,7 +1562,14 @@ async fn startup_rolls_back_prepared_content_and_finishes_committed_content() {
         .expect("outer Prepared writes first");
     lease.apply(ticket).await.expect("content applies");
     drop(lease);
+    let applied_content = fs::read(&settings).unwrap();
+    let process_owner = crate::process_recovery::Owner::create(&state.paths.run_dir.join("owned-processes"), None).unwrap();
+    assert!(recover_checkpoint_restore_startup(&state.paths, &state.checkpoint_restores, &state.profiles, &state.releases, &state.snapshots).await.is_err());
+    assert_eq!(fs::read(&settings).unwrap(), applied_content, "startup must not roll back under a live materializer");
+    assert!(state.checkpoint_restores.load().unwrap().is_some());
+    drop(process_owner);
     recover_checkpoint_restore_startup(
+        &state.paths,
         &state.checkpoint_restores,
         &state.profiles,
         &state.releases,
@@ -1598,6 +1605,7 @@ async fn startup_rolls_back_prepared_content_and_finishes_committed_content() {
         .expect("outer Committed writes");
     drop(lease);
     recover_checkpoint_restore_startup(
+        &state.paths,
         &state.checkpoint_restores,
         &state.profiles,
         &state.releases,
@@ -1686,6 +1694,7 @@ async fn legacy_committed_restore_uses_raw_tuple_without_granting_health() {
     state.checkpoint_restores.begin(intent.clone()).unwrap();
     state.checkpoint_restores.mark_committed(&intent).unwrap();
     recover_checkpoint_restore_startup(
+        &state.paths,
         &state.checkpoint_restores,
         &state.profiles,
         &state.releases,
@@ -1718,6 +1727,7 @@ async fn legacy_committed_restore_uses_raw_tuple_without_granting_health() {
         .restore_release_pointers(Some("target"), Some("external"))
         .unwrap();
     assert!(recover_checkpoint_restore_startup(
+        &state.paths,
         &state.checkpoint_restores,
         &state.profiles,
         &state.releases,
@@ -2082,7 +2092,7 @@ async fn startup_recovers_prepared_and_validates_committed_checkpoint_restore() 
     profiles
         .write(&target_profiles)
         .expect("partial target profile writes");
-    recover_checkpoint_restore_startup(&journals, &profiles, &releases, &snapshot_coordinator)
+    recover_checkpoint_restore_startup(&paths, &journals, &profiles, &releases, &snapshot_coordinator)
         .await
         .expect("Prepared rolls back on startup");
     assert_eq!(profiles.load().expect("profiles reload"), previous_profiles);
@@ -2106,6 +2116,7 @@ async fn startup_recovers_prepared_and_validates_committed_checkpoint_restore() 
         .write(&previous_profiles)
         .expect("committed mismatch injects");
     assert!(recover_checkpoint_restore_startup(
+        &paths,
         &journals,
         &profiles,
         &releases,
@@ -2124,7 +2135,7 @@ async fn startup_recovers_prepared_and_validates_committed_checkpoint_restore() 
     profiles
         .write(&target_profiles)
         .expect("target profile repairs");
-    recover_checkpoint_restore_startup(&journals, &profiles, &releases, &snapshot_coordinator)
+    recover_checkpoint_restore_startup(&paths, &journals, &profiles, &releases, &snapshot_coordinator)
         .await
         .expect("Committed validates on startup");
     assert_eq!(
@@ -2525,4 +2536,35 @@ async fn checkpoint_restore_survives_cancellation_serializes_start_and_rolls_bac
         .is_none());
     let _ = fs::remove_dir_all(root);
     let _ = fs::remove_dir_all(dsh_home);
+}
+
+#[tokio::test]
+async fn desktop_update_shutdown_is_idle_only_and_seals_queued_starts() {
+    let (state, root) = content_test_state("desktop-update");
+    let receiver = state.shutdown.subscribe();
+    let guard = state.supervisor.acquire_lifecycle().await;
+    let busy = super::shutdown_if_idle(state.clone()).await;
+    assert_eq!(busy.status(), StatusCode::CONFLICT);
+    assert!(!*receiver.borrow());
+    drop(guard);
+    let update = state.updater.try_acquire_gate().unwrap();
+    assert_eq!(super::shutdown_if_idle(state.clone()).await.status(), StatusCode::CONFLICT);
+    assert!(!*receiver.borrow());
+    drop(update);
+    let before = fs::read(state.paths.config_file.clone()).unwrap();
+    assert_eq!(super::shutdown_if_idle(state.clone()).await.status(), StatusCode::ACCEPTED);
+    assert!(*receiver.borrow());
+    assert!(matches!(state.supervisor.start().await, Err(super::HarnessSupervisorError::Busy)));
+    assert_eq!(fs::read(state.paths.config_file.clone()).unwrap(), before);
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[tokio::test]
+async fn desktop_update_rejects_nonquiescent_failed_harness() {
+    let (state, root) = content_test_state("desktop-update-failed-owner");
+    let receiver = state.shutdown.subscribe();
+    state.supervisor.inject_nonquiescent_failed_state(None, true).await.unwrap();
+    assert_eq!(super::shutdown_if_idle(state.clone()).await.status(), StatusCode::CONFLICT);
+    assert!(!*receiver.borrow());
+    fs::remove_dir_all(root).unwrap();
 }

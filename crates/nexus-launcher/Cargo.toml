@@ -9,6 +9,10 @@ publish.workspace = true
 name = "nexus-launcher"
 path = "src/main.rs"
 
+[[bin]]
+name = "nexus-desktop-bridge"
+path = "src/desktop_bridge.rs"
+
 [dependencies]
 axum.workspace = true
 hmac = "0.12"

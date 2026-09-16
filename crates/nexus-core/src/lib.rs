@@ -175,10 +175,12 @@ pub fn bundled_runtime_dir() -> Option<PathBuf> {
 
 /// Cooperative cancellation flag shared across command owners.
 #[derive(Debug, Clone, Default)]
-pub struct CancellationToken(Arc<AtomicBool>, Option<Arc<str>>);
+pub struct CancellationToken(Arc<AtomicBool>, Option<Arc<str>>, Option<Arc<PathBuf>>);
 
 impl CancellationToken {
-    pub fn with_job_name(name: String) -> Self { Self(Arc::new(AtomicBool::new(false)), Some(name.into())) }
+    pub fn with_job_name(name: String) -> Self { Self(Arc::new(AtomicBool::new(false)), Some(name.into()), None) }
+    pub fn with_process_registry(&self, path: PathBuf) -> Self { Self(self.0.clone(), self.1.clone(), Some(Arc::new(path))) }
+    pub fn process_registry(&self) -> Option<&Path> { self.2.as_deref().map(PathBuf::as_path) }
     pub fn job_name(&self) -> Option<&str> { self.1.as_deref() }
     pub fn cancel(&self) {
         self.0.store(true, Ordering::Release);
@@ -1027,6 +1029,8 @@ pub struct BoundSnapshotRestore {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 pub struct CheckpointRestoreJournal {
+    #[serde(default)]
+    pub process_owner_version: u32,
     pub schema_version: u32,
     pub phase: CheckpointRestorePhase,
     pub intent: CheckpointRestoreIntent,
@@ -1076,6 +1080,7 @@ impl CheckpointRestoreJournalStore {
             ));
         }
         self.write_unlocked(Some(CheckpointRestoreJournal {
+            process_owner_version: 1,
             schema_version: CHECKPOINT_RESTORE_SCHEMA_VERSION,
             phase: CheckpointRestorePhase::Prepared,
             intent,

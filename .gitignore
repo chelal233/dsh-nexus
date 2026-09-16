@@ -9,5 +9,5 @@
 *.rs.bk
 .DS_Store
 Thumbs.db
-/apps/nexus-launcher/src-tauri/resources/release-identity.json
-/apps/nexus-launcher/src-tauri/resources/release-manifest.json
+/apps/nexus-launcher/desktop/resources/release-identity.json
+/apps/nexus-launcher/desktop/resources/release-manifest.json

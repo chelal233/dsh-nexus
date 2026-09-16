@@ -123,6 +123,11 @@ impl ColdCoordinator {
     pub(crate) fn try_acquire_maintenance(&self) -> io::Result<tokio::sync::OwnedMutexGuard<()>> {
         let guard = Arc::clone(&self.gate).try_lock_owned()
             .map_err(|_| io::Error::new(io::ErrorKind::ResourceBusy, "cold operation is busy"))?;
+        if !self.owner_active.load(Ordering::Acquire) && self.load()?.is_some_and(|operation|
+            operation.cleanup_pending || !operation.owner_quiescent
+                && operation.phase != ColdOperationPhase::AwaitingConfirmation) {
+            self.recover()?;
+        }
         if self.owner_active.load(Ordering::Acquire) || self.publication_pending()
             || self.load()?.is_some_and(|operation| !operation.phase.is_terminal()
                 || operation.cleanup_pending || !operation.owner_quiescent) {
@@ -137,10 +142,15 @@ impl ColdCoordinator {
         if let Err(error) = self.prune_uninstalled_history() {
             tracing::warn!(%error, "Could not clear obsolete installation history; record retained");
         }
+        crate::process_recovery::reconcile(&self.paths.run_dir.join("owned-processes"))?;
         self.recover_publication()?;
         let Some(mut operation) = self.load()? else {
             return Ok(());
         };
+        if operation.process_owner_version > 1 { return Err(io::Error::other("Unsupported cold process ownership protocol; record retained")); }
+        if operation.process_owner_version != 1 && (!operation.owner_quiescent || operation.cleanup_pending) {
+            crate::process_recovery::require_legacy_reboot(&self.paths.root.join("cold-operation.json"))?;
+        }
         if !operation.phase.is_terminal()
             && operation.phase != ColdOperationPhase::AwaitingConfirmation
         {
@@ -159,8 +169,8 @@ impl ColdCoordinator {
             self.write(&operation)?;
         }
         if operation.cleanup_pending {
-            // A previous in-memory owner cannot survive Agent restart. Retain
-            // the primary terminal result and retry only the owned residue.
+            // The process registry was reconciled above. Preserve the terminal
+            // result and retry only residue belonging to the settled owner.
             operation.owner_quiescent = true;
             match offline::cleanup_candidate(&self.paths, &operation)
             {
@@ -585,7 +595,7 @@ impl ColdCoordinator {
             .paths
             .downloads_dir
             .join(format!(".{operation_id}-{release_id}"));
-        let operation = ColdOperation {
+        let operation = ColdOperation { process_owner_version: 1,
             credential_recovery_path: None,
             offline_contents: None,
             operation_id: operation_id.clone(),
@@ -1343,13 +1353,28 @@ pub(crate) async fn run_owned_command(
     .await
 }
 
+pub(crate) async fn run_owned_command_with_stdout(
+    command: std::process::Command, phase: &str, duration: Duration,
+    diagnostic_dir: &Path, cancellation: &CancellationToken, stdout: fs::File,
+) -> io::Result<()> {
+    run_owned_command_diagnostics_output(command, phase, duration, diagnostic_dir, cancellation, false, Some(stdout)).await
+}
+
 async fn run_owned_command_diagnostics(
+    command: std::process::Command, phase: &str, duration: Duration,
+    diagnostic_dir: &Path, cancellation: &CancellationToken, capture_stdout: bool,
+) -> io::Result<()> {
+    run_owned_command_diagnostics_output(command, phase, duration, diagnostic_dir, cancellation, capture_stdout, None).await
+}
+
+async fn run_owned_command_diagnostics_output(
     mut command: std::process::Command,
     phase: &str,
     duration: Duration,
     diagnostic_dir: &Path,
     cancellation: &CancellationToken,
     capture_stdout: bool,
+    mut command_stdout: Option<fs::File>,
 ) -> io::Result<()> {
     fs::create_dir_all(diagnostic_dir)?;
     let diagnostic_path = diagnostic_dir.join(format!(
@@ -1361,23 +1386,35 @@ async fn run_owned_command_diagnostics(
         .create_new(true)
         .write(true)
         .open(&diagnostic_path)?;
-    command.stderr(Stdio::from(diagnostic));
+    command.stderr(Stdio::from(diagnostic.try_clone()?));
     let stdout_path = if capture_stdout {
         let path = diagnostic_path.with_extension("stdout.tmp");
         let file = fs::OpenOptions::new()
             .create_new(true)
             .write(true)
             .open(&path)?;
-        command.stdout(Stdio::from(file));
+        command_stdout = Some(file);
         Some(path)
     } else {
         None
     };
     let token = cancellation.clone();
     if let Some(name) = token.job_name() { command.env("NEXUS_OWNED_JOB_NAME", name); }
+    let registry = cancellation.process_registry().map(Path::to_owned)
+        .unwrap_or_else(|| diagnostic_dir.join("owned-processes"));
+    fs::create_dir_all(&registry)?;
+    let owner = crate::process_recovery::Owner::create(&registry, token.job_name())?;
+    let stdout = match command_stdout {
+        Some(file) => file,
+        None => fs::File::options().write(true).open(if cfg!(windows) { "NUL" } else { "/dev/null" })?,
+    };
     let phase = phase.to_owned();
     let result = tokio::task::spawn_blocking(move || {
-        crate::dsh::run_cold_process(&mut command, duration, || token.is_cancelled())
+        let result = crate::dsh::run_recoverable_process(&mut command, duration, || token.is_cancelled(), &stdout, &diagnostic, &owner);
+        if result.as_ref().err().is_none_or(crate::dsh::cold_process_owner_quiescent) {
+            owner.finish()?;
+        }
+        result
     })
     .await
     .map_err(|error| {
@@ -1884,12 +1921,16 @@ mod tests {
         let mut operation = cold.begin("v-new".into(), RuntimeSource::Official, RuntimeInstallMode::Portable).await.unwrap();
         assert!(cold.try_acquire_maintenance().is_err());
         cold.owner_active.store(false, Ordering::Release);
+        let process_owner = crate::process_recovery::Owner::create(&state.paths.run_dir.join("owned-processes"), None).unwrap();
         assert!(cold.try_acquire_maintenance().is_err());
         operation.phase = ColdOperationPhase::Failed;
         operation.owner_quiescent = true;
         operation.cleanup_pending = true;
         cold.write(&operation).unwrap();
         assert!(cold.try_acquire_maintenance().is_err());
+        drop(process_owner);
+        drop(cold.try_acquire_maintenance().unwrap());
+        assert!(!cold.load().unwrap().unwrap().cleanup_pending);
         operation.cleanup_pending = false;
         cold.write(&operation).unwrap();
         fs::write(cold.intent_path(), "pending").unwrap();
@@ -2636,7 +2677,7 @@ while ($true) {{ Start-Sleep -Seconds 1 }}"#, child.display())).unwrap();
         assert!(error.contains("[REDACTED]"));
         assert!(!error.contains("TOPSECRET"));
         assert!(error.len() <= COMMAND_DIAGNOSTIC_BYTES + 256);
-        assert_eq!(fs::read_dir(&run_dir).unwrap().count(), 0);
+        assert_eq!(fs::read_dir(&run_dir).unwrap().filter(|e| e.as_ref().unwrap().file_name() != "owned-processes").count(), 0);
         fs::remove_dir_all(root).unwrap();
     }
 
@@ -2666,19 +2707,19 @@ while ($true) {{ Start-Sleep -Seconds 1 }}"#, child.display())).unwrap();
         assert!(!error.contains("SECRETSTDOUT"));
         assert!(error.contains("[REDACTED]") && error.contains("tail truncated"));
         assert!(error.len() <= COMMAND_DIAGNOSTIC_BYTES + 256);
-        assert_eq!(fs::read_dir(&root).unwrap().count(), 0);
+        assert_eq!(fs::read_dir(&root).unwrap().filter(|e| e.as_ref().unwrap().file_name() != "owned-processes").count(), 0);
 
         let output = root.join("caller-output");
         let mut command = std::process::Command::new("cmd.exe");
         command
-            .args(["/D", "/C", "echo machine-readable-output"])
-            .stdout(fs::File::create(&output).unwrap());
-        run_owned_command(
+            .args(["/D", "/C", "echo machine-readable-output"]);
+        run_owned_command_with_stdout(
             command,
             "git-fixture",
             Duration::from_secs(5),
             &root,
             &CancellationToken::default(),
+            fs::File::create(&output).unwrap(),
         )
         .await
         .unwrap();

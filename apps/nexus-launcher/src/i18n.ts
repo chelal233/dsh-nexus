@@ -13,6 +13,13 @@ export type TranslationParams = Record<string, string | number>;
 export type Translator = (key: string, params?: TranslationParams) => string;
 
 const english: Record<string, string> = {
+  "Automatic Launcher updates": "Automatic Launcher updates",
+  "Launcher updates": "Launcher updates",
+  "Check for updates": "Check for updates",
+  "Update check completed": "Update check completed",
+  "Downloading {percent}%": "Downloading {percent}%",
+  "Update": "Update",
+  "Update and restart": "Update and restart",
   "Version prepared only. Your current selection is unchanged. Select the prepared version in Release slots to review the rollback warning and confirm a manual switch.":
     "Version prepared only. Your current selection is unchanged. Select the prepared version in Release slots to review the rollback warning and confirm a manual switch.",
   "There is no verified rollback version. Switch manually to {version} anyway? If it fails, automatic rollback will be unavailable. Harness will stay stopped.":
@@ -1440,7 +1447,7 @@ const english: Record<string, string> = {
   "Single instance guard": "Single instance guard",
   "Enabled": "Enabled",
   "Desktop notifications": "Desktop notifications",
-  "Available through Tauri": "Available through Tauri",
+  "Available through Electron": "Available through Electron",
   "API transport": "API transport",
   "Rust loopback proxy": "Rust loopback proxy",
   "Runtime status": "Runtime status",
@@ -1599,6 +1606,13 @@ const english: Record<string, string> = {
 };
 
 const chinese: Record<string, string> = {
+  "Automatic Launcher updates": "Launcher 自动更新",
+  "Launcher updates": "启动器更新",
+  "Check for updates": "检测更新",
+  "Update check completed": "更新检查完成",
+  "Downloading {percent}%": "下载中 {percent}%",
+  "Update": "更新",
+  "Update and restart": "更新并重启",
   "Version prepared only. Your current selection is unchanged. Select the prepared version in Release slots to review the rollback warning and confirm a manual switch.":
     "新版本已准备，当前版本保持不变。请在版本列表选择新版本，阅读回滚风险后确认手动切换。",
   "There is no verified rollback version. Switch manually to {version} anyway? If it fails, automatic rollback will be unavailable. Harness will stay stopped.":
@@ -2974,7 +2988,7 @@ const chinese: Record<string, string> = {
   "Single instance guard": "单实例保护",
   "Enabled": "已启用",
   "Desktop notifications": "桌面通知",
-  "Available through Tauri": "由 Tauri 提供",
+  "Available through Electron": "由 Electron 提供",
   "API transport": "API 传输",
   "Rust loopback proxy": "Rust 本机回环代理",
   "Runtime status": "运行时状态",

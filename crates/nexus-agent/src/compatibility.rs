@@ -188,15 +188,19 @@ async fn prepare_with_trigger(
     validate_profile_name(profile)?;
     let root = paths.root.join("compatibility");
     ensure_work_directory(&root)?;
+    let lock_path = root.join("operation.lock");
+    if fs::symlink_metadata(&lock_path).is_ok_and(|m| !m.is_file() || is_link_or_reparse(&m)) {
+        return Err(io::Error::other("Invalid compatibility operation lock"));
+    }
+    let lease = fs::File::options().read(true).write(true).create(true).truncate(false).open(lock_path)?;
+    lease.try_lock().map_err(|_| io::Error::new(io::ErrorKind::ResourceBusy, "Compatibility check is still running"))?;
+    recover_pending(&root, home)?;
     match fs::remove_file(root.join("latest.json")) {
         Ok(()) => {},
         Err(error) if error.kind() == io::ErrorKind::NotFound => {},
         Err(error) => return Err(error),
     }
     let pending = root.join("owner-pending.json");
-    if fs::symlink_metadata(&pending).is_ok() {
-        return Err(io::Error::other("Compatibility process cleanup is pending; reconcile the owned probe before retrying"));
-    }
     let preferences = nexus_core::load_harness_preferences(paths)?;
     crate::runtime_patches::validate_for_paths(paths, &preferences)?;
     let capabilities = crate::preference_capabilities::resolve(Some(slot), home, profile, &preferences)?;
@@ -231,7 +235,7 @@ async fn prepare_with_trigger(
     command.envs(preferences_env);
     command.arg(&script).arg(&input).current_dir(&root).stdin(Stdio::null()).stdout(Stdio::null());
     tracing::info!(release, profile, "checking target release plugin startup compatibility");
-    write_json_atomic(&root, &pending, &serde_json::json!({"work":work,"release":release,"profile":profile}))?;
+    write_json_atomic(&root, &pending, &serde_json::json!({"format_version":2,"work":work,"release":release,"profile":profile}))?;
     let mut result = crate::cold::run_owned_command(command, "plugin compatibility check", Duration::from_secs(600), &work, cancellation).await;
     if result.as_ref().err().is_some_and(|error| !crate::cold::command_owner_quiescent(error)) {
         // Keep the durable marker and all paths while process ownership is
@@ -280,9 +284,83 @@ async fn prepare_with_trigger(
     Ok(Some(report))
 }
 
+fn recover_pending(root: &Path, home: &Path) -> io::Result<()> {
+    let pending = root.join("owner-pending.json");
+    let Some(bytes) = nexus_core::read_regular_file_bounded(&pending, 64 * 1024)? else { return Ok(()); };
+    let record: serde_json::Value = serde_json::from_slice(&bytes).map_err(io::Error::other)?;
+    if record.get("format_version").is_some_and(|version| version != 2) {
+        return Err(io::Error::other("Unsupported compatibility recovery record; files retained"));
+    }
+    let work = std::path::PathBuf::from(record["work"].as_str().ok_or_else(|| io::Error::other("Compatibility recovery has no work identity"))?);
+    let work_root = home.join("profiles/.nexus-compatibility-work");
+    if work.parent() != Some(work_root.as_path()) || work.file_name().and_then(|s| s.to_str()).is_none_or(|s|
+        !s.strip_prefix("run-").is_some_and(|n| !n.is_empty() && n.bytes().all(|c| c.is_ascii_digit()))) {
+        return Err(io::Error::other("Compatibility recovery path does not match the configured home; files retained"));
+    }
+    if work.try_exists()? {
+        ensure_work_directory(&work_root)?;
+        ensure_work_directory(&work)?;
+        if record["format_version"] == 2 {
+            crate::process_recovery::reconcile(&work.join("owned-processes"))?;
+        } else if record.get("format_version").is_none() {
+            crate::process_recovery::require_legacy_reboot(&pending)?;
+        } else { return Err(io::Error::other("Unsupported compatibility recovery record; files retained")); }
+        // Publication touches only atomic, fingerprinted generated projections.
+        // Never replay an old publication against current user configuration.
+        crate::cold::remove_owned_directory(&work_root, &work)?;
+    }
+    fs::remove_file(pending)?;
+    tracing::info!("Recovered interrupted compatibility check; a fresh check will run");
+    Ok(())
+}
+
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn interrupted_check_recovers_each_cut_without_replaying_publication() {
+        for cut in ["reserved", "command-prepared", "publication-prepared", "work-removed"] {
+            let root = std::env::temp_dir().join(format!("nexus-compat-recovery-{}-{cut}", nexus_core::unix_time_nanos_for_update()));
+            let home = root.join("home"); let control = root.join("compatibility");
+            let work = home.join("profiles/.nexus-compatibility-work/run-123");
+            fs::create_dir_all(&work).unwrap(); fs::create_dir(&control).unwrap();
+            let original = home.join("profiles/source.json"); fs::write(&original, b"original").unwrap();
+            write_json_atomic(&control, &control.join("owner-pending.json"), &serde_json::json!({"format_version":2,"work":work})).unwrap();
+            if cut == "command-prepared" {
+                let owner = crate::process_recovery::Owner::create(&work.join("owned-processes"), None).unwrap();
+                assert!(recover_pending(&control, &home).is_err());
+                assert!(work.exists() && control.join("owner-pending.json").exists());
+                drop(owner);
+            }
+            if cut == "publication-prepared" { fs::write(work.join("publication.json"), b"do not replay").unwrap(); }
+            if cut == "work-removed" { fs::remove_dir(&work).unwrap(); }
+            recover_pending(&control, &home).unwrap(); recover_pending(&control, &home).unwrap();
+            assert!(!work.exists() && !control.join("owner-pending.json").exists());
+            assert_eq!(fs::read(&original).unwrap(), b"original");
+            fs::remove_dir_all(root).unwrap();
+        }
+    }
+
+    #[test]
+    fn legacy_check_requires_positive_reboot_evidence_and_rejects_foreign_paths() {
+        let root = std::env::temp_dir().join(format!("nexus-compat-legacy-{}", nexus_core::unix_time_nanos_for_update()));
+        let home = root.join("home"); let control = root.join("compatibility");
+        let work = home.join("profiles/.nexus-compatibility-work/run-123");
+        fs::create_dir_all(&work).unwrap(); fs::create_dir(&control).unwrap();
+        let request = work.join("request.json"); fs::write(&request, b"{}").unwrap();
+        let pending = control.join("owner-pending.json");
+        write_json_atomic(&control, &pending, &serde_json::json!({"work":work})).unwrap();
+        assert!(recover_pending(&control, &home).unwrap_err().to_string().contains("Restart the computer once"));
+        assert!(work.exists() && pending.exists());
+        fs::File::options().write(true).open(&pending).unwrap().set_times(fs::FileTimes::new().set_modified(std::time::SystemTime::UNIX_EPOCH + Duration::from_secs(86400))).unwrap();
+        recover_pending(&control, &home).unwrap();
+        let foreign = root.join("foreign"); fs::create_dir(&foreign).unwrap();
+        write_json_atomic(&control, &pending, &serde_json::json!({"format_version":2,"work":foreign})).unwrap();
+        assert!(recover_pending(&control, &home).is_err()); assert!(foreign.exists());
+        fs::remove_dir_all(root).unwrap();
+    }
 
     #[test]
     fn latest_report_is_bound_to_release_and_logical_source() {

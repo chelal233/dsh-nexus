@@ -7,7 +7,7 @@ Nexus 的 MIT 许可证仅适用于 Nexus 自有代码，不替代依赖组件�
 | 内置 Node | 完整发行目录保留 `runtime/node/LICENSE` |
 | 内置 npm | 完整包保留 `runtime/node/node_modules/npm/LICENSE` 及包内材料 |
 | 内置 pnpm | 完整包保留 `runtime/pnpm/LICENSE`；仍需核对打包在其中的第三方组件声明 |
-| Rust 依赖 | 根 `Cargo.lock` 与独立 `apps/nexus-launcher/src-tauri/Cargo.lock` 都需纳入精确版本清单 |
+| Rust 依赖 | 根 `Cargo.lock` 纳入精确版本清单；Electron/Chromium 许可随桌面包分发 |
 | 静态 libgit2 | `libgit2-sys` 包装层许可证不能替代 vendored `libgit2/COPYING`；需保留该原文、链接例外及对应组件声明 |
 | 前端依赖与图标 | 根据 `apps/nexus-launcher/pnpm-lock.yaml` 和实际生产构建生成精确版本、版权与许可材料 |
 

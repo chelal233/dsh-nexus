@@ -8,11 +8,14 @@ use std::{
     fs::OpenOptions,
     io::{self, Read},
     path::{Path, PathBuf},
-    process::{Child, Command, ExitStatus, Stdio},
+    process::{Command, ExitStatus, Stdio},
     sync::atomic::{AtomicU64, Ordering},
     thread,
     time::{Duration, Instant},
 };
+
+#[cfg(any(unix, test))]
+use std::process::Child;
 
 use nexus_core::{
     build_pnpm_args, build_runtime_child_env, resolve_runtime_command, validate_profile_name,
@@ -624,14 +627,17 @@ impl PluginCommandRunner for SystemPluginCommandRunner {
             .current_dir(&spec.current_dir)
             .envs(spec.env.iter().map(|(key, value)| (key, value)))
             .stdin(Stdio::null())
-            .stdout(stdout)
-            .stderr(stderr);
-        let result = run_owned_process(&mut command, DEFAULT_MATERIALIZATION_TIMEOUT);
+            .stdout(stdout.try_clone()?)
+            .stderr(stderr.try_clone()?);
+        let registry = paths.run_dir.join("owned-processes");
+        let owner = crate::process_recovery::Owner::create(&registry, None)?;
+        let result = run_recoverable_process(&mut command, DEFAULT_MATERIALIZATION_TIMEOUT, || false, &stdout, &stderr, &owner);
+        if result.as_ref().err().is_none_or(cold_process_owner_quiescent) { owner.finish()?; }
+        let status = result?;
         let stdout = read_output_bounded(&stdout_path);
         let stderr = read_output_bounded(&stderr_path);
         let _ = fs::remove_file(&stdout_path);
         let _ = fs::remove_file(&stderr_path);
-        let status = result?;
         Ok(PluginCommandOutcome {
             exit_code: status.code(),
             stdout: stdout?,
@@ -699,7 +705,11 @@ fn materialize_profile_with_timeout(
     for (key, value) in child_env {
         process.env(key, value);
     }
-    let status = run_owned_process(&mut process, timeout)?;
+    let owner = crate::process_recovery::Owner::create(&paths.run_dir.join("owned-processes"), None)?;
+    let output = fs::File::options().write(true).open(if cfg!(windows) { "NUL" } else { "/dev/null" })?;
+    let result = run_recoverable_process(&mut process, timeout, || false, &output, &output, &owner);
+    if result.as_ref().err().is_none_or(cold_process_owner_quiescent) { owner.finish()?; }
+    let status = result?;
     if !status.success() {
         return Err(io::Error::other(match status.code() {
             Some(code) => format!("pnpm materialization exited with code {code}"),
@@ -709,10 +719,12 @@ fn materialize_profile_with_timeout(
     Ok(())
 }
 
+#[cfg(test)]
 fn run_owned_process(command: &mut Command, timeout: Duration) -> io::Result<ExitStatus> {
     run_owned_process_inner(command, timeout, ProcessTreeFault::None)
 }
 
+#[cfg(test)]
 #[derive(Clone, Copy)]
 enum ProcessTreeFault {
     None,
@@ -724,6 +736,7 @@ enum ProcessTreeFault {
     BeforeResume,
 }
 
+#[cfg(test)]
 fn run_owned_process_inner(
     command: &mut Command,
     timeout: Duration,
@@ -732,12 +745,79 @@ fn run_owned_process_inner(
     run_owned_process_cancelled(command, timeout, fault, || false)
 }
 
-pub(crate) fn run_cold_process(
-    command: &mut Command,
-    timeout: Duration,
-    cancelled: impl Fn() -> bool,
+pub(crate) fn run_recoverable_process(
+    command: &mut Command, timeout: Duration, cancelled: impl Fn() -> bool,
+    stdout: &fs::File, stderr: &fs::File, owner: &crate::process_recovery::Owner,
 ) -> io::Result<ExitStatus> {
-    run_owned_process_cancelled(command, timeout, ProcessTreeFault::None, cancelled)
+    #[cfg(windows)]
+    {
+        let job = WindowsJob::named(&owner.job)?;
+        let mut child = match crate::windows_harness::spawn(command, Some((stdout, stderr)), &job) {
+            Ok(child) => child,
+            Err(error) => { settle_job(&job)?; return Err(error); }
+        };
+        let deadline = Instant::now() + timeout;
+        let result = loop {
+            match child.try_wait() {
+                Ok(Some(status)) => break Ok(status),
+                Err(error) => break Err(error),
+                Ok(None) => {},
+            }
+            if cancelled() { break Err(io::Error::new(io::ErrorKind::Interrupted, "Owned command cancelled")); }
+            if Instant::now() >= deadline { break Err(io::Error::new(io::ErrorKind::TimedOut, "Owned command timed out")); }
+            thread::sleep(Duration::from_millis(20));
+        };
+        // Always reap the entire job before returning, including children whose
+        // immediate parent exited successfully.
+        settle_job(&job)?;
+        let _ = child.try_wait();
+        result
+    }
+    #[cfg(unix)]
+    {
+        command.stdout(stdout.try_clone()?).stderr(stderr.try_clone()?);
+        let guardian = owner.configure(command)?;
+        let child = match command.spawn() {
+            Ok(child) => child,
+            Err(error) => {
+                // exec can fail after the guardian has already forked. Closing
+                // the pipe requests shutdown, but is not proof of quiescence.
+                drop(guardian);
+                let deadline = Instant::now() + Duration::from_secs(10);
+                while !owner.group_is_empty().map_err(|e| owned_process_cleanup_error(e.to_string()))? {
+                    if Instant::now() >= deadline { return Err(owned_process_cleanup_error("Failed command guardian is still stopping".into())); }
+                    thread::sleep(Duration::from_millis(20));
+                }
+                return Err(error);
+            }
+        };
+        let mut tree = OwnedProcessTree { child };
+        let deadline = Instant::now() + timeout;
+        let result = loop {
+            match tree.try_wait() {
+                Ok(Some(status)) => break Ok(status),
+                Err(error) => break Err(error),
+                Ok(None) => {},
+            }
+            if cancelled() { break Err(io::Error::new(io::ErrorKind::Interrupted, "Owned command cancelled")); }
+            if Instant::now() >= deadline { break Err(io::Error::new(io::ErrorKind::TimedOut, "Owned command timed out")); }
+            thread::sleep(Duration::from_millis(20));
+        };
+        drop(guardian);
+        tree.terminate_and_wait(Duration::from_secs(10)).map_err(|e| owned_process_cleanup_error(e.to_string()))?;
+        result
+    }
+}
+
+#[cfg(windows)]
+fn settle_job(job: &WindowsJob) -> io::Result<()> {
+    job.terminate().map_err(|e| owned_process_cleanup_error(e.to_string()))?;
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while !job.is_empty().map_err(|e| owned_process_cleanup_error(e.to_string()))? {
+        if Instant::now() >= deadline { return Err(owned_process_cleanup_error("Owned Job shutdown remains pending".into())); }
+        thread::sleep(Duration::from_millis(20));
+    }
+    Ok(())
 }
 
 #[derive(Debug)]
@@ -761,6 +841,7 @@ pub(crate) fn cold_process_owner_quiescent(error: &io::Error) -> bool {
         .is_some_and(|source| source.downcast_ref::<OwnedProcessCleanupError>().is_some())
 }
 
+#[cfg(test)]
 fn run_owned_process_cancelled(
     command: &mut Command,
     timeout: Duration,
@@ -818,6 +899,7 @@ fn run_owned_process_cancelled(
     }
 }
 
+#[cfg(test)]
 fn configure_owned_process(command: &mut Command) {
     #[cfg(unix)]
     {
@@ -831,13 +913,16 @@ fn configure_owned_process(command: &mut Command) {
     }
 }
 
+#[cfg(any(unix, test))]
 struct OwnedProcessTree {
     child: Child,
     #[cfg(windows)]
     job: windows_sys::Win32::Foundation::HANDLE,
 }
 
+#[cfg(any(unix, test))]
 impl OwnedProcessTree {
+    #[cfg(test)]
     fn new_named(mut child: Child, fault: ProcessTreeFault, job_name: Option<&str>) -> io::Result<Self> {
         #[cfg(windows)]
         {
@@ -879,6 +964,7 @@ impl OwnedProcessTree {
         }
     }
 
+    #[cfg(test)]
     fn resume(&mut self, fault: ProcessTreeFault) -> io::Result<()> {
         #[cfg(windows)]
         {
@@ -951,6 +1037,7 @@ impl OwnedProcessTree {
     }
 }
 
+#[cfg(any(unix, test))]
 impl Drop for OwnedProcessTree {
     fn drop(&mut self) {
         #[cfg(windows)]
@@ -1034,7 +1121,7 @@ fn create_named_kill_on_close_job(name: Option<&str>) -> io::Result<windows_sys:
     Ok(job)
 }
 
-#[cfg(windows)]
+#[cfg(all(windows, test))]
 pub(crate) fn assign_process_to_job(
     process: windows_sys::Win32::Foundation::HANDLE,
     job: windows_sys::Win32::Foundation::HANDLE,
@@ -1048,7 +1135,7 @@ pub(crate) fn assign_process_to_job(
     }
 }
 
-#[cfg(windows)]
+#[cfg(all(windows, test))]
 pub(crate) fn assign_child_to_job(
     child: &Child,
     job: windows_sys::Win32::Foundation::HANDLE,
@@ -1094,6 +1181,9 @@ pub(crate) fn named_operation_job_is_empty(name: &str) -> io::Result<bool> {
 
 #[cfg(windows)]
 impl WindowsJob {
+    pub(crate) fn raw_handle(&self) -> windows_sys::Win32::Foundation::HANDLE { self.0 as _ }
+    pub(crate) fn named(name: &str) -> io::Result<Self> { create_named_kill_on_close_job(Some(name)).map(|job| Self(job as usize)) }
+
     pub(crate) fn contains_pid(&self, pid: u32) -> io::Result<bool> {
         use windows_sys::Win32::{Foundation::CloseHandle, System::{Threading::{OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION}, JobObjects::IsProcessInJob}};
         unsafe {
@@ -1111,11 +1201,6 @@ impl WindowsJob {
         create_kill_on_close_job().map(|job| Self(job as usize))
     }
 
-    pub(crate) fn assign_native_and_resume(&self, handle: std::os::windows::io::RawHandle, pid: u32) -> io::Result<()> {
-        assign_process_to_job(handle.cast(), self.0 as _)?;
-        resume_process_primary_thread(pid)
-    }
-
     pub(crate) fn terminate(&self) -> io::Result<()> { terminate_job_tree(self.0) }
 
     pub(crate) fn is_empty(&self) -> io::Result<bool> { job_is_empty(self.0 as _) }
@@ -1130,7 +1215,7 @@ impl Drop for WindowsJob {
 
 
 #[cfg(windows)]
-fn resume_process_primary_thread(process_id: u32) -> io::Result<()> {
+pub(crate) fn resume_process_primary_thread(process_id: u32) -> io::Result<()> {
     use windows_sys::Win32::{
         Foundation::{CloseHandle, INVALID_HANDLE_VALUE},
         System::{
@@ -1180,7 +1265,7 @@ fn resume_process_primary_thread(process_id: u32) -> io::Result<()> {
     }
 }
 
-#[cfg(windows)]
+#[cfg(all(windows, test))]
 fn terminate_tree(tree: &mut OwnedProcessTree) -> io::Result<()> {
     let ok = unsafe { windows_sys::Win32::System::JobObjects::TerminateJobObject(tree.job, 1) };
     if ok == 0 {
@@ -1190,7 +1275,7 @@ fn terminate_tree(tree: &mut OwnedProcessTree) -> io::Result<()> {
     }
 }
 
-#[cfg(windows)]
+#[cfg(all(windows, test))]
 fn tree_is_empty(tree: &OwnedProcessTree) -> io::Result<bool> {
     job_is_empty(tree.job)
 }

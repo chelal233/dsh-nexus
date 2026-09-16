@@ -3,7 +3,7 @@ import { test } from "node:test";
 import { mkdtemp, mkdir, writeFile, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { inventoryResources, verifyInventory, releaseIdentity, verifyIdentity, verifyRuntimeVersions, verifyAgentIdentity } from "../src-tauri/scripts/prepare-release.mjs";
+import { inventoryResources, verifyInventory, releaseIdentity, verifyIdentity, verifyRuntimeVersions, verifyAgentIdentity } from "../desktop/scripts/prepare-release.mjs";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 
@@ -15,7 +15,7 @@ test("compiled Agent identity must match the package, including old or developme
 });
 
 test("actual bundled versions must agree with the runtime declaration", { skip: !["win32", "darwin"].includes(process.platform) }, () => {
-  const resources = fileURLToPath(new URL("../src-tauri/resources/", import.meta.url));
+  const resources = fileURLToPath(new URL("../desktop/resources/", import.meta.url));
   const runtime = JSON.parse(readFileSync(path.join(resources, "runtime/manifest.json"), "utf8"));
   verifyRuntimeVersions(resources, runtime);
   assert.throws(() => verifyRuntimeVersions(resources, { ...runtime, target: "wrong-architecture" }), /architecture mismatch/);

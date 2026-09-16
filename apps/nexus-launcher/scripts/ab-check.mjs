@@ -72,7 +72,7 @@ if (mode === "capture") {
         {
           name: "controlled-native-bridge",
           setup(build) {
-            build.onResolve({ filter: /^@tauri-apps\/api\/core$/ }, () => ({
+            build.onResolve({ filter: /^\.\/desktop$/ }, () => ({
               path: "core",
               namespace: "ab",
             }));
@@ -139,7 +139,7 @@ if (mode === "capture") {
     const result = { accepted: true };
     const failure = { code: "agent_unavailable", status: 503, message: "fixture failure" };
     const module = await load(root, "agent-bridge.ts", {
-      window: native ? { __TAURI_INTERNALS__: {} } : {},
+      window: native ? { nexusDesktop: {} } : {},
       __invoke: async (...args) => {
         trace.push(["invoke", ...args]);
         if (fails) throw failure;

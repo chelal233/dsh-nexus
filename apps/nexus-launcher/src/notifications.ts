@@ -1,9 +1,4 @@
-import {
-  isPermissionGranted,
-  requestPermission,
-  sendNotification,
-} from "@tauri-apps/plugin-notification";
-import { invoke } from "@tauri-apps/api/core";
+import { invoke } from "./desktop";
 
 const STORAGE_KEY = "nexus.notifications.enabled";
 
@@ -27,14 +22,12 @@ export function setNotificationsEnabledPreference(enabled: boolean): void {
 export async function notify(title: string, body?: string): Promise<void> {
   if (!notificationsEnabledPreference()) return;
   try {
-    let granted = await isPermissionGranted();
-    if (!granted) {
-      const permission = await requestPermission();
-      granted = permission === "granted";
+    if (window.nexusDesktop) {
+      await invoke("notify", { title, body });
+      return;
     }
-    if (granted) sendNotification({ title, body });
   } catch {
-    // Notifications are best-effort: outside Tauri (web dev) or denied
+    // Notifications are best-effort: outside Electron (web dev) or denied
     // permission must never break the caller.
   }
 }

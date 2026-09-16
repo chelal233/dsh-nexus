@@ -1,25 +1,10 @@
-Nexus Launcher 0.1.3 开发预发布。
+# Nexus Launcher
 
-## 本次更新
+Electron 桌面包支持 Windows/macOS x64 和 ARM64；不再提供 32 位版本。
+Windows 下载 EXE，macOS 下载 DMG；ZIP 与 latest 元数据供全量自动更新使用。
 
-- 整理前端页面与 Agent API 职责，简化重复动作、错误处理和快照恢复事务。
-- 收紧前后端状态类型，补充行为 A/B 对照与格式检查。
-- Windows 每种架构合并为单个中英双语 EXE，保留 WebView2 离线安装器。
+包内包含 Chromium、Rust Agent 和 Node/npm/pnpm，无须预装开发工具。
+Harness 的首次在线依赖准备与桌面离线安装不同。
 
-## 下载选择
-
-- Windows x64：选择 `dsh-nexus_0.1.3_windows_x64.exe`。
-- Windows x86：选择 `dsh-nexus_0.1.3_windows_x86.exe`。
-- Windows ARM64：选择 `dsh-nexus_0.1.3_windows_arm64.exe`。
-- macOS Intel：选择 `dsh-nexus_0.1.3_macos_x64.dmg`。
-- macOS Apple Silicon：选择 `dsh-nexus_0.1.3_macos_arm64.dmg`。
-
-每次只需下载匹配系统的一个安装包。Windows 每个架构只提供一个 EXE，运行后可选择简体中文或 English，不再按语言分开发包。Windows 包含 WebView2 离线安装器及 Node/npm/pnpm，体积大于单独的程序。Windows x86 内置 Node 22，其余内置 Node 24。macOS 最低版本为 13.5。
-
-离线安装是发行要求：Windows 保持 `offlineInstaller`，不依赖安装时联网下载 WebView2。Nexus 自身可离线安装；Harness 的离线安装、恢复和运行需要预先准备对应离线材料，不能将空白机器上的首次在线获取依赖称为完全离线。
-
-## 验证与限制
-
-五个架构均通过编译、自动化回归、安装包资源哈希校验、Agent/CLI 通信及 GUI 进程启动检查。每个平台附同名前缀的 `_SHA256SUMS.txt` 和 `_build.json`，记录来源提交、构建编号、运行时和校验值。
-
-CI 不代表完整 Harness 业务、升级、数据保留或用户交互真机验收。Windows 未商业签名；macOS 仅 ad-hoc 签名，未 Apple 公证。macOS 的 DSH 交互终端尚未实现。第三方许可材料已包含在安装包内，仍有 `reviewRequired` 项待核对。本版本不声明稳定版或各平台功能完全对等。
+请以本次 `_build.json`、SHA256 清单及 Actions 结果确认来源、签名和验证状态。
+自动化检查不等于完整业务、签名升级、输入法和跨平台真机验收。

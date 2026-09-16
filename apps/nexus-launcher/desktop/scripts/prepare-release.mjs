@@ -91,12 +91,12 @@ function readAgentIdentity(resources) {
 }
 
 async function main() {
-  const resources = path.join(appRoot, "src-tauri/resources");
+  const resources = path.join(appRoot, "desktop/resources");
   const manifestPath = path.join(resources, "release-manifest.json");
   if (process.argv.includes("--verify")) {
     const manifest = JSON.parse(await readFile(manifestPath, "utf8"));
     verifyAgentIdentity(manifest, readAgentIdentity(resources));
-    const actual = await inventoryResources(resources, ["nexus-agent", "nexus-launcher", "nexusctl"].map(n => n + (process.platform === "win32" ? ".exe" : "")).concat("runtime", "notices"));
+    const actual = await inventoryResources(resources, ["nexus-agent", "nexus-launcher", "nexusctl", "nexus-desktop-bridge"].map(n => n + (process.platform === "win32" ? ".exe" : "")).concat("runtime", "notices"));
     if (JSON.stringify(actual) !== JSON.stringify(manifest.files)) throw new Error("Release inventory is incomplete or changed");
     verifyIdentity(manifest, JSON.parse(await readFile(path.join(resources, "release-identity.json"), "utf8")), (await digest(manifestPath)).sha256);
     verifyRuntimeVersions(resources, manifest.runtime);
@@ -105,14 +105,10 @@ async function main() {
     return;
   }
   const pkg = JSON.parse(await readFile(path.join(appRoot, "package.json"), "utf8"));
-  const tauri = JSON.parse(await readFile(path.join(appRoot, "src-tauri/tauri.conf.json"), "utf8"));
-  const cargo = await readFile(path.join(appRoot, "src-tauri/Cargo.toml"), "utf8");
   const workspace = await readFile(path.join(repositoryRoot, "Cargo.toml"), "utf8");
-  if ([tauri.version, cargo.match(/^version\s*=\s*"([^"]+)"/m)?.[1], workspace.match(/^version\s*=\s*"([^"]+)"/m)?.[1]].some(v => v !== pkg.version)) {
-    throw new Error("Package, Tauri, and Rust release versions disagree");
-  }
+  if (workspace.match(/^version\s*=\s*"([^"]+)"/m)?.[1] !== pkg.version) throw new Error("Package and Rust release versions disagree");
   const suffix = process.platform === "win32" ? ".exe" : "";
-  const files = await inventoryResources(resources, ["nexus-agent", "nexus-launcher", "nexusctl"].map(n => n + suffix).concat("runtime", "notices"));
+  const files = await inventoryResources(resources, ["nexus-agent", "nexus-launcher", "nexusctl", "nexus-desktop-bridge"].map(n => n + suffix).concat("runtime", "notices"));
   const runtime = JSON.parse(await readFile(path.join(resources, "runtime/manifest.json"), "utf8"));
   verifyRuntimeVersions(resources, runtime);
   const git = args => execFileSync("git", args, { cwd: repositoryRoot, encoding: "utf8", windowsHide: true }).trim();

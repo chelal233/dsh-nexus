@@ -7,7 +7,7 @@ import { execFileSync, spawn } from "node:child_process";
 import { once } from "node:events";
 import { createServer } from "node:net";
 import { createHash } from "node:crypto";
-import { selectBuildId, sourceIdentity, packageOutputs, verificationAttempt } from "../src-tauri/scripts/release-gate.mjs";
+import { selectBuildId, sourceIdentity, packageOutputs, verificationAttempt } from "../desktop/scripts/release-gate.mjs";
 
 test("failed gates can retry the same ID while successful and concurrent attempts stay protected", async () => {
   const directory = await mkdtemp(path.join(os.tmpdir(), "nexus-gate-attempt-"));
@@ -129,7 +129,7 @@ test("a malformed guard is preserved and cannot silently create a second lock", 
 
 test("process death releases the kernel lock but never invents completion of running work", { timeout: 20000 }, async () => {
   const directory = await mkdtemp(path.join(os.tmpdir(), "nexus-gate-crash-"));
-  const moduleUrl = new URL("../src-tauri/scripts/release-gate.mjs", import.meta.url).href;
+  const moduleUrl = new URL("../desktop/scripts/release-gate.mjs", import.meta.url).href;
   let child;
   try {
     for (const status of ["failed", "running"]) {
@@ -158,7 +158,7 @@ test("process death releases the kernel lock but never invents completion of run
 test("local release produces one multilingual EXE", () => {
   assert.deepEqual(packageOutputs("0.1.2"), [{
     kind: "nsis", locale: "multilingual",
-    source: "Nexus Launcher_0.1.2_x64-setup.exe",
+    source: "dsh-nexus_0.1.2_windows_x64.exe",
     file: "dsh-nexus_0.1.2_windows_x64.exe",
   }]);
 });
@@ -192,13 +192,4 @@ test("release source binding detects edits, deletions and new files but excludes
     // Only the exact directory created above is owned by this test.
     await rm(directory, { recursive: true, force: true });
   }
-});
-
-
-test("MSI cleanup excludes passive and upgrade removal while retaining Basic ARP consent", async () => {
-  const source = await readFile(new URL("../src-tauri/installers/shutdown.wxs", import.meta.url), "utf8");
-  const condition = source.match(/<Custom Action="NexusAskDataCleanup"[^>]*>([^<]+)<\/Custom>/)?.[1];
-  assert.equal(condition, 'Installed AND REMOVE="ALL" AND NOT UPGRADINGPRODUCTCODE AND UILevel &gt;= 3 AND NOT (REBOOTPROMPT="S")');
-  // /passive sets REBOOTPROMPT=S; ordinary ARP uninstall can also use UILevel=3.
-  // Keep the Basic threshold: raising it to 5 removes normal ARP consent.
 });

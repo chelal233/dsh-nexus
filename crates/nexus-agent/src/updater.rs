@@ -172,9 +172,7 @@ impl UpdateExecutor {
         if operation.operation_id != operation_id { return Err(io::Error::other("Stale installation id")); }
         if operation.cleanup_pending {
             if !operation.owner_quiescent {
-                if let Some(name) = operation.job_name.as_deref() {
-                    operation.owner_quiescent = crate::dsh::named_operation_job_is_empty(name)?;
-                }
+                operation.owner_quiescent = recovered_install_owner(&self.paths, operation.job_name.as_deref(), operation.process_owner_version)?;
             }
             self.finish_install_cleanup(&mut operation)?;
         }
@@ -194,8 +192,8 @@ impl UpdateExecutor {
     fn recover_install_unattached(&self) -> io::Result<()> {
         if let Some(mut operation) = self.install_operation()? {
             if !operation.owner_quiescent {
-                if let Some(name) = operation.job_name.as_deref() {
-                    match crate::dsh::named_operation_job_is_empty(name) {
+                {
+                    match recovered_install_owner(&self.paths, operation.job_name.as_deref(), operation.process_owner_version) {
                         Ok(true) => operation.owner_quiescent = true,
                         Ok(false) => {},
                         Err(error) => operation.cleanup_error = Some(format!("Cannot verify previous operation Job: {error}")),
@@ -220,6 +218,8 @@ impl UpdateExecutor {
         let guard = Arc::clone(&self.gate)
             .try_lock_owned()
             .map_err(|_| UpdateExecutorError::AlreadyRunning)?;
+        crate::process_recovery::reconcile(&self.paths.run_dir.join("owned-processes")).map_err(UpdateExecutorError::Persistence)?;
+        self.recover_install_unattached().map_err(UpdateExecutorError::Persistence)?;
         if self.install_operation().map_err(UpdateExecutorError::Persistence)?
             .is_some_and(|operation| !operation.owner_quiescent || operation.cleanup_pending) {
             return Err(UpdateExecutorError::AlreadyRunning);
@@ -239,7 +239,7 @@ impl UpdateExecutor {
 
     fn cleanup_candidate(&self, candidate: &Path, owner_quiescent: bool) -> io::Result<()> {
         let mut operation = self.install_operation()?.filter(|operation| Path::new(&operation.candidate) == candidate)
-            .unwrap_or_else(|| InstallOperation {
+            .unwrap_or_else(|| InstallOperation { process_owner_version: 1,
                 operation_id: format!("install-{}", nexus_core::new_instance_id()), job_name: None, release_id: "legacy-update".into(),
                 candidate: candidate.to_string_lossy().into_owned(), phase: "failed".into(), cancel_requested: false,
                 owner_quiescent, cleanup_pending: true, error: Some("Update candidate cleanup required".into()), cleanup_error: None,
@@ -550,7 +550,7 @@ impl UpdateExecutor {
         let operation_id = format!("install-{}", nexus_core::new_instance_id());
         let job_name = format!("Global\\NexusInstall-{operation_id}");
         let token = nexus_core::CancellationToken::with_job_name(job_name.clone());
-        let mut operation = InstallOperation {
+        let mut operation = InstallOperation { process_owner_version: 1,
             operation_id, job_name: Some(job_name), release_id: release_id.clone(),
             candidate: candidate.to_string_lossy().into_owned(), phase: "installing".into(),
             cancel_requested: false, owner_quiescent: false, cleanup_pending: false, error: None, cleanup_error: None,
@@ -751,13 +751,13 @@ async fn run_logged_command(
         .open(stderr_path)
         .map_err(|source| UpdateExecutorError::Spawn { phase, source })?;
     let mut command = std::process::Command::new(program);
-    command.args(args).stdin(Stdio::null()).stdout(Stdio::from(stdout)).stderr(Stdio::from(stderr));
+    command.args(args).stdin(Stdio::null()).stdout(Stdio::from(stdout.try_clone().map_err(|source| UpdateExecutorError::Spawn { phase, source })?)).stderr(Stdio::from(stderr));
     if let Some(working_dir) = working_dir { command.current_dir(working_dir); }
     #[cfg(test)]
     if let Some(gate) = command_gate.lock().await.take() {
         let _ = gate.reached.send(()); let _ = gate.release.await;
     }
-    crate::cold::run_owned_command(command, phase, command_timeout, &paths.run_dir, cancellation)
+    crate::cold::run_owned_command_with_stdout(command, phase, command_timeout, &paths.run_dir, cancellation, stdout)
         .await.map_err(UpdateExecutorError::Configuration)
 }
 
@@ -875,20 +875,25 @@ def	refs/tags/v0.9.0^{}
     }
 
     #[test]
-    fn install_recovery_preserves_specific_cleanup_error_and_shared_state_errors() {
+    fn install_recovery_preserves_primary_failure_and_retries_process_cleanup() {
         let root = std::env::temp_dir().join(format!("nexus-install-recovery-errors-{}", nexus_core::new_instance_id()));
         let paths = NexusPaths::from_root(root.clone()); paths.ensure_directories().unwrap();
         let executor = UpdateExecutor::new(paths.clone(), ReleaseStore::new(paths.clone()));
-        executor.write_install_operation(&InstallOperation {
+        executor.write_install_operation(&InstallOperation { process_owner_version: 1,
             operation_id: format!("install-{}", nexus_core::new_instance_id()), job_name: None,
             release_id: "interrupted".into(), candidate: paths.downloads_dir.join(".update-interrupted").to_string_lossy().into_owned(),
             phase: "failed".into(), cancel_requested: false, owner_quiescent: false, cleanup_pending: true,
             error: Some("Primary failure".into()), cleanup_error: Some("Cannot verify previous operation Job: access denied".into()),
         }).unwrap();
+        let process_owner = crate::process_recovery::Owner::create(&paths.run_dir.join("owned-processes"), None).unwrap();
         executor.recover_unattached().unwrap();
         let record = executor.install_operation().unwrap().unwrap();
-        assert_eq!(record.cleanup_error.as_deref(), Some("Cannot verify previous operation Job: access denied"));
+        assert_eq!(record.error.as_deref(), Some("Primary failure"));
+        assert!(record.cleanup_error.as_deref().unwrap().contains("still stopping"));
         assert!(executor.try_acquire_gate().is_err());
+        drop(process_owner);
+        drop(executor.try_acquire_gate().unwrap());
+        assert!(!executor.install_operation().unwrap().unwrap().cleanup_pending);
         fs::write(&paths.update_state_file, "invalid shared state").unwrap();
         assert!(executor.recover_unattached().is_err(), "Other existing startup errors remain fatal");
         fs::remove_dir_all(root).unwrap();
@@ -939,7 +944,7 @@ def	refs/tags/v0.9.0^{}
         let token = nexus_core::CancellationToken::with_job_name(name.clone());
         let candidate = paths.downloads_dir.join(".update-tree"); fs::create_dir(&candidate).unwrap();
         fs::write(candidate.join("keep"), "data").unwrap();
-        executor.write_install_operation(&InstallOperation { operation_id: id.clone(), job_name: Some(name.clone()),
+        executor.write_install_operation(&InstallOperation { process_owner_version: 1, operation_id: id.clone(), job_name: Some(name.clone()),
             release_id: "tree".into(), candidate: candidate.to_string_lossy().into_owned(), phase: "installing".into(),
             cancel_requested: false, owner_quiescent: false, cleanup_pending: false, error: None, cleanup_error: None }).unwrap();
         let marker = root.join("descendant.txt");
@@ -1023,10 +1028,13 @@ def	refs/tags/v0.9.0^{}
         fs::create_dir(&candidate).unwrap();
         fs::write(candidate.join("keep.txt"), "active").unwrap();
         let executor = UpdateExecutor::new(paths.clone(), ReleaseStore::new(paths.clone()));
+        let process_owner = crate::process_recovery::Owner::create(&paths.run_dir.join("owned-processes"), None).unwrap();
         executor.cleanup_candidate(&candidate, false).unwrap();
         assert_eq!(fs::read_to_string(candidate.join("keep.txt")).unwrap(), "active");
-        assert!(matches!(executor.try_acquire_gate(), Err(UpdateExecutorError::AlreadyRunning)));
-        assert!(matches!(executor.clone().try_acquire_gate(), Err(UpdateExecutorError::AlreadyRunning)));
+        assert!(executor.try_acquire_gate().is_err());
+        assert!(executor.clone().try_acquire_gate().is_err());
+        assert!(candidate.join("keep.txt").exists());
+        drop(process_owner);
         let fresh = UpdateExecutor::new(paths.clone(), ReleaseStore::new(paths));
         fresh.cleanup_candidate(&candidate, true).unwrap();
         assert!(!candidate.exists());
@@ -1385,5 +1393,20 @@ def	refs/tags/v0.9.0^{}
         drop(guard);
         assert!(executor.try_acquire_gate().is_ok());
         let _ = fs::remove_dir_all(root);
+    }
+}
+
+fn recovered_install_owner(paths: &NexusPaths, name: Option<&str>, version: u32) -> io::Result<bool> {
+    if version > 1 { return Err(io::Error::other("Unsupported installation process ownership protocol; record retained")); }
+    crate::process_recovery::reconcile(&paths.run_dir.join("owned-processes"))?;
+    #[cfg(windows)] {
+        if let Some(name) = name { return crate::dsh::named_operation_job_is_empty(name); }
+        if version == 0 { crate::process_recovery::require_legacy_reboot(&paths.root.join("install-operation.json"))?; }
+        Ok(true)
+    }
+    #[cfg(unix)] {
+        let _ = name;
+        if version != 1 { crate::process_recovery::require_legacy_reboot(&paths.root.join("install-operation.json"))?; }
+        Ok(true)
     }
 }

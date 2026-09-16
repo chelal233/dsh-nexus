@@ -20,6 +20,7 @@ use profile_api::profile_list_response;
 use profile_api::{profile_control, profile_list};
 
 mod canary;
+mod process_recovery;
 mod recovery_records;
 mod runtime_patches;
 mod source_context;
@@ -276,7 +277,7 @@ pub async fn run_with_instance_id(
     };
     let checkpoint_restores = CheckpointRestoreJournalStore::new(paths.clone());
     if let Err(error) =
-        recover_checkpoint_restore_startup(&checkpoint_restores, &profiles, &releases, &snapshots)
+        recover_checkpoint_restore_startup(&paths, &checkpoint_restores, &profiles, &releases, &snapshots)
             .await
     {
         // Recovery evidence remains authoritative. Mutation/start guards read
@@ -293,6 +294,9 @@ pub async fn run_with_instance_id(
     let cold = cold::ColdCoordinator::new(paths.clone());
     if let Err(error) = cold.recover() {
         tracing::warn!(%error, "Cold recovery remains pending; Agent remains available");
+    }
+    if let Err(error) = canary::recover_unattached(&paths) {
+        tracing::warn!(%error, "Interrupted Canary recovery is pending; retry cancellation after the owned processes exit");
     }
     let release_catalog = initialize!(releases.load(), "release catalog");
     if !release_catalog.unavailable_selections.is_empty() {
@@ -601,7 +605,17 @@ mod host_guard_tests {
     }
 }
 
+fn ensure_checkpoint_process_quiescent(paths: &nexus_core::NexusPaths, journal: &CheckpointRestoreJournal) -> io::Result<()> {
+    process_recovery::reconcile(&paths.run_dir.join("owned-processes"))?;
+    if journal.process_owner_version > 1 { return Err(io::Error::other("Unsupported checkpoint process ownership protocol; journal retained")); }
+    if journal.process_owner_version == 0 && journal.intent.snapshot.is_some() && journal.phase == CheckpointRestorePhase::Prepared {
+        process_recovery::require_legacy_reboot(&paths.run_dir.join("checkpoint-restore.json"))?;
+    }
+    Ok(())
+}
+
 async fn recover_checkpoint_restore_startup(
+    paths: &nexus_core::NexusPaths,
     journal_store: &CheckpointRestoreJournalStore,
     profiles: &ProfileStore,
     releases: &ReleaseStore,
@@ -610,6 +624,7 @@ async fn recover_checkpoint_restore_startup(
     let Some(journal) = journal_store.load()? else {
         return Ok(());
     };
+    ensure_checkpoint_process_quiescent(paths, &journal)?;
     if let Some(binding) = journal.intent.snapshot.as_ref() {
         let recovery = async {
             let lease = snapshots.acquire_bound(binding).await?;
@@ -3468,8 +3483,31 @@ async fn lifecycle(
     Json(command): Json<LifecycleCommand>,
 ) -> impl IntoResponse {
     match command.action {
-        LifecycleAction::Shutdown => accept_shutdown(state, command.action).await,
+        LifecycleAction::Shutdown => accept_shutdown(state, command.action).await.into_response(),
+        LifecycleAction::ShutdownIfIdle => shutdown_if_idle(state).await,
     }
+}
+
+async fn shutdown_if_idle(state: AppState) -> axum::response::Response {
+    let Some(lifecycle) = state.supervisor.try_acquire_lifecycle() else {
+        return api_error_response(StatusCode::CONFLICT, "desktop_update_busy", "Harness lifecycle is busy");
+    };
+    if let Err(response) = ensure_checkpoint_mutation_ready(&state).await { return response; }
+    if let Err(response) = ensure_harness_stopped(&state, &lifecycle).await { return response; }
+    let _update = match state.updater.try_acquire_gate() {
+        Ok(guard) => guard, Err(error) => return update_error_response(error),
+    };
+    if let Err(response) = ensure_update_idle(&state) { return response; }
+    let _snapshot = match state.snapshots.try_acquire_configuration() {
+        Ok(guard) => guard, Err(error) => return data_error_response(error, "desktop_update_busy"),
+    };
+    let _cold = match state.cold.try_acquire_maintenance() {
+        Ok(guard) => guard, Err(error) => return data_error_response(error, "desktop_update_busy"),
+    };
+    // Latch under the lifecycle guard so an already queued start cannot race
+    // the idle observation. It is reset only by a fresh Agent process.
+    state.supervisor.seal_for_desktop_update(&lifecycle);
+    accept_shutdown(state, LifecycleAction::ShutdownIfIdle).await.into_response()
 }
 
 async fn shutdown(State(state): State<AppState>) -> impl IntoResponse {

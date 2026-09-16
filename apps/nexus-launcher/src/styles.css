@@ -1019,6 +1019,7 @@ select {
     padding: 11px 8px;
   }
   .sidebar-footer {
+    flex-wrap: wrap;
     justify-content: center;
     padding-inline: 0;
   }

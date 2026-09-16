@@ -4,7 +4,7 @@ import { localizeBackendError, compactError, errorMessage } from "./display-form
 import { type JsonObject } from "./app-types";
 import { useRef, useEffect, useState } from "react";
 import { isBrowserPreview } from "./agent-bridge";
-import { invoke } from "@tauri-apps/api/core";
+import { invoke } from "./desktop";
 
 export function StatusPill({
   label,

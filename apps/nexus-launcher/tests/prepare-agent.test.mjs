@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { recordArtifact } from "../src-tauri/scripts/prepare-agent.mjs";
+import { recordArtifact } from "../desktop/scripts/prepare-agent.mjs";
 
 test("staging follows Cargo's actual executable even for fresh custom-target builds", () => {
   const artifacts = new Map();

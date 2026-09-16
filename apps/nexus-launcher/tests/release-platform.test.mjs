@@ -1,17 +1,15 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { releaseBasename, selectPlatform, targets } from '../src-tauri/scripts/release-platform.mjs';
+import { releaseBasename, selectPlatform, targets } from '../desktop/scripts/release-platform.mjs';
 
 test('all products select their native Node archive and packaging format', () => {
   for (const [target, spec] of Object.entries(targets)) {
     assert.equal(selectPlatform(target, spec.platform, spec.arch).target, target);
     assert.match(spec.sha256, /^[a-f0-9]{64}$/);
   }
-  const x86 = selectPlatform('i686-pc-windows-msvc', 'win32', 'x64');
-  assert.equal(x86.nodeVersion, '22.23.2');
-  assert.equal(x86.archive, 'win-x86.zip');
+  assert.throws(() => selectPlatform('i686-pc-windows-msvc', 'win32', 'x64'), /Unsupported/);
   for (const spec of Object.values(targets)) {
-    assert.deepEqual(spec.bundles, spec.platform === 'win32' ? ['nsis'] : ['dmg']);
+    assert.deepEqual(spec.bundles, spec.platform === 'win32' ? ['nsis'] : ['dmg', 'zip']);
   }
 });
 
@@ -23,7 +21,7 @@ test('unsupported or mismatched targets fail before staging host binaries', () =
 });
 
 test('public download names identify product, version, system and architecture', () => {
-  const expected = ['windows_x64', 'windows_x86', 'windows_arm64', 'macos_x64', 'macos_arm64'];
+  const expected = ['windows_x64', 'windows_arm64', 'macos_x64', 'macos_arm64'];
   assert.deepEqual(Object.keys(targets).map(target => releaseBasename(target, '0.1.3')),
     expected.map(suffix => 'dsh-nexus_0.1.3_' + suffix));
   assert.equal(releaseBasename('x86_64-pc-windows-msvc', '0.1.3-rc.1'), 'dsh-nexus_0.1.3-rc.1_windows_x64');

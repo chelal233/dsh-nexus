@@ -1,8 +1,8 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { JSDOM } from "jsdom";
-import { mockIPC, clearMocks } from "@tauri-apps/api/mocks";
-import { emit } from "@tauri-apps/api/event";
+import { mockIPC, clearMocks } from "./desktop-mocks.ts";
+import { emit } from "./desktop-mocks.ts";
 import { createUiTestLoader } from "./ui-test-loader.ts";
 
 test("App aggregates completions, repeats errors, and serializes same-turn actions", async () => {

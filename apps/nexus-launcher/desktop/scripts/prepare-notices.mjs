@@ -7,10 +7,10 @@ import { fileURLToPath } from 'node:url';
 // Export only package metadata and license text, never local registry paths.
 const app = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
 const root = path.resolve(app, '../..');
-const output = path.join(app, 'src-tauri/resources/notices');
+const output = path.join(app, 'desktop/resources/notices');
 await mkdir(output, { recursive: true });
 const packages = new Map();
-for (const manifest of ['Cargo.toml', 'apps/nexus-launcher/src-tauri/Cargo.toml']) {
+for (const manifest of ['Cargo.toml']) {
   const metadata = JSON.parse(execFileSync('cargo', ['metadata', '--locked', '--format-version', '1', '--manifest-path', path.join(root, manifest)], {
     cwd: root, encoding: 'utf8', maxBuffer: 32 * 1024 * 1024,
   }));
@@ -57,5 +57,13 @@ await copyFile(path.join(root, 'THIRD_PARTY_NOTICES.md'), path.join(output, 'REA
 await writeFile(path.join(output, 'components.json'), JSON.stringify(inventory, null, 2) + '\n');
 // Remove the raw input containing absolute package-manager paths before packaging.
 const { unlink } = await import('node:fs/promises');
+// Remove only obsolete, generated component text files in this exact folder.
+// Do not recursively delete the resource directory or follow subdirectories.
+const currentTexts = new Set(inventory.map(component => component.text).filter(Boolean));
+for (const entry of await readdir(output, { withFileTypes: true })) {
+  if (entry.isFile() && /^(npm|rust)-[^/\\]+\.txt$/.test(entry.name) && !currentTexts.has(entry.name)) {
+    await unlink(path.join(output, entry.name));
+  }
+}
 await unlink(path.join(output, 'frontend-input.json'));
 console.log(`[notices] ${inventory.length} components; ${inventory.filter(p => p.reviewRequired).length} require manual license review`);

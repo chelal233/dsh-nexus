@@ -44,6 +44,28 @@ fn save(paths: &nexus_core::NexusPaths, value: &Value) -> io::Result<()> {
 }
 fn work(paths: &nexus_core::NexusPaths, id: &str) -> PathBuf { directory(paths).join(format!("work-{id}")) }
 fn job(id: &str) -> String { format!("Global\\NexusCanary-{id}") }
+fn recovered_owner(paths: &nexus_core::NexusPaths, id: &str) -> io::Result<bool> {
+    crate::process_recovery::reconcile(&directory(paths).join("owned-processes"))?;
+    #[cfg(windows)] { crate::dsh::named_operation_job_is_empty(&job(id)) }
+    #[cfg(unix)] {
+        let _ = id;
+        if load(paths)?["process_owner_version"] != 1 {
+            crate::process_recovery::require_legacy_reboot(&directory(paths).join("latest.json"))?;
+        }
+        Ok(true)
+    }
+}
+pub(crate) fn recover_unattached(paths: &nexus_core::NexusPaths) -> io::Result<()> {
+    let mut value = load(paths)?;
+    if !busy(&value) { return Ok(()); }
+    let id = value["operation_id"].as_str().ok_or_else(|| io::Error::other("Canary operation identity missing"))?.to_owned();
+    if !recovered_owner(paths, &id)? { return Err(io::Error::new(io::ErrorKind::ResourceBusy, "Canary descendants are still stopping")); }
+    cleanup(paths, &id)?;
+    value["phase"] = json!("interrupted");
+    value["cleanup_pending"] = json!(false);
+    save(paths, &value)?;
+    archive(paths, &value)
+}
 fn cleanup(paths: &nexus_core::NexusPaths, id: &str) -> io::Result<()> {
     let work = work(paths, id); if work.exists() { crate::cold::remove_owned_directory(&directory(paths), &work)?; } Ok(())
 }
@@ -74,7 +96,7 @@ pub(crate) async fn control(State(state): State<AppState>, Json(command): Json<C
             let mut value = load(&paths)?;
             if value["operation_id"] != id { return Err(io::Error::other("Canary operation changed")); }
             if busy(&value) {
-                if !crate::dsh::named_operation_job_is_empty(&job(&id))? { return Err(io::Error::other("Canary process shutdown cannot yet be verified; files retained")); }
+                if !recovered_owner(&paths, &id)? { return Err(io::Error::other("Canary process shutdown cannot yet be verified; files retained")); }
                 cleanup(&paths, &id)?; value["phase"] = json!("interrupted"); value["cleanup_pending"] = json!(false); save(&paths, &value)?; if let Err(error)=archive(&paths,&value) {tracing::warn!(%error,"Interrupted Canary history was not saved");}
             }
             Ok(value)
@@ -94,12 +116,12 @@ pub(crate) async fn control(State(state): State<AppState>, Json(command): Json<C
         let source = compatibility::source_profile(&home, &state.profiles.load()?.active_profile)?;
         if command.profile.as_deref().is_some_and(|name| name != source) { return Err(io::Error::other("Canary requires the currently selected source profile")); }
         let id = nexus_core::agent_auth::random_hex()?;
-        let value = json!({"format_version":1,"operation_id":id,"phase":"running","mode":mode,"source_profile":source,
+        let value = json!({"format_version":1,"process_owner_version":1,"operation_id":id,"phase":"running","mode":mode,"source_profile":source,
             "config_revision":state.config.snapshot()?.revision,"started_at_unix":unix_time_seconds(),"cleanup_pending":true});
         save(&state.paths, &value)?; Ok((id, source, value))
     })();
     let (id, source, value) = match start { Ok(value) => value, Err(error) => return data_error_response(error, "canary_invalid") };
-    let token = CancellationToken::with_job_name(job(&id));
+    let token = CancellationToken::with_job_name(job(&id)).with_process_registry(directory(&state.paths).join("owned-processes"));
     *owner = Some((id.clone(), token.clone())); drop(owner);
     let response = value.clone();
     tokio::spawn(async move {
@@ -376,7 +398,7 @@ mod ownership_http_tests {
         let state = crate::switch_ownership_tests::switch_test_state("canary-http-owner");
         let root = state.paths.root.clone();
         let id = nexus_core::agent_auth::random_hex().unwrap();
-        save(&state.paths, &json!({"format_version":1,"operation_id":id,"phase":"running","cleanup_pending":true})).unwrap();
+        save(&state.paths, &json!({"format_version":1,"process_owner_version":1,"operation_id":id,"phase":"running","cleanup_pending":true})).unwrap();
         let work = work(&state.paths,&id); nexus_core::create_new_private_directory(&work).unwrap();
         let marker = work.join("child-ready");
         let script = work.join("worker.cjs");
@@ -388,7 +410,8 @@ mod ownership_http_tests {
             crate::cold::run_owned_command(command,"canary ownership fixture",Duration::from_secs(20),&command_work,&owned).await
         });
         let ready = work.join("child-ready");
-        tokio::time::timeout(Duration::from_secs(10),async {while !ready.exists() {tokio::time::sleep(Duration::from_millis(20)).await;}}).await.unwrap();
+        let became_ready = tokio::time::timeout(Duration::from_secs(10),async {while !ready.exists() && !worker.is_finished() {tokio::time::sleep(Duration::from_millis(20)).await;}}).await.is_ok() && ready.exists();
+        if !became_ready { token.cancel(); panic!("Canary ownership fixture did not start: {:?}", worker.await); }
         // A recovered record has no in-memory owner: cleanup must refuse a live named job.
         let app = axum::Router::new().route("/v1/canary",axum::routing::get(status).post(control)).with_state(state.clone());
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -469,7 +492,7 @@ mod progress_history_tests {
     async fn canary_progress_preserves_cancel_and_history_is_bounded_and_independently_readable() {
         let state=crate::switch_ownership_tests::switch_test_state("canary-history");
         let id=nexus_core::agent_auth::random_hex().unwrap();
-        save(&state.paths,&json!({"format_version":1,"operation_id":id,"phase":"running","cleanup_pending":true})).unwrap();
+        save(&state.paths,&json!({"format_version":1,"process_owner_version":1,"operation_id":id,"phase":"running","cleanup_pending":true})).unwrap();
         progress(&state,&id,"planning",0,&Value::Null,None,None).await.unwrap();
         let mut current=load(&state.paths).unwrap();current["phase"]=json!("cancelling");save(&state.paths,&current).unwrap();
         progress(&state,&id,"round_finished",0,&json!([]),None,Some(json!({"outcome":"passed"}))).await.unwrap();

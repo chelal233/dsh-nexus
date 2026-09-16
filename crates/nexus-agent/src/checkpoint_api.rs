@@ -70,6 +70,12 @@ pub(super) async fn ensure_mutation_ready_for_owner(
     state: &AppState,
     cold_owner: Option<&str>,
 ) -> Result<(), axum::response::Response> {
+    if *state.shutdown.borrow() {
+        return Err(api_error_response(StatusCode::CONFLICT, "agent_shutting_down", "Agent is shutting down"));
+    }
+    if let Err(error) = crate::process_recovery::reconcile(&state.paths.run_dir.join("owned-processes")) {
+        return Err(data_error_response(error, "process_recovery_pending"));
+    }
     if let Err(error) = canary::ensure_idle(&state.paths) {
         return Err(data_error_response(error, "canary_pending"));
     }
@@ -945,6 +951,7 @@ fn load_requested_content_restore(
     let journal = state.checkpoint_restores.load()?.ok_or_else(|| {
         io::Error::new(io::ErrorKind::NotFound, "no checkpoint restore is pending")
     })?;
+    crate::ensure_checkpoint_process_quiescent(&state.paths, &journal)?;
     let binding = journal.intent.snapshot.as_ref().ok_or_else(|| {
         io::Error::new(
             io::ErrorKind::InvalidInput,

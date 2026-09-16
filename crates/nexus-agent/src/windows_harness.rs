@@ -385,10 +385,10 @@ pub(crate) fn spawn(
     ];
     let mut size = 0;
     unsafe {
-        InitializeProcThreadAttributeList(std::ptr::null_mut(), 1, 0, &mut size);
+        InitializeProcThreadAttributeList(std::ptr::null_mut(), 2, 0, &mut size);
     }
     let mut storage = vec![0usize; size.div_ceil(std::mem::size_of::<usize>())];
-    if unsafe { InitializeProcThreadAttributeList(storage.as_mut_ptr().cast(), 1, 0, &mut size) }
+    if unsafe { InitializeProcThreadAttributeList(storage.as_mut_ptr().cast(), 2, 0, &mut size) }
         == 0
     {
         return Err(io::Error::last_os_error());
@@ -406,6 +406,14 @@ pub(crate) fn spawn(
         )
     } == 0
     {
+        return Err(io::Error::last_os_error());
+    }
+    // Assignment is part of CreateProcess, so even termination before it returns
+    // cannot leave an unowned suspended process behind.
+    let mut jobs = [job.raw_handle()];
+    if unsafe { UpdateProcThreadAttribute(attributes.0.as_mut_ptr().cast(), 0,
+        0x0002000d /* PROC_THREAD_ATTRIBUTE_JOB_LIST */, jobs.as_mut_ptr().cast(),
+        std::mem::size_of_val(&jobs), std::ptr::null_mut(), std::ptr::null()) } == 0 {
         return Err(io::Error::last_os_error());
     }
     let mut startup: STARTUPINFOEXW = unsafe { std::mem::zeroed() };
@@ -446,7 +454,7 @@ pub(crate) fn spawn(
         exited: None,
     };
     // On failure Child and Job drops terminate the still-suspended process.
-    job.assign_native_and_resume(process.hProcess, process.dwProcessId)?;
+    crate::dsh::resume_process_primary_thread(process.dwProcessId)?;
     Ok(child)
 }
 

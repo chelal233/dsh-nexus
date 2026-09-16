@@ -424,7 +424,7 @@ mod tests {
     #[test]
     fn settled_versioned_install_record_does_not_block_candidate() {
         let store=fixture();
-        let operation=nexus_protocol::InstallOperation {operation_id:"install-test".into(),job_name:None,release_id:"test".into(),candidate:"test".into(),phase:"succeeded".into(),cancel_requested:false,owner_quiescent:true,cleanup_pending:false,error:None,cleanup_error:None};
+        let operation=nexus_protocol::InstallOperation { process_owner_version: 1,operation_id:"install-test".into(),job_name:None,release_id:"test".into(),candidate:"test".into(),phase:"succeeded".into(),cancel_requested:false,owner_quiescent:true,cleanup_pending:false,error:None,cleanup_error:None};
         nexus_core::write_versioned_record(&store.paths.root,&store.paths.root.join("install-operation.json"),&operation).unwrap();
         assert!(store.prepare(command(&store,"prepare")).is_ok());
         fs::remove_dir_all(store.paths.root).unwrap();

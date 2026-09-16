@@ -1909,7 +1909,7 @@ mod tests {
     #[tokio::test]
     async fn shipped_runtime_checks_combination_with_no_developer_path() {
         let bundle = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .join("../../apps/nexus-launcher/src-tauri/resources/runtime");
+            .join("../../apps/nexus-launcher/desktop/resources/runtime");
         if !bundle.join("node/node.exe").is_file() {
             // The source-only test suite does not download release resources.
             return;

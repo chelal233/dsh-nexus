@@ -74,9 +74,10 @@ import {
   operationResponseNotice,
   operationNoticeKind,
 } from "./operation-status";
-import { invoke } from "@tauri-apps/api/core";
+import { invoke } from "./desktop";
+import { useDesktopUpdate } from "./desktop-update";
 import { notificationsEnabledPreference, notify } from "./notifications";
-import { listen } from "@tauri-apps/api/event";
+import { listen } from "./desktop";
 import { setDisplayZoom, displayZoom, ZOOM_LEVELS } from "./display-preferences";
 import { diagnosticExportResult, harnessFailureKeys } from "./settings-state";
 import { flushSync } from "react-dom";
@@ -251,6 +252,7 @@ function App() {
     t,
   ]);
   const [busyAction, setBusyAction] = useState<string | null>(null);
+  const desktopUpdate = useDesktopUpdate();
   const actionInFlight = useRef(false);
   const [credentialInvalidationPending, setCredentialInvalidationPending] = useState(false);
   const refreshInFlight = useRef<Promise<void> | null>(null);
@@ -320,7 +322,7 @@ function App() {
               harnessPollState.current = undefined;
               setSnapshot(next);
               setNotice(null);
-              // The native Tauri shell is still alive when the independent
+              // The native Electron shell is still alive when the independent
               // Agent is offline. Keep the workspace visible so Settings and
               // Diagnostics remain useful instead of showing a false bridge
               // failure page.
@@ -921,6 +923,30 @@ function App() {
           <div className="sidebar-footer">
             <ShieldCheck size={16} />
             <span>{t("Loopback only")}</span>
+            {desktopUpdate &&
+              ["available", "downloading", "ready", "installing"].includes(desktopUpdate.phase) && (
+                <button
+                  className="button secondary small"
+                  title={t("Update and restart")}
+                  disabled={desktopUpdate.phase !== "ready"}
+                  onClick={() =>
+                    void invoke("update_install").catch((error) =>
+                      setError(error.message || String(error)),
+                    )
+                  }
+                >
+                  {desktopUpdate.phase === "ready"
+                    ? t("Update")
+                    : desktopUpdate.phase === "installing"
+                      ? t("Installing")
+                      : t("Downloading {percent}%", {
+                          percent: Math.min(
+                            100,
+                            Math.max(0, Math.floor(desktopUpdate.percent ?? 0)),
+                          ),
+                        })}
+                </button>
+              )}
           </div>
         </aside>
 

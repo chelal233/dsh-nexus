@@ -4,9 +4,9 @@ import {
   type AgentHealthResponse,
   type AgentRequestMethod,
 } from "./app-types";
-import { invoke } from "@tauri-apps/api/core";
+import { invoke } from "./desktop";
 
-export const isBrowserPreview = typeof window === "undefined" || !("__TAURI_INTERNALS__" in window);
+export const isBrowserPreview = typeof window === "undefined" || !window.nexusDesktop;
 
 /// Browser-only preview: synthesize the startup status from the proxied
 /// Agent health endpoint, since the native auto-start command is unavailable.
@@ -34,7 +34,7 @@ export async function proxyRequest<T = JsonObject>(
   body?: JsonObject,
 ): Promise<T> {
   // Browser-only development preview: `pnpm dev` serves the same UI without
-  // the Tauri bridge, so requests go through the /agent dev proxy instead.
+  // the Electron bridge, so requests go through the /agent dev proxy instead.
   if (isBrowserPreview) {
     const response = await fetch(`/agent${path}`, {
       method,

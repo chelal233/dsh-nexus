@@ -162,7 +162,7 @@ export function incompatibleBundles(text, bundles) {
   return [...found].map(([packageName, reason]) => ({ package: packageName, reason }));
 }
 
-async function stopProbe(child) {
+async function stopProbe(child, grouped = true) {
   if (!child.pid || child.exitCode !== null || child.signalCode !== null) return;
   // Windows taskkill is scoped to the exact child tree created by this probe.
   if (process.platform === 'win32') {
@@ -170,7 +170,7 @@ async function stopProbe(child) {
       const killer = spawn(path.join(process.env.SystemRoot || 'C:/Windows', 'System32/taskkill.exe'), ['/PID', String(child.pid), '/T', '/F'], { windowsHide: true, stdio: 'ignore' });
       killer.on('error', reject); killer.on('exit', resolve);
     });
-  } else { try { process.kill(-child.pid, 'SIGKILL'); } catch (e) { if (e.code !== 'ESRCH') throw e; } }
+  } else { try { process.kill(grouped ? -child.pid : child.pid, 'SIGKILL'); } catch (e) { if (e.code !== 'ESRCH') throw e; } }
   if (child.exitCode !== null || child.signalCode !== null) return;
   await Promise.race([
     new Promise(resolve => child.once('exit', resolve)),
@@ -214,12 +214,12 @@ async function webReady(address) {
   return false;
 }
 
-export async function probe(node, entry, home, profile, timeoutMs, patches = []) {
+export async function probe(node, entry, home, profile, timeoutMs, patches = [], owned = false) {
   // Node's main-module loader cannot consume Windows verbatim paths.
   // Resolve only the entry at the child boundary; keep source identity unchanged.
   entry = fs.realpathSync.native(entry);
   const child = spawn(node, [entry, '--profile', profile, ...patches.flatMap(p => ['--patch', p]), '--no-open', '--host', '127.0.0.1', '--port', '0'], {
-    cwd: home, windowsHide: true, detached: process.platform !== 'win32',
+    cwd: home, windowsHide: true, detached: process.platform !== 'win32' && !owned,
     env: { ...process.env, DSH_HOME: home }, stdio: ['ignore', 'pipe', 'pipe'],
   });
   let text = '', exit = null, spawnError;
@@ -252,7 +252,7 @@ export async function probe(node, entry, home, profile, timeoutMs, patches = [])
       await new Promise(resolve => setTimeout(resolve, 100));
     }
     throw Error('Compatibility startup probe timed out; no plugins were guessed or disabled');
-  } finally { await stopProbe(child); }
+  } finally { await stopProbe(child, !owned); }
 }
 
 export function finalizeCompatibility(options) {
@@ -359,7 +359,7 @@ export async function check(options) {
   }
   for (let attempt = 0; attempt <= Math.min(source.manifest.dsh.profile.bundles.length, 12); attempt++) {
     fs.writeFileSync(path.join(candidate, 'package.json'), JSON.stringify(manifest, null, 2));
-    const result = await probe(node, path.join(slot, 'apps/cli/lib/bin.js'), testHome, effective, timeout_ms, patches);
+    const result = await probe(node, path.join(slot, 'apps/cli/lib/bin.js'), testHome, effective, timeout_ms, patches, options.owned_round === true);
     if (result.ok) {
       if (sourceInfo(home, source.source).fingerprint !== source.fingerprint) throw Error('Source profile changed during compatibility check');
       const report = { checker_version: checkerVersion, status: disabled.length ? 'isolated' : 'passed', source_profile: source.source,
@@ -514,7 +514,7 @@ export async function checkCanary(options) {
       fs.writeFileSync(path.join(candidate, 'package.json'), JSON.stringify(manifest));
       const remaining = 540000 - (Date.now() - started);
       if (remaining <= 0) return { outcome: 'inconclusive', reason: 'Total Canary budget exceeded', duration_ms: Date.now() - began };
-      const result = await probe(node, path.join(slot, 'apps/cli/lib/bin.js'), testHome, 'canary', Math.min(45000, remaining), patches);
+      const result = await probe(node, path.join(slot, 'apps/cli/lib/bin.js'), testHome, 'canary', Math.min(45000, remaining), patches, options.owned_round === true);
       return { outcome: result.ok ? 'passed' : 'failed', reason: result.ok ? 'Loader and HTML readiness passed' : 'Process exited or reported a loader failure', raw_error: result.ok ? undefined : result.text.slice(-4000), duration_ms: Date.now() - began };
     } catch (error) {
       // Rust redacts the bounded report before publishing it to the API.

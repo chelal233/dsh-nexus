@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { JSDOM } from "jsdom";
-import { mockIPC, clearMocks } from "@tauri-apps/api/mocks";
+import { mockIPC, clearMocks } from "./desktop-mocks.ts";
 import { createUiTestLoader } from "./ui-test-loader.ts";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";

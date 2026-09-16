@@ -2,40 +2,43 @@ name: Desktop build
 on:
   workflow_call:
   workflow_dispatch:
-    inputs:
-      target:
-        description: 'Target to diagnose; all runs the full release matrix'
-        type: choice
-        default: all
-        options:
-          - all
-          - x86_64-pc-windows-msvc
-          - i686-pc-windows-msvc
-          - aarch64-pc-windows-msvc
-          - x86_64-apple-darwin
-          - aarch64-apple-darwin
-  pull_request:
   push:
     branches: [main]
+  pull_request:
+    paths:
+      - 'apps/nexus-launcher/**'
+      - 'crates/**'
+      - '.github/workflows/build.yml'
 permissions:
   contents: read
 jobs:
-  build:
+  desktop:
     strategy:
       fail-fast: false
       matrix:
-        target: ${{ fromJSON(inputs.target && inputs.target != 'all' && format('["{0}"]', inputs.target) || '["x86_64-pc-windows-msvc","i686-pc-windows-msvc","aarch64-pc-windows-msvc","x86_64-apple-darwin","aarch64-apple-darwin"]') }}
-    runs-on: ${{ matrix.target == 'aarch64-pc-windows-msvc' && 'windows-11-arm' || matrix.target == 'x86_64-apple-darwin' && 'macos-15-intel' || matrix.target == 'aarch64-apple-darwin' && 'macos-15' || 'windows-2022' }}
-    timeout-minutes: 90
+        include:
+          - os: windows-2025
+            target: x86_64-pc-windows-msvc
+            arch: x64
+          - os: windows-11-arm
+            target: aarch64-pc-windows-msvc
+            arch: arm64
+          - os: macos-15-intel
+            target: x86_64-apple-darwin
+            arch: x64
+          - os: macos-15
+            target: aarch64-apple-darwin
+            arch: arm64
+    runs-on: ${{ matrix.os }}
     defaults:
       run:
         shell: bash
+        working-directory: apps/nexus-launcher
     env:
-      CARGO_BUILD_JOBS: '2'
       CARGO_BUILD_TARGET: ${{ matrix.target }}
-      CARGO_TARGET_DIR: ${{ github.workspace }}/target-rtest
-      NEXUS_BUILD_ID: ci-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.target }}
-      MACOSX_DEPLOYMENT_TARGET: '13.5'
+      NEXUS_BUILD_ID: electron-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.target }}
+      # This workflow produces acceptance artifacts, never signed release assets.
+      NEXUS_UNSIGNED_SMOKE: '1'
     steps:
       - uses: actions/checkout@v7
         with:
@@ -44,101 +47,71 @@ jobs:
         with:
           node-version: '24.20.0'
           package-manager-cache: false
-      - name: Prepare tools
+      - name: Prepare native tools
         run: |
-          if [[ "$RUNNER_OS" == "macOS" ]]; then
-            # /var is a macOS symlink. Tests must use an ordinary data-root
-            # ancestry so they exercise, rather than weaken, no-link guards.
-            echo "TMPDIR=$(cd "$RUNNER_TEMP" && pwd -P)/" >> "$GITHUB_ENV"
-          else
-            echo "TEMP=$RUNNER_TEMP" >> "$GITHUB_ENV"
-            echo "TMP=$RUNNER_TEMP" >> "$GITHUB_ENV"
-          fi
           npm install --global pnpm@11.7.0
           rustup toolchain install 1.98.0 --profile minimal
           rustup default 1.98.0
           rustup target add "$CARGO_BUILD_TARGET"
-      - name: Install locked frontend dependencies
-        working-directory: apps/nexus-launcher
-        run: pnpm install --frozen-lockfile
-      - uses: actions/cache/restore@v5
-        id: cargo-cache
-        with:
-          path: target-rtest
-          key: rust-1.98-${{ matrix.target }}-${{ hashFiles('Cargo.lock', 'apps/nexus-launcher/src-tauri/Cargo.lock') }}-${{ github.sha }}-${{ github.run_attempt }}
-          restore-keys: rust-1.98-${{ matrix.target }}-${{ hashFiles('Cargo.lock', 'apps/nexus-launcher/src-tauri/Cargo.lock') }}-
-      - name: Frontend and platform regression tests
-        working-directory: apps/nexus-launcher
+          if [[ "$RUNNER_OS" == "macOS" ]]; then
+            echo "TMPDIR=$(cd "$RUNNER_TEMP" && pwd -P)/" >> "$GITHUB_ENV"
+          fi
+      - name: Locked dependencies and regression checks
         run: |
-          pnpm format:check
+          pnpm install --frozen-lockfile
+          node node_modules/electron/install.js
           pnpm typecheck
+          pnpm format:check
           pnpm test
-          node --test tests/release-platform.test.mjs
-      - name: Rust workspace tests (target architecture)
-        run: cargo test --workspace --locked --target "$CARGO_BUILD_TARGET" -j 2 -- --test-threads=1
-      - name: Compatibility checker regression tests
-        run: node --test --test-concurrency=4 crates/nexus-agent/tests/compatibility.test.mjs
-      - name: Stage native resources
-        working-directory: apps/nexus-launcher
+          pnpm test:electron
+          cargo test --manifest-path ../../Cargo.toml --workspace --locked -j 2 -- --test-threads=4
+      - name: Stage verified offline runtime
         run: |
           pnpm prepare:agent
           pnpm prepare:runtime
           pnpm test:bundled-runtime
           pnpm prepare:notices
           pnpm prepare:release
-          node --test tests/prepare-agent.test.mjs tests/release-gate.test.mjs tests/release-manifest.test.mjs
-      - name: Native bridge regression tests
-        run: cargo test --manifest-path apps/nexus-launcher/src-tauri/Cargo.toml --locked --target "$CARGO_BUILD_TARGET" -j 2 -- --test-threads=1
-      - name: Build installers
-        working-directory: apps/nexus-launcher
-        env:
-          BUNDLES: ${{ contains(matrix.target, 'apple') && 'dmg' || 'nsis' }}
-        run: pnpm tauri build --target "$CARGO_BUILD_TARGET" --bundles "$BUNDLES" -- --locked
+          pnpm verify:release
+          node --test tests/*.test.mjs
+          node --test ../../.github/scripts/verify-release-assets.test.mjs
+      - name: Package Electron acceptance build
+        run: pnpm electron:build --${{ matrix.arch }}
       - name: Windows installed package smoke
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
-          $bundle = Join-Path $env:CARGO_TARGET_DIR "$env:CARGO_BUILD_TARGET/release/bundle"
-          $install = Join-Path $env:RUNNER_TEMP 'Nexus Package Smoke'
-          $setup = @(Get-ChildItem -LiteralPath (Join-Path $bundle 'nsis') -Filter '*.exe')
-          if ($setup.Count -ne 1) { throw 'Expected one NSIS installer' }
+          $install = Join-Path $env:RUNNER_TEMP 'Nexus Electron Smoke'
+          $setup = @(Get-ChildItem electron-dist -Filter '*.exe')
+          if ($setup.Count -ne 1) { throw 'Expected one installer' }
           $process = Start-Process -FilePath $setup[0].FullName -ArgumentList "/S /D=$install" -WindowStyle Hidden -Wait -PassThru
-          if ($process.ExitCode -ne 0) { throw "Installer exited $($process.ExitCode)" }
-          node apps/nexus-launcher/src-tauri/scripts/verify-installed.mjs "$install" "$install/nexus-launcher-app.exe"
+          if ($process.ExitCode -ne 0) { throw 'Installer failed' }
+          node desktop/scripts/verify-installed.mjs "$install/resources"
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          $process = Start-Process -FilePath "$install/uninstall.exe" -ArgumentList '/S' -WindowStyle Hidden -Wait -PassThru
-          if ($process.ExitCode -ne 0) { throw "Uninstaller exited $($process.ExitCode)" }
-          if (Test-Path -LiteralPath "$install/nexus-launcher-app.exe") { throw 'Uninstall left the GUI binary behind' }
+          $env:NEXUS_SMOKE_EXECUTABLE = "$install/Nexus Launcher.exe"
+          node scripts/electron-smoke.mjs
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - name: macOS installed package smoke
         if: runner.os == 'macOS'
         run: |
           set -euo pipefail
           mount="$RUNNER_TEMP/nexus-dmg"
           mkdir -p "$mount" "$RUNNER_TEMP/nexus-installed"
-          images=("$CARGO_TARGET_DIR/$CARGO_BUILD_TARGET/release/bundle/dmg/"*.dmg)
+          images=(electron-dist/*.dmg)
           test "${#images[@]}" -eq 1
           hdiutil attach "${images[0]}" -readonly -nobrowse -mountpoint "$mount"
           trap 'hdiutil detach "$mount"' EXIT
-          apps=("$mount/"*.app)
-          test "${#apps[@]}" -eq 1
           installed="$RUNNER_TEMP/nexus-installed/Nexus Launcher.app"
-          ditto "${apps[0]}" "$installed"
-          codesign --verify --deep --strict "$installed"
-          node apps/nexus-launcher/src-tauri/scripts/verify-installed.mjs "$installed/Contents/Resources" "$installed/Contents/MacOS/nexus-launcher-app"
-      - name: Verify resources and collect public artifacts
-        working-directory: apps/nexus-launcher
-        run: |
-          pnpm verify:release
-          node src-tauri/scripts/collect-release.mjs
+          ditto "$mount/Nexus Launcher.app" "$installed"
+          node desktop/scripts/verify-installed.mjs "$installed/Contents/Resources"
+          NEXUS_SMOKE_EXECUTABLE="$installed/Contents/MacOS/Nexus Launcher" node scripts/electron-smoke.mjs
+      - name: Collect verified packages
+        env:
+          NEXUS_PACKAGE_SMOKE_PASSED: '1'
+        run: node desktop/scripts/collect-release.mjs
       - uses: actions/upload-artifact@v6
         with:
           name: release-${{ matrix.target }}
           path: target/release-assets/${{ matrix.target }}/*
           if-no-files-found: error
-          retention-days: 14
-      - uses: actions/cache/save@v5
-        if: always() && !cancelled() && steps.cargo-cache.outputs.cache-hit != 'true'
-        with:
-          path: target-rtest
-          key: rust-1.98-${{ matrix.target }}-${{ hashFiles('Cargo.lock', 'apps/nexus-launcher/src-tauri/Cargo.lock') }}-${{ github.sha }}-${{ github.run_attempt }}

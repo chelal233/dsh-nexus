@@ -27,13 +27,13 @@ async fn external_run(operation: &Operation, external: &ExternalGit, directory: 
     let output = directory.join(format!("system-git-{}.stdout", nexus_core::unix_time_nanos_for_update()));
     let file = fs::OpenOptions::new().write(true).create_new(true).open(&output)?;
     let mut command = Command::new(&external.program);
-    command.args(&external.prefix).stdin(Stdio::null()).stdout(file);
+    command.args(&external.prefix).stdin(Stdio::null());
     match operation {
         Operation::Tags { source } => { command.args(["ls-remote", "--tags", source]); },
         Operation::Clone { source, reference, candidate, .. } => { command.args(["-c", "core.longpaths=true", "clone", "--no-tags", "--depth", "1", "--branch", reference, source]).arg(candidate); },
         Operation::Head { candidate, .. } => { command.args(["rev-parse", "--verify", "HEAD"]).current_dir(candidate); },
     }
-    let result = crate::cold::run_owned_command(command, "system Git", duration, directory, cancellation).await;
+    let result = crate::cold::run_owned_command_with_stdout(command, "system Git", duration, directory, cancellation, file).await;
     if result.as_ref().err().is_some_and(|error| !crate::cold::command_owner_quiescent(error)) { return result.map(|_| serde_json::Value::Null); }
     let bytes = if result.is_ok() { read_bounded(&output, 1024 * 1024) } else { Ok(Vec::new()) };
     let _ = fs::remove_file(output);

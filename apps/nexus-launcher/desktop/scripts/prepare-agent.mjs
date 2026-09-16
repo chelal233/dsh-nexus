@@ -11,12 +11,12 @@ import { selectBuildId } from "./release-gate.mjs";
 const appRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
 const repositoryRoot = path.resolve(appRoot, "..", "..");
 const binaryNames = process.platform === "win32"
-  ? ["nexus-agent.exe", "nexus-launcher.exe", "nexusctl.exe"]
-  : ["nexus-agent", "nexus-launcher", "nexusctl"];
+  ? ["nexus-agent.exe", "nexus-launcher.exe", "nexusctl.exe", "nexus-desktop-bridge.exe"]
+  : ["nexus-agent", "nexus-launcher", "nexusctl", "nexus-desktop-bridge"];
 const packageNames = ["nexus-agent", "nexus-launcher", "nexus-cli"];
 const cargoCommand = process.env.NEXUS_CARGO_BIN || (process.platform === "win32" ? "cargo.exe" : "cargo");
 const cargoManifest = path.join(repositoryRoot, "Cargo.toml");
-const resourceDirectory = path.join(appRoot, "src-tauri", "resources");
+const resourceDirectory = path.join(appRoot, "desktop", "resources");
 
 export function recordArtifact(message, artifacts, expectedNames) {
   if (message.reason !== "compiler-artifact" || !message.target?.kind?.includes("bin")
@@ -97,6 +97,8 @@ for (const staleName of [
   "nexus-launcher.exe",
   "nexusctl",
   "nexusctl.exe",
+  "nexus-desktop-bridge",
+  "nexus-desktop-bridge.exe",
 ]) {
   await rm(path.join(resourceDirectory, staleName), { force: true });
 }
@@ -107,7 +109,7 @@ for (const binaryName of binaryNames) {
   );
 }
 
-console.log(`[prepare-binaries] staged ${binaryNames.join(", ")} for Tauri at ${resourceDirectory}`);
+console.log(`[prepare-binaries] staged ${binaryNames.join(", ")} for Electron at ${resourceDirectory}`);
 }
 
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) await main();

@@ -1,10 +1,9 @@
 //! UI-independent runtime contracts for Nexus Launcher clients.
 //!
-//! The Tauri shell and the legacy headless launcher both use this crate for
+//! The Electron shell and the legacy headless launcher both use this crate for
 //! loopback Agent transport and Agent lifecycle ownership.  The Agent HTTP
-//! JSON API is the stable boundary for other UI implementations (including a
-//! future Electron shell); this crate is only a Rust convenience layer around
-//! that boundary.
+//! JSON API is the stable boundary; this crate provides the shared Rust
+//! transport and lifecycle adapter used by the desktop stdio bridge.
 
 use std::{
     env, fmt, fs,
@@ -25,13 +24,19 @@ use reqwest::{header, Method, StatusCode, Url};
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use serde_json::Value;
 use tokio::{
-    process::{Child, Command},
+    process::Command,
     sync::Mutex as AsyncMutex,
     time::{sleep, timeout, Instant},
 };
 
 pub mod harness_ui;
 pub mod startup_diagnostics;
+#[cfg(windows)]
+mod windows_agent;
+#[cfg(windows)]
+use windows_agent::Child;
+#[cfg(not(windows))]
+use tokio::process::Child;
 
 pub use harness_ui::{
     harness_observation_matches_session, parse_loopback_harness_url, read_harness_ui_info,
@@ -616,7 +621,7 @@ impl AgentRuntime {
         Self::new_with_resource_dir(config, program, None)
     }
 
-    /// Construct a runtime with an optional Tauri/resource directory.
+    /// Construct a runtime with an optional Electron/resource directory.
     ///
     /// Resolution still gives an explicit program and `NEXUS_AGENT_BIN`
     /// precedence. The resource directory is checked before development
@@ -857,7 +862,7 @@ impl AgentRuntime {
         }
 
         // This OS-owned lock is shared by every Rust entry point. It closes the
-        // cross-process check/spawn race between the Tauri shell and legacy
+        // cross-process check/spawn race between the Electron shell and legacy
         // `nexus-launcher`, while the Agent's own `agent.lock` remains the
         // lifetime owner after readiness.
         let _bootstrap_lock = acquire_bootstrap_lock(&self.paths)?;
@@ -1209,7 +1214,7 @@ pub fn resolve_agent_program_with_resource_dir(
     let mut candidates = Vec::new();
     if let Ok(executable) = env::current_exe() {
         if let Some(parent) = executable.parent() {
-            // A packaged Tauri app keeps its Agent beside the launcher EXE
+            // A packaged Electron app keeps its Agent beside the launcher EXE
             // whenever the bundle resource map permits it. Prefer this
             // same-directory layout before all resource/development fallbacks.
             push_agent_candidates(&mut candidates, parent);
@@ -1217,7 +1222,7 @@ pub fn resolve_agent_program_with_resource_dir(
     }
     if let Some(resource_dir) = resource_dir {
         validate_resource_dir(resource_dir)?;
-        // Tauri versions/platforms expose either the bundle's resource root
+        // Electron versions/platforms expose either the bundle's resource root
         // or its parent to `resource_dir`. Check both bounded locations so a
         // package containing `<exe>/resources/nexus-agent.exe` is usable too.
         push_agent_candidates(&mut candidates, resource_dir);
@@ -1356,14 +1361,19 @@ fn spawn_agent(
         })
         .arg("--instance-id")
         .arg(instance_id)
-        .stdin(Stdio::null())
-        .stdout(Stdio::from(stdout))
-        .stderr(Stdio::from(stderr));
+        .stdin(Stdio::null());
     if let Some(level) = agent_log_level() {
         command.env("NEXUS_AGENT_LOG", level);
     }
     configure_agent_process(&mut command);
-    command.spawn()
+    #[cfg(windows)]
+    {
+        windows_agent::spawn(command.as_std(), &stdout, &stderr, agent_creation_flags())
+    }
+    #[cfg(not(windows))]
+    {
+        command.stdout(Stdio::from(stdout)).stderr(Stdio::from(stderr)).spawn()
+    }
 }
 
 fn configure_agent_process(command: &mut Command) {
@@ -2188,7 +2198,7 @@ mod tests {
             .child
             .lock()
             .expect("child lock is healthy")
-            .replace(child);
+            .replace(child.into());
 
         let started = std::time::Instant::now();
         runtime

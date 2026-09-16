@@ -17,7 +17,7 @@ export function selectBuildId(value) {
 }
 export function packageOutputs(version) {
   return [
-    { kind: "nsis", locale: "multilingual", source: `Nexus Launcher_${version}_x64-setup.exe`, file: `${releaseBasename('x86_64-pc-windows-msvc', version)}.exe` },
+    { kind: "nsis", locale: "multilingual", source: `${releaseBasename('x86_64-pc-windows-msvc', version)}.exe`, file: `${releaseBasename('x86_64-pc-windows-msvc', version)}.exe` },
   ];
 }
 async function sha(file) {
@@ -204,17 +204,20 @@ async function main() {
     await run("compatibility-checker-tests", node, ["--test", "--test-concurrency=4", "crates/nexus-agent/tests/compatibility.test.mjs"], root);
     await run("offline-private-writer-build", "cargo", ["build", "-p", "nexus-agent", "--locked", "-j", "2"], root);
     await run("offline-space-tests", node, ["--test", "crates/nexus-agent/scripts/offline-package-space.test.mjs", "crates/nexus-agent/scripts/offline-package-migration.test.mjs"], root);
-    await run("package", node, ["node_modules/@tauri-apps/cli/tauri.js", "build", "--ci"], app);
-    // A clean checkout has no generated resources. Tauri's build script copies
-    // them even for debug tests, so run the native suite after package staging.
-    // No verified candidate artifacts are published if this suite fails.
-    await run("native-tests", "cargo", ["test", "--manifest-path", "apps/nexus-launcher/src-tauri/Cargo.toml", "--locked", "-j", "2", "--", "--test-threads=4"], root);
-    const identity = JSON.parse(await readFile(path.join(app, "src-tauri/resources/release-identity.json"), "utf8"));
+    for (const script of ['prepare-agent', 'prepare-runtime']) {
+      await run(script, node, [`desktop/scripts/${script}.mjs`], app);
+    }
+    if (!process.env.npm_execpath) throw new Error("Run this gate through pnpm release:gate");
+    await run("notices", node, [process.env.npm_execpath, "prepare:notices"], app);
+    await run("prepare-release", node, ["desktop/scripts/prepare-release.mjs"], app);
+    await run("frontend-build", node, ["node_modules/vite/bin/vite.js", "build"], app);
+    await run("package", node, ["node_modules/electron-builder/cli.js", "--config", "electron-builder.cjs", "--publish", "never"], app);
+    const identity = JSON.parse(await readFile(path.join(app, "desktop/resources/release-identity.json"), "utf8"));
     if (identity.buildId !== buildId || identity.version !== report.version) throw new Error("Packaged release identity differs from verification build");
     report.releaseIdentity = identity;
     report.artifacts = [];
     for (const { kind, locale, source, file: filename } of packageOutputs(report.version)) {
-      const folder = path.join(target, "release/bundle", kind);
+      const folder = path.join(app, "electron-dist");
       const output = path.join(folder, source);
       // Stable names remain separate for each immutable verification attempt.
       const file = path.join(directory, filename);

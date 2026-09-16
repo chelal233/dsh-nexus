@@ -17,7 +17,7 @@ test('preserving credentials rejects lost parents and removed array identities i
 
 const exec = promisify(execFile), root = fileURLToPath(new URL('../../../', import.meta.url));
 const helper = fileURLToPath(new URL('./offline-package.mjs', import.meta.url));
-const runtime = path.join(root, 'apps/nexus-launcher/src-tauri/resources/runtime');
+const runtime = path.join(root, 'apps/nexus-launcher/desktop/resources/runtime');
 test('portable configuration removes recognized credentials and relocates only path boundaries', () => {
   const value = { apiKey: 'secret', nested: { password: 'pass', token: 'token', endpoint: 'https://u:p@example.com/api?token=hidden', root: 'C:\\source\\profiles\\web', other: 'C:\\source-other' } };
   const result = portableConfiguration(value, false, { HOME: 'C:\\source' });
