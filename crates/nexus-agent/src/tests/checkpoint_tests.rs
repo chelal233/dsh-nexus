@@ -254,7 +254,18 @@ async fn release_cleanup_owner_survives_http_cancellation() {
     .await
     .unwrap();
     drop(guard);
-    assert!(state.updater.try_acquire_gate().is_ok());
+    // The blocking owner drops its lifecycle and update guards separately.
+    // Waking on the first guard does not imply the second has been dropped yet.
+    tokio::time::timeout(std::time::Duration::from_secs(10), async {
+        loop {
+            if state.updater.try_acquire_gate().is_ok() {
+                break;
+            }
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("release cleanup owner must release the update gate");
     fs::remove_dir_all(root).unwrap();
 }
 
