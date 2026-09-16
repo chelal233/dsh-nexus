@@ -84,9 +84,7 @@ impl Child {
         }
         match self {
             Self::Native { handle, .. } => {
-                if unsafe { TerminateProcess(handle.as_raw_handle(), 1) } == 0 {
-                    return Err(io::Error::last_os_error());
-                }
+                terminate_native(handle).await?;
                 let _ = self.wait().await?;
                 Ok(())
             }
@@ -142,6 +140,29 @@ impl Child {
         }
         Ok(())
     }
+}
+
+async fn terminate_native(handle: &OwnedHandle) -> io::Result<()> {
+    if unsafe { TerminateProcess(handle.as_raw_handle(), 1) } != 0 {
+        return Ok(());
+    }
+    let error = io::Error::last_os_error();
+    // A process can exit between try_wait and TerminateProcess. Windows returns
+    // ACCESS_DENIED for an already terminated process. Only the original owned
+    // handle becoming signalled proves this race; a live denied process is error.
+    if error.raw_os_error() == Some(5) {
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(1);
+        loop {
+            match unsafe { WaitForSingleObject(handle.as_raw_handle(), 0) } {
+                WAIT_OBJECT_0 => return Ok(()),
+                WAIT_TIMEOUT if tokio::time::Instant::now() < deadline => {
+                    tokio::time::sleep(Duration::from_millis(20)).await;
+                }
+                _ => break,
+            }
+        }
+    }
+    Err(error)
 }
 impl Drop for Child {
     fn drop(&mut self) {
@@ -608,6 +629,31 @@ console.log('stdout remains connected');console.error('stderr remains connected'
         drop(unrelated);
         drop(_job);
         drop(_other_job);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[tokio::test]
+    async fn terminate_race_requires_original_handle_exit_proof() {
+        let root = std::env::temp_dir().join(format!(
+            "nexus-exit-race-{}", &nexus_core::agent_auth::random_hex().unwrap()[..20]
+        ));
+        let (mut child, job) = fixture(&root, true);
+        ready(&root).await;
+        let Child::Native { handle, .. } = &child else { panic!("native child required") };
+        let mut restricted = std::ptr::null_mut();
+        assert_ne!(unsafe { DuplicateHandle(GetCurrentProcess(), handle.as_raw_handle(),
+            GetCurrentProcess(), &mut restricted, PROCESS_SYNCHRONIZE | PROCESS_QUERY_LIMITED_INFORMATION, 0, 0) }, 0);
+        let restricted = unsafe { OwnedHandle::from_raw_handle(restricted) };
+        // Lack of terminate rights on a live process must not count as stopped.
+        assert_eq!(terminate_native(&restricted).await.unwrap_err().raw_os_error(), Some(5));
+        assert!(child.try_wait().unwrap().is_none());
+        child.kill().await.unwrap();
+        let Child::Native { handle, .. } = &child else { unreachable!() };
+        // Exercise the actual Win32 error, without the cached try_wait shortcut.
+        assert_eq!(unsafe { TerminateProcess(handle.as_raw_handle(), 1) }, 0);
+        assert_eq!(io::Error::last_os_error().raw_os_error(), Some(5));
+        terminate_native(handle).await.unwrap();
+        drop(restricted); drop(child); drop(job);
         std::fs::remove_dir_all(root).unwrap();
     }
 
