@@ -103,8 +103,10 @@ mod tests {
         let value = std::fs::read_to_string(&result);
         let running = child.try_wait().unwrap().is_none();
         child.kill().unwrap(); child.wait().unwrap();
+        let value = value.unwrap();
+        let observed_directory = value.strip_prefix("False|False|space %PATH% & ! ' 中文|").expect("interactive handles and environment preserved");
+        assert_eq!(std::fs::canonicalize(observed_directory).unwrap(), std::fs::canonicalize(&root).unwrap());
         std::fs::remove_dir_all(&root).unwrap();
-        assert_eq!(value.unwrap(), format!("False|False|space %PATH% & ! ' 中文|{}", root.display()));
         assert!(running, "-NoExit must remain interactive after initialization");
     }
 }

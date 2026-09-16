@@ -2052,7 +2052,9 @@ mod tests {
         let command = prepare_configured_probe_command("pnpm", &runtime, &config_for(&root, None))
             .expect("configured script probe prepares");
         let args: Vec<_> = command.as_std().get_args().collect();
-        assert_eq!(args, vec![entry.as_os_str(), OsStr::new("--version")]);
+        assert_eq!(args.len(), 2);
+        assert_eq!(fs::canonicalize(args[0]).unwrap(), fs::canonicalize(&entry).unwrap());
+        assert_eq!(args[1], OsStr::new("--version"));
         let _ = fs::remove_dir_all(root);
     }
 
