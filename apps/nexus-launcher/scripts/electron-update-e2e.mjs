@@ -66,7 +66,11 @@ const server = createServer(async (request, response) => {
     if (request.method === 'HEAD') response.end();
     else if (interruptDownload && filename.endsWith('.exe')) {
       // Send a real partial installer, then hold the connection until the app is killed.
-      createReadStream(file, { end: 1024 * 1024 - 1 }).pipe(response, { end: false });
+      for await (const chunk of createReadStream(file, { end: 1024 * 1024 - 1, highWaterMark: 65536 })) {
+        if (response.destroyed) break;
+        response.write(chunk);
+        await delay(250);
+      }
     } else createReadStream(file).pipe(response);
   } catch (error) { response.writeHead(500).end(String(error)); }
 });

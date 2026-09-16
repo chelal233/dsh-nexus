@@ -988,10 +988,18 @@ impl OwnedProcessTree {
     }
 
     fn terminate_and_wait(&mut self, timeout: Duration) -> io::Result<()> {
-        terminate_tree(self)?;
         let deadline = Instant::now() + timeout;
         loop {
             let _ = self.child.try_wait()?;
+            if let Err(error) = terminate_tree(self) {
+                // Darwin can return EPERM for a group containing only zombies
+                // while launchd is reaping the guardian. This is not proof of
+                // cleanup: keep waiting for ESRCH, with the same bounded deadline.
+                #[cfg(target_os = "macos")]
+                if error.raw_os_error() != Some(libc::EPERM) { return Err(error); }
+                #[cfg(not(target_os = "macos"))]
+                return Err(error);
+            }
             if tree_is_empty(self)? {
                 let _ = self.child.wait();
                 return Ok(());
@@ -1077,6 +1085,10 @@ fn tree_is_empty(tree: &OwnedProcessTree) -> io::Result<bool> {
         let error = io::Error::last_os_error();
         if error.raw_os_error() == Some(libc::ESRCH) {
             Ok(true)
+        } else if cfg!(target_os = "macos") && error.raw_os_error() == Some(libc::EPERM) {
+            // A zombie-only group may be temporarily unsignalable on Darwin.
+            // Preserve ownership until the group actually disappears.
+            Ok(false)
         } else {
             Err(error)
         }
