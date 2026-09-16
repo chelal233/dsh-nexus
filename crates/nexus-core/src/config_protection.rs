@@ -252,7 +252,7 @@ mod tests {
     fn fixture() -> (PathBuf, ConfigStore) {
         let root = std::env::temp_dir().join(format!(
             "nexus-config-protection-{}",
-            crate::new_instance_id()
+            crate::agent_auth::random_hex().unwrap()
         ));
         fs::create_dir_all(&root).unwrap();
         (root.clone(), ConfigStore::new(NexusPaths::from_root(root)))
