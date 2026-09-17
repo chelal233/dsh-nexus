@@ -1074,6 +1074,12 @@ async fn health(State(state): State<AppState>) -> Json<HealthResponse> {
         HealthResponse::healthy(state.data_root_id.clone(), state.instance_id.clone())
     };
     response.build_id = option_env!("NEXUS_BUILD_ID").map(str::to_owned);
+    // This handler also serves the deliberately unauthenticated exact-match
+    // GET /v1/health. binary_path stays there by design: the launcher's
+    // freshness binding and standalone diagnostics run before any credential
+    // exists, so the agent program identity must be readable pre-auth. The
+    // endpoint is loopback-only with a Host check and returns no other
+    // filesystem paths.
     if response.binary_path.is_none() {
         response.binary_path = std::env::current_exe()
             .ok()
