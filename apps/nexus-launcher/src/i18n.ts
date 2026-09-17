@@ -1596,6 +1596,32 @@ const english: Record<string, string> = {
   "The native bridge returned an unknown error": "The native bridge returned an unknown error",
   "Backend error: {message}": "Backend error: {message}",
   "Native bridge": "Native bridge",
+  "Set up Harness in three steps": "Set up Harness in three steps",
+  "Choose an install method, install or select a version, then run the startup check and start Harness.":
+    "Choose an install method, install or select a version, then run the startup check and start Harness.",
+  "Prepare": "Prepare",
+  "Check and start": "Check and start",
+  "Step": "Step",
+  "Not started": "Not started",
+  "Choose the install method": "Choose the install method",
+  "Install a version or select a directory": "Install a version or select a directory",
+  "Run the startup check and start Harness": "Run the startup check and start Harness",
+  "Recommended for most setups: choose a version and install it with the bundled runtime.":
+    "Recommended for most setups: choose a version and install it with the bundled runtime.",
+  "An installation is already in progress; wait for it to finish.":
+    "An installation is already in progress; wait for it to finish.",
+  "Harness is ready. Continue to the final step, or open the Workbench directly.":
+    "Harness is ready. Continue to the final step, or open the Workbench directly.",
+  "Go to the final step": "Go to the final step",
+  "Select an already built Harness directory below; Nexus uses it directly and does not install or build its files.":
+    "Select an already built Harness directory below; Nexus uses it directly and does not install or build its files.",
+  "Harness is starting or running": "Harness is starting or running",
+  "Harness is starting or running. Open the Workbench to use it.":
+    "Harness is starting or running. Open the Workbench to use it.",
+  "All checks passed. Start Harness when you are ready.":
+    "All checks passed. Start Harness when you are ready.",
+  "Resolve the blocked checks above, then start Harness.":
+    "Resolve the blocked checks above, then start Harness.",
 };
 
 const chinese: Record<string, string> = {
@@ -3122,6 +3148,30 @@ const chinese: Record<string, string> = {
     "验证 Agent 身份前，Launcher 操作已禁用。",
   "The native bridge returned an unknown error": "原生桥接返回了未知错误",
   "Backend error: {message}": "后端错误：{message}",
+  "Set up Harness in three steps": "三步完成 Harness 设置",
+  "Choose an install method, install or select a version, then run the startup check and start Harness.":
+    "选择安装方式，安装或选择版本，然后完成启动检查并启动 Harness。",
+  "Prepare": "准备",
+  "Check and start": "检查并启动",
+  "Step": "步骤",
+  "Not started": "未开始",
+  "Choose the install method": "选择安装方式",
+  "Install a version or select a directory": "安装版本或选择目录",
+  "Run the startup check and start Harness": "运行启动检查并启动 Harness",
+  "Recommended for most setups: choose a version and install it with the bundled runtime.":
+    "适合大多数用户：选择版本并使用内置运行时安装。",
+  "An installation is already in progress; wait for it to finish.":
+    "已有安装正在进行，请等待其结束。",
+  "Harness is ready. Continue to the final step, or open the Workbench directly.":
+    "Harness 已就绪。继续完成最后一步，或直接进入工作台。",
+  "Go to the final step": "前往最后一步",
+  "Select an already built Harness directory below; Nexus uses it directly and does not install or build its files.":
+    "在下方选择一个已构建的 Harness 目录；Nexus 直接使用它，不会安装或构建其文件。",
+  "Harness is starting or running": "Harness 正在启动或已运行",
+  "Harness is starting or running. Open the Workbench to use it.":
+    "Harness 正在启动或已运行，打开工作台即可使用。",
+  "All checks passed. Start Harness when you are ready.": "检查全部通过，随时可以启动 Harness。",
+  "Resolve the blocked checks above, then start Harness.": "先处理上方阻塞项，再启动 Harness。",
 };
 
 function detectLocale(): Locale {

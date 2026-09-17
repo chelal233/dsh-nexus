@@ -1477,6 +1477,24 @@ select {
 .setup-journey > div.step-done strong {
   color: var(--accent-strong);
 }
+.setup-journey > div.step-current {
+  border-left-color: var(--accent-strong);
+  background: var(--surface-raised, var(--surface));
+}
+.setup-journey .step-state {
+  display: block;
+  margin-top: 7px;
+  font-size: 11px;
+  font-style: normal;
+  font-weight: 650;
+  color: var(--muted);
+}
+.setup-journey > div.step-done .step-state {
+  color: var(--accent-strong);
+}
+.setup-journey > div.step-current .step-state {
+  color: var(--accent-strong);
+}
 .setup-journey span,
 .setup-journey strong {
   display: block;
