@@ -1641,15 +1641,21 @@ async fn startup_rolls_back_prepared_content_and_finishes_committed_content() {
     assert_eq!(fs::read(&settings).unwrap(), applied_content, "startup must not roll back under a live materializer");
     assert!(state.checkpoint_restores.load().unwrap().is_some());
     drop(process_owner);
-    recover_checkpoint_restore_startup(
-        &state.paths,
-        &state.checkpoint_restores,
-        &state.profiles,
-        &state.releases,
-        &state.snapshots,
-    )
-    .await
-    .expect("startup rolls Prepared back");
+    // Parallel Unix spawn fixtures can briefly inherit the locked descriptor
+    // between fork and exec/guardian descriptor cleanup. Recovery must keep
+    // refusing that live lease; retry its explicitly transient result.
+    timeout(Duration::from_secs(5), async {
+        loop {
+            match recover_checkpoint_restore_startup(
+                &state.paths, &state.checkpoint_restores, &state.profiles,
+                &state.releases, &state.snapshots,
+            ).await {
+                Ok(()) => break,
+                Err(error) if error.kind() == std::io::ErrorKind::ResourceBusy => sleep(Duration::from_millis(20)).await,
+                Err(error) => panic!("startup rolls Prepared back: {error}"),
+            }
+        }
+    }).await.expect("startup rolls Prepared back after lease release");
     let rolled_back = fs::read_to_string(&settings).expect("rolled-back settings read");
     assert!(rolled_back.contains("mode: current"));
     assert!(rolled_back.contains("DUMMY-CURRENT-SECRET"));
