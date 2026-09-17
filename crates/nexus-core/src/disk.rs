@@ -8,6 +8,16 @@
 /// a pnpm build comfortably fits, with headroom for the published release.
 pub const MIN_INSTALL_FREE_BYTES: u64 = 4 * 1024 * 1024 * 1024;
 
+/// Real on every platform: probes the actual target volume and the caller's
+/// available quota (Windows quota API / Unix statvfs) before installing,
+/// importing, capturing, or restoring.
+pub fn ensure_free_space(
+    path: &std::path::Path,
+    required_bytes: u64,
+) -> std::io::Result<()> {
+    nexus_private_file::ensure_space_budget(&[(path, required_bytes)])
+}
+
 /// Reason a volume is not acceptable for Nexus state.
 #[derive(Debug, PartialEq, Eq)]
 pub enum VolumeRejection {
@@ -129,30 +139,6 @@ mod imp {
         classify_volume(drive_type, name)
     }
 
-    #[allow(dead_code)]
-    pub fn free_bytes(path: &Path) -> io::Result<u64> {
-        use windows_sys::Win32::Storage::FileSystem::GetDiskFreeSpaceExW;
-        let root = volume_root_for(path)?;
-        let root_wide = wide(&root);
-        let mut free: u64 = 0;
-        let ok = unsafe {
-            GetDiskFreeSpaceExW(
-                root_wide.as_ptr(),
-                &mut free,
-                std::ptr::null_mut(),
-                std::ptr::null_mut(),
-            )
-        };
-        if ok == 0 {
-            return Err(io::Error::last_os_error());
-        }
-        Ok(free)
-    }
-
-    pub fn ensure_free_space(path: &Path, required_bytes: u64) -> io::Result<()> {
-        nexus_private_file::ensure_space_budget(&[(path, required_bytes)])
-    }
-
     pub fn default_preflight_free_bytes() -> u64 {
         MIN_INSTALL_FREE_BYTES
     }
@@ -160,8 +146,6 @@ mod imp {
 
 #[cfg(not(windows))]
 mod imp {
-    use std::io;
-
     use super::VolumeRejection;
 
     pub fn classify_volume(_drive_type: u32, _filesystem: String) -> Result<(), VolumeRejection> {
@@ -174,17 +158,12 @@ mod imp {
         Ok(())
     }
 
-    pub fn ensure_free_space(_path: &std::path::Path, _required_bytes: u64) -> io::Result<()> {
-        // Space preflight is Windows-only in this release.
-        Ok(())
-    }
-
     pub fn default_preflight_free_bytes() -> u64 {
         super::MIN_INSTALL_FREE_BYTES
     }
 }
 
-pub use imp::{classify_volume, default_preflight_free_bytes, ensure_free_space, validate_volume};
+pub use imp::{classify_volume, default_preflight_free_bytes, validate_volume};
 
 #[cfg(test)]
 mod tests {
