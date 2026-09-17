@@ -4,12 +4,64 @@ use serde::{Deserialize, Serialize};
 use std::{
     fs, io,
     path::{Component, Path, PathBuf},
-    sync::Mutex,
 };
 
 pub const PROTECTED_HARNESS_HOMES_FILE: &str = "protected-harness-homes.json";
 pub const PREVIOUS_CONFIG_FILE: &str = "config.previous.json";
-static PROTECTION_GATE: Mutex<()> = Mutex::new(());
+pub const PROTECTION_LOCK_FILE: &str = "protection.lock";
+
+/// Cross-process advisory lock serializing read-modify-write updates of the
+/// durable protection records. The Agent, launcher, CLI, and uninstall helper
+/// are separate processes, so an in-process mutex cannot prevent two writers
+/// from each reading the record and overwriting the other's entries — losing
+/// protection could later allow user data deletion. Every writer takes this
+/// exclusive lock before reading and holds it through the write. The byte
+/// range (Windows) or whole-file lock (Unix) is released when the handle
+/// closes. The lock file itself holds no secrets and lives in the data root.
+pub(crate) struct ProtectionLock {
+    _file: fs::File,
+}
+
+impl ProtectionLock {
+    pub(crate) fn acquire(root: &Path) -> io::Result<Self> {
+        let file = fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create(true)
+            .open(root.join(PROTECTION_LOCK_FILE))?;
+        #[cfg(windows)]
+        {
+            use std::os::windows::io::AsRawHandle;
+            use windows_sys::Win32::Storage::FileSystem::{
+                LockFileEx, LOCKFILE_EXCLUSIVE_LOCK,
+            };
+            let mut overlapped = windows_sys::Win32::System::IO::OVERLAPPED::default();
+            // A blocking wait is bounded by the short record rewrite; closing
+            // the handle releases the lock even if this call is interrupted.
+            let locked = unsafe {
+                LockFileEx(
+                    file.as_raw_handle(),
+                    LOCKFILE_EXCLUSIVE_LOCK,
+                    0,
+                    1,
+                    0,
+                    &mut overlapped,
+                )
+            };
+            if locked == 0 {
+                return Err(io::Error::last_os_error());
+            }
+        }
+        #[cfg(not(windows))]
+        {
+            use std::os::unix::io::AsRawFd;
+            if unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX) } != 0 {
+                return Err(io::Error::last_os_error());
+            }
+        }
+        Ok(Self { _file: file })
+    }
+}
 
 #[derive(Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -176,9 +228,6 @@ pub fn paths_overlap_by_identity(left: &Path, right: &Path) -> io::Result<bool> 
 /// into the root's namespace using actual directory identities, including UNC
 /// aliases. No Harness directory is created, migrated or removed here.
 pub fn protect_harness_homes(root: &Path, candidates: &[PathBuf]) -> io::Result<Vec<PathBuf>> {
-    let _guard = PROTECTION_GATE
-        .lock()
-        .map_err(|_| invalid("Harness protection lock is poisoned"))?;
     validate_path(root)?;
     for ancestor in root.ancestors() {
         let metadata = fs::symlink_metadata(ancestor)?;
@@ -191,6 +240,7 @@ pub fn protect_harness_homes(root: &Path, candidates: &[PathBuf]) -> io::Result<
     let root = fs::canonicalize(root)?;
     let root_id = identity(&root)?;
     let marker = root.join(PROTECTED_HARNESS_HOMES_FILE);
+    let _lock = ProtectionLock::acquire(&root)?;
     let mut saved = ProtectedHomes {
         schema_version: 1,
         root: root.clone(),
@@ -388,6 +438,15 @@ mod tests {
         let slot = default_home.join("Nexus").join("releases").join("old");
         fs::create_dir_all(&slot).unwrap();
         assert!(paths_overlap_by_identity(&slot, &default_home).unwrap());
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn protection_lock_is_reacquirable_after_release() {
+        let (root, _) = fixture();
+        drop(ProtectionLock::acquire(&root).unwrap());
+        drop(ProtectionLock::acquire(&root).unwrap());
+        assert!(root.join(PROTECTION_LOCK_FILE).is_file());
         fs::remove_dir_all(root).unwrap();
     }
 }
