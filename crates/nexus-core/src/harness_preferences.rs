@@ -82,6 +82,20 @@ fn validate_path(name: &str, value: &str) -> io::Result<()> {
         || path.components().any(|c| matches!(c, Component::ParentDir | Component::CurDir)) {
         return Err(invalid(format!("{name} must be an absolute path without parent traversal")));
     }
+    #[cfg(windows)]
+    {
+        use std::path::Prefix;
+        // Device namespaces bypass every ordinary path consumer. Verbatim
+        // drive/UNC forms are semantically ordinary and do appear: Nexus's own
+        // canonicalized paths (offline import environment roots) store them,
+        // so they stay accepted.
+        if path.components().any(|c| matches!(c, Component::Prefix(prefix) if matches!(
+            prefix.kind(),
+            Prefix::DeviceNS(_) | Prefix::Verbatim(_)
+        ))) {
+            return Err(invalid(format!("{name} must use an ordinary path, not a device namespace")));
+        }
+    }
     Ok(())
 }
 
