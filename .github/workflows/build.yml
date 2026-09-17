@@ -37,10 +37,10 @@ jobs:
       NEXUS_BUILD_ID: ci-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.target }}
       MACOSX_DEPLOYMENT_TARGET: '13.5'
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           persist-credentials: false
-      - uses: actions/setup-node@v7
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
         with:
           node-version: '24.20.0'
           package-manager-cache: false
@@ -61,7 +61,7 @@ jobs:
       - name: Install locked frontend dependencies
         working-directory: apps/nexus-launcher
         run: pnpm install --frozen-lockfile
-      - uses: actions/cache/restore@v5
+      - uses: actions/cache/restore@caa296126883cff596d87d8935842f9db880ef25 # v5
         id: cargo-cache
         with:
           path: target-rtest
@@ -131,14 +131,16 @@ jobs:
         run: |
           pnpm verify:release
           node src-tauri/scripts/collect-release.mjs
-      - uses: actions/upload-artifact@v6
+      - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
         with:
           name: release-${{ matrix.target }}
           path: target/release-assets/${{ matrix.target }}/*
           if-no-files-found: error
           retention-days: 14
-      - uses: actions/cache/save@v5
-        if: always() && !cancelled() && steps.cargo-cache.outputs.cache-hit != 'true'
+      # Only cache builds that completed every test and packaging step; a
+      # failed or cancelled run must not seed later runs with a half state.
+      - uses: actions/cache/save@caa296126883cff596d87d8935842f9db880ef25 # v5
+        if: success() && steps.cargo-cache.outputs.cache-hit != 'true'
         with:
           path: target-rtest
           key: rust-1.98-${{ matrix.target }}-${{ hashFiles('Cargo.lock', 'apps/nexus-launcher/src-tauri/Cargo.lock') }}-${{ github.sha }}-${{ github.run_attempt }}
