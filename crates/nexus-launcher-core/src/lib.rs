@@ -1274,6 +1274,13 @@ fn validate_resource_dir(path: &Path) -> Result<(), AgentRuntimeError> {
 }
 
 fn add_target_candidates(candidates: &mut Vec<PathBuf>, start: &Path) {
+    // Walking ancestors for a Cargo target directory is a source-tree
+    // development convenience. A packaged app must not silently adopt an old
+    // Agent from a stray target directory, so release builds skip the walk
+    // and rely on the package's own resource locations.
+    if !cfg!(debug_assertions) {
+        return;
+    }
     let mut ancestor = Some(start);
     for _ in 0..8 {
         let Some(path) = ancestor else {
