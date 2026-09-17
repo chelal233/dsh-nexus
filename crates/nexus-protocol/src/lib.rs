@@ -183,6 +183,7 @@ pub enum HarnessAction {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
 pub struct HarnessCommand {
     pub action: HarnessAction,
 }
@@ -362,6 +363,7 @@ pub enum ProfileAction {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
 pub struct ProfileCommand {
     pub action: ProfileAction,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -400,6 +402,10 @@ pub struct CompatibilityDisabledPlugin {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct CompatibilityReport {
+    #[serde(default)]
+    pub declarations: Vec<serde_json::Value>,
+    #[serde(default)]
+    pub declarations_omitted: usize,
     pub checker_version: u32,
     pub status: String,
     pub source_profile: String,
@@ -426,6 +432,8 @@ pub struct CompatibilityReport {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ProfileListResponse {
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub warnings: Vec<String>,
     pub api_version: String,
     pub active_profile: String,
     pub profiles: Vec<String>,
@@ -435,19 +443,26 @@ pub struct ProfileListResponse {
     pub compatibility: Option<CompatibilityReport>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub disabled_plugins: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub legacy_selected_source: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub retired_profiles_directory: Option<String>,
 }
 
 pub type ProfileStatusResponse = ProfileListResponse;
 
 impl ProfileListResponse {
     pub fn new(active_profile: impl Into<String>, profiles: Vec<String>) -> Self {
-        Self {
+          Self {
+              warnings: Vec::new(),
             api_version: API_VERSION.to_owned(),
             active_profile: active_profile.into(),
             profiles,
             manifests: Vec::new(),
             compatibility: None,
             disabled_plugins: Vec::new(),
+            legacy_selected_source: None,
+            retired_profiles_directory: None,
         }
     }
 
@@ -536,6 +551,7 @@ pub enum CheckpointAction {
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
 pub struct CheckpointCommand {
     pub action: CheckpointAction,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -1094,6 +1110,7 @@ impl Default for UpdateAction {
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
 pub struct UpdateCommand {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub offline_contents: Option<OfflineContents>,
@@ -1387,6 +1404,7 @@ impl Default for DiagnosticsAction {
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
 pub struct DiagnosticsCommand {
     pub action: DiagnosticsAction,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -1448,6 +1466,7 @@ pub enum HarnessLaunchMode {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
 pub struct HarnessConfigPayload {
     #[serde(default)]
     pub mode: HarnessLaunchMode,
@@ -1635,6 +1654,7 @@ impl Default for ConfigAction {
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
 pub struct ConfigCommand {
     #[serde(default)]
     pub external_harness_path: Option<String>,

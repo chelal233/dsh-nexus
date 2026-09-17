@@ -26,7 +26,15 @@ else {
   // Do not top-level-await app.whenReady: Electron waits for ESM evaluation
   // before emitting ready, so awaiting run() here deadlocks native startup.
   void run().catch(async error => {
-    await app.whenReady(); dialog.showErrorBox('Nexus Launcher', error.message); app.exit(1);
+    await app.whenReady();
+    // The React app may not be available yet. Render a self-contained Nexus
+    // error window with escaped text instead of an OS message box.
+    const escape = value => String(value).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+    const zh = app.getLocale().toLowerCase().startsWith('zh');
+    const failure = new BrowserWindow({ width: 620, height: 380, autoHideMenuBar: true, webPreferences: { nodeIntegration: false, contextIsolation: true, sandbox: true } });
+    failure.setMenu(null);
+    failure.on('closed', () => app.exit(1));
+    await failure.loadURL('data:text/html;charset=utf-8,' + encodeURIComponent(`<!doctype html><meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; script-src 'nonce-nexus-error'"><title>Nexus Launcher</title><style>body{font:16px system-ui;padding:28px;background:#f4f7f7;color:#183737}pre{white-space:pre-wrap;overflow-wrap:anywhere}button{padding:8px 24px;border:0;border-radius:8px;background:#086c65;color:white}</style><h2>${zh ? 'Nexus 启动失败' : 'Nexus could not start'}</h2><pre>${escape(error?.message ?? error)}</pre><button id="close">${zh ? '关闭' : 'Close'}</button><script nonce="nexus-error">document.getElementById('close').onclick=()=>window.close()</script>`));
   });
 }
 

@@ -57,3 +57,6 @@ export { default as App } from "../src/App";
 export * as __testI18n from "../src/i18n";
 export { MarketplaceSettings } from '../src/views/market';
 export { Modal } from "../src/ui-components";
+export { ConfirmationHost, confirmAction, BusyOverlay } from "../src/confirmation";
+
+export { StartupOperationPanel } from "../src/views/startup";

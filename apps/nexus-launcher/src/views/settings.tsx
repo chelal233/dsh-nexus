@@ -1,3 +1,4 @@
+import { confirmAction, BusyOverlay } from "../confirmation";
 import { type Snapshot, type JsonObject, type ViewProps, type ThemeMode } from "../app-types";
 import {
   stringValue,
@@ -501,6 +502,7 @@ function HarnessPreferencesPanel({
   };
   return (
     <Panel title={t("Harness configuration")} icon={<SlidersHorizontal size={18} />}>
+      <BusyOverlay label={patchBusy ? t("Operation in progress") : null} />
       <p className="field-help">
         {t("Blank fields inherit upstream behavior. Changes apply on the next launch.")}
       </p>
@@ -985,9 +987,17 @@ export function SettingsView({
     let frame = 0;
     const update = () => {
       const scale = Number(document.documentElement.style.zoom) || 1;
-      const margin = sections[0] ? parseFloat(window.getComputedStyle(sections[0]).scrollMarginTop) * scale : 0;
-      const line = Math.max((document.querySelector(".topbar")?.getBoundingClientRect().bottom || 0) + 20, margin) + 2;
-      const current = sections.filter((section) => section.getBoundingClientRect().top <= line).at(-1) || sections[0];
+      const margin = sections[0]
+        ? parseFloat(window.getComputedStyle(sections[0]).scrollMarginTop) * scale
+        : 0;
+      const line =
+        Math.max(
+          (document.querySelector(".topbar")?.getBoundingClientRect().bottom || 0) + 20,
+          margin,
+        ) + 2;
+      const current =
+        sections.filter((section) => section.getBoundingClientRect().top <= line).at(-1) ||
+        sections[0];
       if (current) onSettingsSectionChange?.(current.id.replace("settings-", ""));
     };
     const schedule = () => {
@@ -1202,7 +1212,9 @@ export function SettingsView({
 
   const clearHarness = async () => {
     if (
-      !window.confirm(t("Remove the Harness launch configuration? Harness must be stopped first."))
+      !(await confirmAction(
+        t("Remove the Harness launch configuration? Harness must be stopped first."),
+      ))
     )
       return;
     const cleared = await runAction(t("Clear Harness configuration"), "/v1/config", {
@@ -1318,6 +1330,7 @@ export function SettingsView({
   };
   return (
     <>
+      <BusyOverlay label={runtimeSaving ? t("Operation in progress") : null} />
       <PageIntro
         kicker={t("System / Settings")}
         title={t("Settings")}
@@ -1716,9 +1729,9 @@ export function SettingsView({
                 draftDirty ||
                 runtimeDraft.dirty
               }
-              onClick={() => {
+              onClick={async () => {
                 if (
-                  window.confirm(
+                  await confirmAction(
                     t("Restore the previous valid Nexus configuration? Harness will stay stopped."),
                   )
                 )
@@ -1960,7 +1973,11 @@ export function SettingsView({
               </label>
             </div>
           </div>
-          {desktopUpdateError && <p className="form-error" role="alert">{desktopUpdateError}</p>}
+          {desktopUpdateError && (
+            <p className="form-error" role="alert">
+              {desktopUpdateError}
+            </p>
+          )}
         </Panel>
       </section>
     </>

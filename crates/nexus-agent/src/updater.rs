@@ -917,8 +917,10 @@ def	refs/tags/v0.9.0^{}
         let cancel_owner = executor.clone();
         let id = operation.operation_id;
         let cancel = tokio::spawn(async move { cancel_owner.cancel_install(&id).await });
-        timeout(Duration::from_secs(3), async {
-            while !executor.install_operation().unwrap().unwrap().cancel_requested { tokio::task::yield_now().await; }
+        timeout(Duration::from_secs(30), async {
+            while !executor.install_operation().unwrap().unwrap().cancel_requested {
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
         }).await.unwrap();
         release.send(()).unwrap();
         assert!(install.await.unwrap().is_err());
@@ -1085,7 +1087,11 @@ def	refs/tags/v0.9.0^{}
                 .install(Some("cancelled-update".to_owned()), Some("test".to_owned()))
                 .await
         });
-        timeout(Duration::from_secs(3), started_rx)
+        // Under full-suite load, spawning and reaping the fake command can take
+        // seconds; the deadline only bounds the failure path, so stay generous
+        // and poll with a sleep instead of a yield_now busy loop that starves
+        // the detached owner on the single-threaded test runtime.
+        timeout(Duration::from_secs(30), started_rx)
             .await
             .expect("update command starts before deadline")
             .expect("update command start signal arrives");
@@ -1099,13 +1105,13 @@ def	refs/tags/v0.9.0^{}
         ));
 
         release.send(()).expect("detached update owner remains");
-        let terminal = timeout(Duration::from_secs(3), async {
+        let terminal = timeout(Duration::from_secs(30), async {
             loop {
                 let state = executor.status().expect("update state loads");
                 if state.state != UpdateState::Running {
                     break state;
                 }
-                tokio::task::yield_now().await;
+                tokio::time::sleep(Duration::from_millis(10)).await;
             }
         })
         .await

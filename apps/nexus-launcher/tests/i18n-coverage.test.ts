@@ -153,5 +153,5 @@ test("dynamic variable and interpolated template calls require registration", ()
 test("installer languages explicitly offer Simplified Chinese rather than generic Chinese", () => {
   const source=readFileSync(path.join(root,"../electron-builder.cjs"),"utf8");
   assert.match(source, /installerLanguages:.*zh_CN/);
-  assert.match(source, /target: \['nsis'\]/);
+  assert.match(source, /target: \['nsis', 'zip'\]/);
 });

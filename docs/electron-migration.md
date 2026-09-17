@@ -114,6 +114,22 @@ notification, startup and signed-update acceptance before release.
 
 ## Desktop compatibility completion
 
+Compatibility checks use disposable HOME/profile copies under the Nexus
+`compatibility/work` directory. They cache only a verification result and never
+publish a generated profile. Real runs and desktop package operations use the
+selected native profile and its original DSH_HOME. Explicit plugin disable/enable
+edits the native manifest atomically, preserving packages and restoration order;
+the disabled list and its migration version live in the same document.
+
+Legacy generated profiles carrying validated ownership markers are moved intact
+to `DSH_HOME/.nexus-retired-profiles` after a successful, quiescent check. The UI
+provides an archive entry. A selected legacy copy requires explicit source
+selection rather than silently discarding its edits. Old references remain
+resolvable through archived markers. Ordinary user profiles named `nexus-*`
+without those markers are untouched. Interrupted checks reconcile process
+ownership before reclaiming temporary directories, including pre-reservation
+orphans; legacy pending records remain supported.
+
 The independent window now rediscovers the current Harness URL and credential,
 shows a local recovery page on service loss/renderer failure, and bounds client
 loader readiness to 45 seconds. Retry can restart Agent startup preparation;

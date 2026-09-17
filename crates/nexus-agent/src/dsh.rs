@@ -218,6 +218,10 @@ pub(crate) fn profile_is_initialized(dsh_home: &Path, profile: &str) -> io::Resu
 }
 
 pub(crate) fn native_profiles(dsh_home: &Path) -> io::Result<Vec<NativeProfilePayload>> {
+    native_profiles_with_warnings(dsh_home, &mut Vec::new())
+}
+
+pub(crate) fn native_profiles_with_warnings(dsh_home: &Path, warnings: &mut Vec<String>) -> io::Result<Vec<NativeProfilePayload>> {
     let home = match canonical_dsh_home(dsh_home) {
         Ok(home) => home,
         Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(Vec::new()),
@@ -252,8 +256,13 @@ pub(crate) fn native_profiles(dsh_home: &Path) -> io::Result<Vec<NativeProfilePa
         if file_type.is_symlink() || !file_type.is_dir() {
             continue;
         }
-        if let Ok(profile) = native_profile(&home, &name) {
-            profiles.push(profile);
+        match native_profile(&home, &name) {
+            Ok(profile) if profile.source_profile.is_none() => profiles.push(profile),
+            Ok(_) => {},
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {},
+            Err(error) => {
+                if warnings.len() < 256 { warnings.push(format!("{}: {error}", entry.path().display())); }
+            },
         }
     }
     profiles.sort_by(|left, right| left.name.cmp(&right.name));
@@ -273,8 +282,8 @@ pub(crate) fn native_profile(dsh_home: &Path, profile: &str) -> io::Result<Nativ
             "profile package.json must be an ordinary file no larger than 1 MiB",
         ));
     }
-    let value: serde_json::Value = serde_json::from_slice(&fs::read(package_path)?)
-        .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
+    let value: serde_json::Value = serde_json::from_slice(&fs::read(&package_path)?)
+        .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, format!("{}: {error}", package_path.display())))?;
     let bundles_value = value
         .pointer("/dsh/profile/bundles")
         .and_then(serde_json::Value::as_array)
@@ -349,6 +358,15 @@ pub(crate) fn native_profile(dsh_home: &Path, profile: &str) -> io::Result<Nativ
                 ProfilePluginPayload { package, version: Some(version), builtin, removable: !builtin }
             }),
     );
+    if let Some(disabled) = value.pointer("/dsh/profile/nexusDisabledBundles").and_then(|value| value.as_array()) {
+        for record in disabled {
+            if let Some(package) = record["package"].as_str().filter(|package| valid_package_name(package)) {
+                if !plugins.iter().any(|plugin| plugin.package == package) {
+                    plugins.push(ProfilePluginPayload { package: package.to_owned(), version: None, builtin: false, removable: false });
+                }
+            }
+        }
+    }
     Ok(NativeProfilePayload {
         name: profile.to_owned(),
         order_undo_id: None,
@@ -1436,6 +1454,21 @@ mod tests {
         fs::write(home.join("profiles"), "invalid directory").expect("invalid fixture writes");
         assert!(native_profiles(&home).is_err());
         fs::remove_dir_all(root).expect("fixture removes");
+    }
+
+    #[test]
+    fn broken_profile_reports_file_and_preserves_original() {
+        let (root, _, home, _) = plugin_fixture();
+        let path = home.join("profiles/web/package.json");
+        let broken = b"{\n\"broken\": [1 2]\n}";
+        fs::write(&path, broken).unwrap();
+        let mut warnings = Vec::new();
+        native_profiles_with_warnings(&home, &mut warnings).unwrap();
+        assert_eq!(warnings.len(), 1);
+        assert!(warnings[0].contains("package.json"));
+        assert!(warnings[0].contains("line 2 column"));
+        assert_eq!(fs::read(&path).unwrap(), broken);
+        fs::remove_dir_all(root).unwrap();
     }
 
     #[test]

@@ -43,10 +43,10 @@ jobs:
       # This workflow produces acceptance artifacts, never signed release assets.
       NEXUS_UNSIGNED_SMOKE: '1'
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           persist-credentials: false
-      - uses: actions/setup-node@v7
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
         with:
           node-version: '24.20.0'
           package-manager-cache: false
@@ -103,6 +103,20 @@ jobs:
           $env:NEXUS_SMOKE_EXECUTABLE = "$install/Nexus Launcher.exe"
           node scripts/electron-smoke.mjs
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Windows ZIP extracted package smoke
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $archives = @(Get-ChildItem electron-dist -Filter '*.zip')
+          if ($archives.Count -ne 1) { throw 'Expected one portable ZIP' }
+          $portable = Join-Path $env:RUNNER_TEMP 'Nexus ZIP Smoke'
+          Expand-Archive -LiteralPath $archives[0].FullName -DestinationPath $portable
+          node desktop/scripts/verify-installed.mjs "$portable/resources"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $env:NEXUS_SMOKE_EXECUTABLE = "$portable/Nexus Launcher.exe"
+          node scripts/electron-smoke.mjs
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - name: macOS installed package smoke
         if: runner.os == 'macOS'
         run: |
@@ -121,8 +135,9 @@ jobs:
         env:
           NEXUS_PACKAGE_SMOKE_PASSED: '1'
         run: node desktop/scripts/collect-release.mjs
-      - uses: actions/upload-artifact@v6
+      - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
         with:
           name: release-${{ matrix.target }}
           path: target/release-assets/${{ matrix.target }}/*
           if-no-files-found: error
+          retention-days: 14

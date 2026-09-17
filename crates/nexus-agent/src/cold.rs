@@ -353,7 +353,7 @@ impl ColdCoordinator {
             previous_config: nexus_core::ConfigStore::new(self.paths.clone()).load()?,
             previous_current: catalog.current_release,
             previous_lkg: catalog.last_known_good,
-            target_lkg: nexus_core::ReleaseStore::new(self.paths.clone()).verified_fallback(Some(&operation.release_id))?,
+            target_lkg: if prepare_only { None } else { nexus_core::ReleaseStore::new(self.paths.clone()).verified_fallback(Some(&operation.release_id))? },
             previous_update: nexus_core::UpdateStateStore::new(self.paths.clone()).load()?,
             new_slot,
         };
@@ -382,7 +382,7 @@ impl ColdCoordinator {
         let intent = self.read_intent()?;
         if intent.preserve_current { return self.finish_preserved_publication(&intent).map(Some); }
         let current = nexus_core::ConfigStore::new(self.paths.clone()).load()?;
-        if current != intent.previous_config && current != intent.target_config {
+        if !intent.prepare_only && current != intent.previous_config && current != intent.target_config {
             return Err(io::Error::new(io::ErrorKind::WouldBlock, PublicationConflict));
         }
         if let (Some(previous), Some(target)) = (&intent.previous_profiles, &intent.target_profiles) {
@@ -738,7 +738,7 @@ async fn prepare_inner(state: &AppState, operation_id: &str) -> io::Result<()> {
         .iter()
         .any(|release| release.version == operation.tag)
     {
-        return promote_existing(state, operation_id, &operation.tag).await;
+        return reuse_prepared_release(state, operation_id, &operation.tag).await;
     }
     state.releases.ensure_capacity_for_new()?;
     // Disk preflight: the clone plus pnpm build needs several GiB on the
@@ -921,25 +921,12 @@ async fn build_and_publish(
         ));
     }
 
-    let lifecycle = state.supervisor.acquire_lifecycle().await;
+    let _lifecycle = state.supervisor.acquire_lifecycle().await;
     ensure_publication_admission(state, operation_id).await?;
     let _updater = state
         .updater
         .try_acquire_gate()
         .map_err(|error| io::Error::new(io::ErrorKind::ResourceBusy, error.to_string()))?;
-    super::ensure_harness_selection_quiescent(
-        state,
-        &lifecycle,
-        "release_change_conflict",
-        "cannot publish a cold release while Harness is active",
-    )
-    .await
-    .map_err(|_| {
-        io::Error::new(
-            io::ErrorKind::ResourceBusy,
-            "Harness must be positively stopped before cold release publication",
-        )
-    })?;
     state.releases.ensure_capacity_for_new()?;
     let _cold_commit = state.cold.gate.lock().await;
     ensure_not_cancelled(&cancellation)?;
@@ -958,151 +945,76 @@ async fn build_and_publish(
     final_operation.progress_percent = 90;
     final_operation.updated_at_unix = Some(unix_time_seconds());
     state.cold.write(&final_operation)?;
-    let node = runtime
-        .node
-        .as_ref()
-        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "verified Node pin is missing"))?
-        .path
-        .clone();
-    // The launch configuration must reference the `{release_root}`
-    // placeholder, never a concrete slot directory, so later switches,
-    // rollbacks, and checkpoint restores keep the launch on the current
-    // pointer.
-    let harness = HarnessLaunchSpec {
-        mode: HarnessLaunchMode::Node,
-        program: node,
-        args: vec![
-            "{release_root}\\apps/cli/lib/bin.js".to_owned(),
-            "--profile".to_owned(),
-            "{profile}".to_owned(),
-        ],
-        working_dir: Some(PathBuf::from("{release_root}")),
-        readiness_url: None,
-        readiness_timeout_secs: None,
-        readiness_token_required: false,
-    };
-    let previous_config = state.config.load()?;
-    let mut config = previous_config.clone();
-    config.runtime = Some(runtime.clone());
-    config.harness = Some(harness.clone());
-    config.update = Some(nexus_core::UpdateSpec {
-        source: APPROVED_UPSTREAM.to_owned(),
-        ref_name: operation.tag.clone(),
-        git_program: runtime
-            .git
-            .as_ref()
-            .map(|pin| pin.path.clone())
-            .unwrap_or_else(|| PathBuf::from("git")),
-        build_program: None,
-        build_args: Vec::new(),
-        verify_program: None,
-        verify_args: Vec::new(),
-        timeout_secs: Some(COMMAND_TIMEOUT.as_secs()),
-    });
-    if config.external_harness.is_none() {
-        if let Err(error) = state.releases.ensure_rollback_protection(&operation.release_id) {
-            if error.kind() != io::ErrorKind::WouldBlock { return Err(error); }
-            return prepare_repair_slot(state, &final_operation, &candidate);
-        }
-    }
-    let mut intent = state
-        .cold
-        .prepare_publication(&final_operation, true, config.clone())?;
-    let catalog = state.releases.register_prepared(
-        &candidate,
-        &operation.release_id,
-        &operation.tag,
-        Some(APPROVED_UPSTREAM.to_owned()),
-        Some("Nexus cold install".to_owned()),
-    )?;
-    crate::compatibility::prepare(
-        &state.paths,
-        &state.snapshots.configured_dsh_home()?,
-        &state.profiles.load()?.active_profile,
-        &operation.release_id,
-        &state.releases.release_root(&operation.release_id)?,
-        &harness.program,
-        true,
-        &cancellation,
-    )
-    .await?;
-    ensure_not_cancelled(&cancellation)?;
-    state.config.write(&config)?;
-    final_operation.phase = ColdOperationPhase::Promoting;
-    final_operation.progress_percent = 96;
-    final_operation.updated_at_unix = Some(unix_time_seconds());
-    state.cold.write(&final_operation)?;
-    let before = state.releases.load()?;
-    let promoted = match if config.external_harness.is_some() { state.releases.promote(&operation.release_id) } else { state.releases.promote_with_rollback(&operation.release_id) } {
-        Ok(catalog) => catalog,
-        Err(error) => {
-            let _ = state.config.write_recovery_document(&previous_config);
-            let _ = state.releases.remove(&operation.release_id);
-            return Err(error);
-        }
-    };
-    if let Err(error) = super::persist_release_catalog_state(state, &promoted, false).await {
-        let _ = state.releases.restore_release_pointers(
-            before.current_release.as_deref(),
-            before.last_known_good.as_deref(),
-        );
-        let _ = state.config.write_recovery_document(&previous_config);
-        return Err(io::Error::other(format!(
-            "failed to persist Agent current release: {error}"
-        )));
-    }
-    let release = catalog.find(&operation.release_id).cloned();
-    let finished = UpdateRuntimeInfo {
-        state: UpdateState::Succeeded,
-        release_id: release.map(|item| item.id),
-        started_at_unix: Some(operation.started_at_unix),
-        finished_at_unix: Some(unix_time_seconds()),
-        exit_code: Some(0),
-        error: None,
-    };
-    intent.committed = true;
-    state.cold.write_intent(&intent)?;
-    state.updater.state_store().write(&finished)?;
-    final_operation.phase = ColdOperationPhase::Succeeded;
-    final_operation.progress_percent = 100;
-    final_operation.updated_at_unix = Some(unix_time_seconds());
-    final_operation.owner_quiescent = true;
-    final_operation.cleanup_pending = false;
-    final_operation.cleanup_error = None;
-    state.cold.write(&final_operation)?;
-    fs::remove_file(state.cold.intent_path())?;
-    Ok(())
+    prepare_repair_slot(state, &final_operation, &candidate)
 }
 
 fn prepare_repair_slot(state: &AppState, operation: &ColdOperation, candidate: &Path) -> io::Result<()> {
     let mut prepared = operation.clone();
-    prepared.warning = Some("rollback_health_required: Version prepared only. Select it in Release slots and confirm a manual switch; the current selection and configuration are unchanged.".into());
+    prepared.warning = Some("Version prepared only. Stop Harness when ready, then select this version in Release slots. The current selection and configuration are unchanged.".into());
     let mut intent = state.cold.prepare_publication_inner(&prepared, true, state.config.load()?, true)?;
-    state.releases.register_prepared(candidate, &prepared.release_id, &prepared.tag, Some(APPROVED_UPSTREAM.into()), Some("Prepared for explicit manual recovery".into()))?;
+    state.releases.register_prepared(candidate, &prepared.release_id, &prepared.tag, Some(APPROVED_UPSTREAM.into()), Some("Prepared for explicit manual selection".into()))?;
     intent.committed = true;
     state.cold.write_intent(&intent)?;
     state.cold.recover_publication()
 }
 
-async fn promote_existing(state: &AppState, operation_id: &str, tag: &str) -> io::Result<()> {
-    let lifecycle = state.supervisor.acquire_lifecycle().await;
+/// First-use launch defaults belong to explicit selection, never background
+/// preparation. Publish config and selection through the existing recovery log.
+pub(crate) async fn initialize_selected_release(
+    state: &AppState, id: &str, confirmation: Option<&str>,
+) -> io::Result<Option<nexus_core::ReleaseCatalog>> {
+    let mut config = state.config.load()?;
+    if config.harness.is_some() || config.external_harness.is_some() { return Ok(None); }
+    let root = state.releases.release_root(id)?;
+    if !root.join("apps/cli/lib/bin.js").is_file() { return Ok(None); }
+    let release = state.releases.load()?.find(id).cloned()
+        .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "Selected release disappeared"))?;
+    let configured = config.runtime.clone().unwrap_or_default();
+    let plan = crate::runtime_plan::plan_candidate_release(&root,
+        RuntimePlanRequest { release_id: id.into(), source: configured.source, mode: configured.mode },
+        &state.config, &crate::runtime::RuntimeRequestContext::production()).await?;
+    if !plan.suggested_actions.iter().all(|action| matches!(action.action, RuntimePlanActionKind::UsePinned | RuntimePlanActionKind::UseExisting)) {
+        return Err(io::Error::other("Configure the required runtime before selecting this release"));
+    }
+    let runtime = runtime_from_plan(&plan)?;
+    let node = runtime.node.as_ref().ok_or_else(|| io::Error::other("Verified Node runtime is missing"))?.path.clone();
+    crate::compatibility::prepare(&state.paths, &state.snapshots.configured_dsh_home()?,
+        &state.profiles.load()?.active_profile, id, &root, &node, true, &CancellationToken::default()).await?;
+    config.harness = Some(HarnessLaunchSpec {
+        mode: HarnessLaunchMode::Node, program: node,
+        args: vec!["{release_root}/apps/cli/lib/bin.js".into(), "--profile".into(), "{profile}".into()],
+        working_dir: Some(PathBuf::from("{release_root}")), readiness_url: None,
+        readiness_timeout_secs: None, readiness_token_required: false,
+    });
+    config.runtime = Some(runtime);
+    let mut operation = state.cold.begin_with_details(release.version, configured.source, configured.mode,
+        "cold_switch", None, Some(id.into())).await?;
+    operation.phase = ColdOperationPhase::Promoting;
+    let cancellation = state.cold.token(&operation.operation_id).await;
+    let cold_commit = state.cold.gate.lock().await;
+    let result = (|| {
+        ensure_not_cancelled(&cancellation)?;
+        let mut intent = state.cold.prepare_publication(&operation, false, config)?;
+        state.releases.promote_confirmed(id, confirmation)?;
+        intent.committed = true;
+        state.cold.write_intent(&intent)?;
+        state.cold.recover_publication()?;
+        state.releases.load().map(Some)
+    })();
+    drop(cold_commit);
+    if let Err(error) = &result {
+        let _ = settle_failure(state, &operation.operation_id, io::Error::new(error.kind(), error.to_string())).await;
+    }
+    state.cold.owner_active.store(false, Ordering::Release);
+    result
+}
+
+async fn reuse_prepared_release(state: &AppState, operation_id: &str, tag: &str) -> io::Result<()> {
+    let _lifecycle = state.supervisor.acquire_lifecycle().await;
     let _updater = state
         .updater
         .try_acquire_gate()
         .map_err(|error| io::Error::new(io::ErrorKind::ResourceBusy, error.to_string()))?;
-    super::ensure_harness_selection_quiescent(
-        state,
-        &lifecycle,
-        "release_change_conflict",
-        "cannot switch release while Harness is active",
-    )
-    .await
-    .map_err(|_| {
-        io::Error::new(
-            io::ErrorKind::ResourceBusy,
-            "Harness must be positively stopped before release switch",
-        )
-    })?;
     let cancellation = state.cold.token(operation_id).await;
     let _cold_commit = state.cold.gate.lock().await;
     ensure_not_cancelled(&cancellation)?;
@@ -1124,26 +1036,9 @@ async fn promote_existing(state: &AppState, operation_id: &str, tag: &str) -> io
         .filter(|item| item.version == tag)
         .max_by_key(|item| item.installed_at_unix)
         .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "installed tag disappeared"))?;
-    crate::compatibility::for_release(state, &release.id, true, &cancellation).await?;
-    ensure_not_cancelled(&cancellation)?;
     final_operation.release_id = release.id.clone();
-    let external = state.config.load()?.external_harness.is_some();
-    if !external { state.releases.ensure_rollback_protection(&release.id)?; }
-    let mut intent =
-        state
-            .cold
-            .prepare_publication(&final_operation, false, state.config.load()?)?;
-    let before = state.releases.load()?;
-    let catalog = if external { state.releases.promote(&release.id) } else { state.releases.promote_with_rollback(&release.id) }?;
-    if let Err(error) = super::persist_release_catalog_state(state, &catalog, true).await {
-        let _ = state.releases.restore_release_pointers(
-            before.current_release.as_deref(),
-            before.last_known_good.as_deref(),
-        );
-        return Err(io::Error::other(format!(
-            "failed to persist Agent current release: {error}"
-        )));
-    }
+    final_operation.warning = Some("Version already prepared. Current selection and configuration are unchanged.".into());
+    let mut intent = state.cold.prepare_publication_inner(&final_operation, false, state.config.load()?, true)?;
     intent.committed = true;
     state.cold.write_intent(&intent)?;
     state.cold.recover_publication()?;
@@ -2190,6 +2085,48 @@ mod tests {
             assert!(!state.cold.intent_path().exists());
             fs::remove_dir_all(&state.paths.root).unwrap();
         }
+    }
+
+    #[tokio::test]
+    async fn prepare_and_reuse_never_switch_or_require_harness_stop() {
+        let state = crate::switch_ownership_tests::switch_test_state("prepare-active-harness");
+        state.releases.register("current", "v-current", None, None).unwrap();
+        state.releases.promote("current").unwrap();
+        state.supervisor.inject_nonquiescent_failed_state(None, true).await.unwrap();
+        let pointers = fs::read(&state.paths.release_pointers_file).unwrap();
+        let config = fs::read(&state.paths.config_file).unwrap();
+        let op = state.cold.begin("v-prepared".into(), RuntimeSource::Official, RuntimeInstallMode::Portable).await.unwrap();
+        fs::create_dir_all(&op.candidate).unwrap();
+        fs::write(Path::new(&op.candidate).join("built-marker"), b"built").unwrap();
+        prepare_repair_slot(&state, &op, Path::new(&op.candidate)).unwrap();
+        assert_eq!(state.cold.load().unwrap().unwrap().phase, ColdOperationPhase::Prepared);
+        state.cold.owner_active.store(false, Ordering::Release);
+        let repeated = state.cold.begin("v-prepared".into(), RuntimeSource::Official, RuntimeInstallMode::Portable).await.unwrap();
+        prepare_inner(&state, &repeated.operation_id).await.unwrap();
+        assert_eq!(state.cold.load().unwrap().unwrap().release_id, op.release_id);
+        assert_eq!(fs::read(&state.paths.release_pointers_file).unwrap(), pointers);
+        assert_eq!(fs::read(&state.paths.config_file).unwrap(), config);
+        let lifecycle = state.supervisor.acquire_lifecycle().await;
+        assert!(!state.supervisor.selection_change_is_quiescent(&lifecycle).await);
+        assert!(crate::ensure_harness_selection_quiescent(&state, &lifecycle, "release_change_conflict", "stop first").await.is_err());
+        fs::remove_dir_all(&state.paths.root).unwrap();
+    }
+
+    #[tokio::test]
+    async fn prepared_recovery_preserves_later_user_configuration() {
+        let state = crate::switch_ownership_tests::switch_test_state("prepare-only-config-edit");
+        let op = state.cold.begin("v-prepared".into(), RuntimeSource::Official, RuntimeInstallMode::Portable).await.unwrap();
+        fs::create_dir_all(&op.candidate).unwrap();
+        let mut intent = state.cold.prepare_publication_inner(&op, true, state.config.load().unwrap(), true).unwrap();
+        state.releases.register_prepared(Path::new(&op.candidate), &op.release_id, &op.tag, None, None).unwrap();
+        intent.committed = true;
+        state.cold.write_intent(&intent).unwrap();
+        state.config.transaction(|config| { config.update.as_mut().unwrap().ref_name = "user-edit".into(); Ok(()) }).unwrap();
+        let changed = fs::read(&state.paths.config_file).unwrap();
+        state.cold.recover_publication().unwrap();
+        assert_eq!(fs::read(&state.paths.config_file).unwrap(), changed);
+        assert!(state.releases.load().unwrap().current_release.is_none());
+        fs::remove_dir_all(&state.paths.root).unwrap();
     }
 
     #[tokio::test]

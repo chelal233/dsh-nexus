@@ -43,6 +43,9 @@ enum Command {
         Option<String>,
         Option<RuntimeSource>,
         Option<RuntimeInstallMode>,
+        // `update confirm OPERATION_ID TOKEN` keeps the two values in
+        // separate slots instead of a packed string.
+        Option<String>,
     ),
     Diagnostics(DiagnosticsAction, Option<String>),
     Config(ConfigAction, Option<RuntimeConfigPayload>),
@@ -248,7 +251,7 @@ fn parse_args_from(mut config: NexusConfig, mut explicit_port: bool, args: impl 
                 } else {
                     (None, None)
                 };
-                let (third, source, mode) = match action {
+                let (third, source, mode, confirm_token) = match action {
                     UpdateAction::Switch => {
                         let tag = args
                             .next()
@@ -277,7 +280,7 @@ fn parse_args_from(mut config: NexusConfig, mut explicit_port: bool, args: impl 
                             }
                             _ => RuntimeInstallMode::Portable,
                         };
-                        (Some(tag), Some(source), Some(mode))
+                        (Some(tag), Some(source), Some(mode), None)
                     }
                     UpdateAction::Confirm => {
                         let operation = args
@@ -290,7 +293,7 @@ fn parse_args_from(mut config: NexusConfig, mut explicit_port: bool, args: impl 
                             .ok_or_else(|| "update confirm requires OPERATION_ID TOKEN".to_owned())?
                             .to_string_lossy()
                             .into_owned();
-                        (Some(format!("{operation}\n{token}")), None, None)
+                        (Some(operation), None, None, Some(token))
                     }
                     UpdateAction::Cancel => (
                         Some(
@@ -301,11 +304,12 @@ fn parse_args_from(mut config: NexusConfig, mut explicit_port: bool, args: impl 
                         ),
                         None,
                         None,
+                        None,
                     ),
-                    _ => (None, None, None),
+                    _ => (None, None, None, None),
                 };
                 command = Some(Command::Update(
-                    action, release_id, version, third, source, mode,
+                    action, release_id, version, third, source, mode, confirm_token,
                 ));
             }
             "diagnostics" if command.is_none() => {
@@ -656,9 +660,9 @@ async fn run(options: Options) -> Result<(), String> {
                 note: note.clone(),
                 ..ReleaseCommand::default()
             }),
-        Command::Update(UpdateAction::Status, _, _, _, _, _) => client
+        Command::Update(UpdateAction::Status, _, _, _, _, _, _) => client
             .get(format!("http://{address}/v1/updates")),
-        Command::Update(action, release_id, version, third, source, mode) => client
+        Command::Update(action, release_id, version, third, source, mode, confirm_token) => client
             .post(format!("http://{address}/v1/updates"))
             .json(&UpdateCommand {
                 offline_contents: None,
@@ -675,18 +679,11 @@ async fn run(options: Options) -> Result<(), String> {
                 source: *source,
                 mode: *mode,
                 operation_id: match action {
-                    UpdateAction::Confirm => third
-                        .as_deref()
-                        .and_then(|value| value.split_once('\n'))
-                        .map(|(id, _)| id.to_owned()),
-                    UpdateAction::Cancel => third.clone(),
+                    UpdateAction::Confirm | UpdateAction::Cancel => third.clone(),
                     _ => None,
                 },
                 confirmation: if *action == UpdateAction::Confirm {
-                    third
-                        .as_deref()
-                        .and_then(|value| value.split_once('\n'))
-                        .map(|(_, token)| token.to_owned())
+                    confirm_token.clone()
                 } else {
                     None
                 },
@@ -969,7 +966,7 @@ async fn run(options: Options) -> Result<(), String> {
                 }
             }
         }
-        Command::Update(_, _, _, _, _, _) => {
+        Command::Update(_, _, _, _, _, _, _) => {
             let update: UpdateResponse = serde_json::from_str(&body)
                 .map_err(|error| format!("invalid agent response: {error}"))?;
             if options.json {

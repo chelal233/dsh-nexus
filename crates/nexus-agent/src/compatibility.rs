@@ -33,7 +33,8 @@ pub(crate) fn source_profile(home: &Path, selected: &str) -> io::Result<String> 
         if !seen.insert(source.clone()) || seen.len() > 5 {
             return Err(io::Error::other("Compatibility profile source cycle"));
         }
-        let marker = home.join("profiles").join(&source).join(".nexus-compatibility.json");
+        let live = home.join("profiles").join(&source).join(".nexus-compatibility.json");
+        let marker = if live.try_exists()? { live } else { home.join(".nexus-retired-profiles").join(&source).join(".nexus-compatibility.json") };
         let metadata = match fs::symlink_metadata(&marker) {
             Ok(metadata) => metadata,
             Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(source),
@@ -72,17 +73,60 @@ fn read_plain_json(path: &Path) -> io::Result<serde_json::Value> {
     if !metadata.is_file() || is_link_or_reparse(&metadata) || metadata.len() > 64 * 1024 {
         return Err(io::Error::other("Invalid compatibility policy or profile manifest"));
     }
-    serde_json::from_slice(&fs::read(path)?).map_err(io::Error::other)
+    serde_json::from_slice(&fs::read(path)?).map_err(|error| io::Error::new(io::ErrorKind::InvalidData, format!("{}: {error}", path.display())))
+}
+
+fn retire_projections(home: &Path) -> io::Result<()> {
+    let profiles = home.join("profiles");
+    let retired = home.join(".nexus-retired-profiles");
+    ensure_work_directory(&profiles)?;
+    for entry in fs::read_dir(&profiles)? {
+        let entry = entry?;
+        let name = entry.file_name().to_string_lossy().into_owned();
+        let metadata = fs::symlink_metadata(entry.path())?;
+        if validate_profile_name(&name).is_err() || !metadata.is_dir() || is_link_or_reparse(&metadata) { continue; }
+        let marker = entry.path().join(".nexus-compatibility.json");
+        let value = match read_plain_json(&marker) {
+            Ok(value) => value,
+            Err(error) if error.kind() == io::ErrorKind::NotFound => continue,
+            Err(error) => return Err(error),
+        };
+        let report: CompatibilityReport = serde_json::from_value(value).map_err(io::Error::other)?;
+        validate_profile_name(&report.source_profile)?;
+        if report.effective_profile != name || report.source_profile == name || !matches!(report.status.as_str(), "passed" | "isolated") {
+            return Err(io::Error::other("Invalid legacy profile identity; retained"));
+        }
+        ensure_work_directory(&retired)?;
+        let destination = retired.join(&name);
+        if destination.try_exists()? { return Err(io::Error::other("Retired profile destination already exists; both copies retained")); }
+        // Same-volume rename is atomic across interruption. Unknown files and
+        // user edits remain intact; archived markers resolve old references.
+        fs::rename(entry.path(), destination)?;
+    }
+    Ok(())
 }
 
 pub(crate) fn disabled_plugins(home: &Path, profile: &str) -> io::Result<Vec<String>> {
     let source = source_profile(&home, profile)?;
     let file = home.join("profiles/.nexus-plugin-isolation").join(format!("{source}.json"));
-    match read_plain_json(&file) {
+    let mut legacy: Vec<String> = match read_plain_json(&file) {
         Ok(value) => serde_json::from_value(value).map_err(io::Error::other),
         Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(Vec::new()),
         Err(error) => Err(error),
+    }?;
+    let manifest = match read_plain_json(&home.join("profiles").join(&source).join("package.json")) {
+        Ok(value) => value,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => serde_json::json!({}),
+        Err(error) => return Err(error),
+    };
+    if manifest.pointer("/dsh/profile/nexusIsolationPolicyVersion").and_then(|v| v.as_u64()) == Some(1) { legacy.clear(); }
+    if let Some(records) = manifest.pointer("/dsh/profile/nexusDisabledBundles") {
+        for record in records.as_array().ok_or_else(|| io::Error::other("Invalid disabled bundle metadata"))? {
+            let package = record["package"].as_str().ok_or_else(|| io::Error::other("Invalid disabled bundle metadata"))?;
+            if !legacy.iter().any(|value| value == package) { legacy.push(package.to_owned()); }
+        }
     }
+    Ok(legacy)
 }
 
 pub(crate) fn set_plugin_disabled(home: &Path, profile: &str, package: &str, disabled: bool) -> io::Result<()> {
@@ -94,25 +138,53 @@ pub(crate) fn set_plugin_disabled(home: &Path, profile: &str, package: &str, dis
     if !metadata.is_dir() || is_link_or_reparse(&metadata) {
         return Err(io::Error::other("Compatibility source profile cannot be a link"));
     }
-    let manifest = read_plain_json(&source_dir.join("package.json"))?;
+    let mut manifest = read_plain_json(&source_dir.join("package.json"))?;
     let bundles = manifest.pointer("/dsh/profile/bundles").and_then(|value| value.as_array())
         .ok_or_else(|| io::Error::other("Unsupported profile bundle manifest"))?;
-    if package.starts_with("@deepseek-ai/") || !bundles.iter().any(|value| value.as_str() == Some(package)) {
+    let mut records = manifest.pointer("/dsh/profile/nexusDisabledBundles").cloned().unwrap_or_else(|| serde_json::json!([]))
+        .as_array().cloned().ok_or_else(|| io::Error::other("Invalid disabled bundle metadata"))?;
+    let mut bundles = bundles.clone();
+    if manifest.pointer("/dsh/profile/nexusIsolationPolicyVersion").and_then(|v| v.as_u64()) != Some(1) {
+        let legacy_file = profiles.join(".nexus-plugin-isolation").join(format!("{source}.json"));
+        let legacy: Vec<String> = match read_plain_json(&legacy_file) {
+            Ok(value) => serde_json::from_value(value).map_err(io::Error::other)?,
+            Err(error) if error.kind() == io::ErrorKind::NotFound => Vec::new(),
+            Err(error) => return Err(error),
+        };
+        for item in legacy {
+            if item.starts_with("@deepseek-ai/") { return Err(io::Error::other("Invalid legacy isolation policy")); }
+            if let Some(index) = bundles.iter().position(|value| value.as_str() == Some(&item)) {
+                if !records.iter().any(|record| record["package"].as_str() == Some(&item)) {
+                    records.push(serde_json::json!({"package":item,"index":index,"following":bundles[index+1..]}));
+                }
+                bundles.remove(index);
+            }
+        }
+    }
+    let saved = records.iter().find(|item| item["package"].as_str() == Some(package)).cloned();
+    if package.starts_with("@deepseek-ai/") || (!bundles.iter().any(|value| value.as_str() == Some(package)) && saved.is_none()) {
         return Err(io::Error::new(io::ErrorKind::InvalidInput, "Only third-party bundles from the original profile can be isolated"));
     }
-    let policy_dir = profiles.join(".nexus-plugin-isolation");
-    ensure_work_directory(&policy_dir)?;
-    let policy_file = policy_dir.join(format!("{source}.json"));
-    let mut policy: Vec<String> = match read_plain_json(&policy_file) {
-        Ok(value) => serde_json::from_value(value).map_err(io::Error::other)?,
-        Err(error) if error.kind() == io::ErrorKind::NotFound => Vec::new(),
-        Err(error) => return Err(error),
-    };
-    policy.retain(|item| item != package);
-    if disabled { policy.push(package.to_owned()); }
-    policy.sort();
-    policy.dedup();
-    write_json_atomic(&policy_dir, &policy_file, &policy)
+    if disabled {
+        if let Some(index) = bundles.iter().position(|value| value.as_str() == Some(package)) {
+            if saved.is_none() { records.push(serde_json::json!({"package":package,"index":index,"following":bundles[index+1..]})); }
+            bundles.remove(index);
+        }
+    } else if let Some(saved) = saved {
+        if !bundles.iter().any(|value| value.as_str() == Some(package)) {
+            let index = saved["following"].as_array().and_then(|following| following.iter().find_map(|next| bundles.iter().position(|value| value == next)))
+                .unwrap_or_else(|| (saved["index"].as_u64().unwrap_or(bundles.len() as u64) as usize).min(bundles.len()));
+            bundles.insert(index, serde_json::json!(package));
+        }
+        records.retain(|item| item["package"].as_str() != Some(package));
+    }
+    manifest["dsh"]["profile"]["bundles"] = serde_json::json!(bundles);
+    manifest["dsh"]["profile"]["nexusIsolationPolicyVersion"] = serde_json::json!(1);
+    if records.is_empty() { manifest["dsh"]["profile"].as_object_mut().unwrap().remove("nexusDisabledBundles"); }
+    else { manifest["dsh"]["profile"]["nexusDisabledBundles"] = serde_json::json!(records); }
+    // One atomic document owns both the active order and restoration metadata.
+    // A process interruption cannot publish only one half of the change.
+    write_json_atomic(&source_dir, &source_dir.join("package.json"), &manifest)
 }
 
 pub(crate) async fn for_release(
@@ -195,6 +267,23 @@ async fn prepare_with_trigger(
     let lease = fs::File::options().read(true).write(true).create(true).truncate(false).open(lock_path)?;
     lease.try_lock().map_err(|_| io::Error::new(io::ErrorKind::ResourceBusy, "Compatibility check is still running"))?;
     recover_pending(&root, home)?;
+    recover_orphan_work(&root.join("work"))?;
+    let source = source_profile(home, profile)?;
+    if source != profile {
+        return Err(io::Error::other(format!("Legacy generated profile {profile} is selected. Select source profile {source} explicitly before starting; all legacy files are retained for recovery.")));
+    }
+    let legacy_policy = home.join("profiles/.nexus-plugin-isolation").join(format!("{source}.json"));
+    let mut legacy: Vec<String> = match read_plain_json(&legacy_policy) {
+        Ok(value) => serde_json::from_value(value).map_err(io::Error::other)?,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => Vec::new(),
+        Err(error) => return Err(error),
+    };
+    if read_plain_json(&home.join("profiles").join(profile).join("package.json")).ok()
+        .and_then(|value| value.pointer("/dsh/profile/nexusIsolationPolicyVersion").and_then(|v| v.as_u64())) == Some(1) { legacy.clear(); }
+    // The first atomic manifest edit imports the entire legacy selection.
+    if let Some(package) = legacy.first() {
+        set_plugin_disabled(home, profile, &package, true)?;
+    }
     match fs::remove_file(root.join("latest.json")) {
         Ok(()) => {},
         Err(error) if error.kind() == io::ErrorKind::NotFound => {},
@@ -210,8 +299,7 @@ async fn prepare_with_trigger(
     if !slot.join("apps/cli/lib/bin.js").is_file() {
         return Err(io::Error::other("Target release does not support the Node profile compatibility check"));
     }
-    ensure_work_directory(&home.join("profiles"))?;
-    let work_root = home.join("profiles/.nexus-compatibility-work");
+    let work_root = root.join("work");
     ensure_work_directory(&work_root)?;
     let nonce = nexus_core::unix_time_nanos_for_update();
     let work = work_root.join(format!("run-{nonce}"));
@@ -220,10 +308,14 @@ async fn prepare_with_trigger(
     let output = work.join("result.json");
     let script = root.join("checker.mjs");
     fs::write(&script, include_bytes!("compatibility.mjs"))?;
+    let vendor = script.parent().unwrap().join("vendor");
+    fs::create_dir_all(&vendor)?;
+    fs::write(vendor.join("semver.cjs"), include_bytes!("vendor/semver.cjs"))?;
+    fs::write(vendor.join("semver.LICENSE"), include_bytes!("vendor/semver.LICENSE"))?;
     let desktop_patch = crate::desktop_plugins::stage(paths, home, profile)?;
     use sha2::Digest;
     nexus_core::write_private_json_atomic(&work, &input, &serde_json::json!({
-        "home":home,"selected":profile,"release_id":release,"slot":slot,
+        "home":home,"selected":profile,"release_id":release,"slot":slot,"cache":root.join("verified.json"),
         "node":node,"work":work,"output":output,"force":force,
         "trigger": trigger, "owned_round": true,
         "preference_capabilities": { "adapter_version": crate::preference_capabilities::VERIFIED_VERSION, "capabilities": capabilities },
@@ -243,20 +335,11 @@ async fn prepare_with_trigger(
     command.arg(&script).arg(&input).current_dir(&root).stdin(Stdio::null()).stdout(Stdio::null());
     tracing::info!(release, profile, "checking target release plugin startup compatibility");
     write_json_atomic(&root, &pending, &serde_json::json!({"format_version":2,"work":work,"release":release,"profile":profile}))?;
-    let mut result = crate::cold::run_owned_command(command, "plugin compatibility check", Duration::from_secs(600), &work, cancellation).await;
+    let result = crate::cold::run_owned_command(command, "plugin compatibility check", Duration::from_secs(600), &work, cancellation).await;
     if result.as_ref().err().is_some_and(|error| !crate::cold::command_owner_quiescent(error)) {
         // Keep the durable marker and all paths while process ownership is
         // unresolved. A subsequent launch must not reuse or delete this tree.
         return result.map(|_| None);
-    }
-    if result.is_ok() && work.join("publication.json").is_file() {
-        let mut request: serde_json::Value = serde_json::from_slice(&fs::read(&input)?).map_err(io::Error::other)?;
-        request["finalize"] = serde_json::json!(true);
-        nexus_core::write_private_json_atomic(&work, &input, &request)?;
-        let mut command = std::process::Command::new(node);
-        command.arg(&script).arg(&input).current_dir(&root).stdin(Stdio::null()).stdout(Stdio::null());
-        result = crate::cold::run_owned_command(command, "publish verified compatibility profile", Duration::from_secs(60), &work, cancellation).await;
-        if result.as_ref().err().is_some_and(|error| !crate::cold::command_owner_quiescent(error)) { return result.map(|_| None); }
     }
     let bytes = fs::read(&output);
     let _ = fs::remove_file(&input);
@@ -286,9 +369,31 @@ async fn prepare_with_trigger(
         return Err(io::Error::other(format!("Plugin compatibility needs a choice; disable selected third-party plugins and retry the target release. {}", report.error.as_deref().unwrap_or(""))));
     }
     result?;
+    // Probe ownership has settled. Archive old copies intact, never merge them
+    // into the source or delete potentially edited configuration.
+    retire_projections(home)?;
+    let profiles = nexus_core::ProfileStore::new(paths.clone());
+    let mut catalog = profiles.load()?;
+    let before = catalog.profiles.clone();
+    catalog.profiles.retain(|name| !home.join(".nexus-retired-profiles").join(name).join(".nexus-compatibility.json").is_file());
+    if catalog.profiles != before { profiles.write(&catalog)?; }
     write_json_atomic(&root, &root.join("latest.json"), &report)?;
     tracing::info!(release, profile, isolated = report.disabled.len(), "plugin compatibility check passed");
     Ok(Some(report))
+}
+
+fn recover_orphan_work(root: &Path) -> io::Result<()> {
+    if !root.try_exists()? { return Ok(()); }
+    ensure_work_directory(root)?;
+    for entry in fs::read_dir(root)? {
+        let entry = entry?;
+        let name = entry.file_name().to_string_lossy().into_owned();
+        if !name.strip_prefix("run-").is_some_and(|n| !n.is_empty() && n.bytes().all(|c| c.is_ascii_digit())) { continue; }
+        ensure_work_directory(&entry.path())?;
+        crate::process_recovery::reconcile(&entry.path().join("owned-processes"))?;
+        crate::cold::remove_owned_directory(root, &entry.path())?;
+    }
+    Ok(())
 }
 
 fn recover_pending(root: &Path, home: &Path) -> io::Result<()> {
@@ -299,7 +404,9 @@ fn recover_pending(root: &Path, home: &Path) -> io::Result<()> {
         return Err(io::Error::other("Unsupported compatibility recovery record; files retained"));
     }
     let work = std::path::PathBuf::from(record["work"].as_str().ok_or_else(|| io::Error::other("Compatibility recovery has no work identity"))?);
-    let work_root = home.join("profiles/.nexus-compatibility-work");
+    let current_root = root.join("work");
+    let legacy_root = home.join("profiles/.nexus-compatibility-work");
+    let work_root = if work.parent() == Some(current_root.as_path()) { current_root } else { legacy_root };
     if work.parent() != Some(work_root.as_path()) || work.file_name().and_then(|s| s.to_str()).is_none_or(|s|
         !s.strip_prefix("run-").is_some_and(|n| !n.is_empty() && n.bytes().all(|c| c.is_ascii_digit()))) {
         return Err(io::Error::other("Compatibility recovery path does not match the configured home; files retained"));
@@ -382,7 +489,7 @@ mod tests {
         fs::write(projection.join(".nexus-compatibility.json"),
             br#"{"source_profile":"original"}"#).unwrap();
         let report = CompatibilityReport {
-            checker_version: 1, status: "passed".to_owned(), source_profile: "original".to_owned(),
+            declarations: Vec::new(), declarations_omitted: 0, checker_version: 1, status: "passed".to_owned(), source_profile: "original".to_owned(),
             effective_profile: "nexus-projection".to_owned(), release_id: "release-a".to_owned(),
             fingerprint: "fixture".to_owned(), checked_at_unix: 1, checked_disabled_plugins: None, disabled: Vec::new(), error: None, candidates: Vec::new(),
             trigger: None, last_trigger: None, last_used_at_unix: None, cache_reused: false,
@@ -411,23 +518,71 @@ mod tests {
     }
 
     #[test]
-    fn manual_isolation_preserves_original_and_rejects_official_bundles() {
+    fn manual_isolation_edits_one_native_manifest_and_restores_order() {
         let home = std::env::temp_dir().join(format!("nexus-compat-policy-{}-{}",
             std::process::id(), nexus_core::unix_time_nanos_for_update()));
         let profile = home.join("profiles/original");
         fs::create_dir_all(&profile).unwrap();
-        let manifest = br#"{"dsh":{"profile":{"bundles":["third-party","@deepseek-ai/core"]}}}"#;
+        let manifest = br#"{"dependencies":{"third-party":"1"},"custom":"keep","dsh":{"profile":{"bundles":["third-party","second","@deepseek-ai/core"]}}}"#;
         fs::write(profile.join("package.json"), manifest).unwrap();
         set_plugin_disabled(&home, "original", "third-party", true).unwrap();
-        let policy = home.join("profiles/.nexus-plugin-isolation/original.json");
-        assert_eq!(read_plain_json(&policy).unwrap(), serde_json::json!(["third-party"]));
+        assert_eq!(disabled_plugins(&home, "original").unwrap(), vec!["third-party"]);
+        assert_eq!(read_plain_json(&profile.join("package.json")).unwrap()["dsh"]["profile"]["bundles"], serde_json::json!(["second","@deepseek-ai/core"]));
         assert!(set_plugin_disabled(&home, "original", "@deepseek-ai/core", true).is_err());
         assert!(set_plugin_disabled(&home, "original", "not-in-manifest", true).is_err());
-        assert_eq!(read_plain_json(&policy).unwrap(), serde_json::json!(["third-party"]));
-        assert_eq!(fs::read(profile.join("package.json")).unwrap(), manifest);
+        set_plugin_disabled(&home, "original", "second", true).unwrap();
         set_plugin_disabled(&home, "original", "third-party", false).unwrap();
-        assert_eq!(read_plain_json(&policy).unwrap(), serde_json::json!([]));
-        assert_eq!(fs::read(profile.join("package.json")).unwrap(), manifest);
+        set_plugin_disabled(&home, "original", "second", false).unwrap();
+        assert!(disabled_plugins(&home, "original").unwrap().is_empty());
+        let mut restored = read_plain_json(&profile.join("package.json")).unwrap();
+        restored["dsh"]["profile"].as_object_mut().unwrap().remove("nexusIsolationPolicyVersion");
+        assert_eq!(restored, serde_json::from_slice::<serde_json::Value>(manifest).unwrap());
         fs::remove_dir_all(home).unwrap();
+    }
+
+    #[test]
+    fn legacy_policy_import_is_atomic_and_cannot_re_disable_after_enable() {
+        let home = std::env::temp_dir().join(format!("nexus-policy-upgrade-{}", nexus_core::unix_time_nanos_for_update()));
+        fs::create_dir_all(home.join("profiles/web")).unwrap();
+        fs::create_dir(home.join("profiles/.nexus-plugin-isolation")).unwrap();
+        write_json_atomic(&home, &home.join("profiles/web/package.json"), &serde_json::json!({"dsh":{"profile":{"bundles":["a","b","c"]}}})).unwrap();
+        write_json_atomic(&home, &home.join("profiles/.nexus-plugin-isolation/web.json"), &serde_json::json!(["a","b"])).unwrap();
+        set_plugin_disabled(&home,"web","a",true).unwrap();
+        assert_eq!(disabled_plugins(&home,"web").unwrap(), vec!["a","b"]);
+        set_plugin_disabled(&home,"web","a",false).unwrap();
+        assert_eq!(disabled_plugins(&home,"web").unwrap(), vec!["b"]);
+        set_plugin_disabled(&home,"web","b",false).unwrap();
+        assert_eq!(read_plain_json(&home.join("profiles/web/package.json")).unwrap()["dsh"]["profile"]["bundles"], serde_json::json!(["a","b","c"]));
+        assert!(disabled_plugins(&home,"web").unwrap().is_empty());
+        fs::remove_dir_all(home).unwrap();
+    }
+
+    #[test]
+    fn legacy_profiles_are_archived_intact_and_old_references_still_resolve() {
+        let home = std::env::temp_dir().join(format!("nexus-retire-{}", nexus_core::unix_time_nanos_for_update()));
+        for name in ["web","nexus-user","nexus-old"] { fs::create_dir_all(home.join("profiles").join(name)).unwrap(); }
+        let legacy = home.join("profiles/nexus-old");
+        fs::write(legacy.join("user-edit.txt"), "preserve every byte").unwrap();
+        write_json_atomic(&home, &legacy.join(".nexus-compatibility.json"), &serde_json::json!({
+            "checker_version":2,"status":"passed","source_profile":"web","effective_profile":"nexus-old",
+            "release_id":"old","fingerprint":"fixture","checked_at_unix":1,"disabled":[]
+        })).unwrap();
+        retire_projections(&home).unwrap(); retire_projections(&home).unwrap();
+        assert!(!legacy.exists()); assert!(home.join("profiles/nexus-user").is_dir());
+        assert_eq!(fs::read_to_string(home.join(".nexus-retired-profiles/nexus-old/user-edit.txt")).unwrap(), "preserve every byte");
+        assert_eq!(source_profile(&home,"nexus-old").unwrap(), "web");
+        fs::remove_dir_all(home).unwrap();
+    }
+
+    #[test]
+    fn interrupted_new_work_is_reclaimed_only_after_process_ownership_settles() {
+        let root = std::env::temp_dir().join(format!("nexus-work-recovery-{}", nexus_core::unix_time_nanos_for_update()));
+        let work = root.join("run-123"); fs::create_dir_all(&work).unwrap();
+        let owner = crate::process_recovery::Owner::create(&work.join("owned-processes"), None).unwrap();
+        assert!(recover_orphan_work(&root).is_err()); assert!(work.exists());
+        drop(owner); recover_orphan_work(&root).unwrap(); assert!(!work.exists());
+        fs::create_dir(&work).unwrap(); fs::write(work.join("request.json"), b"{}").unwrap();
+        recover_orphan_work(&root).unwrap(); assert!(!work.exists());
+        fs::remove_dir_all(root).unwrap();
     }
 }

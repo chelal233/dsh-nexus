@@ -13,7 +13,7 @@ export const targets = {
     nodeVersion: '24.20.0',
     archive: 'win-x64.zip',
     sha256: '6cac9ffbca8f6a47091e4b5c772e0606049c3871cb67d900c0cedde630e545ba',
-    bundles: ['nsis']
+    bundles: ['nsis', 'zip']
   },
   'aarch64-pc-windows-msvc': {
     platform: 'win32',
@@ -21,7 +21,7 @@ export const targets = {
     nodeVersion: '24.20.0',
     archive: 'win-arm64.zip',
     sha256: '31c6799744de8a54601643098040c68c3697e56c94e407d61d0e5fa5f34191d7',
-    bundles: ['nsis']
+    bundles: ['nsis', 'zip']
   },
   'x86_64-apple-darwin': {
     platform: 'darwin',

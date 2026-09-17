@@ -320,19 +320,24 @@ fn fingerprint(path: &Path) -> io::Result<Vec<EntryIdentity>> {
     fingerprint_until(path, Instant::now() + Duration::from_secs(TARGET_SCAN_SECONDS))
 }
 fn fingerprint_until(path: &Path, deadline: Instant) -> io::Result<Vec<EntryIdentity>> {
-    fn visit(root: &Path, path: &Path, output: &mut Vec<EntryIdentity>, budget: &mut ContentScanBudget) -> io::Result<()> {
+    // A planted path can nest thousands of single-character directories; a
+    // depth bound keeps recursion far from the stack limit while staying far
+    // above any real runtime tree. Fail closed: the tree is preserved.
+    const MAX_TREE_DEPTH: usize = 512;
+    fn visit(root: &Path, path: &Path, depth: usize, output: &mut Vec<EntryIdentity>, budget: &mut ContentScanBudget) -> io::Result<()> {
+        if depth > MAX_TREE_DEPTH { return Err(invalid("Directory nesting exceeds the supported depth; this tree is preserved")); }
         if output.len() >= MAX_ENTRIES { return Err(invalid("Capacity inspection limit reached; size is unknown")); }
         let entry = entry_identity(path, path.strip_prefix(root).map_err(io::Error::other)?.into(), budget)?;
         if path == root && entry.link_target.is_some() { return Err(invalid("The cleanup root must not be a link")); }
         let recurse = entry.directory && entry.link_target.is_none();
         output.push(entry);
         if recurse {
-            for entry in fs::read_dir(path)? { visit(root, &entry?.path(), output, budget)?; }
+            for entry in fs::read_dir(path)? { visit(root, &entry?.path(), depth + 1, output, budget)?; }
         }
         Ok(())
     }
     let mut result = Vec::new();
-    visit(path, path, &mut result, &mut ContentScanBudget::new(deadline))?;
+    visit(path, path, 0, &mut result, &mut ContentScanBudget::new(deadline))?;
     result.sort_by(|a, b| a.relative.cmp(&b.relative));
     Ok(result)
 }
@@ -340,7 +345,9 @@ fn size(entries: &[EntryIdentity]) -> io::Result<u64> {
     entries.iter().try_fold(0u64, |sum, entry| sum.checked_add(entry.bytes).ok_or_else(|| invalid("Capacity exceeds supported size")))
 }
 fn capacity(path: &Path, known: &std::collections::BTreeMap<PathBuf, Option<u64>>, deadline: Instant) -> io::Result<u64> {
-    fn visit(path: &Path, known: &std::collections::BTreeMap<PathBuf, Option<u64>>, deadline: Instant, count: &mut usize) -> io::Result<u64> {
+    const MAX_TREE_DEPTH: usize = 512;
+    fn visit(path: &Path, depth: usize, known: &std::collections::BTreeMap<PathBuf, Option<u64>>, deadline: Instant, count: &mut usize) -> io::Result<u64> {
+        if depth > MAX_TREE_DEPTH { return Err(invalid("Directory nesting exceeds the supported depth; capacity is unknown")); }
         if let Some(value) = known.get(path) { return value.ok_or_else(|| invalid("A child directory has an incomplete size")); }
         *count += 1;
         if *count > MAX_ENTRIES || Instant::now() > deadline { return Err(invalid("Capacity inspection is incomplete; refresh to inspect again")); }
@@ -350,11 +357,11 @@ fn capacity(path: &Path, known: &std::collections::BTreeMap<PathBuf, Option<u64>
         if !metadata.is_dir() { return Err(invalid("Unrecognized filesystem object")); }
         let mut total = 0u64;
         for entry in fs::read_dir(path)? {
-            total = total.checked_add(visit(&entry?.path(), known, deadline, count)?).ok_or_else(|| invalid("Capacity overflow"))?;
+            total = total.checked_add(visit(&entry?.path(), depth + 1, known, deadline, count)?).ok_or_else(|| invalid("Capacity overflow"))?;
         }
         Ok(total)
     }
-    visit(path, known, deadline, &mut 0)
+    visit(path, 0, known, deadline, &mut 0)
 }
 fn simple_name(name: &str) -> bool {
     !name.is_empty() && name.len() <= 200 && name.bytes().all(|c| c.is_ascii_alphanumeric() || matches!(c, b'-' | b'_' | b'.'))

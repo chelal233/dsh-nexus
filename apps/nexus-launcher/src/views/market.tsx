@@ -1,3 +1,4 @@
+import { BusyOverlay } from "../confirmation";
 import { useEffect, useRef, useState, useId } from "react";
 import { Storefront, WarningCircle } from "@phosphor-icons/react";
 import { useI18n } from "../i18n";
@@ -154,6 +155,7 @@ export function MarketplaceSettings({
   }
   return (
     <Panel title={text("Available plugins", "可用插件")} icon={<Storefront size={18} />}>
+      <BusyOverlay label={busy ? text("Operation in progress", "操作进行中") : null} />
       {state ? (
         <>
           <div className="plugin-target">
@@ -257,7 +259,11 @@ export function MarketplaceSettings({
       ) : (
         !error && <p role="status">{text("Loading plugins…", "正在读取插件…")}</p>
       )}
-      {error && <p className="form-error" role="alert">{error}</p>}
+      {error && (
+        <p className="form-error" role="alert">
+          {error}
+        </p>
+      )}
     </Panel>
   );
 }

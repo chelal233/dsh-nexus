@@ -38,7 +38,7 @@ test("offline controls use full paths, honor gates, and show persisted export ou
     const recovery = renderToStaticMarkup(createElement(OfflineOperationStatus, { ...props, snapshot: { ...snapshot, updates: { operation: { ...operation, kind: "offline_import", credential_recovery_path: "C:/Nexus/run/credential-recovery-cold-1.json" } } } }));
     assert.match(recovery, /Credential recovery record/); assert.match(recovery, /credential-recovery-cold-1.json/); assert.match(recovery, /stop Harness before restoring/);
     const prepared = renderToStaticMarkup(createElement(UpdatesView, { ...props, snapshot: { ...snapshot, updates: { operation: { ...operation, kind: "cold_switch", warning: "rollback_health_required" } } }, embedded: true }));
-    assert.match(prepared, /Version prepared only/); assert.match(prepared, /confirm a manual switch/);
+    assert.match(prepared, /Version is ready/); assert.match(prepared, /then switch in Release slots/);
     const preparedSnapshot = { ...snapshot, updates: { update: { state: "prepared", release_id: "new-slot" }, operation: { operation_id: "prepare-only", kind: "cold_switch", phase: "prepared", release_id: "new-slot", owner_quiescent: true } } };
     const preparedView = renderToStaticMarkup(createElement(UpdatesView, { ...props, snapshot: preparedSnapshot, embedded: true }));
     assert.match(preparedView, /Prepared; awaiting manual confirmation/);

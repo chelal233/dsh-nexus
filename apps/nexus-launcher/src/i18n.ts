@@ -13,15 +13,37 @@ export type TranslationParams = Record<string, string | number>;
 export type Translator = (key: string, params?: TranslationParams) => string;
 
 const english: Record<string, string> = {
+  "Declaration details omitted: {count}. This does not affect the startup check.":
+    "Declaration details omitted: {count}. This does not affect the startup check.",
+  "Confirm": "Confirm",
+  "Confirm action": "Confirm action",
+  "Please wait until this operation finishes before making other changes.":
+    "Please wait until this operation finishes before making other changes.",
+  "Plugin version declarations": "Plugin version declarations",
+  "Declared match": "Declared match",
+  "Declared mismatch": "Declared mismatch",
+  "Declaration unknown": "Declaration unknown",
+  "Local manifest declarations only. A match does not guarantee runtime compatibility.":
+    "Local manifest declarations only. A match does not guarantee runtime compatibility.",
+  "Choose version to prepare": "Choose version to prepare",
+  "Prepare upstream versions": "Prepare upstream versions",
+  "Version is ready. Harness and your current selection are unchanged. Stop Harness when convenient, then switch in Release slots.":
+    "Version is ready. Harness and your current selection are unchanged. Stop Harness when convenient, then switch in Release slots.",
+  "Preparing a version does not interrupt Harness. Before switching, stop Harness yourself; running tasks will be interrupted.":
+    "Preparing a version does not interrupt Harness. Before switching, stop Harness yourself; running tasks will be interrupted.",
+  "Fetching prepares a version without changing the current selection. Switch versions separately after stopping Harness.":
+    "Fetching prepares a version without changing the current selection. Switch versions separately after stopping Harness.",
   "Close": "Close",
   "Loading request history": "Loading request history…",
-  "No request records to display": "No request records to display. Check previous requests to refresh.",
+  "No request records to display":
+    "No request records to display. Check previous requests to refresh.",
   "View checkpoints": "View checkpoints",
   "Slot": "Slot",
   "Notifications": "Notifications",
   "Built-in plugins": "Built-in plugins",
   "Built-in plugin management": "Built-in plugin management",
-  "Manage Nexus plugin integrations for the active profile.": "Manage Nexus plugin integrations for the active profile.",
+  "Manage Nexus plugin integrations for the active profile.":
+    "Manage Nexus plugin integrations for the active profile.",
 
   "A data file could not be parsed. Back up the file shown below, correct its syntax at the reported location, then retry. Nexus will not overwrite it.":
     "A data file could not be parsed. Back up the file shown below, correct its syntax at the reported location, then retry. Nexus will not overwrite it.",
@@ -1638,9 +1660,55 @@ const english: Record<string, string> = {
   "The native bridge returned an unknown error": "The native bridge returned an unknown error",
   "Backend error: {message}": "Backend error: {message}",
   "Native bridge": "Native bridge",
+  "Set up Harness in three steps": "Set up Harness in three steps",
+  "Choose an install method, install or select a version, then run the startup check and start Harness.":
+    "Choose an install method, install or select a version, then run the startup check and start Harness.",
+  "Prepare": "Prepare",
+  "Check and start": "Check and start",
+  "Step": "Step",
+  "Not started": "Not started",
+  "Choose the install method": "Choose the install method",
+  "Install a version or select a directory": "Install a version or select a directory",
+  "Run the startup check and start Harness": "Run the startup check and start Harness",
+  "Recommended for most setups: choose a version and install it with the bundled runtime.":
+    "Recommended for most setups: choose a version and install it with the bundled runtime.",
+  "An installation is already in progress; wait for it to finish.":
+    "An installation is already in progress; wait for it to finish.",
+  "Harness is ready. Continue to the final step, or open the Workbench directly.":
+    "Harness is ready. Continue to the final step, or open the Workbench directly.",
+  "Go to the final step": "Go to the final step",
+  "Select an already built Harness directory below; Nexus uses it directly and does not install or build its files.":
+    "Select an already built Harness directory below; Nexus uses it directly and does not install or build its files.",
+  "Harness is starting or running": "Harness is starting or running",
+  "Harness is starting or running. Open the Workbench to use it.":
+    "Harness is starting or running. Open the Workbench to use it.",
+  "All checks passed. Start Harness when you are ready.":
+    "All checks passed. Start Harness when you are ready.",
+  "Resolve the blocked checks above, then start Harness.":
+    "Resolve the blocked checks above, then start Harness.",
 };
 
 const chinese: Record<string, string> = {
+  "Declaration details omitted: {count}. This does not affect the startup check.":
+    "已省略 {count} 个插件的声明明细，不影响启动检查结果。",
+  "Confirm": "确认",
+  "Confirm action": "确认操作",
+  "Please wait until this operation finishes before making other changes.":
+    "请等待本次操作完成后再进行其他更改。",
+  "Plugin version declarations": "插件版本声明",
+  "Declared match": "声明匹配",
+  "Declared mismatch": "声明不匹配",
+  "Declaration unknown": "声明未知",
+  "Local manifest declarations only. A match does not guarantee runtime compatibility.":
+    "仅检查本地 manifest 的版本声明。声明匹配不代表运行功能完全兼容。",
+  "Choose version to prepare": "选择要准备的版本",
+  "Prepare upstream versions": "准备上游版本",
+  "Version is ready. Harness and your current selection are unchanged. Stop Harness when convenient, then switch in Release slots.":
+    "版本已准备好，Harness 和当前版本均未改变。请在合适的时候停止 Harness，再到版本槽中切换。",
+  "Preparing a version does not interrupt Harness. Before switching, stop Harness yourself; running tasks will be interrupted.":
+    "准备版本不会中断 Harness。切换前请自行停止 Harness；停止会中断正在执行的任务。",
+  "Fetching prepares a version without changing the current selection. Switch versions separately after stopping Harness.":
+    "拉取仅准备版本，不改变当前选择。停止 Harness 后，再单独切换版本。",
   "Close": "关闭",
   "Loading request history": "正在读取操作记录…",
   "No request records to display": "暂无可显示的操作记录，可查询之前的请求以刷新。",
@@ -1649,7 +1717,8 @@ const chinese: Record<string, string> = {
   "Notifications": "通知",
   "Built-in plugins": "内置插件",
   "Built-in plugin management": "内置插件管理",
-  "Manage Nexus plugin integrations for the active profile.": "管理 Nexus 提供的插件集成入口。插件安装到当前配置档。",
+  "Manage Nexus plugin integrations for the active profile.":
+    "管理 Nexus 提供的插件集成入口。插件安装到当前配置档。",
 
   "A data file could not be parsed. Back up the file shown below, correct its syntax at the reported location, then retry. Nexus will not overwrite it.":
     "数据文件解析失败。请先备份下方错误指向的文件，按报错行列修正格式后重试。Nexus 不会覆盖原文件。",
@@ -3206,6 +3275,30 @@ const chinese: Record<string, string> = {
     "验证 Agent 身份前，Launcher 操作已禁用。",
   "The native bridge returned an unknown error": "原生桥接返回了未知错误",
   "Backend error: {message}": "后端错误：{message}",
+  "Set up Harness in three steps": "三步完成 Harness 设置",
+  "Choose an install method, install or select a version, then run the startup check and start Harness.":
+    "选择安装方式，安装或选择版本，然后完成启动检查并启动 Harness。",
+  "Prepare": "准备",
+  "Check and start": "检查并启动",
+  "Step": "步骤",
+  "Not started": "未开始",
+  "Choose the install method": "选择安装方式",
+  "Install a version or select a directory": "安装版本或选择目录",
+  "Run the startup check and start Harness": "运行启动检查并启动 Harness",
+  "Recommended for most setups: choose a version and install it with the bundled runtime.":
+    "适合大多数用户：选择版本并使用内置运行时安装。",
+  "An installation is already in progress; wait for it to finish.":
+    "已有安装正在进行，请等待其结束。",
+  "Harness is ready. Continue to the final step, or open the Workbench directly.":
+    "Harness 已就绪。继续完成最后一步，或直接进入工作台。",
+  "Go to the final step": "前往最后一步",
+  "Select an already built Harness directory below; Nexus uses it directly and does not install or build its files.":
+    "在下方选择一个已构建的 Harness 目录；Nexus 直接使用它，不会安装或构建其文件。",
+  "Harness is starting or running": "Harness 正在启动或已运行",
+  "Harness is starting or running. Open the Workbench to use it.":
+    "Harness 正在启动或已运行，打开工作台即可使用。",
+  "All checks passed. Start Harness when you are ready.": "检查全部通过，随时可以启动 Harness。",
+  "Resolve the blocked checks above, then start Harness.": "先处理上方阻塞项，再启动 Harness。",
 };
 
 function detectLocale(): Locale {

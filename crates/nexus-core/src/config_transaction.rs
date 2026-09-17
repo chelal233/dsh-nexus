@@ -60,11 +60,14 @@ impl ConfigStore {
         let Some(bytes)=read_regular_file_bounded(&self.paths.root.join("cold-publication.json"),16*1024*1024)? else { return Ok(false); };
         let value:serde_json::Value=serde_json::from_slice(&bytes).map_err(|_| invalid_data("Invalid outer publication record"))?;
         let fields = value.as_object().ok_or_else(|| invalid_data("Invalid outer publication record"))?;
+        // A missing schema_version is treated as v1 on purpose: pending cold
+        // publications written before the field existed must still be able to
+        // finish or roll back after an upgrade. An explicit foreign version is
+        // always rejected.
         if fields.get("schema_version").is_some_and(|v| v.as_u64()!=Some(1)) || fields.keys().any(|key| !["schema_version","committed","preserve_current","prepare_only","owned_runtime","owned_environment","preserve_release","operation","previous_config","target_config","previous_profiles","target_profiles","previous_current","previous_lkg","target_lkg","previous_update","new_slot"].contains(&key.as_str())) { return Err(invalid_data("Unsupported outer publication record")); }
         for key in ["owned_environment", "preserve_release", "prepare_only"] { if fields.get(key).is_some_and(|v| !v.is_boolean()) { return Err(invalid_data("Invalid outer publication record")); } }
         if fields.get("prepare_only").and_then(|v| v.as_bool()) == Some(true)
             && (fields.get("previous_config") != fields.get("target_config")
-                || fields.get("new_slot").and_then(|v| v.as_bool()) != Some(true)
                 || ["previous_profiles", "target_profiles", "owned_runtime"].iter().any(|key| fields.get(*key).is_some_and(|v| !v.is_null()))
                 || fields.get("owned_environment").and_then(|v| v.as_bool()) == Some(true)) {
             return Err(invalid_data("Prepared-only publication cannot change the active environment"));
@@ -348,7 +351,6 @@ mod tests {
         let path = root.join("cold-publication.json");
         for (field, value) in [
             ("target_config", serde_json::to_value(config(true)).unwrap()),
-            ("new_slot", false.into()),
             ("previous_profiles", serde_json::json!({"active_profile":"web","profiles":["web"]})),
             ("target_profiles", serde_json::json!({"active_profile":"web","profiles":["web"]})),
             ("owned_runtime", "runtime-new".into()),
@@ -365,7 +367,9 @@ mod tests {
             assert_eq!(fs::read(&store.paths.config_file).unwrap(), current);
             assert_eq!(fs::read(&path).unwrap(), before);
         }
-        for record in [valid, outer_preserve_fixture()] {
+        let mut reused = valid.clone();
+        reused["new_slot"] = false.into();
+        for record in [valid, reused, outer_preserve_fixture()] {
             write_private_json_atomic(&root, &path, &record).unwrap();
             assert!(store.outer_preserves_current().unwrap());
             assert_eq!(store.load().unwrap(), config(false));

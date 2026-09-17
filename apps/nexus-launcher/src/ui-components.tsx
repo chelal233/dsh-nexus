@@ -1,3 +1,4 @@
+import { createPortal } from "react-dom";
 import { useI18n } from "./i18n";
 import { Pulse, BracketsCurly, WarningCircle, ArrowClockwise, X } from "@phosphor-icons/react";
 import { localizeBackendError, errorMessage } from "./display-format";
@@ -182,7 +183,11 @@ export function DegradedNotice({
             </>
           )}
         </div>
-        {openError && <p className="form-error" role="alert">{localizeBackendError(openError, t)}</p>}
+        {openError && (
+          <p className="form-error" role="alert">
+            {localizeBackendError(openError, t)}
+          </p>
+        )}
       </div>
     </div>
   );
@@ -236,6 +241,18 @@ export function MissingReleaseNotice({
   );
 }
 
+const modalStack: HTMLElement[] = [];
+const originalInert = new Map<HTMLElement, boolean>();
+function updateModalInert() {
+  const top = modalStack.at(-1);
+  for (const child of Array.from(document.body.children)) {
+    if (!(child instanceof HTMLElement)) continue;
+    if (!originalInert.has(child)) originalInert.set(child, child.inert);
+    child.inert = top ? child !== top : (originalInert.get(child) ?? false);
+  }
+  if (!top) originalInert.clear();
+}
+
 export function Modal({
   title,
   onClose,
@@ -251,10 +268,19 @@ export function Modal({
   const dialog = useRef<HTMLDivElement>(null);
   useEffect(() => {
     const previous = document.activeElement as HTMLElement | null;
+    const overlay = dialog.current?.parentElement;
+    if (!overlay) return;
+    modalStack.push(overlay);
+    updateModalInert();
     dialog.current?.focus();
-    return () => previous?.focus();
+    return () => {
+      const index = modalStack.indexOf(overlay);
+      if (index >= 0) modalStack.splice(index, 1);
+      updateModalInert();
+      if (previous?.isConnected && !previous.closest("[inert]")) previous.focus();
+    };
   }, []);
-  return (
+  const content = (
     <div
       className="modal-overlay"
       role="dialog"
@@ -305,7 +331,13 @@ export function Modal({
         <div className="modal-header">
           <strong>{title}</strong>
           {!locked && (
-            <button type="button" className="button" onClick={onClose} aria-label={t("Close")} title={t("Close")}>
+            <button
+              type="button"
+              className="button"
+              onClick={onClose}
+              aria-label={t("Close")}
+              title={t("Close")}
+            >
               <X size={16} />
             </button>
           )}
@@ -314,6 +346,7 @@ export function Modal({
       </div>
     </div>
   );
+  return typeof document === "undefined" ? content : createPortal(content, document.body);
 }
 
 export function Metric({

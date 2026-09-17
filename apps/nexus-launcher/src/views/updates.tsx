@@ -1,3 +1,4 @@
+import { confirmAction } from "../confirmation";
 import { ActionButton, Panel, Modal, PathInput, PageIntro, EmptyState } from "../ui-components";
 import { useI18n } from "../i18n";
 import { useState, useEffect, useId, useRef, useCallback } from "react";
@@ -819,7 +820,18 @@ export function UpdatesView({
   const persistedSource = stringValue(runtime, "source") || "official";
   const currentUpdateSource = stringValue(nestedValue(snapshot.config, "update"), "source") || "";
   const persistedMode = stringValue(runtime, "mode") || "portable";
+  const harness = nestedValue(snapshot.harnessRuntime, "harness");
+  const harnessState = stringValue(harness, "state");
+  const switchBlocked =
+    !["stopped", "detached", "failed"].includes(harnessState || "") ||
+    !!numberValue(harness, "pid");
+  const [switchNeedsStop, setSwitchNeedsStop] = useState(false);
   const promoteRelease = async (id: string) => {
+    if (switchBlocked) {
+      setSwitchNeedsStop(true);
+      return;
+    }
+    setSwitchNeedsStop(false);
     try {
       const preview = await proxyRequest<JsonObject>("/v1/releases", "POST", {
         action: "promote",
@@ -831,12 +843,12 @@ export function UpdatesView({
         id,
         confirmation || null,
         !confirmation ||
-          window.confirm(
+          (await confirmAction(
             t(
               "There is no verified rollback version. Switch manually to {version} anyway? If it fails, automatic rollback will be unavailable. Harness will stay stopped.",
               { version: id },
             ),
-          ),
+          )),
       );
       if (command)
         await runAction(
@@ -849,6 +861,12 @@ export function UpdatesView({
           command,
         );
     } catch (error) {
+      if (
+        error &&
+        typeof error === "object" &&
+        (error as JsonObject).code === "release_change_conflict"
+      )
+        setSwitchNeedsStop(true);
       setTagsError(errorMessage(error));
     }
   };
@@ -968,10 +986,11 @@ export function UpdatesView({
           )}
         </p>
       )}
-      {stringValue(operation, "warning")?.includes("rollback_health_required") && (
+      {(operationPhase === "prepared" ||
+        stringValue(operation, "warning")?.includes("rollback_health_required")) && (
         <p className="notice degraded" role="status">
           {t(
-            "Version prepared only. Your current selection is unchanged. Select the prepared version in Release slots to review the rollback warning and confirm a manual switch.",
+            "Version is ready. Harness and your current selection are unchanged. Stop Harness when convenient, then switch in Release slots.",
           )}
         </p>
       )}
@@ -1087,7 +1106,7 @@ export function UpdatesView({
         </Panel>
       )}
       <Panel
-        title={t(embedded ? "Choose version and install" : "Upstream tags & cold switch")}
+        title={t(embedded ? "Choose version to prepare" : "Prepare upstream versions")}
         icon={<CloudArrowUp size={18} />}
       >
         <label className="form-field">
@@ -1176,7 +1195,7 @@ export function UpdatesView({
                 (!!operationId && !coldOperationIsTerminal(operationPhase))
               }
               onClick={() =>
-                void runAction(t("Switch to tag"), "/v1/updates", {
+                void runAction(t("Fetch this tag"), "/v1/updates", {
                   action: "switch",
                   tag: selectedTag,
                   source: persistedSource,
@@ -1184,13 +1203,7 @@ export function UpdatesView({
                 })
               }
             >
-              {t(
-                embedded
-                  ? "Install Harness"
-                  : releases.some((item) => stringValue(item, "version") === selectedTag)
-                    ? "Switch to tag"
-                    : "Fetch this tag",
-              )}
+              {t("Fetch this tag")}
             </ActionButton>
           )}
         </div>
@@ -1403,11 +1416,31 @@ export function UpdatesView({
               </ActionButton>
             </div>
           )}
+          {(switchNeedsStop || switchBlocked) && (
+            <div className="notice degraded" role={switchNeedsStop ? "alert" : "status"}>
+              <span>
+                {t(
+                  "Preparing a version does not interrupt Harness. Before switching, stop Harness yourself; running tasks will be interrupted.",
+                )}
+              </span>
+              <ActionButton
+                disabled={busyAction !== null}
+                onClick={() =>
+                  void (async () => {
+                    if (await runAction(t("Stop Harness"), "/v1/harness", { action: "stop" }))
+                      setSwitchNeedsStop(false);
+                  })()
+                }
+              >
+                {t("Stop Harness")}
+              </ActionButton>
+            </div>
+          )}
           {releases.length === 0 ? (
             <EmptyState
               title={t("No release slots")}
               detail={t(
-                "A successful cold switch registers and promotes its immutable slot without starting Harness.",
+                "Fetching prepares a version without changing the current selection. Switch versions separately after stopping Harness.",
               )}
             />
           ) : (

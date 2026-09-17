@@ -71,7 +71,11 @@ export function ToastNotice({
         <Info size={18} />
       )}
       <span style={{ whiteSpace: "pre-line" }}>{message}</span>
-      {onDetails && <button className="toast-details" onClick={onDetails}>{t("Open operation details")}</button>}
+      {onDetails && (
+        <button className="toast-details" onClick={onDetails}>
+          {t("Open operation details")}
+        </button>
+      )}
       <button onClick={() => setVisible(false)} aria-label={t("Dismiss notice")}>
         <X size={16} />
       </button>
@@ -89,7 +93,7 @@ export function OperationStatusPanel({
 }: {
   attentionOnly?: boolean;
   snapshot: Snapshot;
-  onOpen: (module: "guide" | "versions" | "profiles" | "maintenance", anchor: string) => void;
+  onOpen?: (module: "guide" | "versions" | "profiles" | "maintenance", anchor: string) => void;
 }) {
   const { t, locale } = useI18n();
   const records = operationSummaries(snapshot as unknown as JsonObject).filter(
@@ -133,11 +137,12 @@ export function OperationStatusPanel({
               "Cleanup required",
               "Package exported; cleanup required",
               "Confirmation required",
-            ].includes(item.status) && (
-              <ActionButton onClick={() => onOpen(item.module, item.anchor)}>
-                {t("Resolve issue")}
-              </ActionButton>
-            )}
+            ].includes(item.status) &&
+              onOpen && (
+                <ActionButton onClick={() => onOpen(item.module, item.anchor)}>
+                  {t("Resolve issue")}
+                </ActionButton>
+              )}
           </div>
         ))}
       </div>

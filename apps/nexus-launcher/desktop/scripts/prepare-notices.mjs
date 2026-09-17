@@ -52,6 +52,8 @@ for (const [id, pkg] of [...packages].sort(([a], [b]) => a.localeCompare(b))) {
   inventory.push({ name: pkg.name, version: pkg.version, license: pkg.license, source: pkg.source,
     text: texts.length ? file : null, reviewRequired: !texts.length || !pkg.license });
 }
+await copyFile(path.join(root, 'crates/nexus-agent/src/vendor/semver.LICENSE'), path.join(output, 'checker-semver-LICENSE.txt'));
+inventory.push({ name: 'checker/node-semver', version: '7.7.4', license: 'ISC', source: 'https://github.com/npm/node-semver', text: 'checker-semver-LICENSE.txt', reviewRequired: false });
 await copyFile(path.join(root, 'LICENSE'), path.join(output, 'Nexus-LICENSE.txt'));
 await copyFile(path.join(root, 'THIRD_PARTY_NOTICES.md'), path.join(output, 'README.md'));
 await writeFile(path.join(output, 'components.json'), JSON.stringify(inventory, null, 2) + '\n');

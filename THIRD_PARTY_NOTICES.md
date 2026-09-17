@@ -10,6 +10,7 @@ Nexus 的 MIT 许可证仅适用于 Nexus 自有代码，不替代依赖组件�
 | Rust 依赖 | 根 `Cargo.lock` 纳入精确版本清单；Electron/Chromium 许可随桌面包分发 |
 | 静态 libgit2 | `libgit2-sys` 包装层许可证不能替代 vendored `libgit2/COPYING`；需保留该原文、链接例外及对应组件声明 |
 | 前端依赖与图标 | 根据 `apps/nexus-launcher/pnpm-lock.yaml` 和实际生产构建生成精确版本、版权与许可材料 |
+| 本地插件声明检查 | 内嵌 node-semver 7.7.4（ISC）；原文在 `crates/nexus-agent/src/vendor/semver.LICENSE`，发布时复制至 notices |
 
 公开分发安装包前，应把核对后的许可原文和组件清单加入包内资源清单，使现有哈希校验覆盖这些文件。不能仅凭包管理器的许可证名称或 Node 的 LICENSE 宣称全包覆盖；缺失材料应逐项记录并补齐。构建身份、资源哈希和代码签名也不能替代此项。
 

@@ -17,7 +17,8 @@ pub(super) fn profile_list_response(
     catalog: ProfileCatalog,
 ) -> io::Result<ProfileListResponse> {
     let home = state.snapshots.configured_dsh_home()?;
-    let mut manifests = dsh::native_profiles(&home)?;
+    let mut warnings = Vec::new();
+    let mut manifests = dsh::native_profiles_with_warnings(&home, &mut warnings)?;
     for manifest in &mut manifests {
         manifest.order_undo_id = dsh::order_undo_id(&state.paths, &home, &manifest.name)?;
     }
@@ -27,6 +28,13 @@ pub(super) fn profile_list_response(
         .collect();
     let mut response =
         ProfileListResponse::new(catalog.active_profile, names).with_manifests(manifests);
+    response.warnings = warnings;
+    response.legacy_selected_source = compatibility::source_profile(&home, &response.active_profile).ok()
+        .filter(|source| source != &response.active_profile);
+    let retired = home.join(".nexus-retired-profiles");
+    if std::fs::symlink_metadata(&retired).is_ok_and(|metadata| metadata.is_dir() && !nexus_core::path_is_reparse(&metadata)) {
+        response.retired_profiles_directory = Some(retired.to_string_lossy().into_owned());
+    }
     response.compatibility = compatibility::latest_for_selection(
         &state.paths,
         &state.snapshots.configured_dsh_home()?,
@@ -684,7 +692,9 @@ async fn profile_open_terminal(
                 Ok(lease) => lease,
                 Err(error) => {
                     let _ = child.kill();
-                    let _ = child.wait();
+                    // wait polls the console handle for up to 5 seconds; keep
+                    // that off the async worker threads.
+                    let _ = tokio::task::spawn_blocking(move || child.wait()).await;
                     return data_error_response(error, "terminal_registration_failed");
                 }
             };
@@ -692,7 +702,7 @@ async fn profile_open_terminal(
             nexus_core::write_private_bytes_atomic(&state.paths.root, &ready, b"ready")
         {
             let _ = child.kill();
-            let _ = child.wait();
+            let _ = tokio::task::spawn_blocking(move || child.wait()).await;
             let _ = std::fs::remove_file(&lease);
             return data_error_response(error, "terminal_registration_failed");
         }
@@ -759,10 +769,18 @@ async fn profile_open_path(state: AppState, command: ProfileCommand) -> axum::re
             "open_path_target_required",
         );
     };
+    // Repair entry points must remain usable even when the profile catalog is
+    // unreadable. Resolve only fixed, Agent-owned roots, never client paths.
+    if target == "nexus_data" {
+        return open_resolved_profile_path(target, state.paths.root.clone(), true);
+    }
     let dsh_home = match state.snapshots.configured_dsh_home() {
         Ok(home) => home.clone(),
         Err(error) => return data_error_response(error, "dsh_home_unavailable"),
     };
+    if target == "harness_data" {
+        return open_resolved_profile_path(target, dsh_home, true);
+    }
     let profiles = match state.profiles.load() {
         Ok(catalog) => catalog,
         Err(error) => return data_error_response(error, "profile_catalog_unavailable"),
@@ -777,7 +795,7 @@ async fn profile_open_path(state: AppState, command: ProfileCommand) -> axum::re
         return data_error_response(error, "profile_invalid");
     }
     let profile_dir = dsh_home.join("profiles").join(&profile);
-    if !profile_dir.is_dir() {
+    if !profile_dir.is_dir() && target != "retired_profiles" {
         return data_error_response(
             io::Error::new(
                 io::ErrorKind::NotFound,
@@ -787,6 +805,13 @@ async fn profile_open_path(state: AppState, command: ProfileCommand) -> axum::re
         );
     }
     let (path, open_dir) = match target {
+        "retired_profiles" => {
+            let path = dsh_home.join(".nexus-retired-profiles");
+            if !std::fs::symlink_metadata(&path).is_ok_and(|metadata| metadata.is_dir() && !nexus_core::path_is_reparse(&metadata)) {
+                return data_error_response(io::Error::other("Retired profile directory is unavailable"), "open_path_missing");
+            }
+            (path, true)
+        }
         "settings" => (dsh_home.join("settings.yaml"), false),
         "profile_dir" => (profile_dir.clone(), true),
         "profile_patch" => (profile_dir.join("cordis.patch.yml"), false),
@@ -801,13 +826,31 @@ async fn profile_open_path(state: AppState, command: ProfileCommand) -> axum::re
             );
         }
     };
-    if !open_dir && !path.exists() {
+    open_resolved_profile_path(target, path, open_dir)
+}
+
+fn open_resolved_profile_path(target: &str, path: std::path::PathBuf, open_dir: bool) -> axum::response::Response {
+    if !path.exists() {
         return data_error_response(
             io::Error::new(
                 io::ErrorKind::NotFound,
                 format!("path not found: {}", path.display()),
             ),
             "open_path_missing",
+        );
+    }
+    #[cfg(windows)]
+    if !open_dir && path.as_os_str().to_string_lossy().contains('%') {
+        // The file branch launches through `cmd /C start`, which expands
+        // %VAR% even inside quoted arguments. The path derives from the
+        // profile directory, but refuse percent characters so a crafted
+        // dsh_home cannot expand to a different target.
+        return data_error_response(
+            io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "the path contains a percent character",
+            ),
+            "open_path_invalid",
         );
     }
     #[cfg(windows)]

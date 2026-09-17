@@ -9,7 +9,7 @@ test('all products select their native Node archive and packaging format', () =>
   }
   assert.throws(() => selectPlatform('i686-pc-windows-msvc', 'win32', 'x64'), /Unsupported/);
   for (const spec of Object.values(targets)) {
-    assert.deepEqual(spec.bundles, spec.platform === 'win32' ? ['nsis'] : ['dmg', 'zip']);
+    assert.deepEqual(spec.bundles, spec.platform === 'win32' ? ['nsis', 'zip'] : ['dmg', 'zip']);
   }
 });
 

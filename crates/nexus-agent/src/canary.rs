@@ -167,6 +167,10 @@ async fn run(state: &AppState, profile: &str, id: &str, mode: &nexus_protocol::C
     let work = work(&state.paths, id); nexus_core::create_new_private_directory(&work)?;
     let script = work.join("checker.mjs");
     fs::write(&script, include_bytes!("compatibility.mjs"))?;
+    let vendor = script.parent().unwrap().join("vendor");
+    fs::create_dir_all(&vendor)?;
+    fs::write(vendor.join("semver.cjs"), include_bytes!("vendor/semver.cjs"))?;
+    fs::write(vendor.join("semver.LICENSE"), include_bytes!("vendor/semver.LICENSE"))?;
     let mut options = json!({"home":home,"selected":profile,"release_id":release,"node":node,"slot":slot,"mode":"diagnostic_only","owned_round":true,"patches":preferences.patches.as_deref().unwrap_or(&[])});
     let mut environment = nexus_core::build_runtime_child_env(&runtime, std::env::var_os("PATH").as_deref())?;
     options["builtin_patches"] = json!([crate::desktop_plugins::stage(&state.paths, &home, profile)?]);

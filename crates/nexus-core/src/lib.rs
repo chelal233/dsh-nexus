@@ -776,7 +776,7 @@ impl ProfileStore {
 
     fn read_unlocked(&self) -> io::Result<Option<ProfileCatalog>> {
         let Some(bytes) = read_regular_file_bounded(&self.paths.profiles_file, 4 * 1024 * 1024)? else { return Ok(None); };
-        let catalog: ProfileCatalog = decode_json(&bytes).map_err(invalid_data)?;
+        let catalog: ProfileCatalog = decode_json(&bytes).map_err(|error| invalid_data(format!("{}: {error}", self.paths.profiles_file.display())))?;
         if catalog.schema_version > PROFILE_SCHEMA_VERSION { return Err(invalid_data("Unsupported profile catalog schema")); }
         Ok(Some(catalog))
     }
@@ -886,7 +886,7 @@ impl CheckpointStore {
                 continue;
             }
             let bytes = fs::read(&path)?;
-            let manifest: CheckpointManifest = decode_json(&bytes).map_err(invalid_data)?;
+            let manifest: CheckpointManifest = decode_json(&bytes).map_err(|error| invalid_data(format!("{}: {error}", path.display())))?;
             validate_checkpoint_manifest(&manifest)?;
             if path.file_stem().and_then(|stem| stem.to_str()) != Some(&manifest.id) {
                 return Err(invalid_data(
@@ -911,8 +911,8 @@ impl CheckpointStore {
         if !path.exists() {
             return Ok(None);
         }
-        let bytes = fs::read(path)?;
-        let manifest: CheckpointManifest = decode_json(&bytes).map_err(invalid_data)?;
+        let bytes = fs::read(&path)?;
+        let manifest: CheckpointManifest = decode_json(&bytes).map_err(|error| invalid_data(format!("{}: {error}", path.display())))?;
         validate_checkpoint_manifest(&manifest)?;
         Ok(Some(manifest))
     }
@@ -1402,7 +1402,7 @@ pub struct ReleaseStore {
 impl ReleaseStore {
     fn health_records(&self) -> io::Result<Vec<HealthyReleaseEvidence>> {
         let Some(bytes) = read_regular_file_bounded(&self.paths.release_pointers_file, 1024 * 1024)? else { return Ok(Vec::new()); };
-        let document: ReleasePointerDocument = decode_json(&bytes).map_err(invalid_data)?;
+        let document: ReleasePointerDocument = decode_json(&bytes).map_err(|error| invalid_data(format!("{}: {error}", self.paths.release_pointers_file.display())))?;
         if document.schema_version != RELEASE_SCHEMA_VERSION || document.healthy.len() > 256 { return Err(invalid_data("Unsupported release health record")); }
         Ok(document.healthy)
     }
@@ -1791,7 +1791,7 @@ impl ReleaseStore {
 
     fn ensure_rollback_protection_unlocked(&self, id: &str) -> io::Result<()> {
         let Some(bytes) = read_regular_file_bounded(&self.paths.release_pointers_file, 1024 * 1024)? else { return Ok(()); };
-        let document: ReleasePointerDocument = decode_json(&bytes).map_err(invalid_data)?;
+        let document: ReleasePointerDocument = decode_json(&bytes).map_err(|error| invalid_data(format!("{}: {error}", self.paths.release_pointers_file.display())))?;
         if document.schema_version != RELEASE_SCHEMA_VERSION { return Err(invalid_data("Unsupported release pointer schema")); }
         let (current, legacy_lkg) = (document.current_release, document.last_known_good);
         if current.as_deref() == Some(id) || (current.is_none() && legacy_lkg.is_none()) { return Ok(()); }
@@ -1902,9 +1902,9 @@ impl ReleaseStore {
         }
         let mut bytes = Vec::new();
         use std::io::Read;
-        fs::File::open(marker)?.take(256 * 1024 + 1).read_to_end(&mut bytes)?;
+        fs::File::open(&marker)?.take(256 * 1024 + 1).read_to_end(&mut bytes)?;
         if bytes.len() > 256 * 1024 { return Err(invalid_data("Pending release cleanup record is too large")); }
-        let manifest: ReleaseManifest = decode_json(&bytes).map_err(invalid_data)?;
+        let manifest: ReleaseManifest = decode_json(&bytes).map_err(|error| invalid_data(format!("{}: {error}", marker.display())))?;
         validate_release_manifest(&manifest)?;
         if manifest.id != id { return Err(invalid_data("Pending release cleanup does not match its slot")); }
         Ok(Some(manifest))
@@ -2284,7 +2284,7 @@ fn create_dir_junction(link: &Path, target: &Path) -> io::Result<()> {
     pub fn stored_release_pointers(&self) -> io::Result<(Option<String>, Option<String>)> {
         let _gate = self.lock_gate()?;
         let Some(bytes) = read_regular_file_bounded(&self.paths.release_pointers_file, 1024 * 1024)? else { return Ok((None, None)); };
-        let document: ReleasePointerDocument = decode_json(&bytes).map_err(invalid_data)?;
+        let document: ReleasePointerDocument = decode_json(&bytes).map_err(|error| invalid_data(format!("{}: {error}", self.paths.release_pointers_file.display())))?;
         if document.schema_version != RELEASE_SCHEMA_VERSION { return Err(invalid_data("Unsupported release pointer schema")); }
         let catalog = self.load_unlocked()?;
         for id in [&document.current_release, &document.last_known_good].into_iter().flatten() {
@@ -2369,7 +2369,7 @@ fn create_dir_junction(link: &Path, target: &Path) -> io::Result<()> {
                     continue;
                 }
                 let bytes = fs::read(&manifest_path)?;
-                let manifest: ReleaseManifest = decode_json(&bytes).map_err(invalid_data)?;
+                let manifest: ReleaseManifest = decode_json(&bytes).map_err(|error| invalid_data(format!("{}: {error}", manifest_path.display())))?;
                 validate_release_manifest(&manifest)?;
                 if manifest.id != slot_id {
                     return Err(invalid_data("release directory does not match manifest id"));
@@ -3109,7 +3109,7 @@ impl UpdateStateStore {
             return Ok(UpdateRuntimeInfo::idle());
         }
         let bytes = fs::read(&self.paths.update_state_file)?;
-        let document: UpdateStateDocument = decode_json(&bytes).map_err(invalid_data)?;
+        let document: UpdateStateDocument = decode_json(&bytes).map_err(|error| invalid_data(format!("{}: {error}", self.paths.update_state_file.display())))?;
         Ok(document.update)
     }
 
@@ -3132,7 +3132,7 @@ impl UpdateStateStore {
             return Ok(UpdateRuntimeInfo::idle());
         }
         let bytes = fs::read(&self.paths.update_state_file)?;
-        let document: UpdateStateDocument = decode_json(&bytes).map_err(invalid_data)?;
+        let document: UpdateStateDocument = decode_json(&bytes).map_err(|error| invalid_data(format!("{}: {error}", self.paths.update_state_file.display())))?;
         let mut update = document.update;
         if update.state == UpdateState::Running {
             update.state = UpdateState::Failed;
@@ -6450,7 +6450,7 @@ pub fn write_versioned_record<T: Serialize + serde::de::DeserializeOwned>(root: 
 }
 /// Strict dispatch preserves the two documented legacy single-section forms.
 fn decode_config_document(bytes: &[u8]) -> io::Result<NexusConfigFile> {
-    let value: serde_json::Value = serde_json::from_slice(bytes).map_err(|_| invalid_data("Invalid configuration format"))?;
+    let value: serde_json::Value = serde_json::from_slice(bytes).map_err(|error| invalid_data(format!("Invalid configuration format at line {} column {}", error.line(), error.column())))?;
     let object = value.as_object().ok_or_else(|| invalid_data("Invalid configuration format"))?;
     let document = if !object.contains_key("schema_version") && object.contains_key("program") {
         NexusConfigFile { external_harness: None, harness: Some(serde_json::from_value(value).map_err(|_| invalid_data("Invalid legacy Harness configuration"))?), ..Default::default() }
@@ -6549,7 +6549,7 @@ impl ConfigStore {
     fn snapshot_unlocked(&self) -> io::Result<ConfigSnapshot> {
         use sha2::{Digest, Sha256};
         let bytes = read_regular_file_bounded(&self.paths.config_file, 4 * 1024 * 1024)?;
-        let document = bytes.as_deref().map(decode_config_document).transpose()?.unwrap_or_default();
+        let document = bytes.as_deref().map(decode_config_document).transpose().map_err(|error| io::Error::new(error.kind(), format!("{}: {error}", self.paths.config_file.display())))?.unwrap_or_default();
         validate_config_document(&self.paths, &document)?;
         let revision = bytes.as_ref().map(|b| format!("sha256:{:x}", Sha256::digest(b))).unwrap_or_else(|| "missing".into());
         Ok(ConfigSnapshot { document, revision })
@@ -6583,7 +6583,7 @@ impl ConfigStore {
         let Some(bytes) = read_regular_file_bounded(&self.paths.config_file, 4 * 1024 * 1024)? else {
             return Ok(NexusConfigFile::default());
         };
-        let document = decode_config_document(&bytes)?;
+        let document = decode_config_document(&bytes).map_err(|error| io::Error::new(error.kind(), format!("{}: {error}", self.paths.config_file.display())))?;
         validate_config_document(&self.paths, &document)?;
         Ok(document)
     }

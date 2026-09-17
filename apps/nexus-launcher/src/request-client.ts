@@ -19,7 +19,7 @@ function stableJson(value: unknown): string {
   }
   if (value && typeof value === "object") {
     const properties = Object.entries(value)
-      .sort(([left], [right]) => left.localeCompare(right))
+      .sort(([left], [right]) => (left < right ? -1 : left > right ? 1 : 0))
       .map(([key, item]) => JSON.stringify(key) + ":" + stableJson(item));
     return "{" + properties.join(",") + "}";
   }
@@ -28,6 +28,27 @@ function stableJson(value: unknown): string {
 
 function hex(bytes: Uint8Array): string {
   return Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0")).join("");
+}
+
+const sharedClients = new Map<string, ReturnType<typeof createRequestClient>>();
+
+/**
+ * One client per data root. Separate clients each rewrite the whole pending
+ * map in localStorage, so concurrent callers (App actions and the recovery
+ * view) can silently drop each other's entries; sharing one instance keeps
+ * the read-modify-write inside a single owner.
+ */
+export function sharedRequestClient(
+  storage: StoragePort,
+  transport: Transport,
+  dataRootId: string,
+): ReturnType<typeof createRequestClient> {
+  let client = sharedClients.get(dataRootId);
+  if (!client) {
+    client = createRequestClient(storage, transport, dataRootId);
+    sharedClients.set(dataRootId, client);
+  }
+  return client;
 }
 
 export function createRequestClient(

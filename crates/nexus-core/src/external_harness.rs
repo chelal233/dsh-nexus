@@ -28,7 +28,12 @@ impl ExternalHarness {
         }
         let identity = crate::data_root_identity(&NexusPaths::from_root(root.clone()))?;
         let started = Instant::now(); let mut count=0usize; let mut bytes=0u64; let mut hash=Sha256::new();
-        fn visit(root: &Path, path: &Path, hash: &mut Sha256, count: &mut usize, bytes: &mut u64, started: Instant) -> io::Result<()> {
+        // A planted source directory can nest thousands of levels; the depth
+        // bound keeps recursion far from the stack limit while staying above
+        // any real dependency tree.
+        const MAX_TREE_DEPTH: usize = 512;
+        fn visit(root: &Path, path: &Path, depth: usize, hash: &mut Sha256, count: &mut usize, bytes: &mut u64, started: Instant) -> io::Result<()> {
+            if depth>MAX_TREE_DEPTH {return Err(invalid("External Harness directory nesting exceeds the supported depth"));}
             let mut entries=Vec::new();
             for entry in fs::read_dir(path)? {
                 if *count+entries.len()>=150_000 || started.elapsed()>Duration::from_secs(30) {return Err(invalid("External Harness inspection budget exceeded"));}
@@ -46,7 +51,7 @@ impl ExternalHarness {
                     if !target.starts_with(root) { return Err(invalid("External Harness dependency link escapes its directory")); }
                     hash.update(b"link"); hash.update(target.to_string_lossy().as_bytes()); continue;
                 }
-                if metadata.is_dir() { hash.update(b"dir"); visit(root,&p,hash,count,bytes,started)?; }
+                if metadata.is_dir() { hash.update(b"dir"); visit(root,&p,depth+1,hash,count,bytes,started)?; }
                 else if metadata.is_file() {
                     hash.update(b"file");
                     if relative==Path::new("package.json") || relative==Path::new("apps/cli/package.json") || relative==Path::new("apps/cli/lib/bin.js") {
@@ -57,7 +62,7 @@ impl ExternalHarness {
             }
             Ok(())
         }
-        visit(&root,&root,&mut hash,&mut count,&mut bytes,started)?;
+        visit(&root,&root,0,&mut hash,&mut count,&mut bytes,started)?;
         Ok(Self {root,identity,fingerprint:format!("{:x}",hash.finalize()),version})
     }
     pub fn verify(&self, paths: &NexusPaths) -> io::Result<()> {
@@ -159,6 +164,10 @@ pub(crate) fn protected_locations(paths:&NexusPaths)->io::Result<Vec<PathBuf>> {
     Ok(saved.roots)
 }
 pub(crate) fn protect_locations(paths:&NexusPaths,old:Option<&ExternalHarness>,new:Option<&ExternalHarness>)->io::Result<()> {
+    // Same cross-process union write as the Harness homes record; take the
+    // shared protection lock before reading so concurrent writers cannot drop
+    // each other's confirmed roots.
+    let _lock=crate::config_protection::ProtectionLock::acquire(&paths.root)?;
     let mut roots=protected_locations(paths)?;
     let previous = roots.clone();
     for source in old.into_iter().chain(new){if !roots.contains(&source.root){roots.push(source.root.clone());}}

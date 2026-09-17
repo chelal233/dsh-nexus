@@ -1,3 +1,4 @@
+import { BusyOverlay } from "./confirmation";
 import {
   type IconProps,
   RocketLaunch,
@@ -53,7 +54,7 @@ import {
 } from "./ui-components";
 import { useRef, useState, useEffect, useCallback, useMemo } from "react";
 import { createDraftMemory, DraftMemoryContext } from "./draft-memory";
-import { createRequestClient, requiresRequestId } from "./request-client";
+import { sharedRequestClient, requiresRequestId } from "./request-client";
 import { useI18n } from "./i18n";
 import {
   createFailureNoticeTracker,
@@ -164,7 +165,8 @@ function App() {
   useEffect(() => {
     const bar = topbarRef.current;
     if (!bar) return;
-    const measure = () => bar.parentElement?.style.setProperty("--topbar-height", `${bar.offsetHeight}px`);
+    const measure = () =>
+      bar.parentElement?.style.setProperty("--topbar-height", `${bar.offsetHeight}px`);
     measure();
     if (typeof ResizeObserver === "undefined") return;
     const observer = new ResizeObserver(measure);
@@ -173,24 +175,14 @@ function App() {
   }, []);
   const draftMemory = useRef(createDraftMemory());
   const draftRoot = useRef("unresolved");
-  const requestClient = useRef<{
-    root: string;
-    client: ReturnType<typeof createRequestClient>;
-  } | null>(null);
   const postAction = (path: string, body: JsonObject) => {
     if (!requiresRequestId(path, body)) return proxyRequest<JsonObject>(path, "POST", body);
     const root = stringValue(snapshot.startup, "data_root_id") || "";
-    if (!requestClient.current || requestClient.current.root !== root) {
-      requestClient.current = {
-        root,
-        client: createRequestClient(
-          window.localStorage,
-          (route, method, payload) => proxyRequest<JsonObject>(route, method, payload),
-          root,
-        ),
-      };
-    }
-    return requestClient.current.client.post(path, body);
+    return sharedRequestClient(
+      window.localStorage,
+      (route, method, payload) => proxyRequest<JsonObject>(route, method, payload),
+      root,
+    ).post(path, body);
   };
   const { locale, t } = useI18n();
   const [activeModule, setActiveModule] = useState<ModuleId>("workbench");
@@ -874,7 +866,11 @@ function App() {
         setRepairSection({ section: "harness", id: Date.now() });
       },
       openWorkbench: () => setActiveModule("workbench"),
-      openProfiles: () => { setCheckpointFocus(undefined); setActiveModule("profiles"); window.scrollTo({ top: 0, behavior: "instant" }); },
+      openProfiles: () => {
+        setCheckpointFocus(undefined);
+        setActiveModule("profiles");
+        window.scrollTo({ top: 0, behavior: "instant" });
+      },
       openCheckpoints: () => {
         const profile = stringValue(snapshot.profiles, "active_profile");
         setCheckpointFocus(profile ? { profile, id: Date.now() } : undefined);
@@ -987,12 +983,22 @@ function App() {
                   { id: "repair", label: "Repair & reset", icon: ArrowsClockwise },
                   { id: "application", label: "Application and about", icon: Info },
                 ].map(({ id, label, icon: Icon }) => (
-                  <button type="button" key={id} className="settings-subitem"
-                    title={t(label)} aria-label={t(label)} aria-controls={`settings-${id}`}
+                  <button
+                    type="button"
+                    key={id}
+                    className="settings-subitem"
+                    title={t(label)}
+                    aria-label={t(label)}
+                    aria-controls={`settings-${id}`}
                     aria-current={activeSettingsSection === id ? "page" : undefined}
                     disabled={booleanValue(snapshot.health, "degraded")}
-                    onClick={() => { setRepairSection({ section: id, id: Date.now() }); window.scrollTo({ top: 0, behavior: "instant" }); }}>
-                    <Icon size={16} aria-hidden="true" /><span>{t(label)}</span>
+                    onClick={() => {
+                      setRepairSection({ section: id, id: Date.now() });
+                      window.scrollTo({ top: 0, behavior: "instant" });
+                    }}
+                  >
+                    <Icon size={16} aria-hidden="true" />
+                    <span>{t(label)}</span>
                   </button>
                 ))}
               </div>
@@ -1219,12 +1225,14 @@ function App() {
               </span>
             </div>
           )}
-          <StartupOperationPanel
-            available={
-              snapshot.startup?.available === true && !booleanValue(snapshot.health, "degraded")
-            }
-            identity={`${stringValue(snapshot.health, "instance_id")}:${stringValue(snapshot.health, "data_root_id")}`}
-          />
+          {!busyAction && !snapshot.lifecycleBusy && (
+            <StartupOperationPanel
+              available={
+                snapshot.startup?.available === true && !booleanValue(snapshot.health, "degraded")
+              }
+              identity={`${stringValue(snapshot.health, "instance_id")}:${stringValue(snapshot.health, "data_root_id")}`}
+            />
+          )}
           {!booleanValue(snapshot.health, "degraded") && activeModule !== "maintenance" && (
             <OperationStatusPanel
               snapshot={snapshot}
@@ -1270,6 +1278,49 @@ function App() {
               onClose={() => setCheckOpen(false)}
             />
           )}
+          <BusyOverlay
+            label={busyAction ?? (snapshot.lifecycleBusy ? t("Operation in progress") : null)}
+          >
+            <StartupOperationPanel
+              available={
+                snapshot.startup?.available === true && !booleanValue(snapshot.health, "degraded")
+              }
+              identity={`${stringValue(snapshot.health, "instance_id")}:${stringValue(snapshot.health, "data_root_id")}`}
+            />
+            {error && (
+              <p className="form-error" role="alert">
+                {error}
+              </p>
+            )}
+            {snapshot.lifecycleBusy && (
+              <>
+                <OperationStatusPanel snapshot={snapshot} />
+                {stringValue(asObject(asObject(snapshot.updates).operation), "operation_id") &&
+                  !coldOperationIsTerminal(
+                    stringValue(asObject(asObject(snapshot.updates).operation), "phase"),
+                  ) && (
+                    <ActionButton
+                      disabled={
+                        busyAction !== null ||
+                        stringValue(asObject(asObject(snapshot.updates).operation), "phase") ===
+                          "cancelling"
+                      }
+                      onClick={() =>
+                        void runAction(t("Cancel"), "/v1/updates", {
+                          action: "cancel",
+                          operation_id: stringValue(
+                            asObject(asObject(snapshot.updates).operation),
+                            "operation_id",
+                          ),
+                        })
+                      }
+                    >
+                      {t("Cancel")}
+                    </ActionButton>
+                  )}
+              </>
+            )}
+          </BusyOverlay>
           <footer className="workspace-footer">
             <span>
               <Cpu size={15} />

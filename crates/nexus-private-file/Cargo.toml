@@ -7,3 +7,6 @@ publish.workspace = true
 
 [target.'cfg(windows)'.dependencies]
 windows-sys = { workspace = true, features = ["Win32_Security_Authorization"] }
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"

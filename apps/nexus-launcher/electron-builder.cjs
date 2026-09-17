@@ -21,7 +21,7 @@ module.exports = {
   publish: [{ provider: 'github', owner: 'chelal233', repo: 'dsh-nexus', vPrefixedTagName: true,
     channel: `latest-${process.arch}`, releaseType: 'prerelease' }],
   generateUpdatesFilesForAllChannels: false,
-  win: { target: ['nsis'], icon: 'desktop/icons/icon.ico' },
+  win: { target: ['nsis', 'zip'], icon: 'desktop/icons/icon.ico' },
   nsis: { oneClick: false, perMachine: false, allowToChangeInstallationDirectory: true,
     differentialPackage: false, installerLanguages: ['en_US', 'zh_CN', 'zh_TW', 'ja_JP', 'ko_KR', 'de_DE', 'fr_FR', 'es_ES'],
     deleteAppDataOnUninstall: false },

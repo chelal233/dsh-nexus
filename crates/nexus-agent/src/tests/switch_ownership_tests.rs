@@ -424,7 +424,7 @@ async fn runtime_config_waits_for_lifecycle_then_uses_try_update_gate() {
 }
 
 #[tokio::test]
-async fn asynchronous_fast_switch_persists_terminal_failure() {
+async fn fetching_existing_tag_does_not_publish_agent_selection() {
     let state = switch_test_state("agent-persistence");
     let root = state.paths.root.clone();
     state
@@ -462,11 +462,8 @@ async fn asynchronous_fast_switch_persists_terminal_failure() {
     })
     .await
     .expect("background fast switch terminates");
-    assert_eq!(terminal.phase, nexus_protocol::ColdOperationPhase::Failed);
-    assert!(terminal
-        .error
-        .as_deref()
-        .is_some_and(|message| message.contains("failed to persist Agent current release")));
+    assert_eq!(terminal.phase, nexus_protocol::ColdOperationPhase::Prepared);
+    assert!(terminal.error.is_none());
     assert_eq!(
         state
             .releases
@@ -475,7 +472,7 @@ async fn asynchronous_fast_switch_persists_terminal_failure() {
             .current_release
             .as_deref(),
         None,
-        "failed asynchronous promotion restores the previous pointer"
+        "fetching an existing version never changes the current pointer"
     );
     assert!(state.updater.try_acquire_gate().is_ok());
     let _ = fs::remove_dir_all(root);

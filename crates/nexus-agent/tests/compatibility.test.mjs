@@ -31,7 +31,7 @@ function fixture() {
       server.listen(0,'127.0.0.1',()=>console.log('dsh web: http://127.0.0.1:'+server.address().port+'/?token=test'));}
   `);
   const write = bundles => fs.writeFileSync(path.join(source,'package.json'), JSON.stringify({name:'original',dependencies:{bad:'1'},dsh:{profile:{bundles}}}));
-  const options = {home,slot,selected:'original',release_id:'one',node:process.execPath,work:path.join(home,'profiles/.work'),output:path.join(root,'report.json'),timeout_ms:3000};
+  const options = {home,slot,selected:'original',release_id:'one',node:process.execPath,work:path.join(root,'work'),cache:path.join(root,'verified.json'),output:path.join(root,'report.json'),timeout_ms:3000};
   fs.mkdirSync(options.work,{recursive:true});
   return {root,home,slot,source,options,write,close:()=>fs.rmSync(root,{recursive:true,force:true})};
 }
@@ -49,6 +49,31 @@ test('Windows canonical external slot works in compatibility and Canary', {skip:
   } finally { f.close(); }
 });
 
+test('declaration mismatch is advisory and target manifest changes invalidate cached reports', async () => {
+  const f = fixture();
+  try {
+    f.write(['good']);
+    fs.mkdirSync(path.join(f.source, 'node_modules/good'), { recursive: true });
+    const plugin = path.join(f.source, 'node_modules/good/package.json');
+    fs.writeFileSync(plugin, JSON.stringify({ name: 'good', version: '1.0.0', engines: { dsh: '>=2.0.0' } }));
+    const original = fs.readFileSync(plugin, 'utf8');
+    const host = path.join(f.slot, 'apps/cli/package.json');
+    fs.writeFileSync(host, JSON.stringify({ version: '1.0.0' }));
+    // Recover transparently from an oversized result written by an old checker.
+    fs.writeFileSync(f.options.cache, JSON.stringify({ padding: 'x'.repeat(70000) }));
+    const first = await check(f.options);
+    assert.equal(first.status, 'passed');
+    assert.ok(fs.statSync(f.options.cache).size < 65536);
+    assert.equal(first.declarations[0].status, 'mismatch');
+    assert.equal((await check(f.options)).cache_reused, true);
+    fs.writeFileSync(host, JSON.stringify({ version: '2.0.0' }));
+    const changed = await check(f.options);
+    assert.equal(changed.cache_reused, false);
+    assert.equal(changed.declarations[0].status, 'match');
+    assert.equal(fs.readFileSync(plugin, 'utf8'), original);
+  } finally { f.close(); }
+});
+
 test('preference and patch changes invalidate compatibility cache', async()=>{
   const f=fixture();
   try {
@@ -57,10 +82,10 @@ test('preference and patch changes invalidate compatibility cache', async()=>{
     fs.writeFileSync(patch,'[]');
     const first=await check({...f.options, patches:[patch], preferences_env:{DSH_TOOLS_MODE:'native'}});
     const changed=await check({...f.options, patches:[patch], preferences_env:{DSH_TOOLS_MODE:'both'}});
-    assert.notEqual(first.effective_profile, changed.effective_profile);
+    assert.equal(changed.effective_profile, 'original'); assert.equal(changed.cache_reused, false);
     fs.writeFileSync(patch,'# changed\n[]');
     const patched=await check({...f.options, patches:[patch], preferences_env:{DSH_TOOLS_MODE:'both'}});
-    assert.notEqual(changed.effective_profile, patched.effective_profile);
+    assert.equal(patched.effective_profile, 'original'); assert.equal(patched.cache_reused, false);
     const reused=await check({...f.options, patches:[patch], preferences_env:{DSH_TOOLS_MODE:'both'}});
     assert.equal(reused.effective_profile, patched.effective_profile);
     assert.equal(reused.cache_reused, true);
@@ -73,68 +98,75 @@ test('only specific third-party import/API failures are attributable',()=>{
   assert.deepEqual(incompatibleBundles('failed to apply loader entry child (bad): API key missing',['bad']),[]);
 });
 
+test('checks never publish profiles or change the source; cache contains results only', async () => {
+  const f = fixture();
+  try {
+    f.write(['good']);
+    const before = fs.readFileSync(path.join(f.source, 'package.json'));
+    const first = await check({ ...f.options, trigger: 'version_switch' });
+    assert.equal(first.effective_profile, 'original');
+    assert.deepEqual(fs.readdirSync(path.join(f.home, 'profiles')), ['original']);
+    assert.deepEqual(fs.readdirSync(f.options.work), []);
+    const cache = fs.readFileSync(f.options.cache);
+    const reused = await check({ ...f.options, trigger: 'startup' });
+    assert.equal(reused.cache_reused, true); assert.equal(reused.trigger, 'version_switch');
+    assert.equal(reused.last_trigger, 'startup'); assert.deepEqual(fs.readFileSync(f.options.cache), cache);
+    const next = await check({ ...f.options, release_id: 'two' });
+    assert.equal(next.cache_reused, false); assert.equal(next.effective_profile, 'original');
+    assert.deepEqual(fs.readFileSync(path.join(f.source, 'package.json')), before);
+    assert.deepEqual(fs.readdirSync(path.join(f.home, 'profiles')), ['original']);
+  } finally { f.close(); }
+});
+
+test('real Harness validates the native profile without publishing a replacement', { skip: !process.env.NEXUS_TEST_DSH_ROOT }, async () => {
+  const f = fixture();
+  try {
+    f.write(['@deepseek-ai/dsh-base', '@deepseek-ai/dsh-web-app']);
+    const before = fs.readFileSync(path.join(f.source, 'package.json'));
+    const report = await check({ ...f.options, slot: process.env.NEXUS_TEST_DSH_ROOT, timeout_ms: 45000 });
+    assert.equal(report.status, 'passed'); assert.equal(report.effective_profile, 'original');
+    assert.deepEqual(fs.readdirSync(path.join(f.home, 'profiles')), ['original']);
+    assert.deepEqual(fs.readFileSync(path.join(f.source, 'package.json')), before);
+    assert.deepEqual(fs.readdirSync(f.options.work), []);
+  } finally { f.close(); }
+});
+
+test('disabled native bundles keep their order and dependencies and checks do not rewrite them', async () => {
+  const f = fixture();
+  try {
+    f.write(['good']);
+    const manifest = JSON.parse(fs.readFileSync(path.join(f.source, 'package.json')));
+    manifest.dsh.profile.nexusDisabledBundles = [{ package: 'bad', index: 0, following: ['good'] }];
+    const before = JSON.stringify(manifest); fs.writeFileSync(path.join(f.source, 'package.json'), before);
+    const result = await check(f.options);
+    assert.equal(result.status, 'isolated'); assert.equal(result.effective_profile, 'original');
+    assert.deepEqual(result.disabled, [{ package: 'bad', reason: 'Disabled by user' }]);
+    assert.equal(fs.readFileSync(path.join(f.source, 'package.json'), 'utf8'), before);
+    assert.deepEqual(fs.readdirSync(path.join(f.home, 'profiles')), ['original']);
+  } finally { f.close(); }
+});
+
+test('owned checks leave only disposable work until outer process reconciliation', async () => {
+  const f = fixture();
+  try {
+    f.write(['good']); await check({ ...f.options, owned_round: true });
+    assert.deepEqual(fs.readdirSync(path.join(f.home, 'profiles')), ['original']);
+    assert.ok(fs.readdirSync(f.options.work).length > 0);
+    assert.equal(fs.existsSync(path.join(f.options.work, 'publication.json')), false);
+    f.write(['soft-bad']); await assert.rejects(check({ ...f.options, owned_round: true }), /explicit plugin decision/);
+    assert.deepEqual(fs.readdirSync(path.join(f.home, 'profiles')), ['original']);
+    assert.deepEqual(JSON.parse(fs.readFileSync(path.join(f.source, 'package.json'))).dsh.profile.bundles, ['soft-bad']);
+  } finally { f.close(); }
+});
+
 test('enabled patches prevent automatic plugin removal after a failed probe', async()=>{
   const f=fixture();
   try {
     f.write(['bad']); const patch=path.join(f.root,'extra.yml'); fs.writeFileSync(patch,'[]');
-    await assert.rejects(check({...f.options, patches:[patch]}), /Enabled patch combination failed/);
+    await assert.rejects(check({...f.options, patches:[patch]}), /explicit plugin decision/);
     const report=JSON.parse(fs.readFileSync(f.options.output));
     assert.equal(report.status,'needs_choice'); assert.deepEqual(report.disabled,[]);
     assert.deepEqual(JSON.parse(fs.readFileSync(path.join(f.source,'package.json'))).dsh.profile.bundles,['bad']);
-  } finally { f.close(); }
-});
-
-test('isolates in a copy, reuses checked cache, and restores plugins on another release',async()=>{
-  const f=fixture();
-  try {
-    f.write(['bad','good']); const before=fs.readFileSync(path.join(f.source,'package.json'),'utf8');
-    const result=await check(f.options);
-    assert.equal(result.status,'isolated'); assert.deepEqual(result.disabled.map(x=>x.package),['bad']);
-    assert.equal(fs.readFileSync(path.join(f.source,'package.json'),'utf8'),before);
-    assert.equal(sourceInfo(f.home,result.effective_profile).source,'original');
-    const cached=await check(f.options); assert.equal(cached.effective_profile,result.effective_profile);
-    fs.writeFileSync(path.join(f.slot,'apps/cli/lib/supported'),'yes');
-    const next=await check({...f.options,selected:result.effective_profile,release_id:'two'});
-    assert.equal(next.status,'passed'); assert.deepEqual(next.disabled,[]);
-    const manifest=JSON.parse(fs.readFileSync(path.join(f.home,'profiles',next.effective_profile,'package.json')));
-    assert.ok(manifest.dsh.profile.bundles.includes('bad'));
-    assert.notEqual(next.effective_profile,result.effective_profile);
-    assert.deepEqual(fs.readdirSync(f.options.work),[]);
-  } finally { f.close(); }
-});
-
-test('cache reports preserve actual check provenance without rewriting its marker',async()=>{
-  const f=fixture();
-  try {
-    f.write(['good']);
-    const checked=await check({...f.options,force:true,trigger:'version_switch'});
-    assert.equal(checked.trigger,'version_switch');
-    assert.equal(checked.cache_reused,false);
-    const marker=path.join(f.home,'profiles',checked.effective_profile,'.nexus-compatibility.json');
-    const markerBefore=fs.readFileSync(marker,'utf8');
-    const reused=await check({...f.options,trigger:'startup'});
-    assert.equal(reused.cache_reused,true);
-    assert.equal(reused.checked_at_unix,checked.checked_at_unix);
-    assert.equal(reused.trigger,'version_switch');
-    assert.equal(reused.last_trigger,'startup');
-    assert.ok(reused.last_used_at_unix>=checked.checked_at_unix);
-    assert.equal(fs.readFileSync(marker,'utf8'),markerBefore);
-    const legacy=JSON.parse(markerBefore);
-    delete legacy.trigger;
-    delete legacy.last_trigger;
-    delete legacy.last_used_at_unix;
-    delete legacy.cache_reused;
-    fs.writeFileSync(marker,JSON.stringify(legacy));
-    const legacyBefore=fs.readFileSync(marker,'utf8');
-    const unknown=await check({...f.options,trigger:'startup'});
-    assert.equal(unknown.trigger,null);
-    assert.equal(unknown.last_trigger,'startup');
-    assert.equal(unknown.cache_reused,true);
-    assert.equal(unknown.checked_at_unix,checked.checked_at_unix);
-    assert.equal(fs.readFileSync(marker,'utf8'),legacyBefore);
-    const selected=await check({...f.options,force:true,trigger:'profile_switch'});
-    assert.equal(selected.trigger,'profile_switch');
-    assert.equal(selected.cache_reused,false);
   } finally { f.close(); }
 });
 
@@ -142,7 +174,7 @@ test('unknown errors fail closed without publishing a profile',async()=>{
   const f=fixture();
   try {
     f.write(['unknown']);
-    await assert.rejects(check({...f.options,trigger:'version_switch'}),/user decision/);
+    await assert.rejects(check({...f.options,trigger:'version_switch'}),/explicit plugin decision/);
     const report=JSON.parse(fs.readFileSync(f.options.output));
     assert.equal(report.status,'needs_choice');
     assert.equal(report.trigger,'version_switch');
@@ -163,59 +195,6 @@ test('timeout fails closed and cleans the owned probe',async()=>{
     assert.deepEqual(fs.readdirSync(f.options.work),[]);
   } finally {f.close();}
 });
-
-test('a reachable web page cannot conceal a loader initialization failure',async()=>{
-  const f=fixture();
-  try {
-    f.write(['soft-bad','good']);
-    const result=await check(f.options);
-    assert.equal(result.status,'isolated');
-    assert.deepEqual(result.disabled.map(x=>x.package),['soft-bad']);
-  } finally {f.close();}
-});
-
-test('edited effective profiles are rechecked and retained; changed home settings invalidate cache',async()=>{
-  const f=fixture();
-  try {
-    f.write(['good']);
-    const first=await check(f.options);
-    const effective=path.join(f.home,'profiles',first.effective_profile);
-    const manifest=JSON.parse(fs.readFileSync(path.join(effective,'package.json')));
-    manifest.dsh.profile.bundles.push('unknown');
-    fs.writeFileSync(path.join(effective,'package.json'),JSON.stringify(manifest));
-    await assert.rejects(check(f.options),/user decision/);
-    assert.ok(JSON.parse(fs.readFileSync(path.join(effective,'package.json'))).dsh.profile.bundles.includes('unknown'));
-    manifest.dsh.profile.bundles= ['good','bad'];
-    fs.writeFileSync(path.join(effective,'package.json'),JSON.stringify(manifest));
-    const checked=await check(f.options);
-    assert.deepEqual(checked.disabled.map(x=>x.package),['bad']);
-    assert.ok(fs.readdirSync(effective).some(x=>x.startsWith('package.nexus-backup-')));
-    fs.writeFileSync(path.join(f.home,'settings.yaml'),'test: true');
-    const next=await check(f.options);
-    assert.notEqual(next.effective_profile,first.effective_profile);
-    assert.equal(fs.readFileSync(path.join(f.home,'settings.yaml'),'utf8'),'test: true');
-  } finally {f.close();}
-});
-
-test('user can isolate an unclassified failure and restore it without changing the source',async()=>{
-  const f=fixture();
-  try {
-    f.write(['unknown','good']);
-    const original=fs.readFileSync(path.join(f.source,'package.json'),'utf8');
-    await assert.rejects(check(f.options),/user decision/);
-    const dir=path.join(f.home,'profiles/.nexus-plugin-isolation');
-    fs.mkdirSync(dir);
-    fs.writeFileSync(path.join(dir,'original.json'),JSON.stringify(['unknown']));
-    const isolated=await check(f.options);
-    assert.equal(isolated.status,'isolated');
-    assert.deepEqual(isolated.disabled,[{package:'unknown',reason:'Disabled by user'}]);
-    assert.equal(fs.readFileSync(path.join(f.source,'package.json'),'utf8'),original);
-    fs.writeFileSync(path.join(dir,'original.json'),'[]');
-    await assert.rejects(check(f.options),/user decision/);
-    assert.equal(fs.readFileSync(path.join(f.source,'package.json'),'utf8'),original);
-  } finally {f.close();}
-});
-
 
 test('Canary narrows an interaction without mutating candidates and rejects failed baseline', async () => {
   const candidates = ['good', 'a', 'b'];
@@ -245,21 +224,6 @@ test('Canary real child report preserves source and original error without produ
 });
 
 
-test('owned compatibility defers publication until quiescent finalize and keeps failed scratch', async () => {
-  const f = fixture();
-  try {
-    f.write(['good']);
-    const result = await check({...f.options, owned_round:true});
-    assert.equal(fs.existsSync(path.join(f.home,'profiles',result.effective_profile)), false);
-    assert.equal(fs.existsSync(path.join(f.options.work,'publication.json')), true);
-    await check({...f.options, owned_round:true, finalize:true});
-    assert.equal(fs.existsSync(path.join(f.home,'profiles',result.effective_profile)), true);
-    f.write(['bad']);
-    await assert.rejects(check({...f.options, owned_round:true}), /ctx.missing/);
-    assert.ok(fs.readdirSync(f.options.work).length > 0);
-  } finally { f.close(); }
-});
-
 test('owned Canary performs exactly one subset and leaves scratch for the outer job owner', async () => {
   const f = fixture();
   try {
@@ -286,7 +250,7 @@ test('Canary copy plan shares exclusions and does not copy or execute plugins', 
     assert.ok(plan.copy_bytes<100000);
     assert.ok(plan.required_bytes>=64*1024*1024+plan.copy_bytes);
     assert.deepEqual(fs.readdirSync(f.options.work),[]);
-    assert.deepEqual(fs.readdirSync(path.join(f.home,'profiles')),['.work','original']);
+    assert.deepEqual(fs.readdirSync(path.join(f.home,'profiles')),['original']);
     const outside=path.join(f.root,'outside');fs.mkdirSync(outside);
     fs.symlinkSync(outside,path.join(modules,'escape'),process.platform==='win32'?'junction':'dir');
     assert.throws(()=>planCanary(f.options),/escapes/);

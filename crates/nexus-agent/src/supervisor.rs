@@ -148,7 +148,7 @@ struct SupervisorInner {
     spawned_launch: bool,
     spawned_preferences: Option<nexus_protocol::HarnessPreferencesPayload>,
     #[cfg(windows)]
-    job: Option<crate::dsh::WindowsJob>,
+    job: Option<std::sync::Arc<crate::dsh::WindowsJob>>,
     runtime: HarnessRuntimeInfo,
     generation: u64,
     operation_epoch: u64,
@@ -173,7 +173,7 @@ pub(crate) fn preflight_readiness_endpoint(spec: &HarnessLaunchSpec) -> Result<O
 struct SpawnedHarness {
     child: Child,
     #[cfg(windows)]
-    job: crate::dsh::WindowsJob,
+    job: std::sync::Arc<crate::dsh::WindowsJob>,
 }
 
 async fn spawn_owned_harness(command: Command, logs: Option<(&fs::File, &fs::File)>) -> io::Result<SpawnedHarness> {
@@ -181,7 +181,7 @@ async fn spawn_owned_harness(command: Command, logs: Option<(&fs::File, &fs::Fil
     {
         let job = crate::dsh::WindowsJob::new()?;
         let child = crate::windows_harness::spawn(command.as_std(), logs, &job)?;
-        Ok(SpawnedHarness { child, job })
+        Ok(SpawnedHarness { child, job: std::sync::Arc::new(job) })
     }
     #[cfg(not(windows))]
     { let _ = logs; crate::unix_harness::spawn(command).map(|child| SpawnedHarness { child }) }
@@ -191,6 +191,13 @@ async fn spawn_owned_harness(command: Command, logs: Option<(&fs::File, &fs::Fil
 async fn finish_owned_job(inner: &mut SupervisorInner) -> io::Result<()> {
     let Some(job) = inner.job.as_ref() else { return Ok(()); };
     job.terminate()?;
+    drain_owned_job(job).await?;
+    inner.job = None;
+    Ok(())
+}
+
+#[cfg(windows)]
+async fn drain_owned_job(job: &crate::dsh::WindowsJob) -> io::Result<()> {
     let deadline = Instant::now() + Duration::from_secs(10);
     while !job.is_empty()? {
         if Instant::now() >= deadline {
@@ -198,8 +205,20 @@ async fn finish_owned_job(inner: &mut SupervisorInner) -> io::Result<()> {
         }
         tokio::time::sleep(Duration::from_millis(20)).await;
     }
-    inner.job = None;
     Ok(())
+}
+
+/// Terminate the owned job and remove it from the supervisor state so the
+/// bounded drain wait can run without holding the supervisor lock and
+/// delaying unlocked read endpoints. Callers must re-validate the
+/// generation and epoch tokens after the wait.
+#[cfg(windows)]
+fn take_terminating_job(
+    inner: &mut SupervisorInner,
+) -> io::Result<Option<std::sync::Arc<crate::dsh::WindowsJob>>> {
+    let Some(job) = inner.job.take() else { return Ok(None); };
+    job.terminate()?;
+    Ok(Some(job))
 }
 
 #[cfg(test)]
@@ -877,7 +896,7 @@ impl HarnessSupervisor {
         // The lifecycle owner remains held while the isolated check runs, but
         // never hold `inner` across the child-process probe.
         let cancellation = self.startup_phase("compatibility").await?;
-        let mut compatible_profile = None;
+        let mut verified_profile = None;
         if spec.mode == HarnessLaunchMode::Node {
             if let (Some(id), Some(root)) = (release_id, release_root.as_deref()) {
                 let entry = spec.render_args_for_context(profile, release_id, release_root.as_deref())
@@ -897,18 +916,23 @@ impl HarnessSupervisor {
                         }
                     }
                     let home = selected_home.clone();
-                    compatible_profile = crate::compatibility::prepare(&self.paths, &home, profile, id, root,
+                    verified_profile = crate::compatibility::prepare(&self.paths, &home, profile, id, root,
                         &spec.program, false, &cancellation).await
-                        .map_err(|e|if cancellation.is_cancelled()&&e.kind()==io::ErrorKind::Interrupted {HarnessSupervisorError::Cancelled}else{HarnessSupervisorError::Configuration(e)})?.map(|report| report.effective_profile);
+                        .map_err(|e|if cancellation.is_cancelled()&&e.kind()==io::ErrorKind::Interrupted {HarnessSupervisorError::Cancelled}else{HarnessSupervisorError::Configuration(e)})?.map(|report| report.source_profile);
                 }
             }
         }
         if source.external && spec.mode==HarnessLaunchMode::Node {
-            let id=crate::source_context::compatibility_id(&self.paths,&self.releases).map_err(HarnessSupervisorError::Configuration)?.expect("external identity");
-            compatible_profile=crate::compatibility::prepare(&self.paths,&selected_home,profile,&id,release_root.as_deref().expect("external root"),&spec.program,false,&cancellation).await.map_err(|e|if cancellation.is_cancelled()&&e.kind()==io::ErrorKind::Interrupted {HarnessSupervisorError::Cancelled}else{HarnessSupervisorError::Configuration(e)})?.map(|report|report.effective_profile);
+            // The configuration can change between the external-source check
+            // above and this re-read; surface a configuration error instead of
+            // panicking in the request handler.
+            let missing = || HarnessSupervisorError::Configuration(io::Error::other("external Harness identity is missing; confirm the external Harness source again"));
+            let id=crate::source_context::compatibility_id(&self.paths,&self.releases).map_err(HarnessSupervisorError::Configuration)?.ok_or_else(missing)?;
+            let root=release_root.as_deref().ok_or_else(missing)?;
+            verified_profile=crate::compatibility::prepare(&self.paths,&selected_home,profile,&id,root,&spec.program,false,&cancellation).await.map_err(|e|if cancellation.is_cancelled()&&e.kind()==io::ErrorKind::Interrupted {HarnessSupervisorError::Cancelled}else{HarnessSupervisorError::Configuration(e)})?.map(|report|report.source_profile);
         }
         if let Some(prepared)=&prepared {prepared.recheck(&self.paths,profile).map_err(HarnessSupervisorError::Configuration)?;}
-        let profile = compatible_profile.as_deref().unwrap_or(profile);
+        let profile = verified_profile.as_deref().unwrap_or(profile);
         let capabilities = crate::preference_capabilities::resolve(release_root.as_deref(), &selected_home, profile, &preferences)
             .map_err(HarnessSupervisorError::Configuration)?;
         // A port preference may synthesize a TCP target; it is not a user's
@@ -1301,7 +1325,9 @@ impl HarnessSupervisor {
                     self.store.update_harness(inner.runtime.clone()).map_err(HarnessSupervisorError::Persistence)?;
                 }
                 if inner.stop_pending {
-                    return Err(HarnessSupervisorError::AlreadyRunning);
+                    // A stop (or start-failure reap) is already finishing;
+                    // naming it "already running" would misdirect a retry.
+                    return Err(HarnessSupervisorError::Busy);
                 } else if inner.log_session.launch_pending
                     || inner.recovery.is_some()
                     || (inner.runtime.state == HarnessState::Running && inner.runtime.pid.is_none())
@@ -1396,7 +1422,9 @@ impl HarnessSupervisor {
             Ok(Some(exit)) => exit,
             Ok(None) => {
                 killed = true;
-                if let Err(error) = child.kill().await {
+                // Both platform Child types kill the whole process tree.
+                let kill_result = child.kill().await;
+                if let Err(error) = kill_result {
                     self.restore_stop_child(
                         stop_generation,
                         stop_epoch,
@@ -1450,7 +1478,11 @@ impl HarnessSupervisor {
         } else {
             runtime_from_exit_with_state(started_at, None, exit, HarnessState::Stopped)
         };
-        {
+        // Terminate the job under the lock, then wait for the tree to drain
+        // without holding the lock so unlocked read endpoints (preflight,
+        // startup status) are not delayed by stubborn descendants.
+        #[cfg(windows)]
+        let draining = {
             let mut inner = self.inner.lock().await;
             if inner.generation != stop_generation
                 || inner.operation_epoch != stop_epoch
@@ -1458,10 +1490,28 @@ impl HarnessSupervisor {
             {
                 return Ok(inner.runtime.clone());
             }
-            #[cfg(windows)]
-            if let Err(error) = finish_owned_job(&mut inner).await {
-                inner.stop_pending = false;
+            take_terminating_job(&mut inner).map_err(HarnessSupervisorError::Process)?
+        };
+        #[cfg(windows)]
+        if let Some(job) = draining.as_ref() {
+            if let Err(error) = drain_owned_job(job).await {
+                let mut inner = self.inner.lock().await;
+                if inner.generation == stop_generation
+                    && inner.operation_epoch == stop_epoch
+                    && inner.stop_pending
+                {
+                    inner.stop_pending = false;
+                }
                 return Err(HarnessSupervisorError::Process(error));
+            }
+        }
+        {
+            let mut inner = self.inner.lock().await;
+            if inner.generation != stop_generation
+                || inner.operation_epoch != stop_epoch
+                || !inner.stop_pending
+            {
+                return Ok(inner.runtime.clone());
             }
             inner.stop_pending = false;
             inner.runtime = runtime.clone();
@@ -1784,16 +1834,20 @@ impl HarnessSupervisor {
                     natural_exit = Some(exit);
                     Ok(())
                 }
-                Ok(None) => match child.kill().await {
-                    Ok(()) => child.wait().await.map(|_| ()),
-                    Err(kill_error) => match child.try_wait() {
-                        Ok(Some(exit)) => {
-                            natural_exit = Some(exit);
-                            Ok(())
-                        }
-                        Ok(None) | Err(_) => Err(kill_error),
-                    },
-                },
+                Ok(None) => {
+                // Both platform Child types kill the whole process tree.
+                let kill_result = child.kill().await;
+                match kill_result {
+                        Ok(()) => child.wait().await.map(|_| ()),
+                        Err(kill_error) => match child.try_wait() {
+                            Ok(Some(exit)) => {
+                                natural_exit = Some(exit);
+                                Ok(())
+                            }
+                            Ok(None) | Err(_) => Err(kill_error),
+                        },
+                    }
+                }
                 Err(error) => Err(error),
             };
             if let Err(error) = termination {
@@ -1837,15 +1891,32 @@ impl HarnessSupervisor {
                     .map_err(|error| error.to_string());
             }
         }
-        let runtime = {
+        // Terminate the job under the lock and drain it without holding the
+        // lock, re-validating the ownership tokens afterwards.
+        #[cfg(windows)]
+        let draining = {
             let mut inner = self.inner.lock().await;
             if inner.generation != generation || inner.operation_epoch != cancellation_epoch {
                 return Ok(());
             }
-            #[cfg(windows)]
-            if let Err(error) = finish_owned_job(&mut inner).await {
-                inner.stop_pending = false;
+            take_terminating_job(&mut inner).map_err(|error| {
+                format!("failed to reap Harness process tree after start failure: {error}")
+            })?
+        };
+        #[cfg(windows)]
+        if let Some(job) = draining.as_ref() {
+            if let Err(error) = drain_owned_job(job).await {
+                let mut inner = self.inner.lock().await;
+                if inner.generation == generation && inner.operation_epoch == cancellation_epoch {
+                    inner.stop_pending = false;
+                }
                 return Err(format!("failed to reap Harness process tree after start failure: {error}"));
+            }
+        }
+        let runtime = {
+            let mut inner = self.inner.lock().await;
+            if inner.generation != generation || inner.operation_epoch != cancellation_epoch {
+                return Ok(());
             }
             inner.stop_pending = false;
             inner.start_ownership_pending = false;

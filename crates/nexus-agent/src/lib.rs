@@ -1101,6 +1101,12 @@ async fn health(State(state): State<AppState>) -> Json<HealthResponse> {
         HealthResponse::healthy(state.data_root_id.clone(), state.instance_id.clone())
     };
     response.build_id = option_env!("NEXUS_BUILD_ID").map(str::to_owned);
+    // This handler also serves the deliberately unauthenticated exact-match
+    // GET /v1/health. binary_path stays there by design: the launcher's
+    // freshness binding and standalone diagnostics run before any credential
+    // exists, so the agent program identity must be readable pre-auth. The
+    // endpoint is loopback-only with a Host check and returns no other
+    // filesystem paths.
     if response.binary_path.is_none() {
         response.binary_path = std::env::current_exe()
             .ok()
@@ -2114,6 +2120,11 @@ async fn release_control_inner(
                     }
                     Err(error) => data_error_response(error, "release_promote_failed"),
                 };
+            }
+            match cold::initialize_selected_release(&state, id, command.rollback_confirmation.as_deref()).await {
+                Ok(Some(catalog)) => return apply_release_catalog(&state, catalog).await,
+                Ok(None) => {},
+                Err(error) => return data_error_response(error, "release_promote_failed"),
             }
             if let Err(error) = compatibility::for_release(
                 &state,
@@ -3409,7 +3420,19 @@ fn data_error_response(error: io::Error, fallback_code: &str) -> axum::response:
         io::ErrorKind::TimedOut => StatusCode::GATEWAY_TIMEOUT,
         _ => StatusCode::INTERNAL_SERVER_ERROR,
     };
-    api_error_response(status, fallback_code, error.to_string())
+    let kind = match error.kind() {
+        io::ErrorKind::InvalidData => "invalid_data",
+        io::ErrorKind::PermissionDenied => "permission_denied",
+        io::ErrorKind::NotFound => "not_found",
+        io::ErrorKind::ResourceBusy | io::ErrorKind::WouldBlock => "busy",
+        io::ErrorKind::TimedOut | io::ErrorKind::ConnectionRefused | io::ErrorKind::ConnectionReset => "unavailable",
+        _ => "other",
+    };
+    (status, Json(serde_json::json!({
+        "api_version": nexus_protocol::API_VERSION, "code": fallback_code,
+        "message": error.to_string(), "kind": kind,
+        "retryable": matches!(kind, "busy" | "unavailable"),
+    }))).into_response()
 }
 
 fn harness_error_response(error: HarnessSupervisorError) -> axum::response::Response {

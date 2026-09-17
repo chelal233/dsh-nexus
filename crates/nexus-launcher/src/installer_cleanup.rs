@@ -118,10 +118,54 @@ fn cleanup(root: &Path, home: Option<&Path>) -> io::Result<()> {
 
 #[cfg(windows)]
 fn message(text: &str, flags: u32, chinese: bool) -> i32 {
-    use windows_sys::Win32::UI::WindowsAndMessaging::MessageBoxW;
-    let text: Vec<u16> = text.encode_utf16().chain(Some(0)).collect();
-    let title: Vec<u16> = (if chinese { "卸载 Nexus Launcher" } else { "Nexus Launcher Uninstall" }).encode_utf16().chain(Some(0)).collect();
-    unsafe { MessageBoxW(std::ptr::null_mut(), text.as_ptr(), title.as_ptr(), flags) }
+    // The uninstall helper runs after the desktop UI has closed. Use a Nexus
+    // dialog template here; never require Electron just to confirm data removal.
+    use windows_sys::Win32::UI::WindowsAndMessaging::*;
+    unsafe extern "system" fn procedure(window: windows_sys::Win32::Foundation::HWND, message: u32, wparam: usize, _: isize) -> isize {
+        match message {
+            WM_COMMAND => {
+                let id = (wparam & 0xffff) as i32;
+                if matches!(id, IDYES | IDNO | IDOK | IDCANCEL) {
+                    unsafe { EndDialog(window, if id == IDCANCEL { IDNO } else { id } as isize); }
+                    return 1;
+                }
+                0
+            }
+            WM_CLOSE => { unsafe { EndDialog(window, IDNO as isize); } 1 }
+            WM_INITDIALOG => 1,
+            _ => 0,
+        }
+    }
+    fn dword(words: &mut Vec<u16>, value: u32) { words.extend([value as u16, (value >> 16) as u16]); }
+    fn string(words: &mut Vec<u16>, value: &str) { words.extend(value.encode_utf16()); words.push(0); }
+    fn control(words: &mut Vec<u16>, style: u32, rect: [u16; 4], id: u16, class: u16, text: &str) {
+        if words.len() % 2 != 0 { words.push(0); }
+        dword(words, style | WS_CHILD | WS_VISIBLE); dword(words, 0);
+        words.extend(rect); words.extend([id, 0xffff, class]); string(words, text); words.push(0);
+    }
+    let question = flags & MB_YESNO == MB_YESNO;
+    let mut words = Vec::new();
+    dword(&mut words, WS_POPUP | WS_CAPTION | WS_SYSMENU | DS_MODALFRAME as u32 | DS_SETFONT as u32 | DS_CENTER as u32);
+    dword(&mut words, 0);
+    words.extend([if question { 3 } else { 2 }, 0, 0, 420, 220, 0, 0]);
+    string(&mut words, if chinese { "卸载 Nexus Launcher" } else { "Nexus Launcher Uninstall" });
+    words.push(10); string(&mut words, "Segoe UI");
+    control(&mut words, WS_BORDER | WS_VSCROLL | ES_MULTILINE as u32 | ES_READONLY as u32 | ES_AUTOVSCROLL as u32,
+        [14, 14, 392, 164], 100, 0x81, text);
+    if question {
+        control(&mut words, WS_TABSTOP | BS_DEFPUSHBUTTON as u32, [206, 190, 96, 22], IDNO as u16, 0x80,
+            if chinese { "保留数据" } else { "Keep data" });
+        control(&mut words, WS_TABSTOP | BS_PUSHBUTTON as u32, [310, 190, 96, 22], IDYES as u16, 0x80,
+            if chinese { "删除 Nexus 数据" } else { "Remove Nexus data" });
+    } else {
+        control(&mut words, WS_TABSTOP | BS_DEFPUSHBUTTON as u32, [310, 190, 96, 22], IDOK as u16, 0x80,
+            if chinese { "关闭" } else { "Close" });
+    }
+    if words.len() % 2 != 0 { words.push(0); }
+    // DLGTEMPLATE and each item require DWORD alignment.
+    let template: Vec<u32> = words.chunks_exact(2).map(|v| v[0] as u32 | ((v[1] as u32) << 16)).collect();
+    let result = unsafe { DialogBoxIndirectParamW(std::ptr::null_mut(), template.as_ptr().cast(), std::ptr::null_mut(), Some(procedure), 0) };
+    if result == IDYES as isize { IDYES } else { IDNO }
 }
 
 pub fn run(args: Vec<OsString>) -> Result<(), String> {
@@ -132,9 +176,9 @@ pub fn run(args: Vec<OsString>) -> Result<(), String> {
         if !root.exists() { return Ok(()); }
         let chinese = installer_chinese(args.get(5).and_then(|v| v.to_str()), unsafe { windows_sys::Win32::Globalization::GetUserDefaultUILanguage() });
         let question = if chinese {
-            format!("是否删除 {} 中的 Nexus 数据？\n\n是：删除 Nexus 设置、安装历史、日志、快照、已下载版本和缓存的运行时。\n否（默认）：保留这些数据，以便重新安装。\n\n保留 .dsh 中的 Harness 会话和插件、自定义 NEXUS_DATA_DIR 位置、链接及无法识别的文件。", root.display())
+            format!("是否删除 {} 中的 Nexus 数据？\n\n删除 Nexus 数据：删除 Nexus 设置、安装历史、日志、快照、已下载版本和缓存的运行时。\n保留数据（默认）：保留这些数据，以便重新安装。\n\n保留 .dsh 中的 Harness 会话和插件、自定义 NEXUS_DATA_DIR 位置、链接及无法识别的文件。", root.display())
         } else {
-            format!("Remove Nexus data from {}?\n\nYes: remove Nexus settings, installation history, logs, snapshots, downloaded versions and cached runtimes.\nNo (default): keep this data for reinstallation.\n\nHarness sessions and plugins in .dsh, custom NEXUS_DATA_DIR locations, links and unrecognized files are kept.", root.display())
+            format!("Remove Nexus data from {}?\n\nRemove Nexus data: remove Nexus settings, installation history, logs, snapshots, downloaded versions and cached runtimes.\nKeep data (default): keep this data for reinstallation.\n\nHarness sessions and plugins in .dsh, custom NEXUS_DATA_DIR locations, links and unrecognized files are kept.", root.display())
         };
         if message(&question, MB_YESNO | MB_ICONQUESTION | MB_DEFBUTTON2, chinese) != IDYES { return Ok(()); }
         let home = std::env::var_os("DSH_HOME").filter(|value| !value.is_empty()).map(PathBuf::from);

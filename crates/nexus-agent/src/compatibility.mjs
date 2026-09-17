@@ -5,8 +5,9 @@ import path from 'node:path';
 import crypto from 'node:crypto';
 import { spawn } from 'node:child_process';
 import { pathToFileURL } from 'node:url';
+import semver from './vendor/semver.cjs';
 
-export const checkerVersion = 2;
+export const checkerVersion = 5;
 const marker = '.nexus-compatibility.json';
 // Native resolution accepts Windows canonical (\\?\) paths without stripping
 // their namespace or weakening the containment checks below.
@@ -16,6 +17,7 @@ const validName = name => typeof name === 'string' && /^[a-zA-Z0-9][a-zA-Z0-9._-
 const validPackage = name => /^(?:@[\w.-]+\/)?[\w.-]+$/.test(name) && !name.split('/').some(p => p === '.' || p === '..');
 const profileFiles = ['package.json', 'pnpm-lock.yaml', 'cordis.patch.yml', 'pnpm-workspace.yaml'];
 const homeFiles = ['settings.yaml', 'cordis.patch.yml', '.env'];
+const retiredDirectory = '.nexus-retired-profiles';
 function atomicJson(file, value) {
   const tmp = file + '.' + crypto.randomUUID() + '.tmp';
   fs.writeFileSync(tmp, JSON.stringify(value, null, 2), { flag: 'wx' });
@@ -26,10 +28,15 @@ export function sourceInfo(home, selected) {
   if (!validName(selected)) throw Error('Invalid source profile name');
   let source = selected;
   const seen = new Set();
-  while (fs.existsSync(path.join(home, 'profiles', source, marker))) {
+  while (true) {
+    const live = path.join(home, 'profiles', source, marker);
+    const file = fs.existsSync(live) ? live : path.join(home, retiredDirectory, source, marker);
+    if (!fs.existsSync(file)) break;
     if (seen.has(source) || seen.size > 4) throw Error('Compatibility profile source cycle');
     seen.add(source);
-    source = readJson(path.join(home, 'profiles', source, marker)).source_profile;
+    const record = readJson(file);
+    if (record.effective_profile !== source || !['passed', 'isolated'].includes(record.status)) throw Error('Invalid legacy profile identity');
+    source = record.source_profile;
     if (!validName(source)) throw Error('Invalid compatibility source');
   }
   const dir = fs.realpathSync.native(path.join(home, 'profiles', source));
@@ -39,7 +46,7 @@ export function sourceInfo(home, selected) {
   if (!Array.isArray(bundles) || !bundles.every(x => typeof x === 'string' && validPackage(x))) throw Error('Unsupported profile bundle manifest');
   const policy = path.join(home, 'profiles', '.nexus-plugin-isolation', source + '.json');
   let manualDisabled = [], fingerprint = profileFingerprint(home, dir);
-  if (fs.existsSync(policy)) {
+  if (manifest.dsh?.profile?.nexusIsolationPolicyVersion !== 1 && fs.existsSync(policy)) {
     if (fs.lstatSync(policy).isSymbolicLink()) throw Error('Plugin isolation policy cannot be a link');
     const bytes = fs.readFileSync(policy);
     const choices = JSON.parse(bytes.toString('utf8'));
@@ -47,6 +54,9 @@ export function sourceInfo(home, selected) {
     manualDisabled = [...new Set(choices)].filter(p => bundles.includes(p));
     fingerprint = crypto.createHash('sha256').update(fingerprint).update(bytes).digest('hex');
   }
+  const saved = manifest.dsh?.profile?.nexusDisabledBundles ?? [];
+  if (!Array.isArray(saved) || !saved.every(item => typeof item.package === 'string' && validPackage(item.package))) throw Error('Invalid disabled bundle metadata');
+  manualDisabled = [...new Set([...manualDisabled, ...saved.map(item => item.package)])];
   return { source, dir, manifest, fingerprint, manualDisabled };
 }
 
@@ -102,6 +112,41 @@ function officialPackages(slot) {
   }
   if (!packages.size) throw Error('Target release has no supported official package layout');
   return packages;
+}
+
+// Read data only: never import plugin code or fetch registry metadata. Preserve
+// npm's prerelease semantics; incomplete declarations remain unknown.
+export function declarationChecks(source, slot, official) {
+  // Unsupported release layouts are diagnosed by the startup check itself.
+  // Declaration reporting must not prevent that check from writing its report.
+  if (!official) { try { official = officialPackages(slot); } catch { official = new Map(); } }
+  const read = file => { try { return readJson(file); } catch { return null; } };
+  const hostVersion = read(path.join(slot, 'apps/cli/package.json'))?.version;
+  const results = [];
+  for (const name of source.manifest.dsh.profile.bundles) {
+    if (name.startsWith('@deepseek-ai/') || source.manualDisabled.includes(name)) continue;
+    const manifest = read(path.join(source.dir, 'node_modules', name, 'package.json'));
+    const declarations = [];
+    const add = (dependency, required, actual, optional = false) => {
+      const range = typeof required === 'string' ? required : null;
+      const version = typeof actual === 'string' ? actual : null;
+      const valid = range && semver.validRange(range) !== null && version && semver.valid(version);
+      declarations.push({ dependency, required: range, actual: version, optional,
+        status: valid ? semver.satisfies(version, range) ? 'match' : 'mismatch' : 'unknown' });
+    };
+    const engine = manifest?.engines?.dsh ?? manifest?.dsh?.engines?.dsh;
+    if (engine !== undefined) add('dsh', engine, hostVersion);
+    for (const [dependency, required] of Object.entries(manifest?.peerDependencies ?? {})) {
+      if (!dependency.startsWith('@deepseek-ai/')) continue;
+      const target = official.get(dependency);
+      add(dependency, required, target ? read(path.join(target, 'package.json'))?.version : null,
+        manifest?.peerDependenciesMeta?.[dependency]?.optional === true);
+    }
+    results.push({ package: name, version: typeof manifest?.version === 'string' ? manifest.version : null,
+      status: declarations.some(d => d.status === 'mismatch' && !d.optional) ? 'mismatch'
+        : declarations.length && declarations.every(d => d.status === 'match') ? 'match' : 'unknown', declarations });
+  }
+  return results;
 }
 
 function moduleFilter(source, official, planning = false) {
@@ -255,196 +300,98 @@ export async function probe(node, entry, home, profile, timeoutMs, patches = [],
   } finally { await stopProbe(child, !owned); }
 }
 
-export function finalizeCompatibility(options) {
-  const { work, output } = options;
-  const {home, source, effective, release_id, disabled, trigger, report, candidate, scratch, destination, metadataFile, projectionBefore, manifest} = readJson(path.join(work, 'publication.json'));
-  if (!within(fs.realpathSync.native(work), fs.realpathSync.native(candidate)) || sourceInfo(home, source.source).fingerprint !== source.fingerprint) throw Error('Compatibility publication identity changed');
-      // Remove generated top-level module links through the disposable HOME.
-      const modules = path.join(candidate, 'node_modules');
-      for (const name of fs.readdirSync(modules)) {
-        const first = path.join(modules, name);
-        const entries = name.startsWith('@') && !fs.lstatSync(first).isSymbolicLink()
-          ? fs.readdirSync(first).map(child => path.join(first, child)) : [first];
-        for (const entry of entries) if (fs.lstatSync(entry).isSymbolicLink()) {
-          const target = path.resolve(path.dirname(entry), fs.readlinkSync(entry));
-          if (within(path.resolve(scratch), target)) fs.unlinkSync(entry);
-        }
-      }
-      // Remove boot-generated paths whose links refer to the probe HOME.
-      for (const name of ['.dsh-module-fallback', '.dsh-market', 'cordis.yml']) {
-        const owned = path.resolve(candidate, name);
-        if (!within(path.resolve(candidate), owned)) throw Error('Invalid generated cleanup path');
-        fs.rmSync(owned, {recursive:true, force:true});
-      }
-      // The checker owns only generated directories carrying our marker.
-      if (fs.existsSync(destination)) {
-        if (profileFingerprint(home, destination) !== projectionBefore) throw Error('Effective profile changed during compatibility check');
-        const currentManifest = readJson(path.join(destination, 'package.json'));
-        if (JSON.stringify(currentManifest) !== JSON.stringify(manifest)) {
-          const backup = path.join(destination, 'package.nexus-backup-' + crypto.randomUUID() + '.json');
-          fs.copyFileSync(path.join(destination, 'package.json'), backup, fs.constants.COPYFILE_EXCL);
-          atomicJson(path.join(destination, 'package.json'), manifest);
-        }
-        report.projection_fingerprint = profileFingerprint(home, destination);
-        atomicJson(metadataFile, report);
-      } else {
-        report.projection_fingerprint = profileFingerprint(home, candidate);
-        atomicJson(path.join(candidate, marker), report);
-        // Same volume is required for the atomic profile publication.
-        fs.renameSync(candidate, destination);
-      }
-      atomicJson(output, report);
-      return report;
+export function boundDeclarationReport(report) {
+  const rows = report.declarations ?? [];
+  // Reserve room for failure text/candidates added by the caller. Measure the
+  // indented cache envelope too: its extra indentation costs real bytes.
+  const bounded = { ...report, declarations: [], declarations_omitted: rows.length + (report.declarations_omitted ?? 0) };
+  const order = { mismatch: 0, unknown: 1, match: 2 };
+  for (const row of [...rows].sort((a, b) => (order[a.status] ?? 1) - (order[b.status] ?? 1))) {
+    bounded.declarations.push(row);
+    bounded.declarations_omitted--;
+    if (Buffer.byteLength(JSON.stringify({ key: '0'.repeat(64), report: bounded }, null, 2)) > 32 * 1024) {
+      bounded.declarations.pop();
+      bounded.declarations_omitted++;
+    }
+  }
+  return bounded;
 }
 
 export async function check(options) {
-  if (options.finalize) return finalizeCompatibility(options);
   const { home, selected, release_id, node, output, work, force = false, timeout_ms = 45000 } = options;
+  if (options.finalize) throw Error('Legacy projection publication is no longer supported; retry the check');
   const trigger = ['version_switch', 'profile_switch', 'startup', 'manual_check'].includes(options.trigger) ? options.trigger : null;
-  const slot = fs.realpathSync.native(options.slot);
-  const source = sourceInfo(home, selected);
-  const patches = options.patches ?? [];
-  const preferencesFingerprint = crypto.createHash('sha256').update(JSON.stringify({ environment: options.preferences_env ?? {}, capabilities: options.preference_capabilities ?? null, builtins: options.builtin_fingerprint ?? null }));
-  for (const patch of [...patches, ...(options.builtin_patches ?? [])]) preferencesFingerprint.update(patch).update(fs.readFileSync(patch));
-  const key = crypto.createHash('sha256').update(JSON.stringify([checkerVersion, slot, release_id, source.source, source.fingerprint, preferencesFingerprint.digest('hex')])).digest('hex');
-  const effective = 'nexus-' + key.slice(0, 24);
-  const destination = path.join(home, 'profiles', effective);
-  const metadataFile = path.join(destination, marker);
-  let cached;
-  let projectionBefore;
-  if (fs.existsSync(destination)) {
-    if (fs.lstatSync(destination).isSymbolicLink()) throw Error('Projection destination cannot be a link');
-    cached = readJson(metadataFile);
-    if (cached.fingerprint !== source.fingerprint || cached.release_id !== release_id || cached.checker_version !== checkerVersion || cached.source_profile !== source.source) {
-      throw Error('Projection destination ownership mismatch');
-    }
-    projectionBefore = profileFingerprint(home, destination);
-    if (!force && cached.projection_fingerprint === projectionBefore) {
-      const reused = { ...cached, trigger: cached.trigger ?? null, last_trigger: trigger,
-        last_used_at_unix: Math.floor(Date.now() / 1000), cache_reused: true };
-      atomicJson(output, reused); return reused;
+  const slot = fs.realpathSync.native(options.slot), source = sourceInfo(home, selected);
+  const declarations = declarationChecks(source, slot);
+  const patches = [...(options.builtin_patches ?? []), ...(options.patches ?? [])];
+  const fingerprint = crypto.createHash('sha256').update(JSON.stringify([checkerVersion, slot, release_id, source.source, source.fingerprint,
+    options.preferences_env ?? {}, options.preference_capabilities ?? null, options.builtin_fingerprint ?? null, declarations]));
+  for (const file of patches) fingerprint.update(file).update(fs.readFileSync(file));
+  const key = fingerprint.digest('hex');
+  const cache = options.cache;
+  if (cache && !force && fs.existsSync(cache)) {
+    if (fs.lstatSync(cache).isSymbolicLink()) throw Error('Invalid compatibility result cache');
+    // Older checkers could write oversized advisory details. Ignore that cache
+    // and regenerate; a disposable optimization must not prevent startup.
+    const cached = fs.statSync(cache).size <= 65536 ? readJson(cache) : {};
+    if (cached.key === key && cached.report?.checker_version === checkerVersion && ['passed', 'isolated'].includes(cached.report.status)) {
+      const report = { ...cached.report, last_trigger: trigger, last_used_at_unix: Math.floor(Date.now() / 1000), cache_reused: true };
+      atomicJson(output, report); return report;
     }
   }
-  // Never reuse/mutate an old published projection during checking.
-  const scratch = path.join(work, crypto.randomUUID());
-  const testHome = path.join(scratch, 'home');
-  const candidate = path.join(testHome, 'profiles', effective);
+  const scratch = path.join(work, crypto.randomUUID()), testHome = path.join(scratch, 'home');
+  const candidate = path.join(testHome, 'profiles', source.source);
   fs.mkdirSync(candidate, { recursive: true });
-  let disabled = [], failures = new Set();
+  const disabled = source.manualDisabled.map(packageName => ({ package: packageName, reason: 'Disabled by user' }));
+  let failureText = '';
+  const report = status => boundDeclarationReport({ checker_version: checkerVersion, status, source_profile: source.source,
+    effective_profile: source.source, release_id, fingerprint: source.fingerprint, checked_at_unix: Math.floor(Date.now() / 1000),
+    disabled, declarations, checked_disabled_plugins: source.manualDisabled, trigger, last_trigger: trigger,
+    last_used_at_unix: Math.floor(Date.now() / 1000), cache_reused: false });
   try {
-  const official = officialPackages(slot);
-  // Recheck edited effective profiles without throwing their local changes away.
-  const base = cached ? destination : source.dir;
-  copyModules(path.join(base, 'node_modules'), path.join(candidate, 'node_modules'), official);
-  for (const [name, target] of official) {
-    const link = path.join(candidate, 'node_modules', name);
-    fs.mkdirSync(path.dirname(link), { recursive: true });
-    fs.symlinkSync(target, link, process.platform === 'win32' ? 'junction' : 'dir');
-  }
-  for (const name of profileFiles.filter(name => name !== 'package.json')) {
-    const from = path.join(base, name);
-    if (fs.existsSync(from)) fs.copyFileSync(from, path.join(candidate, name));
-  }
-  for (const name of homeFiles) {
-    const from = path.join(home, name);
-    if (fs.existsSync(from)) fs.copyFileSync(from, path.join(testHome, name));
-  }
-  const manifest = cached ? readJson(path.join(base, 'package.json')) : structuredClone(source.manifest);
-  manifest.name = 'dsh-profile-' + effective;
-  disabled = cached ? cached.disabled.filter(item => !manifest.dsh.profile.bundles.includes(item.package)) : [];
-  for (const name of source.manualDisabled) {
-    if (!disabled.some(item => item.package === name)) disabled.push({package: name, reason: 'Disabled by user'});
-    manifest.dsh.profile.bundles = manifest.dsh.profile.bundles.filter(p => p !== name);
-    if (manifest.dependencies) delete manifest.dependencies[name];
-  }
-  for (let attempt = 0; attempt <= Math.min(source.manifest.dsh.profile.bundles.length, 12); attempt++) {
-    fs.writeFileSync(path.join(candidate, 'package.json'), JSON.stringify(manifest, null, 2));
-    const result = await probe(node, path.join(slot, 'apps/cli/lib/bin.js'), testHome, effective, timeout_ms, [...(options.builtin_patches ?? []), ...patches], options.owned_round === true);
-    if (result.ok) {
-      if (sourceInfo(home, source.source).fingerprint !== source.fingerprint) throw Error('Source profile changed during compatibility check');
-      const report = { checker_version: checkerVersion, status: disabled.length ? 'isolated' : 'passed', source_profile: source.source,
-        effective_profile: effective, release_id, fingerprint: source.fingerprint, checked_at_unix: Math.floor(Date.now() / 1000), disabled, checked_disabled_plugins: source.manualDisabled,
-        trigger, last_trigger: trigger, last_used_at_unix: Math.floor(Date.now() / 1000), cache_reused: false };
-      if (options.owned_round) {
-        atomicJson(path.join(work, 'publication.json'), {home, source, effective, release_id, disabled, trigger, report, candidate, scratch, destination, metadataFile, projectionBefore, manifest});
-        atomicJson(output, {...report, publication_pending:true});
-        return report;
-      }
-      // Remove generated top-level module links through the disposable HOME.
-      const modules = path.join(candidate, 'node_modules');
-      for (const name of fs.readdirSync(modules)) {
-        const first = path.join(modules, name);
-        const entries = name.startsWith('@') && !fs.lstatSync(first).isSymbolicLink()
-          ? fs.readdirSync(first).map(child => path.join(first, child)) : [first];
-        for (const entry of entries) if (fs.lstatSync(entry).isSymbolicLink()) {
-          const target = path.resolve(path.dirname(entry), fs.readlinkSync(entry));
-          if (within(path.resolve(scratch), target)) fs.unlinkSync(entry);
-        }
-      }
-      // Remove boot-generated paths whose links refer to the probe HOME.
-      for (const name of ['.dsh-module-fallback', '.dsh-market', 'cordis.yml']) {
-        const owned = path.resolve(candidate, name);
-        if (!within(path.resolve(candidate), owned)) throw Error('Invalid generated cleanup path');
-        fs.rmSync(owned, {recursive:true, force:true});
-      }
-      // The checker owns only generated directories carrying our marker.
-      if (fs.existsSync(destination)) {
-        if (profileFingerprint(home, destination) !== projectionBefore) throw Error('Effective profile changed during compatibility check');
-        const currentManifest = readJson(path.join(destination, 'package.json'));
-        if (JSON.stringify(currentManifest) !== JSON.stringify(manifest)) {
-          const backup = path.join(destination, 'package.nexus-backup-' + crypto.randomUUID() + '.json');
-          fs.copyFileSync(path.join(destination, 'package.json'), backup, fs.constants.COPYFILE_EXCL);
-          atomicJson(path.join(destination, 'package.json'), manifest);
-        }
-        report.projection_fingerprint = profileFingerprint(home, destination);
-        atomicJson(metadataFile, report);
-      } else {
-        report.projection_fingerprint = profileFingerprint(home, candidate);
-        atomicJson(path.join(candidate, marker), report);
-        // Same volume is required for the atomic profile publication.
-        fs.renameSync(candidate, destination);
-      }
-      atomicJson(output, report);
-      return report;
+    const official = officialPackages(slot);
+    copyModules(path.join(source.dir, 'node_modules'), path.join(candidate, 'node_modules'), official);
+    for (const [name, target] of official) {
+      const link = path.join(candidate, 'node_modules', name);
+      fs.mkdirSync(path.dirname(link), { recursive: true });
+      fs.symlinkSync(target, link, process.platform === 'win32' ? 'junction' : 'dir');
     }
-    if (/failed to (?:import|apply) loader entry nexus-(?:desktop-compat|desktop-bridge|notifications)\b/.test(result.text)) {
-      throw Error('A Nexus built-in plugin failed to load. Update or repair Nexus, then retry startup; do not disable third-party plugins for this error. Original error: ' + result.text.slice(-4000));
+    for (const name of profileFiles) {
+      const from = path.join(source.dir, name);
+      if (fs.existsSync(from)) fs.copyFileSync(from, path.join(candidate, name));
     }
-    if (options.owned_round) { failures = loaderFailures(result.text, manifest.dsh.profile.bundles); throw Error('Startup check needs an explicit plugin decision; original profile preserved. Original error: ' + result.text.slice(-4000)); }
-    if (patches.length) throw Error('Enabled patch combination failed. Disable patches explicitly in Settings before retrying; no plugin was automatically removed. The failing patch could not be identified reliably.');
-    failures = loaderFailures(result.text, manifest.dsh.profile.bundles);
-    const rejected = incompatibleBundles(result.text, manifest.dsh.profile.bundles);
-    if (!rejected.length) throw Error('Startup check needs a user decision: choose third-party plugins to disable, then retry the switch; original profile preserved');
-    disabled.push(...rejected);
-    const names = new Set(rejected.map(x => x.package));
-    manifest.dsh.profile.bundles = manifest.dsh.profile.bundles.filter(x => !names.has(x));
-    for (const name of names) if (manifest.dependencies) delete manifest.dependencies[name];
-  }
-  throw Error('Compatibility retry limit reached; original profile preserved');
+    for (const name of homeFiles) {
+      const from = path.join(home, name);
+      if (fs.existsSync(from)) fs.copyFileSync(from, path.join(testHome, name));
+    }
+    // A check sees the same manifest as the real launch. Disabling a plugin is
+    // an explicit, atomic edit to the user's profile, never a hidden projection.
+    const result = await probe(node, path.join(slot, 'apps/cli/lib/bin.js'), testHome, source.source, timeout_ms, patches, options.owned_round === true);
+    failureText = result.text;
+    if (!result.ok && /failed to (?:import|apply) loader entry nexus-(?:desktop-compat|desktop-bridge|notifications)\b/.test(result.text)) {
+      throw Error('A Nexus built-in plugin failed to load. Update or repair Nexus; do not disable third-party plugins. Original error: ' + result.text.slice(-4000));
+    }
+    if (!result.ok) throw Error('Startup check needs an explicit plugin decision; original profile preserved. Original error: ' + result.text.slice(-4000));
+    if (sourceInfo(home, selected).fingerprint !== source.fingerprint) throw Error('Source profile changed during compatibility check');
+    const passed = report(disabled.length ? 'isolated' : 'passed');
+    if (cache) atomicJson(cache, { key, report: passed });
+    atomicJson(output, passed); return passed;
   } catch (error) {
-    // A failed attempt is actionable evidence, not a successful publication.
-    // No raw startup log or credential is copied into the public report.
-    atomicJson(output, {checker_version: checkerVersion, status: 'needs_choice',
-      source_profile: source.source, effective_profile: effective, release_id,
-      fingerprint: source.fingerprint, checked_at_unix: Math.floor(Date.now() / 1000), disabled, checked_disabled_plugins: source.manualDisabled,
-      trigger, last_trigger: trigger, last_used_at_unix: Math.floor(Date.now() / 1000), cache_reused: false,
-      error: String(error.message).slice(0, 4600),
-      candidates: source.manifest.dsh.profile.bundles.filter(p => !p.startsWith('@deepseek-ai/')).map(packageName => ({
-        package: packageName, reason: failures.has(packageName)
-          ? 'DSH reported a loader error for this plugin'
-          : 'Not identified as faulty; optional isolation for troubleshooting',
-      })),
-    });
+    const failures = loaderFailures(failureText, source.manifest.dsh.profile.bundles);
+    atomicJson(output, boundDeclarationReport({ ...report('needs_choice'), error: String(error.message).slice(0, 4600),
+      candidates: source.manifest.dsh.profile.bundles.filter(p => !p.startsWith('@deepseek-ai/')).map(packageName => ({ package: packageName,
+        reason: failures.has(packageName) ? 'DSH reported a loader error for this plugin' : 'Not identified as faulty; optional isolation for troubleshooting' })) }));
     throw error;
   } finally {
+    // The Rust owner first reconciles the entire child tree, including a crash,
+    // before removing an owned round. Standalone probes await stopTree above.
     if (!options.owned_round && fs.existsSync(scratch)) {
       if (!within(fs.realpathSync.native(work), fs.realpathSync.native(scratch)) || fs.lstatSync(scratch).isSymbolicLink()) throw Error('Unsafe compatibility cleanup path');
-      fs.rmSync(scratch, {recursive:true, force:true});
+      fs.rmSync(scratch, { recursive: true, force: true });
     }
   }
 }
 
-// Canary never publishes a projection or changes compatibility policy/reports.
 export async function canarySearch(candidates, test, mode = 'bisect', limit = 20) {
   const rounds = [];
   const run = async enabled => {

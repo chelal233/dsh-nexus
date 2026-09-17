@@ -85,6 +85,7 @@ export function apply(ctx) {
       return fs.readdirSync(path.join(config.home, 'profiles')).filter(validName).flatMap(name => {
         const dir = path.join(config.home, 'profiles', name), file = path.join(dir, 'package.json');
         try {
+          if (fs.existsSync(path.join(dir, '.nexus-compatibility.json'))) return [];
           if (fs.lstatSync(dir).isSymbolicLink() || fs.lstatSync(file).isSymbolicLink() || fs.statSync(file).size > 1048576) return [];
           const manifest = JSON.parse(fs.readFileSync(file, 'utf8'));
           return Array.isArray(manifest.dsh?.profile?.bundles) ? [{ name, dir, selectable: true, current: name === config.profile }] : [];

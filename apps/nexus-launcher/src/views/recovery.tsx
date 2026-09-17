@@ -1,3 +1,4 @@
+import { confirmAction } from "../confirmation";
 import { type HarnessPanelProps, type JsonObject, type ViewProps } from "../app-types";
 import { PageIntro, Panel, ActionButton, DataList, EmptyState } from "../ui-components";
 import { stringValue, arrayValue, asObject, booleanValue, numberValue } from "../json-values";
@@ -13,7 +14,7 @@ import { proxyRequest } from "../agent-bridge";
 import { errorMessage, localizedRuntimeState, formatTimestamp } from "../display-format";
 import { useState, useEffect, useRef } from "react";
 import { createLatestRequest } from "../control-state";
-import { createRequestClient, mergeRequestHistory } from "../request-client";
+import { sharedRequestClient, mergeRequestHistory } from "../request-client";
 
 export function ReadOnlyRecoveryView({ snapshot, busyAction, runAction }: HarnessPanelProps) {
   const { t } = useI18n();
@@ -222,7 +223,10 @@ export function RecoveryModePanel({
       </ActionButton>
     );
   return (
-    <section className={`notice${pauseError ? " action-error" : " degraded"}`} aria-label={t("Harness recovery mode")}>
+    <section
+      className={`notice${pauseError ? " action-error" : " degraded"}`}
+      aria-label={t("Harness recovery mode")}
+    >
       <WarningCircle size={17} />
       <div>
         <strong>{t(paused ? "Harness startup is paused" : "Harness recovery mode")}</strong>
@@ -343,7 +347,7 @@ export function RequestHistory({ busy, dataRootId }: { busy: boolean; dataRootId
     return () => latest.current.cancel();
   }, [dataRootId]);
   const localClient = () =>
-    createRequestClient(
+    sharedRequestClient(
       window.localStorage,
       (route, method, payload) => proxyRequest<JsonObject>(route, method, payload),
       dataRootId,
@@ -367,13 +371,13 @@ export function RequestHistory({ busy, dataRootId }: { busy: boolean; dataRootId
       if (latest.current.isCurrent(token)) setLoading(false);
     }
   };
-  const release = (id: string) => {
+  const release = async (id: string) => {
     if (
-      !window.confirm(
+      !(await confirmAction(
         t(
           "The previous operation may have changed data. Check the current version and Recovery first. Allow a new attempt with a new request reference?",
         ),
-      )
+      ))
     )
       return;
     try {
@@ -414,7 +418,13 @@ export function RequestHistory({ busy, dataRootId }: { busy: boolean; dataRootId
             </tr>
           </thead>
           <tbody>
-            {!items.length && <tr><td colSpan={5} className="field-help">{t(loading ? "Loading request history" : "No request records to display")}</td></tr>}
+            {!items.length && (
+              <tr>
+                <td colSpan={5} className="field-help">
+                  {t(loading ? "Loading request history" : "No request records to display")}
+                </td>
+              </tr>
+            )}
             {items
               .slice()
               .reverse()

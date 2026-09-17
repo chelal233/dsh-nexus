@@ -10,8 +10,8 @@ test('release gate requires four tested targets, exact provenance and unmodified
   const dir = mkdtempSync(path.join(os.tmpdir(), 'nexus-release-assets-'));
   const commit = 'a'.repeat(40);
   const targets = {
-    'x86_64-pc-windows-msvc': ['.exe'],
-    'aarch64-pc-windows-msvc': ['.exe'],
+    'x86_64-pc-windows-msvc': ['.exe', '.zip'],
+    'aarch64-pc-windows-msvc': ['.exe', '.zip'],
     'x86_64-apple-darwin': ['.dmg', '.zip'],
     'aarch64-apple-darwin': ['.dmg', '.zip'],
   };
@@ -34,7 +34,7 @@ test('release gate requires four tested targets, exact provenance and unmodified
         buildId: 'test', automatedChecks: 'passed', installedPackageSmoke: 'passed-on-ci-runner', files }));
       writeFileSync(path.join(dir, `${basename}_SHA256SUMS.txt`), files.map(f => `${f.sha256}  ${f.name}\n`).join(''));
     }
-    assert.equal(verifyReleaseAssets(dir, 'v0.1.2', commit).length, 18);
+    assert.equal(verifyReleaseAssets(dir, 'v0.1.2', commit).length, 20);
     assert.throws(() => verifyReleaseAssets(dir, 'v0.1.3', commit));
     assert.throws(() => verifyReleaseAssets(dir, 'v0.1.2', 'b'.repeat(40)));
     const metadata = path.join(dir, 'dsh-nexus_0.1.2_windows_x64_build.json');

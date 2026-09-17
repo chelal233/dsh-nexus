@@ -38,24 +38,42 @@ export function GuideView(props: ViewProps) {
     !!stringValue(installation, "operation_id") &&
     (!coldOperationIsTerminal(stringValue(installation, "phase")) ||
       booleanValue(installation, "cleanup_pending"));
-  const ready =
+  const sourceReady =
     hasHarnessSource(snapshot.config, snapshot.releases) &&
-    !needsHarnessInstall(snapshot.config, snapshot.releases) &&
-    !snapshot.lifecycleBusy &&
-    !installing &&
-    busyAction === null;
+    !needsHarnessInstall(snapshot.config, snapshot.releases);
+  const ready = sourceReady && !snapshot.lifecycleBusy && !installing && busyAction === null;
   const external = externalHarnessRoot(snapshot.config);
   const home = stringValue(nestedValue(snapshot.config, "harness_preferences"), "home");
   const [chooseExternal, setChooseExternal] = useState(false);
+  const [checkResult, setCheckResult] = useState<JsonObject | null>(null);
   const sourceRevision = stringValue(snapshot.config, "revision");
   const sourceState = stringValue(harnessRuntimeValue(snapshot.harnessRuntime), "state");
+  const started = ["starting", "running"].includes(sourceState || "");
   const sourceDisabled =
     busyAction !== null ||
     !!snapshot.lifecycleBusy ||
     !snapshot.startup?.available ||
     !["stopped", "detached", "failed"].includes(sourceState || "");
+  const prepareDisabled = sourceDisabled || installing;
+  const startupAvailable =
+    snapshot.startup?.available === true && !booleanValue(snapshot.health, "degraded");
+  const checksReady =
+    !!checkResult && booleanValue(checkResult, "ready") && !booleanValue(checkResult, "paused");
+  const steps = [
+    { label: "Prepare", detail: "Choose the install method", done: sourceReady },
+    {
+      label: "Install Harness",
+      detail: "Install a version or select a directory",
+      done: sourceReady && !installing,
+    },
+    {
+      label: "Check and start",
+      detail: "Run the startup check and start Harness",
+      done: started,
+    },
+  ];
   const installManaged = async () => {
-    if (sourceDisabled) return;
+    if (prepareDisabled) return;
     if (
       external &&
       !(await props.runAction(t("Select Harness source"), "/v1/config", {
@@ -71,111 +89,183 @@ export function GuideView(props: ViewProps) {
     <>
       <PageIntro
         kicker={t("Setup guide")}
-        title={t("Install Harness step by step")}
-        detail={t("Prepare your settings, install a version, then continue in Workbench.")}
+        title={t("Set up Harness in three steps")}
+        detail={t(
+          "Choose an install method, install or select a version, then run the startup check and start Harness.",
+        )}
       />
       <nav className="setup-journey" aria-label={t("Setup progress")}>
-        {["Preparation", "Install Harness", "Finish setup"].map((label, index) => (
-          <button
-            key={label}
-            type="button"
-            className={index === step ? "step-current" : ""}
+        {steps.map((item, index) => (
+          <div
+            key={item.label}
+            className={item.done ? "step-done" : index === step ? "step-current" : ""}
             aria-current={index === step ? "step" : undefined}
-            disabled={index === 2 && !ready}
-            onClick={() => setStep(index)}
           >
-            <span>
-              {index + 1} · {t(label)}
-            </span>
-          </button>
+            <span>{`${t("Step")} ${index + 1} · ${t(item.label)}`}</span>
+            <strong>{t(item.detail)}</strong>
+            <em className="step-state">
+              {item.done ? t("Completed") : index === step ? t("In progress") : t("Not started")}
+            </em>
+          </div>
         ))}
       </nav>
-      <section hidden={step !== 0}>
-        <Panel title={t("Preparation")} icon={<Gear size={18} />}>
-          <dl className="detail-list">
-            <dt>{t("Harness data directory")}</dt>
-            <dd>{home || t("Inherit upstream default")}</dd>
-            <dt>{t("Active program source")}</dt>
-            <dd>{activeProgramSource(snapshot, t)}</dd>
-          </dl>
-          <p>
-            {t(
-              "Choose a version and install it with the bundled runtime, or select an already built local directory.",
-            )}
-          </p>
-          <div className="button-row">
-            <ActionButton
-              tone="primary"
-              disabled={sourceDisabled}
-              onClick={() => void installManaged()}
-            >
-              {t("Choose version and install")}
-            </ActionButton>
-            <ActionButton disabled={sourceDisabled} onClick={() => setChooseExternal(true)}>
-              {t("Use an already built directory")}
-            </ActionButton>
-            <ActionButton onClick={() => props.openSettings?.()}>{t("Open Settings")}</ActionButton>
-          </div>
-          {sourceDisabled && (
-            <p className="field-help">{t("Stop Harness before changing its program source.")}</p>
-          )}
-        </Panel>
-        {chooseExternal && (
-          <>
-            <HarnessSourcePanel {...props} />
-            <div className="form-actions">
-              <ActionButton
-                tone="primary"
-                disabled={!external || !ready}
-                onClick={() => setStep(2)}
-              >
-                {t("Use this external Harness")}
-              </ActionButton>
-            </div>
-          </>
-        )}
-      </section>
-      <section hidden={step !== 1}>
-        {external ? (
-          <Panel title={t("External directory")} icon={<Package size={18} />}>
-            <p>{external}</p>
-            <p>
-              {t(
-                "The selected external program is used directly. Nexus does not install or build its files.",
-              )}
-            </p>
-            <ActionButton disabled={sourceDisabled} onClick={() => void installManaged()}>
-              {t("Choose version and install")}
-            </ActionButton>
-          </Panel>
-        ) : (
-          <UpdatesView {...props} embedded autoLoadTags={step === 1} />
-        )}
-        <div className="form-actions">
-          <ActionButton onClick={() => setStep(0)}>{t("Previous step")}</ActionButton>
-          <ActionButton
-            tone="primary"
-            disabled={!ready || busyAction !== null}
-            onClick={() => setStep(2)}
-          >
-            {t("Next step")}
-          </ActionButton>
-        </div>
-      </section>
-      <section hidden={step !== 2}>
-        <Panel title={t("Finish setup")} icon={<CheckCircle size={18} />}>
-          <p>
-            {t(
-              ready
-                ? "Harness is installed. Continue in Workbench to check and start it."
-                : "Install or select a Harness version before continuing.",
-            )}
-          </p>
-          <ActionButton tone="primary" disabled={!ready} onClick={() => props.openWorkbench?.()}>
+      {sourceReady && !installing && !started && step !== 2 && (
+        <section className="notice" aria-live="polite">
+          <span>
+            {t("Harness is ready. Continue to the final step, or open the Workbench directly.")}
+          </span>
+          <ActionButton onClick={() => setStep(2)}>{t("Go to the final step")}</ActionButton>
+          <ActionButton tone="primary" onClick={() => props.openWorkbench?.()}>
             {t("Open Workbench")}
           </ActionButton>
-        </Panel>
-      </section>
+        </section>
+      )}
+      {step === 0 && (
+        <section>
+          <Panel title={t("Prepare")} icon={<Gear size={18} />}>
+            <dl className="detail-list">
+              <dt>{t("Harness data directory")}</dt>
+              <dd>{home || t("Inherit upstream default")}</dd>
+              <dt>{t("Active program source")}</dt>
+              <dd>{activeProgramSource(snapshot, t)}</dd>
+            </dl>
+            <p>
+              {t(
+                "Choose a version and install it with the bundled runtime, or select an already built local directory.",
+              )}
+            </p>
+            <div className="button-row">
+              <ActionButton
+                tone="primary"
+                disabled={prepareDisabled}
+                onClick={() => void installManaged()}
+              >
+                {t("Choose version and install")}
+              </ActionButton>
+              <ActionButton
+                disabled={prepareDisabled}
+                onClick={() => {
+                  setChooseExternal(true);
+                  setStep(1);
+                }}
+              >
+                {t("Use an already built directory")}
+              </ActionButton>
+              <ActionButton onClick={() => props.openSettings?.()}>
+                {t("Open Settings")}
+              </ActionButton>
+            </div>
+            <p className="field-help">
+              {t(
+                "Recommended for most setups: choose a version and install it with the bundled runtime.",
+              )}
+            </p>
+            {installing && (
+              <p className="field-help">
+                {t("An installation is already in progress; wait for it to finish.")}
+              </p>
+            )}
+            {sourceDisabled && !installing && (
+              <p className="field-help">{t("Stop Harness before changing its program source.")}</p>
+            )}
+          </Panel>
+        </section>
+      )}
+      {step === 1 && (
+        <section>
+          {external || chooseExternal ? (
+            <>
+              <Panel title={t("External directory")} icon={<Package size={18} />}>
+                {external ? (
+                  <>
+                    <p>{external}</p>
+                    <p>
+                      {t(
+                        "The selected external program is used directly. Nexus does not install or build its files.",
+                      )}
+                    </p>
+                  </>
+                ) : (
+                  <p>
+                    {t(
+                      "Select an already built Harness directory below; Nexus uses it directly and does not install or build its files.",
+                    )}
+                  </p>
+                )}
+              </Panel>
+              <HarnessSourcePanel {...props} />
+              <div className="form-actions">
+                <ActionButton disabled={!external || !ready} onClick={() => setStep(2)}>
+                  {t("Use this external Harness")}
+                </ActionButton>
+              </div>
+            </>
+          ) : (
+            <UpdatesView {...props} embedded autoLoadTags={step === 1} />
+          )}
+          <div className="form-actions">
+            <ActionButton onClick={() => setStep(0)}>{t("Previous step")}</ActionButton>
+            {!external && !chooseExternal && (
+              <ActionButton
+                tone="primary"
+                disabled={!ready || busyAction !== null}
+                onClick={() => setStep(2)}
+              >
+                {t("Next step")}
+              </ActionButton>
+            )}
+          </div>
+        </section>
+      )}
+      {step === 2 && (
+        <section>
+          <Panel title={t("Check and start")} icon={<CheckCircle size={18} />}>
+            {started ? (
+              <>
+                <StatusPill label={t("Harness is starting or running")} tone="good" />
+                <p>{t("Harness is starting or running. Open the Workbench to use it.")}</p>
+                <ActionButton tone="primary" onClick={() => props.openWorkbench?.()}>
+                  {t("Open Workbench")}
+                </ActionButton>
+              </>
+            ) : (
+              <>
+                <BasicStartupCheck
+                  disabled={busyAction !== null || !!snapshot.lifecycleBusy}
+                  recheckEpoch={1}
+                  onResult={setCheckResult}
+                />
+                <StartupOperationPanel
+                  available={startupAvailable}
+                  identity={`${stringValue(snapshot.health, "instance_id")}:${stringValue(snapshot.health, "data_root_id")}`}
+                />
+                <div className="form-actions">
+                  <ActionButton onClick={() => setStep(1)}>{t("Previous step")}</ActionButton>
+                  <ActionButton
+                    tone="primary"
+                    disabled={busyAction !== null || !checksReady || !startupAvailable || !ready}
+                    onClick={() =>
+                      void props.runAction(t("Start Harness"), "/v1/harness", { action: "start" })
+                    }
+                  >
+                    {t("Start Harness")}
+                  </ActionButton>
+                </div>
+                {checksReady && (
+                  <p className="field-help">
+                    {t("All checks passed. Start Harness when you are ready.")}
+                  </p>
+                )}
+                {checkResult && !booleanValue(checkResult, "ready") && (
+                  <p className="field-help">
+                    {t("Resolve the blocked checks above, then start Harness.")}
+                  </p>
+                )}
+              </>
+            )}
+          </Panel>
+        </section>
+      )}
     </>
   );
 }
@@ -272,6 +362,7 @@ export function CompatibilitySummary({
               });
   return (
     <Panel title={t("Startup compatibility check")} icon={<SlidersHorizontal size={18} />}>
+      <PluginDeclarations report={report} />
       <p>
         {t("Source profile")}: {source}
         {hasReport && (
@@ -755,5 +846,57 @@ export function BasicStartupCheck({
         </div>
       )}
     </section>
+  );
+}
+
+function PluginDeclarations({ report }: { report: JsonObject }) {
+  const { t } = useI18n();
+  const rows = arrayValue(report, "declarations");
+  const omitted = numberValue(report, "declarations_omitted") ?? 0;
+  if (!rows.length && !omitted) return null;
+  return (
+    <details>
+      <summary>{t("Plugin version declarations")}</summary>
+      <p>
+        {t("Local manifest declarations only. A match does not guarantee runtime compatibility.")}
+      </p>
+      {omitted > 0 && (
+        <p role="status">
+          {t("Declaration details omitted: {count}. This does not affect the startup check.", {
+            count: omitted,
+          })}
+        </p>
+      )}
+      {rows.map((raw, i) => {
+        const row = asObject(raw);
+        const status = stringValue(row, "status");
+        return (
+          <div className="status-block" key={i}>
+            <strong>
+              {stringValue(row, "package")} {stringValue(row, "version")}
+            </strong>
+            <StatusPill
+              tone={status === "mismatch" ? "warn" : status === "match" ? "good" : "neutral"}
+              label={
+                status === "mismatch"
+                  ? t("Declared mismatch")
+                  : status === "match"
+                    ? t("Declared match")
+                    : t("Declaration unknown")
+              }
+            />
+            {arrayValue(row, "declarations").map((raw, j) => {
+              const d = asObject(raw);
+              return (
+                <span key={j}>
+                  {stringValue(d, "dependency")}: {stringValue(d, "required") || "?"} ·{" "}
+                  {stringValue(d, "actual") || "?"}
+                </span>
+              );
+            })}
+          </div>
+        );
+      })}
+    </details>
   );
 }

@@ -9,6 +9,8 @@ const START_WAIT_SECS: u64 = nexus_launcher_core::DEFAULT_START_WAIT_SECS;
 #[derive(Debug, serde::Serialize)]
 struct BridgeError {
     #[serde(skip_serializing_if = "Option::is_none")]
+    kind: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     preflight: Option<Value>,
     code: String,
     message: String,
@@ -18,7 +20,7 @@ struct BridgeError {
 }
 impl From<String> for BridgeError {
     fn from(message: String) -> Self {
-        Self { preflight: None, code: "launcher_error".into(), message, retryable: false, actions: vec![], status: None }
+        Self { kind: None, preflight: None, code: "launcher_error".into(), message, retryable: false, actions: vec![], status: None }
     }
 }
 impl From<nexus_launcher_core::AgentClientError> for BridgeError {
@@ -32,11 +34,11 @@ impl From<nexus_launcher_core::AgentClientError> for BridgeError {
                 "harness_start_paused" => vec!["open_recovery".into()],
                 _ => vec![],
             };
-            return Self { preflight: document.get("preflight").cloned(), code, message: document.get("message").and_then(Value::as_str).unwrap_or(&message).to_owned(),
-                retryable: matches!(status.as_u16(), 408 | 429 | 502 | 503 | 504), actions, status: Some(status.as_u16()) };
+            return Self { kind: document.get("kind").and_then(Value::as_str).map(str::to_owned), preflight: document.get("preflight").cloned(), code, message: document.get("message").and_then(Value::as_str).unwrap_or(&message).to_owned(),
+                retryable: document.get("retryable").and_then(Value::as_bool).unwrap_or(false) || matches!(status.as_u16(), 408 | 429 | 502 | 503 | 504), actions, status: Some(status.as_u16()) };
         }
         let retryable = matches!(&error, nexus_launcher_core::AgentClientError::Transport(_));
-        Self { preflight: None, code: if retryable { "agent_transport_error" } else { "agent_protocol_error" }.into(), message: error.to_string(), retryable,
+        Self { kind: None, preflight: None, code: if retryable { "agent_transport_error" } else { "agent_protocol_error" }.into(), message: error.to_string(), retryable,
             actions: vec!["check_agent".into()], status: None }
     }
 }

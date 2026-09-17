@@ -950,7 +950,9 @@ server.listen(0, '127.0.0.1', () => console.log('dsh web: http://127.0.0.1:' + s
     let report = compatibility::latest(&state.paths).unwrap();
     assert_eq!(report.status, "isolated");
     assert_eq!(report.disabled[0].reason, "Disabled by user");
-    assert_eq!(fs::read(&manifest).unwrap(), original);
+    let disabled_manifest: serde_json::Value = serde_json::from_slice(&fs::read(&manifest).unwrap()).unwrap();
+    assert_eq!(disabled_manifest["dsh"]["profile"]["bundles"], serde_json::json!([]));
+    assert_eq!(report.effective_profile, "demo");
     let restored = profile_control(
         State(state.clone()),
         Json(ProfileCommand {
@@ -965,7 +967,9 @@ server.listen(0, '127.0.0.1', () => console.log('dsh web: http://127.0.0.1:' + s
     assert!(compatibility::disabled_plugins(&home, "demo")
         .unwrap()
         .is_empty());
-    assert_eq!(fs::read(&manifest).unwrap(), original);
+    let mut restored: serde_json::Value = serde_json::from_slice(&fs::read(&manifest).unwrap()).unwrap();
+    restored["dsh"]["profile"].as_object_mut().unwrap().remove("nexusIsolationPolicyVersion");
+    assert_eq!(restored, serde_json::from_slice::<serde_json::Value>(original).unwrap());
     // Manual verification in recovery mode executes only the disposable
     // probe, including failure and a subsequent saved isolation choice.
     let mut config = state.config.load().unwrap();
@@ -1020,7 +1024,9 @@ server.listen(0, '127.0.0.1', () => console.log('dsh web: http://127.0.0.1:' + s
         .root
         .join("compatibility/owner-pending.json")
         .exists());
-    assert_eq!(fs::read(&manifest).unwrap(), original);
+    assert_eq!(serde_json::from_slice::<serde_json::Value>(&fs::read(&manifest).unwrap()).unwrap(), disabled_manifest);
+    assert!(!home.join("profiles/.nexus-compatibility-work").exists());
+    assert_eq!(fs::read_dir(state.paths.root.join("compatibility/work")).unwrap().count(), 0);
     fs::remove_dir_all(root).unwrap();
 }
 
@@ -1232,6 +1238,7 @@ async fn profile_selection_preflight_failure_does_not_publish_target() {
     // A profile-switch report grants choices for that unselected target,
     // and consecutive choices must preserve the report and current profile.
     let report = nexus_protocol::CompatibilityReport {
+        declarations: Vec::new(), declarations_omitted: 0,
         checker_version: 1,
         status: "needs_choice".to_owned(),
         source_profile: "target".to_owned(),
@@ -1265,11 +1272,7 @@ async fn profile_selection_preflight_failure_does_not_publish_target() {
     }
     assert_eq!(state.profiles.load().unwrap(), before);
     assert_eq!(super::compatibility::latest(&state.paths), Some(report));
-    let policy: serde_json::Value = serde_json::from_slice(
-        &fs::read(home.join("profiles/.nexus-plugin-isolation/target.json")).unwrap(),
-    )
-    .unwrap();
-    assert_eq!(policy, serde_json::json!(["plugin-one", "plugin-two"]));
+    assert_eq!(super::compatibility::disabled_plugins(&home, "target").unwrap(), vec!["plugin-one", "plugin-two"]);
     let response = super::profile_list_response(&state, before).unwrap();
     assert_eq!(response.disabled_plugins, vec!["plugin-one", "plugin-two"]);
     fs::remove_dir_all(root).unwrap();

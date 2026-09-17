@@ -53,7 +53,10 @@ pub const AGENT_BINARY_ENV: &str = "NEXUS_AGENT_BIN";
 pub const AGENT_DATA_ROOT_HEADER: &str = "x-nexus-data-root-id";
 pub const AGENT_INSTANCE_HEADER: &str = "x-nexus-instance-id";
 
-const DEFAULT_CONNECT_TIMEOUT: Duration = Duration::from_secs(2);
+// Agent connections are exclusively IPv4 loopback. Bound absent-listener
+// retries separately from the request budget; slow business work still gets
+// its full response deadline after the TCP connection is established.
+const DEFAULT_CONNECT_TIMEOUT: Duration = Duration::from_millis(300);
 const DEFAULT_REQUEST_TIMEOUT: Duration = Duration::from_secs(8);
 const OFFLINE_PREVIEW_TIMEOUT: Duration = Duration::from_secs(1830);
 const AGENT_ROUTES: &[&str] = &[
@@ -459,7 +462,12 @@ fn response_message(bytes: &[u8], status: StatusCode) -> String {
     serde_json::from_slice::<ErrorResponse>(bytes)
         .map(|body| body.message)
         .or_else(|_| serde_json::from_slice::<Value>(bytes).map(|value| value.to_string()))
-        .unwrap_or_else(|_| format!("HTTP {status}"))
+        .unwrap_or_else(|_| {
+            let detail = String::from_utf8_lossy(bytes);
+            let detail = detail.trim();
+            if detail.is_empty() { format!("HTTP {status}") }
+            else { format!("HTTP {status}: {}", detail.chars().take(4096).collect::<String>()) }
+        })
 }
 
 pub fn is_allowed_agent_route(path: &str) -> bool {
@@ -1282,6 +1290,13 @@ fn validate_resource_dir(path: &Path) -> Result<(), AgentRuntimeError> {
 }
 
 fn add_target_candidates(candidates: &mut Vec<PathBuf>, start: &Path) {
+    // Walking ancestors for a Cargo target directory is a source-tree
+    // development convenience. A packaged app must not silently adopt an old
+    // Agent from a stray target directory, so release builds skip the walk
+    // and rely on the package's own resource locations.
+    if !cfg!(debug_assertions) {
+        return;
+    }
     let mut ancestor = Some(start);
     for _ in 0..8 {
         let Some(path) = ancestor else {
@@ -1449,6 +1464,13 @@ fn ensure_runtime_lock_available(paths: &NexusPaths) -> Result<(), AgentRuntimeE
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn plain_text_rejections_keep_bounded_parser_details() {
+        let message = response_message(b"Failed to deserialize JSON: unknown field `request_id`", StatusCode::UNPROCESSABLE_ENTITY);
+        assert!(message.contains("unknown field `request_id`"));
+        assert_eq!(response_message(b"", StatusCode::BAD_REQUEST), "HTTP 400 Bad Request");
+        assert!(response_message(&vec![b'x'; 8000], StatusCode::BAD_REQUEST).len() < 4200);
+    }
     use nexus_protocol::HealthResponse;
     use tokio::{
         io::{AsyncReadExt, AsyncWriteExt},

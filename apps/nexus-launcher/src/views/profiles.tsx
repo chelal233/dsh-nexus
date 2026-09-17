@@ -1,3 +1,4 @@
+import { confirmAction, BusyOverlay } from "../confirmation";
 import { type ViewProps, type JsonObject } from "../app-types";
 import { stringValue, arrayValue, asObject, booleanValue, numberValue } from "../json-values";
 import { proxyRequest } from "../agent-bridge";
@@ -40,13 +41,22 @@ export function ProfilesView(props: ViewProps) {
   const { t, locale } = useI18n();
   const { snapshot, busyAction, runAction } = props;
   const active = stringValue(snapshot.profiles, "active_profile");
-  const [expandedProfiles, setExpandedProfiles] = useState<string[]>(() => props.checkpointFocus ? [props.checkpointFocus.profile] : []);
+  const [expandedProfiles, setExpandedProfiles] = useState<string[]>(() =>
+    props.checkpointFocus ? [props.checkpointFocus.profile] : [],
+  );
   useEffect(() => {
-    if (props.checkpointFocus) setExpandedProfiles(current => current.includes(props.checkpointFocus!.profile) ? current : [...current, props.checkpointFocus!.profile]);
+    if (props.checkpointFocus)
+      setExpandedProfiles((current) =>
+        current.includes(props.checkpointFocus!.profile)
+          ? current
+          : [...current, props.checkpointFocus!.profile],
+      );
   }, [props.checkpointFocus]);
   useEffect(() => {
     if (props.checkpointFocus && expandedProfiles.includes(props.checkpointFocus.profile)) {
-      document.getElementById("profile-checkpoints-" + encodeURIComponent(props.checkpointFocus.profile))?.scrollIntoView({block: "start", behavior: "instant"});
+      document
+        .getElementById("profile-checkpoints-" + encodeURIComponent(props.checkpointFocus.profile))
+        ?.scrollIntoView({ block: "start", behavior: "instant" });
     }
   }, [props.checkpointFocus, expandedProfiles]);
   const [newProfileName, setNewProfileName] = useState("");
@@ -108,16 +118,34 @@ export function ProfilesView(props: ViewProps) {
         )}
       />
       <Panel title={t("Profile catalog")} icon={<SlidersHorizontal size={18} />}>
-        {stringValue(snapshot.profiles, "legacy_selected_source") && <p className="notice degraded">
-          {t("A legacy internal copy is selected. Stop Harness and explicitly select its source; edits in the copy will not overwrite the source:")}
-          <strong>{stringValue(snapshot.profiles, "legacy_selected_source")}</strong>
-        </p>}
-        {stringValue(snapshot.profiles, "retired_profiles_directory") && <div className="status-block">
-          <p>{t("Legacy internal copies are archived intact and no longer used as profiles. Open the archive to inspect and recover any settings or plugin changes.")}</p>
-          <ActionButton disabled={busyAction !== null} onClick={() => void runAction(t("Open legacy archive"), "/v1/profiles", { action: "open_path", target: "retired_profiles" })}>
-            {t("Open legacy archive")}
-          </ActionButton>
-        </div>}
+        {stringValue(snapshot.profiles, "legacy_selected_source") && (
+          <p className="notice degraded">
+            {t(
+              "A legacy internal copy is selected. Stop Harness and explicitly select its source; edits in the copy will not overwrite the source:",
+            )}
+            <strong>{stringValue(snapshot.profiles, "legacy_selected_source")}</strong>
+          </p>
+        )}
+        {stringValue(snapshot.profiles, "retired_profiles_directory") && (
+          <div className="status-block">
+            <p>
+              {t(
+                "Legacy internal copies are archived intact and no longer used as profiles. Open the archive to inspect and recover any settings or plugin changes.",
+              )}
+            </p>
+            <ActionButton
+              disabled={busyAction !== null}
+              onClick={() =>
+                void runAction(t("Open legacy archive"), "/v1/profiles", {
+                  action: "open_path",
+                  target: "retired_profiles",
+                })
+              }
+            >
+              {t("Open legacy archive")}
+            </ActionButton>
+          </div>
+        )}
         <div className="button-row">
           {[
             ["settings", t("Open settings.yaml")],
@@ -221,7 +249,10 @@ export function ProfilesView(props: ViewProps) {
                 )}
                 {expanded && (
                   <div className="profile-children">
-                    <div className="profile-checkpoints" id={"profile-checkpoints-" + encodeURIComponent(name)}>
+                    <div
+                      className="profile-checkpoints"
+                      id={"profile-checkpoints-" + encodeURIComponent(name)}
+                    >
                       <CheckpointsView {...props} embedded profileFilter={name} />
                     </div>
                     <ProfilePlugins {...props} profile={name} />
@@ -510,8 +541,10 @@ export function CheckpointsView({
                     </ActionButton>
                     <ActionButton
                       disabled={gate.disabled}
-                      onClick={() => {
-                        if (window.confirm(t("Restore this snapshot? Harness must be stopped.")))
+                      onClick={async () => {
+                        if (
+                          await confirmAction(t("Restore this snapshot? Harness must be stopped."))
+                        )
                           void runAction(t("Restore snapshot"), "/v1/checkpoints", {
                             action: "restore",
                             id,
@@ -667,9 +700,9 @@ export function ProfilePlugins({
   };
   const removePlugin = async (packageName: string) => {
     if (
-      !window.confirm(
+      !(await confirmAction(
         t("Remove {package} from profile {profile}?", { package: packageName, profile: active }),
-      )
+      ))
     )
       return;
     const token = latestPlugin.current.begin();
@@ -692,6 +725,7 @@ export function ProfilePlugins({
   };
   return (
     <Panel title={t("Plugin inventory")} icon={<Package size={18} />}>
+      <BusyOverlay label={pluginBusy ? t("Operation in progress") : null} />
       <p className="field-help">
         {t(
           "Plugin choices update this profile atomically. Disabled packages stay installed; enabling restores their load order. Stop Harness before making changes.",
@@ -828,7 +862,15 @@ export function ProfilePlugins({
                     tone={removable ? "warn" : "neutral"}
                   />
                   {fixed && <StatusPill label={t("Fixed load position")} tone="neutral" />}
-                  {index < 0 && <span>{t(isolation.disabled ? "Disabled by user" : "Dependency only; not in the load list")}</span>}
+                  {index < 0 && (
+                    <span>
+                      {t(
+                        isolation.disabled
+                          ? "Disabled by user"
+                          : "Dependency only; not in the load list",
+                      )}
+                    </span>
+                  )}
                   <span>{stringValue(item, "version") || t("Unknown version")}</span>
                 </div>
                 <span className="row-meta button-row">
