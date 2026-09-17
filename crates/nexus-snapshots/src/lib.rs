@@ -756,8 +756,14 @@ impl SnapshotStore {
             let staging = validation::is_generated_name(&name, ".staging-snapshot-");
             if !matches!(name.as_str(), "healthy" | "manual") && !staging {
                 return Err(SnapshotError::UnsafePath(format!(
-                    "unidentified snapshot publication orphan: {}",
-                    entry.path().display()
+                    "unidentified entry in the snapshot directory: {}. Only the \
+                     \"healthy\" and \"manual\" slot directories and \".staging-snapshot-*\" \
+                     staging directories are recognized. If you did not create this entry \
+                     (for example a stray desktop.ini or a downloaded file), move it out of \
+                     \"{}\" yourself, then retry the snapshot operation. Nexus does not \
+                     delete or rename unrecognized files on its own.",
+                    entry.path().display(),
+                    self.snapshot_root.display()
                 )));
             }
             validation::validate_directory_tree(&self.data_root, &entry.path())?;

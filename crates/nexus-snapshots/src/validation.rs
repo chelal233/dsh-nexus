@@ -1,6 +1,6 @@
 use std::{
     collections::BTreeSet,
-    fs::{self, File, OpenOptions},
+    fs::{self, OpenOptions},
     io::{Read, Write},
     path::{Component, Path, PathBuf},
 };
@@ -397,8 +397,26 @@ pub(crate) fn read_regular_bounded(path: &Path, limit: u64) -> Result<Option<(Ve
             limit,
         });
     }
-    let file = File::open(path)
+    // Open without following reparse points, then re-verify through the open
+    // handle so a swap between the check and the open cannot redirect the read.
+    let mut options = fs::OpenOptions::new();
+    options.read(true);
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::OpenOptionsExt;
+        options.custom_flags(0x0020_0000); // FILE_FLAG_OPEN_REPARSE_POINT
+    }
+    let file = options.open(path)
         .map_err(|error| SnapshotError::io(format!("open file {}", path.display()), error))?;
+    let opened = file.metadata().map_err(|error| {
+        SnapshotError::io(format!("inspect file {}", path.display()), error)
+    })?;
+    if !opened.is_file() || is_link_or_reparse(&opened) {
+        return Err(SnapshotError::UnsafePath(format!(
+            "snapshot source identity changed to a non-regular file: {}",
+            path.display()
+        )));
+    }
     let mut bytes = Vec::with_capacity(metadata.len() as usize);
     file.take(limit + 1)
         .read_to_end(&mut bytes)
