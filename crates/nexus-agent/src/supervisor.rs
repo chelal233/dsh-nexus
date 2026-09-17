@@ -3416,9 +3416,12 @@ mod tests {
         assert!(!super::automatic_web_readiness_supported(&spec,Some(&slot),&home,"web",&spec.args));
 
         let listener=std::net::TcpListener::bind("127.0.0.1:0").unwrap(); let port=listener.local_addr().unwrap().port();
-        assert_eq!(super::windows_listener_owners("127.0.0.1",port).unwrap(),vec![std::process::id()]);
-        let job=crate::dsh::WindowsJob::new().unwrap();
-        assert!(!job.contains_pid(std::process::id()).unwrap(),"an unrelated live listener is not owned by a new Harness job");
+        #[cfg(windows)]
+        {
+            assert_eq!(super::windows_listener_owners("127.0.0.1",port).unwrap(),vec![std::process::id()]);
+            let job=crate::dsh::WindowsJob::new().unwrap();
+            assert!(!job.contains_pid(std::process::id()).unwrap(),"an unrelated live listener is not owned by a new Harness job");
+        }
         let (session,mut stdout,stderr)=super::create_harness_log_session(&paths,1,true).unwrap();
         let mut observer=nexus_launcher_core::HarnessLogObserver::default();
         use std::io::Write;
@@ -3432,7 +3435,7 @@ mod tests {
         assert!(super::observed_web_readiness(&paths,&session,&mut observer).is_none());
         assert!(super::observed_web_readiness(&paths,&next,&mut observer).is_none(),"old log token cannot complete a new run");
         assert!(nexus_core::HarnessLogSessionStore::new(paths.clone()).read().unwrap().unwrap().launch_pending);
-        drop((stdout,stderr,next_out,next_err,listener,job)); fs::remove_dir_all(root).unwrap();
+        drop((stdout,stderr,next_out,next_err,listener)); fs::remove_dir_all(root).unwrap();
     }
 
     #[cfg(windows)]
