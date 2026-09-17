@@ -1389,7 +1389,7 @@ fn replace_file(source: &Path, destination: &Path) -> Result<()> {
 pub(crate) fn sync_directory(directory: &Path) -> Result<()> {
     #[cfg(unix)]
     {
-        File::open(directory)
+        std::fs::File::open(directory)
             .and_then(|file| file.sync_all())
             .map_err(|error| {
                 SnapshotError::io(format!("sync directory {}", directory.display()), error)
