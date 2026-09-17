@@ -38,6 +38,15 @@ impl Child {
             return Ok(());
         }
         let error = io::Error::last_os_error();
+        // Darwin killpg excludes zombies and returns EPERM when none remain
+        // signalable. Never suppress a real permission failure: independently
+        // prove the owned group has no live members before accepting it.
+        #[cfg(target_os = "macos")]
+        if error.raw_os_error() == Some(libc::EPERM) {
+            if let Some(group) = self.group {
+                if group_has_no_live_members(group)? { return Ok(()); }
+            }
+        }
         if error.raw_os_error() == Some(libc::ESRCH) {
             Ok(())
         } else {
@@ -82,6 +91,32 @@ impl Child {
         self.signal(libc::SIGKILL)?;
         self.wait().await.map(|_| ())
     }
+}
+
+#[cfg(target_os = "macos")]
+fn group_has_no_live_members(group: i32) -> io::Result<bool> {
+    // PROC_PGRP_ONLY from Apple's proc_info.h. A full buffer is inconclusive.
+    let mut pids = [0i32; 4096];
+    let capacity = std::mem::size_of_val(&pids) as i32;
+    let bytes = unsafe { libc::proc_listpids(2, group as u32, pids.as_mut_ptr().cast(), capacity) };
+    if bytes < 0 { return Err(io::Error::last_os_error()); }
+    if bytes >= capacity || bytes as usize % std::mem::size_of::<i32>() != 0 {
+        return Err(io::Error::other("Incomplete process group inspection"));
+    }
+    for &pid in &pids[..bytes as usize / std::mem::size_of::<i32>()] {
+        if pid <= 0 { continue; }
+        let mut info = std::mem::MaybeUninit::<libc::proc_bsdinfo>::zeroed();
+        let size = std::mem::size_of::<libc::proc_bsdinfo>() as i32;
+        let read = unsafe { libc::proc_pidinfo(pid, libc::PROC_PIDTBSDINFO, 0, info.as_mut_ptr().cast(), size) };
+        if read != size {
+            let error = io::Error::last_os_error();
+            if read == 0 && error.raw_os_error() == Some(libc::ESRCH) { continue; }
+            return Err(io::Error::other(format!("Cannot inspect process {pid}: {error}")));
+        }
+        let info = unsafe { info.assume_init() };
+        if info.pbi_pgid == group as u32 && info.pbi_status != libc::SZOMB { return Ok(false); }
+    }
+    Ok(true)
 }
 
 impl Drop for Child {
