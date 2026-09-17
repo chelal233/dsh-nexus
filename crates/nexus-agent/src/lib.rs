@@ -1,4 +1,13 @@
 //! Headless Nexus control-plane process.
+// CI can select its native PowerShell instead of assuming Windows PowerShell
+// exists at the same System32 location on every Windows architecture.
+#[cfg(test)]
+fn test_powershell() -> std::path::PathBuf {
+    std::env::var_os("NEXUS_TEST_POWERSHELL")
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|| std::path::PathBuf::from("powershell.exe"))
+}
+
 mod config_api;
 use config_api::{config_control, config_response_for_paths};
 #[cfg(test)]

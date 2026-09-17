@@ -3444,8 +3444,7 @@ mod tests {
         for observe_exit in [false, true] {
             let root = std::env::temp_dir().join(format!("nexus-harness-job-{}", unix_time_nanos_for_update()));
             fs::create_dir_all(&root).unwrap();
-            let powershell = PathBuf::from(std::env::var_os("SystemRoot").unwrap())
-                .join("System32/WindowsPowerShell/v1.0/powershell.exe");
+            let powershell = crate::test_powershell();
             let mut command = tokio::process::Command::new(&powershell);
             command.args(["-NoProfile", "-NonInteractive", "-Command",
                 "$p=Start-Process -FilePath $env:NEXUS_JOB_TEST_POWERSHELL -ArgumentList '-NoProfile -NonInteractive -Command Start-Sleep -Seconds 300' -WindowStyle Hidden -PassThru; [IO.File]::WriteAllText($env:NEXUS_JOB_TEST_PID,[string]$p.Id)"])
@@ -3520,7 +3519,7 @@ mod tests {
     fn immediate_nonzero_marker_command(marker: &std::path::Path) -> (PathBuf, Vec<String>) {
         if cfg!(windows) {
             (
-                PathBuf::from("powershell.exe"),
+                crate::test_powershell(),
                 vec![
                     "-NoProfile".to_owned(),
                     "-Command".to_owned(),
@@ -4065,7 +4064,7 @@ mod tests {
         let marker = root.join("duplicate-bootstrap.txt");
         let (program, args) = if cfg!(windows) {
             (
-                PathBuf::from("powershell.exe"),
+                crate::test_powershell(),
                 vec![
                     "-NoProfile".to_owned(),
                     "-Command".to_owned(),
@@ -4496,7 +4495,7 @@ mod tests {
         });
         let (program, args) = if cfg!(windows) {
             (
-                PathBuf::from("powershell.exe"),
+                crate::test_powershell(),
                 vec![
                     "-NoProfile".to_owned(),
                     "-Command".to_owned(),
@@ -4571,7 +4570,7 @@ mod tests {
         });
         let (program, args) = if cfg!(windows) {
             (
-                PathBuf::from("powershell.exe"),
+                crate::test_powershell(),
                 vec![
                     "-NoProfile".to_owned(),
                     "-Command".to_owned(),
@@ -4913,7 +4912,7 @@ mod tests {
         let paths = NexusPaths::from_root(root.clone());
         let (program, args) = if cfg!(windows) {
             (
-                PathBuf::from("powershell.exe"),
+                crate::test_powershell(),
                 vec![
                     "-NoProfile".to_owned(),
                     "-Command".to_owned(),
@@ -5040,7 +5039,7 @@ mod tests {
         let paths = NexusPaths::from_root(root.clone());
         let (program, args) = if cfg!(windows) {
             (
-                PathBuf::from("powershell.exe"),
+                crate::test_powershell(),
                 vec![
                     "-NoProfile".to_owned(),
                     "-Command".to_owned(),
@@ -5095,7 +5094,7 @@ mod tests {
         let paths = NexusPaths::from_root(root.clone());
         let (program, args) = if cfg!(windows) {
             (
-                PathBuf::from("powershell.exe"),
+                crate::test_powershell(),
                 vec![
                     "-NoProfile".to_owned(),
                     "-Command".to_owned(),
@@ -5183,7 +5182,7 @@ mod tests {
         let port = listener.local_addr().expect("readiness address").port();
         let (program, args) = if cfg!(windows) {
             (
-                PathBuf::from("powershell.exe"),
+                crate::test_powershell(),
                 vec![
                     "-NoProfile".to_owned(),
                     "-Command".to_owned(),
@@ -5296,7 +5295,7 @@ mod tests {
         let paths = NexusPaths::from_root(root.clone());
         let (program, args) = if cfg!(windows) {
             (
-                PathBuf::from("powershell.exe"),
+                crate::test_powershell(),
                 vec![
                     "-NoProfile".to_owned(),
                     "-Command".to_owned(),
@@ -5364,7 +5363,7 @@ mod tests {
                 harness: Some(HarnessLaunchSpec {
                     mode: Default::default(),
                     program: if cfg!(windows) {
-                        PathBuf::from("powershell.exe")
+                        crate::test_powershell()
                     } else {
                         PathBuf::from("sleep")
                     },
@@ -5495,7 +5494,7 @@ mod tests {
         });
         let (program, args) = if cfg!(windows) {
             (
-                PathBuf::from("powershell.exe"),
+                crate::test_powershell(),
                 vec![
                     "-NoProfile".to_owned(),
                     "-Command".to_owned(),
@@ -5536,7 +5535,7 @@ mod tests {
             .expect("Harness config writes");
         let supervisor = HarnessSupervisor::new(paths).expect("supervisor creates");
         let mut short = if cfg!(windows) {
-            let mut command = tokio::process::Command::new("powershell.exe");
+            let mut command = tokio::process::Command::new(crate::test_powershell());
             command.args([
                 "-NoProfile",
                 "-Command",
@@ -6310,7 +6309,7 @@ mod tests {
         });
         let (program, args) = if cfg!(windows) {
             (
-                PathBuf::from("powershell.exe"),
+                crate::test_powershell(),
                 vec![
                     "-NoProfile".to_owned(),
                     "-Command".to_owned(),
@@ -6483,7 +6482,7 @@ mod tests {
         });
         let (program, args) = if cfg!(windows) {
             (
-                PathBuf::from("powershell.exe"),
+                crate::test_powershell(),
                 vec![
                     "-NoProfile".to_owned(),
                     "-Command".to_owned(),
@@ -6718,7 +6717,7 @@ mod tests {
         });
         let (program, args) = if cfg!(windows) {
             (
-                PathBuf::from("powershell.exe"),
+                crate::test_powershell(),
                 vec![
                     "-NoProfile".to_owned(),
                     "-Command".to_owned(),

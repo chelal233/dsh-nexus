@@ -1700,7 +1700,7 @@ async fn startup_rolls_back_prepared_content_and_finishes_committed_content() {
 fn release_marker_command(marker: &Path) -> (PathBuf, Vec<String>) {
     if cfg!(windows) {
         (
-            PathBuf::from("powershell.exe"),
+            crate::test_powershell(),
             vec![
                 "-NoProfile".to_owned(),
                 "-Command".to_owned(),
@@ -2557,7 +2557,7 @@ async fn checkpoint_restore_survives_cancellation_serializes_start_and_rolls_bac
         .select("web")
         .expect("profile selection loads");
     let mut command = if cfg!(windows) {
-        let mut command = tokio::process::Command::new("powershell.exe");
+        let mut command = tokio::process::Command::new(crate::test_powershell());
         command.args(["-NoProfile", "-Command", "Start-Sleep -Seconds 30"]);
         command
     } else {

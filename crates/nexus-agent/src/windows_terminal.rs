@@ -93,7 +93,7 @@ mod tests {
         let root = std::env::temp_dir().join(format!("nexus-console-{}-{}", std::process::id(), nexus_core::agent_auth::random_hex().unwrap()));
         std::fs::create_dir(&root).unwrap();
         let result = root.join("console result.txt");
-        let shell = std::path::PathBuf::from(std::env::var_os("SystemRoot").unwrap()).join("System32/WindowsPowerShell/v1.0/powershell.exe");
+        let shell = crate::test_powershell();
         let mut command = Command::new(shell);
         command.args(["-NoLogo", "-NoProfile", "-NoExit", "-Command", "[IO.File]::WriteAllText($env:NEXUS_CONSOLE_RESULT, ('{0}|{1}|{2}|{3}' -f [Console]::IsInputRedirected, [Console]::IsOutputRedirected, $env:NEXUS_CONSOLE_VALUE, (Get-Location).Path))"])
             .current_dir(std::fs::canonicalize(&root).unwrap()).env("NEXUS_CONSOLE_RESULT", &result).env("NEXUS_CONSOLE_VALUE", "space %PATH% & ! ' 中文");

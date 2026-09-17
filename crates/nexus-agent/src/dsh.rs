@@ -1722,8 +1722,7 @@ fs.writeFileSync(path.join(process.cwd(), 'materialized.json'), JSON.stringify({
 
     #[cfg(windows)]
     fn powershell() -> PathBuf {
-        PathBuf::from(std::env::var_os("SystemRoot").expect("SystemRoot exists"))
-            .join("System32/WindowsPowerShell/v1.0/powershell.exe")
+        crate::test_powershell()
     }
 
     #[cfg(windows)]
@@ -1752,7 +1751,7 @@ while ($true) {
         fs::write(
             &parent_script,
             format!(
-                r#"$child = Start-Process -FilePath "$PSHOME\powershell.exe" -ArgumentList @('-NoProfile','-File','{}','{}') -PassThru
+                r#"$child = Start-Process -FilePath "$((Get-Process -Id $PID).Path)" -ArgumentList @('-NoProfile','-File','{}','{}') -PassThru
 $child.Id | Set-Content -LiteralPath '{}'
 while ($true) {{ Start-Sleep -Seconds 1 }}
 "#,

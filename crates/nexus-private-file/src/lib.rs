@@ -104,8 +104,8 @@ mod unix {
         let available = u64::try_from(stat.f_bavail).map_err(|_| io::Error::other("negative free-block count"))?
             .checked_mul(u64::try_from(stat.f_frsize).unwrap_or(0))
             .ok_or_else(|| io::Error::other("Space budget overflow"))?;
-        let fsid = stat.f_fsid.val;
-        Ok((format!("{:x}-{:x}", fsid[0] as u64, fsid[1] as u64), available))
+        // statvfs exposes a scalar filesystem id (unlike statfs::f_fsid).
+        Ok((format!("{:x}", stat.f_fsid), available))
     }
 }
 

@@ -2437,9 +2437,9 @@ mod tests {
             let child = root.join("child.ps1");
             let parent = root.join("parent.ps1");
             fs::write(&child, format!("while ($true) {{ Add-Content -LiteralPath '{}' -Value 'live'; Start-Sleep -Milliseconds 20 }}", marker.display())).unwrap();
-            fs::write(&parent, format!(r#"Start-Process -WindowStyle Hidden -FilePath "$PSHOME\powershell.exe" -ArgumentList @('-NoProfile','-File','{}')
+            fs::write(&parent, format!(r#"Start-Process -WindowStyle Hidden -FilePath "$((Get-Process -Id $PID).Path)" -ArgumentList @('-NoProfile','-File','{}')
 while ($true) {{ Start-Sleep -Seconds 1 }}"#, child.display())).unwrap();
-            let mut command = std::process::Command::new("powershell.exe");
+            let mut command = std::process::Command::new(crate::test_powershell());
             command
                 .args(["-NoProfile", "-File"])
                 .arg(&parent)

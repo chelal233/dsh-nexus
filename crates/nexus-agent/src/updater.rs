@@ -953,8 +953,8 @@ def	refs/tags/v0.9.0^{}
         let child_script = root.join("child.ps1");
         fs::write(&child_script, format!("while ($true) {{ Add-Content -LiteralPath '{}' -Value 'owned'; Start-Sleep -Milliseconds 20 }}", marker.display().to_string().replace('\'', "''"))).unwrap();
         let parent_script = root.join("parent.ps1");
-        fs::write(&parent_script, format!("Start-Process -WindowStyle Hidden -FilePath \"$PSHOME\\powershell.exe\" -ArgumentList @('-NoProfile','-File','{}'); while ($true) {{ Start-Sleep -Seconds 1 }}", child_script.display().to_string().replace('\'', "''"))).unwrap();
-        let powershell = std::path::PathBuf::from(std::env::var_os("SystemRoot").unwrap()).join("System32/WindowsPowerShell/v1.0/powershell.exe");
+        fs::write(&parent_script, format!("Start-Process -WindowStyle Hidden -FilePath \"$((Get-Process -Id $PID).Path)\" -ArgumentList @('-NoProfile','-File','{}'); while ($true) {{ Start-Sleep -Seconds 1 }}", child_script.display().to_string().replace('\'', "''"))).unwrap();
+        let powershell = crate::test_powershell();
         let args = vec!["-NoProfile".into(), "-File".into(), parent_script.to_string_lossy().into_owned()];
         let owned_paths = paths.clone(); let owned_token = token.clone();
         let command = tokio::spawn(async move { run_logged_command(&owned_paths, "build", "tree", &powershell, &args, None,

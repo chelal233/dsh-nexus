@@ -59,6 +59,14 @@ jobs:
           if [[ "$RUNNER_OS" == "macOS" ]]; then
             echo "TMPDIR=$(cd "$RUNNER_TEMP" && pwd -P)/" >> "$GITHUB_ENV"
           fi
+      - name: Select native Windows test shell
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $shell = (Get-Process -Id $PID).Path
+          & $shell -NoLogo -NoProfile -NonInteractive -Command 'exit 0'
+          if ($LASTEXITCODE -ne 0) { throw 'Test PowerShell failed its startup probe' }
+          "NEXUS_TEST_POWERSHELL=$shell" >> $env:GITHUB_ENV
       - name: Locked dependencies and regression checks
         run: |
           pnpm install --frozen-lockfile
