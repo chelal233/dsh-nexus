@@ -14,7 +14,7 @@ jobs:
     outputs:
       run: ${{ steps.source.outputs.run }}
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           persist-credentials: false
       - name: Find a complete successful build of the tagged commit
@@ -48,17 +48,19 @@ jobs:
     permissions:
       contents: write
       actions: read
+      id-token: write
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           persist-credentials: false
-      - uses: actions/download-artifact@v7
+      - uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
         with:
           pattern: release-*
           path: release-assets
           merge-multiple: true
           github-token: ${{ github.token }}
           run-id: ${{ needs.source.outputs.run || github.run_id }}
+      - uses: sigstore/cosign-installer@f713795cb21599bc4e5c4b58cbad1da852d7eeb9 # v3
       - name: Verify all packages and publish downloads
         env:
           GH_TOKEN: ${{ github.token }}
@@ -68,6 +70,19 @@ jobs:
           set -euo pipefail
           node --test .github/scripts/verify-release-assets.test.mjs
           node .github/scripts/verify-release-assets.mjs release-assets "$RELEASE_TAG" "$(git rev-parse HEAD)"
+          # Aggregate the per-architecture checksum manifests into one signed
+          # download. The keyless signature binds the manifest to this exact
+          # workflow running at the release tag, so users can verify artifact
+          # provenance without trusting the upload itself.
+          cat release-assets/*_SHA256SUMS.txt > release-assets/SHA256SUMS.txt
+          cosign sign-blob --yes release-assets/SHA256SUMS.txt \
+            --output-signature release-assets/SHA256SUMS.txt.sig \
+            --output-certificate release-assets/SHA256SUMS.txt.crt
+          cosign verify-blob release-assets/SHA256SUMS.txt \
+            --signature release-assets/SHA256SUMS.txt.sig \
+            --certificate release-assets/SHA256SUMS.txt.crt \
+            --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+            --certificate-identity-regexp "^https://github.com/${GITHUB_REPOSITORY}/\.github/workflows/release\.yml@refs/tags/"
           gh release create "$RELEASE_TAG" release-assets/* --repo "$GITHUB_REPOSITORY" \
             --verify-tag --draft --prerelease --title "Nexus Launcher $RELEASE_TAG" \
             --notes-file .github/RELEASE_TEMPLATE.md

@@ -16,7 +16,7 @@ Nexus 是面向 Windows 和 macOS 的 Harness 启动器，提供安装与版本�
 | macOS | Intel x64 | DMG | 24.20.0 | macOS 13.5 或更新 |
 | macOS | Apple Silicon ARM64 | DMG | 24.20.0 | macOS 13.5 或更新 |
 
-安装包统一命名为 `dsh-nexus_<版本>_<系统>_<架构>.<扩展名>`，例如 `dsh-nexus_0.1.3_windows_x64.exe`。构建编号和精确 Rust target 保留在同名前缀的 `_build.json` 中。
+安装包统一命名为 `dsh-nexus_<版本>_<系统>_<架构>.<扩展名>`，例如 `dsh-nexus_0.1.3_windows_x64.exe`。构建编号和精确 Rust target 保留在同名前缀的 `_build.json` 中。发布同时附带聚合的 `SHA256SUMS.txt` 及其 Sigstore 签名，校验方法见[安全问题报告](SECURITY.md)。
 
 macOS 不提供 x86 32 位版本；其他架构及 Linux 尚未纳入发行矩阵。Windows 包含 WebView2 离线安装器，macOS 使用系统 WKWebView。Windows 包未签名；macOS 使用 ad-hoc 签名但未 Apple 公证，当前为开发预发布候选。不要混用不同构建的附件。
 

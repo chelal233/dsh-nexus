@@ -9,3 +9,20 @@
 本地回环地址不等于授权。Nexus Agent 的身份和访问验证属于产品边界；运行的 Harness 和插件不是被 Nexus 隔离的安全沙箱。用户应仅运行自己信任的程序和补丁。
 
 目前 0.1.2 仍处于候选验证阶段，尚无长期支持版本承诺。代码签名延期不意味着免除发布来源、产物完整性或第三方许可检查。
+
+## 验证发布下载
+
+发布草稿附带聚合校验清单 `SHA256SUMS.txt`，以及它的 Sigstore keyless 签名 `SHA256SUMS.txt.sig` 与证书 `SHA256SUMS.txt.crt`。签名由本仓库的 `release.yml` 工作流在发布时生成，绑定该工作流在对应 tag 上的运行身份。安装包仍无传统代码签名；这份验签证明的是"产物清单来自本仓库 CI"，不是操作系统级信任。
+
+下载全部文件后执行：
+
+```sh
+cosign verify-blob SHA256SUMS.txt \
+  --signature SHA256SUMS.txt.sig \
+  --certificate SHA256SUMS.txt.crt \
+  --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+  --certificate-identity-regexp '^https://github.com/chelal233/dsh-nexus/\.github/workflows/release\.yml@refs/tags/'
+sha256sum -c SHA256SUMS.txt
+```
+
+需要安装 [cosign](https://github.com/sigstore/cosign)（验证依赖 Rekor 透明日志的联网查询）。逐架构的 `<包名>_SHA256SUMS.txt` 与聚合清单内容一致，可单独核对。
