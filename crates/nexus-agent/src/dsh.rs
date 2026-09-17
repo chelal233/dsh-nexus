@@ -1694,8 +1694,11 @@ fs.writeFileSync(path.join(process.cwd(), 'materialized.json'), JSON.stringify({
             })
             .expect("writes pinned runtime config");
 
-        materialize_profile_with_timeout(&paths, &home, "demo", Duration::from_secs(10))
-            .expect("fake pnpm materialization succeeds");
+        // This verifies arguments and environment, not startup latency. Hosted
+        // Windows runners may cold-start Node slowly; timeout behavior has its
+        // own process-tree regression test.
+        materialize_profile_with_timeout(&paths, &home, "demo", Duration::from_secs(60))
+            .unwrap_or_else(|error| panic!("fake pnpm materialization fails: {error}; observation written: {}", profile.join("materialized.json").is_file()));
         let observed: serde_json::Value = serde_json::from_slice(
             &fs::read(profile.join("materialized.json")).expect("reads fake pnpm observation"),
         )

@@ -89,7 +89,19 @@ jobs:
           node --test tests/*.test.mjs
           node --test ../../.github/scripts/verify-release-assets.test.mjs
       - name: Package Electron acceptance build
-        run: pnpm electron:build --${{ matrix.arch }}
+        run: |
+          log=$(mktemp)
+          if pnpm electron:build --${{ matrix.arch }} 2>&1 | tee "$log"; then
+            exit 0
+          fi
+          # Finder/indexing can briefly hold the generated DMG's mounted volume.
+          # Retry only this known transient error; never force-detach volumes.
+          if [[ "$RUNNER_OS" == "macOS" ]] && grep -Fq 'Unable to detach device cleanly:' "$log" && grep -Fq 'Resource busy' "$log"; then
+            sleep 10
+            pnpm electron:build --${{ matrix.arch }}
+          else
+            exit 1
+          fi
       - name: Windows installed package smoke
         if: runner.os == 'Windows'
         shell: pwsh
