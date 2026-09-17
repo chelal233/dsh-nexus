@@ -671,7 +671,9 @@ async fn profile_open_terminal(
                 Ok(lease) => lease,
                 Err(error) => {
                     let _ = child.kill();
-                    let _ = child.wait();
+                    // wait polls the console handle for up to 5 seconds; keep
+                    // that off the async worker threads.
+                    let _ = tokio::task::spawn_blocking(move || child.wait()).await;
                     return data_error_response(error, "terminal_registration_failed");
                 }
             };
@@ -679,7 +681,7 @@ async fn profile_open_terminal(
             nexus_core::write_private_bytes_atomic(&state.paths.root, &ready, b"ready")
         {
             let _ = child.kill();
-            let _ = child.wait();
+            let _ = tokio::task::spawn_blocking(move || child.wait()).await;
             let _ = std::fs::remove_file(&lease);
             return data_error_response(error, "terminal_registration_failed");
         }
@@ -781,6 +783,20 @@ async fn profile_open_path(state: AppState, command: ProfileCommand) -> axum::re
                 format!("path not found: {}", path.display()),
             ),
             "open_path_missing",
+        );
+    }
+    #[cfg(windows)]
+    if !open_dir && path.as_os_str().to_string_lossy().contains('%') {
+        // The file branch launches through `cmd /C start`, which expands
+        // %VAR% even inside quoted arguments. The path derives from the
+        // profile directory, but refuse percent characters so a crafted
+        // dsh_home cannot expand to a different target.
+        return data_error_response(
+            io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "the path contains a percent character",
+            ),
+            "open_path_invalid",
         );
     }
     #[cfg(windows)]
