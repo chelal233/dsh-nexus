@@ -125,6 +125,10 @@ pub fn ensure_all_idle(paths: &NexusPaths) -> io::Result<()> {
 }
 pub fn register(paths: &NexusPaths, release: &str, pid: u32) -> io::Result<PathBuf> {
     crate::validate_release_id(release)?;
+    // Two concurrent registrations can both count the same live leases and
+    // briefly exceed the 64 cap; that is a soft comfort limit, so no file lock
+    // is taken here. Liveness is decided by the process creation time, which
+    // already covers pid reuse.
     let existing = records(paths)?;
     let mut live = 0;
     for (path, lease) in existing {

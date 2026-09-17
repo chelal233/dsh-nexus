@@ -124,6 +124,8 @@ impl AgentCredential {
     }
 }
 fn verify(mac: Hmac<Sha256>, signature: &str) -> bool {
+    // valid_hex guarantees an even-length ASCII hex string, so neither the
+    // UTF-8 slice nor the radix decode below can fail.
     if !valid_hex(signature) { return false; }
     let bytes: Vec<u8> = signature.as_bytes().chunks_exact(2).map(|pair| u8::from_str_radix(std::str::from_utf8(pair).unwrap(), 16).unwrap()).collect();
     mac.verify_slice(&bytes).is_ok()

@@ -60,6 +60,10 @@ impl ConfigStore {
         let Some(bytes)=read_regular_file_bounded(&self.paths.root.join("cold-publication.json"),16*1024*1024)? else { return Ok(false); };
         let value:serde_json::Value=serde_json::from_slice(&bytes).map_err(|_| invalid_data("Invalid outer publication record"))?;
         let fields = value.as_object().ok_or_else(|| invalid_data("Invalid outer publication record"))?;
+        // A missing schema_version is treated as v1 on purpose: pending cold
+        // publications written before the field existed must still be able to
+        // finish or roll back after an upgrade. An explicit foreign version is
+        // always rejected.
         if fields.get("schema_version").is_some_and(|v| v.as_u64()!=Some(1)) || fields.keys().any(|key| !["schema_version","committed","preserve_current","prepare_only","owned_runtime","owned_environment","preserve_release","operation","previous_config","target_config","previous_profiles","target_profiles","previous_current","previous_lkg","target_lkg","previous_update","new_slot"].contains(&key.as_str())) { return Err(invalid_data("Unsupported outer publication record")); }
         for key in ["owned_environment", "preserve_release", "prepare_only"] { if fields.get(key).is_some_and(|v| !v.is_boolean()) { return Err(invalid_data("Invalid outer publication record")); } }
         if fields.get("prepare_only").and_then(|v| v.as_bool()) == Some(true)
