@@ -43,7 +43,7 @@ struct Receipt {
     #[serde(default)]
     context: Option<nexus_core::OperationContext>,
 }
-#[derive(Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct Document {
     format_version: u32,
@@ -264,63 +264,75 @@ pub(crate) async fn enforce(
         Sha256::digest(format!("{}\n{}", parts.uri.path(), value))
     );
     let now = nexus_core::unix_time_seconds();
+    // The async receipt lock is deliberately held across the blocking-pool
+    // calls below: serializing load→save→insert is what prevents two
+    // concurrent requests with the same request_id from both executing.
+    let mut active = state.active.lock().await;
+    let load_state = state.clone();
+    let load_active = active.clone();
+    let mut doc = match tokio::task::spawn_blocking(move || load_state.load(&load_active))
+        .await
+        .unwrap_or_else(|_| Err(io::Error::other("request receipt worker stopped")))
     {
-        let mut active = state.active.lock().await;
-        let mut doc = match state.load(&active) {
-            Ok(d) => d,
-            Err(e) => {
-                return error(
-                    StatusCode::SERVICE_UNAVAILABLE,
-                    "request_receipts_unavailable",
-                    &e.to_string(),
-                )
-            }
-        };
-        if let Some(item) = doc.requests.iter().find(|r| r.request_id == id) {
-            if item.fingerprint != fingerprint {
-                return error(
-                    StatusCode::CONFLICT,
-                    "request_id_conflict",
-                    "This request_id was used with different parameters",
-                );
-            }
-            return reply(item);
-        }
-        if issued > now.saturating_add(60) || now.saturating_sub(issued) > LIFETIME {
-            return error(StatusCode::CONFLICT, "request_id_expired", "The request ID is outside its retry window; inspect the original operation before starting a new request");
-        }
-        if doc.requests.len() >= LIMIT {
-            return error(
-                StatusCode::TOO_MANY_REQUESTS,
-                "request_history_full",
-                "The safe retry history is full; wait for older requests to expire",
-            );
-        }
-        let context = Some(observed_context(&nexus_core::NexusPaths::from_root(
-            state.root.clone(),
-        )));
-        doc.requests.push(Receipt {
-            request_id: id.clone(),
-            kind: kind.into(),
-            state: "running".into(),
-            http_status: 202,
-            error_code: None,
-            operation_id: None,
-            target_id: safe_id(value.get("id").or_else(|| value.get("tag"))),
-            created_at_unix: now,
-            updated_at_unix: now,
-            fingerprint,
-            context,
-        });
-        if let Err(e) = state.save(&doc) {
+        Ok(d) => d,
+        Err(e) => {
             return error(
                 StatusCode::SERVICE_UNAVAILABLE,
                 "request_receipts_unavailable",
                 &e.to_string(),
+            )
+        }
+    };
+    if let Some(item) = doc.requests.iter().find(|r| r.request_id == id) {
+        if item.fingerprint != fingerprint {
+            return error(
+                StatusCode::CONFLICT,
+                "request_id_conflict",
+                "This request_id was used with different parameters",
             );
         }
-        active.insert(id.clone());
+        return reply(item);
     }
+    if issued > now.saturating_add(60) || now.saturating_sub(issued) > LIFETIME {
+        return error(StatusCode::CONFLICT, "request_id_expired", "The request ID is outside its retry window; inspect the original operation before starting a new request");
+    }
+    if doc.requests.len() >= LIMIT {
+        return error(
+            StatusCode::TOO_MANY_REQUESTS,
+            "request_history_full",
+            "The safe retry history is full; wait for older requests to expire",
+        );
+    }
+    let context = Some(observed_context(&nexus_core::NexusPaths::from_root(
+        state.root.clone(),
+    )));
+    doc.requests.push(Receipt {
+        request_id: id.clone(),
+        kind: kind.into(),
+        state: "running".into(),
+        http_status: 202,
+        error_code: None,
+        operation_id: None,
+        target_id: safe_id(value.get("id").or_else(|| value.get("tag"))),
+        created_at_unix: now,
+        updated_at_unix: now,
+        fingerprint,
+        context,
+    });
+    let save_state = state.clone();
+    let saved_doc = doc.clone();
+    if let Err(e) = tokio::task::spawn_blocking(move || save_state.save(&saved_doc))
+        .await
+        .unwrap_or_else(|_| Err(io::Error::other("request receipt worker stopped")))
+    {
+        return error(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "request_receipts_unavailable",
+            &e.to_string(),
+        );
+    }
+    active.insert(id.clone());
+    drop(active);
     // The owner continues even if the HTTP client stops waiting. No request is
     // ever replayed merely because its receipt could not be finalized.
     let owner = tokio::spawn(async move {
@@ -339,44 +351,55 @@ pub(crate) async fn enforce(
         let (parts, body) = response.into_parts();
         let bytes = to_bytes(body, BODY_LIMIT).await;
         let mut active = state.active.lock().await;
-        let result = (|| -> io::Result<()> {
-            let mut doc = state.load(&active)?;
-            let item = doc
-                .requests
-                .iter_mut()
-                .find(|r| r.request_id == id)
-                .ok_or_else(|| io::Error::other("Request receipt disappeared"))?;
-            item.state = if parts.status.is_success() && bytes.is_ok() {
-                "completed"
-            } else {
-                "failed"
-            }
-            .into();
-            item.http_status = parts.status.as_u16();
-            item.updated_at_unix = nexus_core::unix_time_seconds();
-            if let Ok(bytes) = &bytes {
-                if let Ok(value) = serde_json::from_slice::<Value>(bytes) {
-                    item.operation_id = safe_id(value.pointer("/operation/operation_id"));
-                    item.target_id = safe_id(
-                        value
-                            .get("current_release")
-                            .or_else(|| value.pointer("/checkpoint/id"))
-                            .or_else(|| value.pointer("/operation/release_id")),
-                    )
-                    .or_else(|| item.target_id.clone());
-                    item.error_code = safe_id(value.get("code"));
-                    if item.error_code.as_deref() == Some("request_interrupted") {
-                        item.state = "interrupted".into();
-                        item.http_status = 409;
-                    }
+        // Same invariant as admission: the receipt lock stays held across the
+        // blocking-pool finalize so a concurrent retry cannot interleave.
+        let finalize_state = state.clone();
+        let finalize_active = active.clone();
+        let finalize_id = id.clone();
+        let finalize_status = parts.status;
+        let finalize_bytes = bytes.as_ref().ok().map(|chunk| (*chunk).clone());
+        let result = tokio::task::spawn_blocking(move || {
+            (|| -> io::Result<()> {
+                let mut doc = finalize_state.load(&finalize_active)?;
+                let item = doc
+                    .requests
+                    .iter_mut()
+                    .find(|r| r.request_id == finalize_id)
+                    .ok_or_else(|| io::Error::other("Request receipt disappeared"))?;
+                item.state = if finalize_status.is_success() && finalize_bytes.is_some() {
+                    "completed"
+                } else {
+                    "failed"
                 }
-            } else {
-                item.state = "interrupted".into();
-                item.http_status = 409;
-                item.error_code = Some("request_interrupted".into());
-            }
-            state.save(&doc)
-        })();
+                .into();
+                item.http_status = finalize_status.as_u16();
+                item.updated_at_unix = nexus_core::unix_time_seconds();
+                if let Some(bytes) = &finalize_bytes {
+                    if let Ok(value) = serde_json::from_slice::<Value>(bytes) {
+                        item.operation_id = safe_id(value.pointer("/operation/operation_id"));
+                        item.target_id = safe_id(
+                            value
+                                .get("current_release")
+                                .or_else(|| value.pointer("/checkpoint/id"))
+                                .or_else(|| value.pointer("/operation/release_id")),
+                        )
+                        .or_else(|| item.target_id.clone());
+                        item.error_code = safe_id(value.get("code"));
+                        if item.error_code.as_deref() == Some("request_interrupted") {
+                            item.state = "interrupted".into();
+                            item.http_status = 409;
+                        }
+                    }
+                } else {
+                    item.state = "interrupted".into();
+                    item.http_status = 409;
+                    item.error_code = Some("request_interrupted".into());
+                }
+                finalize_state.save(&doc)
+            })()
+        })
+        .await
+        .unwrap_or_else(|_| Err(io::Error::other("request receipt worker stopped")));
         active.remove(&id);
         if let Err(e) = result {
             return error(
@@ -650,12 +673,14 @@ mod tests {
         )
         .unwrap();
         release.add_permits(1);
-        tokio::time::timeout(std::time::Duration::from_secs(2), async {
+        // Finalize runs on the blocking pool; give the handoff a generous
+        // deadline and sleep between polls instead of a yield_now busy loop.
+        tokio::time::timeout(std::time::Duration::from_secs(30), async {
             loop {
                 if state.read_document().unwrap().requests[0].state == "completed" {
                     break;
                 }
-                tokio::task::yield_now().await;
+                tokio::time::sleep(std::time::Duration::from_millis(10)).await;
             }
         })
         .await
