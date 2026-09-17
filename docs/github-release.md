@@ -70,7 +70,7 @@ DSH 交互终端入口及终端租约目前仅在 Windows 实现；macOS 调用�
 
 ## 首次发布操作
 
-1. 审核当前文件和 Git 历史，尤其是 `artifacts/takeover`、内部文档、本机路径和历史诊断。`.gitignore` 不会清除已跟踪文件或历史；不使用 `git push --mirror`。
+1. 审核当前文件和 Git 历史，尤其是 `docs/history/artifacts`（原 `artifacts/takeover`）、内部文档、本机路径和历史诊断。`.gitignore` 不会清除已跟踪文件或历史；不使用 `git push --mirror`。
 2. 将审核后的提交放入计划发布的 main，配置正确 GitHub remote，启用 Actions；确认 ARM runner 可用于该仓库和账户。设置所需分支保护及私密漏洞报告入口。
 3. 先执行 Desktop build，排除任何目标失败；核对生成的 `notices/components.json`，补齐 `reviewRequired` 项及嵌套组件许可义务。
 4. 对每个目标完成安装、首次启动、Agent 身份、Harness 安装/启动/停止、升级、卸载及数据保留验收；macOS 增查 DMG 挂载、复制到 Applications 后启动、资源可执行权限和系统权限提示。使用 [现有验收清单](manual-acceptance-0.1.2.md) 并记录平台差异。
