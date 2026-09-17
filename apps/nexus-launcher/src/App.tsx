@@ -48,7 +48,7 @@ import {
 } from "./ui-components";
 import { useRef, useState, useEffect, useCallback, useMemo } from "react";
 import { createDraftMemory, DraftMemoryContext } from "./draft-memory";
-import { createRequestClient, requiresRequestId } from "./request-client";
+import { sharedRequestClient, requiresRequestId } from "./request-client";
 import { useI18n } from "./i18n";
 import {
   createFailureNoticeTracker,
@@ -155,24 +155,14 @@ function systemTheme(): "light" | "dark" {
 function App() {
   const draftMemory = useRef(createDraftMemory());
   const draftRoot = useRef("unresolved");
-  const requestClient = useRef<{
-    root: string;
-    client: ReturnType<typeof createRequestClient>;
-  } | null>(null);
   const postAction = (path: string, body: JsonObject) => {
     if (!requiresRequestId(path, body)) return proxyRequest<JsonObject>(path, "POST", body);
     const root = stringValue(snapshot.startup, "data_root_id") || "";
-    if (!requestClient.current || requestClient.current.root !== root) {
-      requestClient.current = {
-        root,
-        client: createRequestClient(
-          window.localStorage,
-          (route, method, payload) => proxyRequest<JsonObject>(route, method, payload),
-          root,
-        ),
-      };
-    }
-    return requestClient.current.client.post(path, body);
+    return sharedRequestClient(
+      window.localStorage,
+      (route, method, payload) => proxyRequest<JsonObject>(route, method, payload),
+      root,
+    ).post(path, body);
   };
   const { locale, t } = useI18n();
   const [activeModule, setActiveModule] = useState<ModuleId>("workbench");

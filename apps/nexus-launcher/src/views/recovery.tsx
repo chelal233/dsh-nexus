@@ -13,7 +13,7 @@ import { proxyRequest } from "../agent-bridge";
 import { errorMessage, localizedRuntimeState, formatTimestamp } from "../display-format";
 import { useState, useEffect, useRef } from "react";
 import { createLatestRequest } from "../control-state";
-import { createRequestClient, mergeRequestHistory } from "../request-client";
+import { sharedRequestClient, mergeRequestHistory } from "../request-client";
 
 export function ReadOnlyRecoveryView({ snapshot, busyAction, runAction }: HarnessPanelProps) {
   const { t } = useI18n();
@@ -343,7 +343,7 @@ export function RequestHistory({ busy, dataRootId }: { busy: boolean; dataRootId
     return () => latest.current.cancel();
   }, [dataRootId]);
   const localClient = () =>
-    createRequestClient(
+    sharedRequestClient(
       window.localStorage,
       (route, method, payload) => proxyRequest<JsonObject>(route, method, payload),
       dataRootId,
