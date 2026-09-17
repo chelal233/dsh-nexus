@@ -5105,7 +5105,7 @@ mod tests {
                 ],
             )
         } else {
-            (PathBuf::from("sleep"), vec!["30".to_owned()])
+            (PathBuf::from("sh"), vec!["-c".to_owned(), "trap '' TERM; printf ready > \"$1\"; while :; do sleep 1; done".to_owned(), "nexus-stop-fixture".to_owned(), root.join("stop-ready").to_string_lossy().into_owned()])
         };
         ConfigStore::new(paths.clone())
             .write(&NexusConfigFile { update_attempt_id: None, external_harness: None,
@@ -5130,6 +5130,10 @@ mod tests {
         let supervisor = HarnessSupervisor::with_graceful_wait(paths, Duration::from_millis(500))
             .expect("supervisor creates");
         let _ = supervisor.start().await.expect("Harness starts");
+        #[cfg(unix)]
+        timeout(Duration::from_secs(5), async {
+            while !root.join("stop-ready").is_file() { sleep(Duration::from_millis(10)).await; }
+        }).await.expect("fixture installs its TERM handler before stop");
         let stop_supervisor = supervisor.clone();
         let stop_task = tokio::spawn(async move { stop_supervisor.stop().await });
         timeout(Duration::from_secs(1), async {
