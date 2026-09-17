@@ -806,6 +806,7 @@ dependencies = [
 name = "nexus-private-file"
 version = "0.1.3"
 dependencies = [
+ "libc",
  "windows-sys 0.61.2",
 ]
 

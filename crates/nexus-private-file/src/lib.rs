@@ -6,9 +6,10 @@ use std::{fs::{self, File}, io, path::Path};
 /// additional allocations. Call before publication, never from rollback.
 pub fn ensure_space_budget(targets: &[(&Path, u64)]) -> io::Result<()> {
     #[cfg(windows)] { check_space_budget(targets, windows::space_for_path) }
-    #[cfg(not(windows))] { let _ = targets; Ok(()) } // Same Windows-only policy as Nexus install preflight.
+    #[cfg(unix)] { check_space_budget(targets, unix::space_for_path) }
+    #[cfg(not(any(unix, windows)))] { let _ = targets; Ok(()) } // Same Windows-only policy as Nexus install preflight.
 }
-#[cfg(any(windows, test))]
+#[cfg(any(windows, unix, test))]
 fn check_space_budget(targets: &[(&Path, u64)], probe: impl Fn(&Path) -> io::Result<(String, u64)>) -> io::Result<()> {
     let mut volumes = std::collections::BTreeMap::<String, (u64, u64)>::new();
     for (path, bytes) in targets {
@@ -71,6 +72,41 @@ pub fn verify_private(file: &File) -> io::Result<()> {
         else { Err(io::Error::other("private file is accessible to other users")) }
     }
     #[cfg(not(any(unix, windows)))] { let _ = file; Err(io::Error::other("private files are unsupported on this platform")) }
+}
+
+/// Probe the volume containing the nearest existing parent of `path`, using
+/// the space actually available to unprivileged callers. Mirrors the Windows
+/// probe: same parent walk, same quota semantics, keyed by filesystem id.
+#[cfg(unix)]
+mod unix {
+    use super::*;
+    use std::os::unix::ffi::OsStrExt;
+
+    pub(super) fn space_for_path(path: &Path) -> io::Result<(String, u64)> {
+        let mut existing = path;
+        loop {
+            match fs::metadata(existing) {
+                Ok(metadata) if metadata.is_dir() => break,
+                Ok(_) => {},
+                Err(error) if error.kind() == io::ErrorKind::NotFound => {},
+                Err(error) => return Err(error),
+            }
+            existing = existing.parent().ok_or_else(|| io::Error::other("Target has no existing parent"))?;
+        }
+        let existing = fs::canonicalize(existing)?;
+        let cpath = std::ffi::CString::new(existing.as_os_str().as_bytes())
+            .map_err(|_| io::Error::other("Target path contains NUL"))?;
+        let mut stat = std::mem::MaybeUninit::<libc::statvfs>::zeroed();
+        if unsafe { libc::statvfs(cpath.as_ptr(), stat.as_mut_ptr()) } != 0 {
+            return Err(io::Error::last_os_error());
+        }
+        let stat = unsafe { stat.assume_init() };
+        let available = u64::try_from(stat.f_bavail).map_err(|_| io::Error::other("negative free-block count"))?
+            .checked_mul(u64::try_from(stat.f_frsize).unwrap_or(0))
+            .ok_or_else(|| io::Error::other("Space budget overflow"))?;
+        let fsid = stat.f_fsid.val;
+        Ok((format!("{:x}-{:x}", fsid[0] as u64, fsid[1] as u64), available))
+    }
 }
 
 #[cfg(windows)]
@@ -313,6 +349,14 @@ mod space_budget_tests {
         let (volume,available)=windows::space_for_path(&root).unwrap();
         assert!(available>0);
         assert_eq!(windows::space_for_path(&root.join("nexus-space-uncreated/file.tmp")).unwrap().0,volume);
+    }
+    #[cfg(unix)]
+    #[test]
+    fn missing_target_uses_existing_parent_and_caller_quota_unix() {
+        let root=std::env::temp_dir();
+        let (volume,available)=unix::space_for_path(&root).unwrap();
+        assert!(available>0);
+        assert_eq!(unix::space_for_path(&root.join("nexus-space-uncreated/file.tmp")).unwrap().0,volume);
     }
 }
 
