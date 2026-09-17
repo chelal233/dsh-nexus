@@ -181,6 +181,7 @@ pub enum HarnessAction {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
 pub struct HarnessCommand {
     pub action: HarnessAction,
 }
@@ -360,6 +361,7 @@ pub enum ProfileAction {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
 pub struct ProfileCommand {
     pub action: ProfileAction,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -534,6 +536,7 @@ pub enum CheckpointAction {
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
 pub struct CheckpointCommand {
     pub action: CheckpointAction,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -1092,6 +1095,7 @@ impl Default for UpdateAction {
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
 pub struct UpdateCommand {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub offline_contents: Option<OfflineContents>,
@@ -1381,6 +1385,7 @@ impl Default for DiagnosticsAction {
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
 pub struct DiagnosticsCommand {
     pub action: DiagnosticsAction,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -1442,6 +1447,7 @@ pub enum HarnessLaunchMode {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
 pub struct HarnessConfigPayload {
     #[serde(default)]
     pub mode: HarnessLaunchMode,
@@ -1629,6 +1635,7 @@ impl Default for ConfigAction {
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
 pub struct ConfigCommand {
     #[serde(default)]
     pub external_harness_path: Option<String>,
