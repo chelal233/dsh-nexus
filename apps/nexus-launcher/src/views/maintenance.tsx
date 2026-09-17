@@ -211,7 +211,11 @@ export function CanaryPanel({ snapshot, busyAction, runAction, openWorkbench }: 
           </span>
         )}
       </div>
-      {error && <p className="form-error" role="alert">{error}</p>}
+      {error && (
+        <p className="form-error" role="alert">
+          {error}
+        </p>
+      )}
       {Boolean(status.report) && <CanaryReport report={asObject(status.report)} />}
       {Boolean(status.progress) && (
         <details open={running}>
@@ -227,7 +231,11 @@ export function CanaryPanel({ snapshot, busyAction, runAction, openWorkbench }: 
           <pre>{JSON.stringify(status.report, null, 2)}</pre>
         </details>
       )}
-      {Boolean(status.history_error) && <p className="form-error" role="alert">{String(status.history_error)}</p>}
+      {Boolean(status.history_error) && (
+        <p className="form-error" role="alert">
+          {String(status.history_error)}
+        </p>
+      )}
       {arrayValue(status, "history").length > 0 && (
         <details>
           <summary>{t("Recent Canary diagnostics")}</summary>
@@ -248,7 +256,11 @@ export function CanaryPanel({ snapshot, busyAction, runAction, openWorkbench }: 
               );
             })}
           </ul>
-          {historyError && <p className="form-error" role="alert">{historyError}</p>}
+          {historyError && (
+            <p className="form-error" role="alert">
+              {historyError}
+            </p>
+          )}
           {historyRecord && (
             <>
               <CanaryReport report={asObject(historyRecord.report)} />

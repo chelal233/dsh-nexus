@@ -207,7 +207,11 @@ export function NotificationSettings() {
           {saved && <p role="status">{text("Saved", "已保存")}</p>}
         </div>
       )}
-      {error && <p className="form-error" role="alert">{error}</p>}
+      {error && (
+        <p className="form-error" role="alert">
+          {error}
+        </p>
+      )}
     </Panel>
   );
 }

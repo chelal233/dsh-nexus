@@ -560,19 +560,26 @@ dd {
   overflow-wrap: anywhere;
 }
 /* Three feedback levels; successful operations share the info palette. */
-.notice, .toast, .form-error {
+.notice,
+.toast,
+.form-error {
   --feedback-color: var(--accent-strong);
   --feedback-accent: var(--accent);
 }
-.notice.degraded, .toast-warning {
+.notice.degraded,
+.toast-warning {
   --feedback-color: var(--warning);
   --feedback-accent: var(--warning);
 }
-.notice.action-error, .form-error, .toast-error {
+.notice.action-error,
+.form-error,
+.toast-error {
   --feedback-color: var(--danger);
   --feedback-accent: var(--danger);
 }
-.notice, .toast, .form-error {
+.notice,
+.toast,
+.form-error {
   border: 1px solid color-mix(in srgb, var(--feedback-accent) 34%, transparent);
   color: var(--feedback-color);
   background: color-mix(in srgb, var(--feedback-accent) 8%, var(--surface));
@@ -2325,8 +2332,12 @@ dt {
 .notice > .button + .button {
   margin-left: 0;
 }
-.notice > div > p:first-child { margin-top: 0; }
-.notice > div > p:last-child { margin-bottom: 0; }
+.notice > div > p:first-child {
+  margin-top: 0;
+}
+.notice > div > p:last-child {
+  margin-bottom: 0;
+}
 .toast {
   display: grid;
   grid-template-columns: 18px minmax(0, 1fr) auto;
@@ -2346,21 +2357,49 @@ dt {
   color: var(--feedback-color);
 }
 @media (max-width: 520px) {
-  .toast-stack { right: 16px; }
+  .toast-stack {
+    right: 16px;
+  }
 }
 
 /* Nested sections keep the same spacing as top-level panels. */
-.page-content > #offline-packages { margin-top: 16px; }
-.profile-checkpoints { display: grid; gap: 16px; }
-.plugin-target > div { min-width: 0; flex-wrap: wrap; }
-.plugin-target strong, .builtin-plugin-name strong { overflow-wrap: anywhere; }
-.button { max-width: 100%; overflow-wrap: anywhere; }
-.button > svg { flex-shrink: 0; }
-.modal-header > strong { min-width: 0; overflow-wrap: anywhere; }
-.modal-header > button { flex-shrink: 0; }
+.page-content > #offline-packages {
+  margin-top: 16px;
+}
+.profile-checkpoints {
+  display: grid;
+  gap: 16px;
+}
+.plugin-target > div {
+  min-width: 0;
+  flex-wrap: wrap;
+}
+.plugin-target strong,
+.builtin-plugin-name strong {
+  overflow-wrap: anywhere;
+}
+.button {
+  max-width: 100%;
+  overflow-wrap: anywhere;
+}
+.button > svg {
+  flex-shrink: 0;
+}
+.modal-header > strong {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.modal-header > button {
+  flex-shrink: 0;
+}
 @media (max-width: 520px) {
-  .metric-grid { grid-template-columns: minmax(0, 1fr); }
-  .builtin-plugin-actions { grid-column: 2 / -1; justify-content: flex-end; }
+  .metric-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .builtin-plugin-actions {
+    grid-column: 2 / -1;
+    justify-content: flex-end;
+  }
 }
 
 .integration-list a {
@@ -2370,15 +2409,31 @@ dt {
   text-underline-offset: 3px;
 }
 @media (max-width: 640px) {
-  .settings-group, .profile-checkpoints { scroll-margin-top: 170px; }
-  .integration-list > div { grid-template-columns: 20px minmax(0, 1fr); }
-  .integration-list > div > :last-child { grid-column: 2; justify-self: start; max-width: 100%; }
+  .settings-group,
+  .profile-checkpoints {
+    scroll-margin-top: 170px;
+  }
+  .integration-list > div {
+    grid-template-columns: 20px minmax(0, 1fr);
+  }
+  .integration-list > div > :last-child {
+    grid-column: 2;
+    justify-self: start;
+    max-width: 100%;
+  }
 }
 
 /* Dense inventories must retain their actions when identifiers are long. */
-.data-row { flex-wrap: wrap; }
-.data-row > div { flex: 1 1 240px; max-width: 100%; }
-.data-row strong { max-width: 100%; }
+.data-row {
+  flex-wrap: wrap;
+}
+.data-row > div {
+  flex: 1 1 240px;
+  max-width: 100%;
+}
+.data-row strong {
+  max-width: 100%;
+}
 .row-meta {
   display: inline-flex;
   align-items: center;
@@ -2388,40 +2443,93 @@ dt {
   max-width: 100%;
   margin-left: auto;
 }
-.profile-entry-header { flex-wrap: wrap; }
-.profile-row-toggle { min-width: 0; max-width: 100%; flex-wrap: wrap; }
-.profile-entry-header > .profile-row-toggle { flex: 1 1 220px; }
-.profile-entry-header > .row-meta { flex-shrink: 1; }
-.profile-chevron { flex-shrink: 0; }
-.profile-row-toggle > strong { white-space: normal; overflow-wrap: anywhere; }
+.profile-entry-header {
+  flex-wrap: wrap;
+}
+.profile-row-toggle {
+  min-width: 0;
+  max-width: 100%;
+  flex-wrap: wrap;
+}
+.profile-entry-header > .profile-row-toggle {
+  flex: 1 1 220px;
+}
+.profile-entry-header > .row-meta {
+  flex-shrink: 1;
+}
+.profile-chevron {
+  flex-shrink: 0;
+}
+.profile-row-toggle > strong {
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
 @media (max-width: 640px) {
-  .profile-entry > .profile-children { margin-left: 0; padding-left: 8px; }
-  .patch-editor { margin-left: 0; padding-left: 10px; }
+  .profile-entry > .profile-children {
+    margin-left: 0;
+    padding-left: 8px;
+  }
+  .patch-editor {
+    margin-left: 0;
+    padding-left: 10px;
+  }
 }
 
 /* Preserve readable version columns; narrow panes scroll inside the table. */
-.release-slots-table { min-width: 640px; }
-
-@media (max-width: 1000px) {
-  .patch-row-actions { margin-left: 0; max-width: 100%; flex: 1 1 100%; }
+.release-slots-table {
+  min-width: 640px;
 }
 
-.data-list { min-width: 0; grid-template-columns: minmax(0, 1fr); }
-.data-row { min-width: 0; max-width: 100%; }
-.topbar { flex-wrap: wrap; }
-.topbar-actions { margin-left: auto; }
-.settings-group, .profile-checkpoints {
+@media (max-width: 1000px) {
+  .patch-row-actions {
+    margin-left: 0;
+    max-width: 100%;
+    flex: 1 1 100%;
+  }
+}
+
+.data-list {
+  min-width: 0;
+  grid-template-columns: minmax(0, 1fr);
+}
+.data-row {
+  min-width: 0;
+  max-width: 100%;
+}
+.topbar {
+  flex-wrap: wrap;
+}
+.topbar-actions {
+  margin-left: auto;
+}
+.settings-group,
+.profile-checkpoints {
   scroll-margin-top: calc(var(--topbar-height, 150px) + 20px);
 }
 
-.patch-row-actions { min-width: 0; max-width: 100%; flex-shrink: 1; }
+.patch-row-actions {
+  min-width: 0;
+  max-width: 100%;
+  flex-shrink: 1;
+}
 /* CSS zoom must not make viewport-bound navigation and dialogs taller than the window. */
-body, .app-shell { min-height: calc(100dvh / var(--ui-zoom, 1)); }
-.sidebar { height: calc(100dvh / var(--ui-zoom, 1)); }
+body,
+.app-shell {
+  min-height: calc(100dvh / var(--ui-zoom, 1));
+}
+.sidebar {
+  height: calc(100dvh / var(--ui-zoom, 1));
+}
 .modal-card {
   width: min(720px, calc(92vw / var(--ui-zoom, 1)));
   max-height: calc(82dvh / var(--ui-zoom, 1));
 }
 
-.panel p, .panel summary, .modal-body { overflow-wrap: anywhere; }
-.modal-body .status-block { margin-top: 16px; }
+.panel p,
+.panel summary,
+.modal-body {
+  overflow-wrap: anywhere;
+}
+.modal-body .status-block {
+  margin-top: 16px;
+}
