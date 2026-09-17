@@ -54,7 +54,8 @@ test("Overview removes stale Harness credentials while a restart POST is deferre
     const before = render(false);
     assert.match(before, /old-token/);
     assert.doesNotMatch(before, /<iframe/);
-    assert.match(before, /Harness authentication requires a system browser/);
+    assert.match(before, /Open in system browser/);
+    assert.doesNotMatch(before, /Embedded Harness Web/);
 
     let releasePost!: () => void;
     const deferredPost = new Promise<void>((resolve) => {

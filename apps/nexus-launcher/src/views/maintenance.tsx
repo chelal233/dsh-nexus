@@ -15,7 +15,7 @@ import { proxyRequest } from "../agent-bridge";
 import { errorMessage, localizedRuntimeState } from "../display-format";
 import { useState, useRef, useEffect, useCallback } from "react";
 import { createLatestRequest, hasHarnessSource } from "../control-state";
-import { Cpu, Package } from "@phosphor-icons/react";
+import { Cpu, Package, WarningCircle } from "@phosphor-icons/react";
 import {
   type CleanupSelection,
   cleanupSelectedIds,
@@ -162,26 +162,31 @@ export function CanaryPanel({ snapshot, busyAction, runAction, openWorkbench }: 
         )}
       </p>
       {!stopped && (
-        <div className="notice">
+        <div className="notice degraded">
+          <WarningCircle size={17} />
           <p>
             {t(
               "Stop Harness explicitly before running diagnostics. Your selection and settings are kept.",
             )}
           </p>
-          <ActionButton
-            disabled={
-              !available ||
-              busyAction !== null ||
-              pending ||
-              !["running", "starting", "failed"].includes(harnessState)
-            }
-            onClick={() =>
-              void runAction(t("Stop Harness for diagnostics"), "/v1/harness", { action: "stop" })
-            }
-          >
-            {t("Stop Harness for diagnostics")}
-          </ActionButton>
-          <ActionButton onClick={() => openWorkbench?.()}>{t("Return to Workbench")}</ActionButton>
+          <div className="notice-actions">
+            <ActionButton
+              disabled={
+                !available ||
+                busyAction !== null ||
+                pending ||
+                !["running", "starting", "failed"].includes(harnessState)
+              }
+              onClick={() =>
+                void runAction(t("Stop Harness for diagnostics"), "/v1/harness", { action: "stop" })
+              }
+            >
+              {t("Stop Harness for diagnostics")}
+            </ActionButton>
+            <ActionButton onClick={() => openWorkbench?.()}>
+              {t("Return to Workbench")}
+            </ActionButton>
+          </div>
         </div>
       )}
       <div className="button-row">
@@ -206,7 +211,7 @@ export function CanaryPanel({ snapshot, busyAction, runAction, openWorkbench }: 
           </span>
         )}
       </div>
-      {error && <p role="alert">{error}</p>}
+      {error && <p className="form-error" role="alert">{error}</p>}
       {Boolean(status.report) && <CanaryReport report={asObject(status.report)} />}
       {Boolean(status.progress) && (
         <details open={running}>
@@ -222,7 +227,7 @@ export function CanaryPanel({ snapshot, busyAction, runAction, openWorkbench }: 
           <pre>{JSON.stringify(status.report, null, 2)}</pre>
         </details>
       )}
-      {Boolean(status.history_error) && <p role="alert">{String(status.history_error)}</p>}
+      {Boolean(status.history_error) && <p className="form-error" role="alert">{String(status.history_error)}</p>}
       {arrayValue(status, "history").length > 0 && (
         <details>
           <summary>{t("Recent Canary diagnostics")}</summary>
@@ -243,7 +248,7 @@ export function CanaryPanel({ snapshot, busyAction, runAction, openWorkbench }: 
               );
             })}
           </ul>
-          {historyError && <p role="alert">{historyError}</p>}
+          {historyError && <p className="form-error" role="alert">{historyError}</p>}
           {historyRecord && (
             <>
               <CanaryReport report={asObject(historyRecord.report)} />

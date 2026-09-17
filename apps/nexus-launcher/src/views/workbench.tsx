@@ -85,6 +85,8 @@ export function OverviewView({
   busyAction,
   credentialInvalidationPending,
   runAction,
+  openProfiles,
+  openCheckpoints,
 }: ViewProps) {
   const { t } = useI18n();
   const status = asObject(snapshot.status);
@@ -149,7 +151,7 @@ export function OverviewView({
               detail={localizedRuntimeState(stringValue(health, "status"), t)}
               actions={
                 <ActionButton
-                  tone="primary"
+                  tone="default"
                   disabled={agentRestartDisabled}
                   onClick={() =>
                     void runAction(t("Force restart Agent"), "/v1/agent", { action: "restart" })
@@ -233,13 +235,32 @@ export function OverviewView({
             </Metric>
             <Metric
               label={t("Active profile")}
-              value={stringValue(state, "profile") || t("None selected")}
+              value={
+                stringValue(snapshot.profiles, "active_profile") ||
+                stringValue(state, "profile") ||
+                t("None selected")
+              }
               detail={t("{count} profiles available", { count: profiles.length })}
+              actions={
+                openProfiles && (
+                  <ActionButton onClick={openProfiles}>{t("Switch profile")}</ActionButton>
+                )
+              }
             />
             <Metric
               label={t("Checkpoints")}
               value={String(checkpoints.length)}
               detail={updateStateLabel(update, t)}
+              actions={
+                openCheckpoints && (
+                  <ActionButton
+                    disabled={!stringValue(snapshot.profiles, "active_profile")}
+                    onClick={openCheckpoints}
+                  >
+                    {t("View checkpoints")}
+                  </ActionButton>
+                )
+              }
             />
           </div>
         );
@@ -248,12 +269,6 @@ export function OverviewView({
         snapshot={snapshot}
         busyAction={busyAction}
         credentialInvalidationPending={credentialInvalidationPending}
-        runAction={runAction}
-      />
-      <HarnessWebPanel
-        snapshot={snapshot}
-        credentialInvalidationPending={credentialInvalidationPending}
-        busyAction={busyAction}
         runAction={runAction}
       />
     </>

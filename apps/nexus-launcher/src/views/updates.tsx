@@ -1,4 +1,4 @@
-import { ActionButton, Panel, Modal, PathInput, PageIntro, DataList } from "../ui-components";
+import { ActionButton, Panel, Modal, PathInput, PageIntro, EmptyState } from "../ui-components";
 import { useI18n } from "../i18n";
 import { useState, useEffect, useId, useRef, useCallback } from "react";
 import { type HarnessPanelProps, type JsonObject, type ViewProps } from "../app-types";
@@ -362,7 +362,7 @@ export function OfflinePackagePanel({
                 </label>
                 {importContents.credentials && (
                   <div className="form-field">
-                    <p role="alert">
+                    <p className="form-error" role="alert">
                       {t(
                         "This archive is not encrypted. Replacing credentials changes the accounts used by this environment. Original files remain in the previous data directory; a recovery record identifies them.",
                       )}
@@ -556,7 +556,7 @@ export function OfflinePackagePanel({
               </label>
             </div>
             {contents.credentials && (
-              <p role="alert">
+              <p className="form-error" role="alert">
                 {t(
                   "This archive is not encrypted and includes account credentials. Anyone who can read it can use those accounts, including recipients of a shared-folder copy.",
                 )}
@@ -969,7 +969,7 @@ export function UpdatesView({
         </p>
       )}
       {stringValue(operation, "warning")?.includes("rollback_health_required") && (
-        <p className="field-help" role="alert">
+        <p className="notice degraded" role="status">
           {t(
             "Version prepared only. Your current selection is unchanged. Select the prepared version in Release slots to review the rollback warning and confirm a manual switch.",
           )}
@@ -1122,19 +1122,37 @@ export function UpdatesView({
           </div>
         </label>
         <div className="status-block">
-          <ActionButton
-            disabled={tagsLoading || sourceDraft.dirty || !snapshot.startup?.available}
-            onClick={() => void loadTags()}
-          >
-            {t(tagsLoading ? "Listing tags" : "List upstream tags")}
-          </ActionButton>
+          <div className="upstream-tag-row">
+            <label className="form-field">
+              <span>{t("Upstream tags")}</span>
+              <select
+                className="form-input"
+                value={selectedTag}
+                disabled={sourceDraft.dirty || tagsLoading || tags.length === 0}
+                onChange={(event) => setSelectedTag(event.target.value)}
+              >
+                <option value="">{t("Select a tag")}</option>
+                {tags.map((tag) => (
+                  <option key={tag} value={tag}>
+                    {tag}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <ActionButton
+              disabled={tagsLoading || sourceDraft.dirty || !snapshot.startup?.available}
+              onClick={() => void loadTags()}
+            >
+              {t(tagsLoading ? "Listing tags" : "List upstream tags")}
+            </ActionButton>
+          </div>
           {sourceDraft.dirty && <p>{t("Save the upstream address before loading tags.")}</p>}
           {tagsError ? (
             <p className="form-error" role="alert">
               {tagsError}
             </p>
           ) : (
-            <p role="status">
+            <p className="field-help" role="status">
               {t(
                 tagsLoading
                   ? "Listing tags"
@@ -1146,24 +1164,6 @@ export function UpdatesView({
                 { count: tags.length },
               )}
             </p>
-          )}
-          {!tagsLoading && !tagsError && tags.length > 0 && (
-            <label className="form-field">
-              <span>{t("Upstream tags")}</span>
-              <select
-                className="form-input"
-                value={selectedTag}
-                disabled={sourceDraft.dirty}
-                onChange={(event) => setSelectedTag(event.target.value)}
-              >
-                <option value="">{t("Select a tag")}</option>
-                {tags.map((tag) => (
-                  <option key={tag} value={tag}>
-                    {tag}
-                  </option>
-                ))}
-              </select>
-            </label>
           )}
           {selectedTag && (
             <ActionButton
@@ -1199,187 +1199,198 @@ export function UpdatesView({
           (!!operationId || updateState === "running" || updateState === "failed") && (
             <>
               <hr className="panel-divider" />
-              <div className="status-block">
-                <strong>
-                  {offlineExport
-                    ? t("Offline package export")
-                    : offlineImport
-                      ? t("Offline package import")
-                      : finished
-                        ? t("Last installation")
-                        : t("Current stage")}
-                  :{" "}
-                  {verificationPending
-                    ? t("Verification pending")
-                    : unpublishedSuccess
-                      ? t("Verifying installed version")
-                      : localizedRuntimeState(operationPhase || updateState, t)}
-                </strong>
-                {finished && (
-                  <span>
-                    {formatTimestamp(
-                      numberValue(operation, "updated_at_unix") ??
-                        numberValue(operation, "started_at_unix"),
-                      t("Not available"),
-                      locale,
-                    )}
-                  </span>
-                )}
-                {finished && (
-                  <p className="field-help">
-                    {t(
-                      offlineExport || offlineImport
-                        ? "This is the saved result of the last offline package operation."
-                        : "This is a saved installation record, not a new error from reinstalling Nexus.",
-                    )}
-                  </p>
-                )}
-                {archivePath && (
-                  <ArchivePath
-                    path={archivePath}
-                    exported={offlineExport && operationPhase === "succeeded"}
-                  />
-                )}
-                {offlineExport && operationPhase === "succeeded" && (
-                  <p className="field-help">
-                    {t(
-                      cleanupPending
-                        ? "The package was exported. Temporary-file cleanup still needs attention."
-                        : "The package was exported. The selected version is unchanged.",
-                    )}
-                  </p>
-                )}
-                {offlineImport && operationPhase === "succeeded" && (
-                  <p className="field-help">
-                    {t(
-                      "Import selects the verified version as current. Harness stays stopped; run startup checks before starting it.",
-                    )}
-                  </p>
-                )}
-                {(stringValue(operation, "tag") || stringValue(update, "release_id")) && (
-                  <span>{stringValue(operation, "tag") || stringValue(update, "release_id")}</span>
-                )}
-                {unpublishedSuccess && (
-                  <p className="form-error" role="alert">
-                    {t(
-                      "The task reports completion, but its version slot is unavailable. Refresh to verify installation before starting Harness.",
-                    )}
-                  </p>
-                )}
-                {operationId && !finished && (
-                  <progress
-                    aria-label={t("Update progress")}
-                    max="100"
-                    value={numberValue(operation, "progress_percent") || 0}
-                  >
-                    {numberValue(operation, "progress_percent") || 0}%
-                  </progress>
-                )}
-                {canDismiss ? (
-                  <details key={operationId}>
-                    <summary>
+              <details
+                className="installation-record"
+                key={`${operationId}:${canDismiss}`}
+                open={
+                  !canDismiss ||
+                  operationPhase !== "succeeded" ||
+                  verificationPending ||
+                  unpublishedSuccess ||
+                  undefined
+                }
+              >
+                <summary>
+                  {t(finished ? "Last installation" : "Current stage")}:{" "}
+                  {localizedRuntimeState(operationPhase || updateState, t)}
+                </summary>
+                <div className="status-block">
+                  <strong>
+                    {offlineExport
+                      ? t("Offline package export")
+                      : offlineImport
+                        ? t("Offline package import")
+                        : finished
+                          ? t("Last installation")
+                          : t("Current stage")}
+                    :{" "}
+                    {verificationPending
+                      ? t("Verification pending")
+                      : unpublishedSuccess
+                        ? t("Verifying installed version")
+                        : localizedRuntimeState(operationPhase || updateState, t)}
+                  </strong>
+                  {finished && (
+                    <span>
+                      {formatTimestamp(
+                        numberValue(operation, "updated_at_unix") ??
+                          numberValue(operation, "started_at_unix"),
+                        t("Not available"),
+                        locale,
+                      )}
+                    </span>
+                  )}
+                  {finished && (
+                    <p className="field-help">
                       {t(
                         offlineExport || offlineImport
-                          ? "Operation log and details"
-                          : "Installation log and details",
+                          ? "This is the saved result of the last offline package operation."
+                          : "This is a saved installation record, not a new error from reinstalling Nexus.",
                       )}
-                    </summary>
-                    {attemptDetails}
-                  </details>
-                ) : (
-                  attemptDetails
-                )}
-                {stringValue(operation, "cleanup_error") && (
-                  <p className="form-error" role="alert">
-                    <WarningCircle size={15} />
-                    {t("Cleanup error")}: {stringValue(operation, "cleanup_error")}
-                  </p>
-                )}
-                {cleanupPending && (
-                  <p className="notice degraded">
-                    {t("Cleanup is incomplete. Retry cleanup before starting another update.")}
-                  </p>
-                )}
-                <div className="button-row">
-                  <ActionButton disabled={busyAction !== null} onClick={() => void refresh()}>
-                    {t("Refresh")}
-                  </ActionButton>
-                  {operationId && (!coldOperationIsTerminal(operationPhase) || cleanupPending) && (
-                    <ActionButton
-                      tone="danger"
-                      disabled={
-                        (actionPending ?? (busyAction !== null && !snapshot.lifecycleBusy)) ||
-                        operationPhase === "cancelling"
-                      }
-                      onClick={() =>
-                        void runAction(
-                          t(
-                            offlineExport || offlineImport
-                              ? "Cancel offline operation"
-                              : "Cancel cold switch",
-                          ),
-                          "/v1/updates",
-                          { action: "cancel", operation_id: operationId },
-                        )
-                      }
-                    >
-                      {cleanupPending ? t("Retry cleanup") : t("Cancel")}
-                    </ActionButton>
+                    </p>
                   )}
-                  {canDismiss && operationPhase !== "succeeded" && retryCommand && (
-                    <ActionButton
-                      tone="primary"
-                      disabled={busyAction !== null || snapshot.startup?.available !== true}
-                      onClick={() =>
-                        void runAction(
-                          t(
-                            offlineExport || offlineImport
-                              ? "Retry offline operation"
-                              : "Retry installation",
-                          ),
-                          "/v1/updates",
-                          retryCommand,
-                        )
-                      }
-                    >
+                  {archivePath && (
+                    <ArchivePath
+                      path={archivePath}
+                      exported={offlineExport && operationPhase === "succeeded"}
+                    />
+                  )}
+                  {offlineExport && operationPhase === "succeeded" && (
+                    <p className="field-help">
                       {t(
-                        offlineExport || offlineImport
-                          ? "Retry offline operation"
-                          : "Retry installation",
+                        cleanupPending
+                          ? "The package was exported. Temporary-file cleanup still needs attention."
+                          : "The package was exported. The selected version is unchanged.",
                       )}
-                    </ActionButton>
+                    </p>
                   )}
+                  {offlineImport && operationPhase === "succeeded" && (
+                    <p className="field-help">
+                      {t(
+                        "Import selects the verified version as current. Harness stays stopped; run startup checks before starting it.",
+                      )}
+                    </p>
+                  )}
+                  {(stringValue(operation, "tag") || stringValue(update, "release_id")) && (
+                    <span>
+                      {stringValue(operation, "tag") || stringValue(update, "release_id")}
+                    </span>
+                  )}
+                  {unpublishedSuccess && (
+                    <p className="form-error" role="alert">
+                      {t(
+                        "The task reports completion, but its version slot is unavailable. Refresh to verify installation before starting Harness.",
+                      )}
+                    </p>
+                  )}
+                  {operationId && !finished && (
+                    <progress
+                      aria-label={t("Update progress")}
+                      max="100"
+                      value={numberValue(operation, "progress_percent") || 0}
+                    >
+                      {numberValue(operation, "progress_percent") || 0}%
+                    </progress>
+                  )}
+                  {canDismiss ? (
+                    <details key={operationId}>
+                      <summary>
+                        {t(
+                          offlineExport || offlineImport
+                            ? "Operation log and details"
+                            : "Installation log and details",
+                        )}
+                      </summary>
+                      {attemptDetails}
+                    </details>
+                  ) : (
+                    attemptDetails
+                  )}
+                  {stringValue(operation, "cleanup_error") && (
+                    <p className="form-error" role="alert">
+                      <WarningCircle size={15} />
+                      {t("Cleanup error")}: {stringValue(operation, "cleanup_error")}
+                    </p>
+                  )}
+                  {cleanupPending && (
+                    <p className="notice degraded">
+                      {t("Cleanup is incomplete. Retry cleanup before starting another update.")}
+                    </p>
+                  )}
+                  <div className="button-row">
+                    <ActionButton disabled={busyAction !== null} onClick={() => void refresh()}>
+                      {t("Refresh")}
+                    </ActionButton>
+                    {operationId &&
+                      (!coldOperationIsTerminal(operationPhase) || cleanupPending) && (
+                        <ActionButton
+                          tone="danger"
+                          disabled={
+                            (actionPending ?? (busyAction !== null && !snapshot.lifecycleBusy)) ||
+                            operationPhase === "cancelling"
+                          }
+                          onClick={() =>
+                            void runAction(
+                              t(
+                                offlineExport || offlineImport
+                                  ? "Cancel offline operation"
+                                  : "Cancel cold switch",
+                              ),
+                              "/v1/updates",
+                              { action: "cancel", operation_id: operationId },
+                            )
+                          }
+                        >
+                          {cleanupPending ? t("Retry cleanup") : t("Cancel")}
+                        </ActionButton>
+                      )}
+                    {canDismiss && operationPhase !== "succeeded" && retryCommand && (
+                      <ActionButton
+                        tone="primary"
+                        disabled={busyAction !== null || snapshot.startup?.available !== true}
+                        onClick={() =>
+                          void runAction(
+                            t(
+                              offlineExport || offlineImport
+                                ? "Retry offline operation"
+                                : "Retry installation",
+                            ),
+                            "/v1/updates",
+                            retryCommand,
+                          )
+                        }
+                      >
+                        {t(
+                          offlineExport || offlineImport
+                            ? "Retry offline operation"
+                            : "Retry installation",
+                        )}
+                      </ActionButton>
+                    )}
+                    {canDismiss && (
+                      <ActionButton
+                        disabled={busyAction !== null}
+                        onClick={() =>
+                          void runAction(t("Clear finished record"), "/v1/updates", {
+                            action: "clear_finished",
+                            operation_id: operationId,
+                          })
+                        }
+                      >
+                        {t("Clear finished record")}
+                      </ActionButton>
+                    )}
+                  </div>
                   {canDismiss && (
-                    <ActionButton
-                      disabled={busyAction !== null}
-                      onClick={() =>
-                        void runAction(t("Clear finished record"), "/v1/updates", {
-                          action: "clear_finished",
-                          operation_id: operationId,
-                        })
-                      }
-                    >
-                      {t("Clear finished record")}
-                    </ActionButton>
+                    <span className="field-help">
+                      {t("Clearing this record keeps installed versions and Harness data.")}
+                    </span>
                   )}
                 </div>
-                {canDismiss && (
-                  <span className="field-help">
-                    {t("Clearing this record keeps installed versions and Harness data.")}
-                  </span>
-                )}
-              </div>
+              </details>
             </>
           )}
       </Panel>
-      {!embedded && (
-        <OfflinePackagePanel
-          snapshot={snapshot}
-          busyAction={busyAction}
-          actionPending={actionPending}
-          runAction={runAction}
-        />
-      )}
       {!embedded && (
         <Panel title={t("Release slots")} icon={<Package size={18} />}>
           {externalHarnessRoot(snapshot.config) && (
@@ -1392,62 +1403,91 @@ export function UpdatesView({
               </ActionButton>
             </div>
           )}
-          <DataList
-            items={releases}
-            emptyTitle={t("No release slots")}
-            emptyDetail={t(
-              "A successful cold switch registers and promotes its immutable slot without starting Harness.",
-            )}
-            render={(item) => {
-              const slotId = stringValue(item, "id") || "";
-              const current = stringValue(snapshot.releases, "current_release");
-              const lkg = stringValue(snapshot.releases, "last_known_good");
-              const protectedSlot = slotId === current || slotId === lkg;
-              return (
-                <>
-                  <div>
-                    <strong>{slotId || t("Release")}</strong>
-                    <span>
-                      {stringValue(item, "version") || t("Unknown version")}
-                      {slotId === current
-                        ? ` · ${t(externalHarnessRoot(snapshot.config) ? "Prepared slot" : "Current")}`
-                        : slotId === lkg
-                          ? ` · ${t("Last known good")}`
-                          : ""}
-                    </span>
-                  </div>
-                  <span className="row-meta">
-                    {slotId !== current && (
-                      <ActionButton
-                        disabled={busyAction !== null}
-                        onClick={() => void promoteRelease(slotId)}
-                      >
-                        {t(
-                          externalHarnessRoot(snapshot.config)
-                            ? "Prepare this version slot"
-                            : "Switch to this version",
-                        )}
-                      </ActionButton>
-                    )}
-                    {!protectedSlot && (
-                      <ActionButton
-                        disabled={busyAction !== null}
-                        onClick={() =>
-                          void runAction(t("Release slot"), "/v1/releases", {
-                            action: "remove",
-                            id: slotId,
-                          })
-                        }
-                      >
-                        {t("Release slot")}
-                      </ActionButton>
-                    )}
-                  </span>
-                </>
-              );
-            }}
-          />
+          {releases.length === 0 ? (
+            <EmptyState
+              title={t("No release slots")}
+              detail={t(
+                "A successful cold switch registers and promotes its immutable slot without starting Harness.",
+              )}
+            />
+          ) : (
+            <div className="table-scroll">
+              <table className="release-slots-table">
+                <thead>
+                  <tr>
+                    <th scope="col">{t("Slot")}</th>
+                    <th scope="col">{t("Version")}</th>
+                    <th scope="col">{t("Status")}</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {releases.map((item) => {
+                    const slotId = stringValue(item, "id") || "";
+                    const current = stringValue(snapshot.releases, "current_release");
+                    const lkg = stringValue(snapshot.releases, "last_known_good");
+                    const protectedSlot = slotId === current || slotId === lkg;
+                    return (
+                      <tr key={slotId}>
+                        <th scope="row">
+                          <code>{slotId || t("Release")}</code>
+                        </th>
+                        <td>
+                          {stringValue(item, "version") || t("Unknown version")}
+                          {slotId === lkg && <small>{t("Last known good")}</small>}
+                        </td>
+                        <td>
+                          <div className="release-slot-actions">
+                            {slotId === current ? (
+                              <button type="button" className="button slot-current" disabled>
+                                {t(
+                                  externalHarnessRoot(snapshot.config)
+                                    ? "Prepared slot"
+                                    : "Current",
+                                )}
+                              </button>
+                            ) : (
+                              <ActionButton
+                                disabled={busyAction !== null}
+                                onClick={() => void promoteRelease(slotId)}
+                              >
+                                {t(
+                                  externalHarnessRoot(snapshot.config)
+                                    ? "Prepare this version slot"
+                                    : "Switch to this version",
+                                )}
+                              </ActionButton>
+                            )}
+                            {!protectedSlot && (
+                              <ActionButton
+                                disabled={busyAction !== null}
+                                onClick={() =>
+                                  void runAction(t("Release slot"), "/v1/releases", {
+                                    action: "remove",
+                                    id: slotId,
+                                  })
+                                }
+                              >
+                                {t("Release slot")}
+                              </ActionButton>
+                            )}
+                          </div>
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          )}
         </Panel>
+      )}
+      {!embedded && (
+        <OfflinePackagePanel
+          snapshot={snapshot}
+          busyAction={busyAction}
+          actionPending={actionPending}
+          runAction={runAction}
+        />
       )}
     </>
   );

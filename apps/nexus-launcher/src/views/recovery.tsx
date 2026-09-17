@@ -222,7 +222,7 @@ export function RecoveryModePanel({
       </ActionButton>
     );
   return (
-    <section className="notice" aria-label={t("Harness recovery mode")}>
+    <section className={`notice${pauseError ? " action-error" : " degraded"}`} aria-label={t("Harness recovery mode")}>
       <WarningCircle size={17} />
       <div>
         <strong>{t(paused ? "Harness startup is paused" : "Harness recovery mode")}</strong>
@@ -414,6 +414,7 @@ export function RequestHistory({ busy, dataRootId }: { busy: boolean; dataRootId
             </tr>
           </thead>
           <tbody>
+            {!items.length && <tr><td colSpan={5} className="field-help">{t(loading ? "Loading request history" : "No request records to display")}</td></tr>}
             {items
               .slice()
               .reverse()
@@ -590,7 +591,7 @@ export function DiagnosticsView({ snapshot, busyAction, runAction, refresh, embe
           )}
         </p>
         {arrayValue(snapshot.diagnostics, "warnings").map((item, index) => (
-          <p role="alert" key={index}>
+          <p className="form-error" role="alert" key={index}>
             {stringValue(item, "bundle_id")}:{" "}
             {t(
               stringValue(item, "reason") ||

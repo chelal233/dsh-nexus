@@ -9,8 +9,7 @@ import {
   booleanValue,
 } from "../json-values";
 import { useI18n, type Locale } from "../i18n";
-import { NotificationSettings } from './notifications';
-import { MarketplaceSettings } from './market';
+import { NotificationSettings } from "./notifications";
 import { useDraftReference, useDraftState } from "../draft-memory";
 import { harnessUiMatchesRuntime } from "../harness-session";
 import { launchInputValueLabel, errorMessage, harnessOptionLabel } from "../display-format";
@@ -973,12 +972,43 @@ export function SettingsView({
   busyAction,
   runAction,
   repairSection,
+  onSettingsSectionChange,
 }: ViewProps) {
-  const scrollSection = (id: string) =>
-    document.getElementById(`settings-${id}`)?.scrollIntoView({ block: "start" });
   useEffect(() => {
-    if (repairSection) scrollSection(repairSection.section);
+    if (!repairSection) return;
+    document
+      .getElementById("settings-" + repairSection.section)
+      ?.scrollIntoView({ block: "start", behavior: "instant" });
   }, [repairSection]);
+  useEffect(() => {
+    const sections = Array.from(document.querySelectorAll<HTMLElement>(".settings-group"));
+    let frame = 0;
+    const update = () => {
+      const scale = Number(document.documentElement.style.zoom) || 1;
+      const margin = sections[0] ? parseFloat(window.getComputedStyle(sections[0]).scrollMarginTop) * scale : 0;
+      const line = Math.max((document.querySelector(".topbar")?.getBoundingClientRect().bottom || 0) + 20, margin) + 2;
+      const current = sections.filter((section) => section.getBoundingClientRect().top <= line).at(-1) || sections[0];
+      if (current) onSettingsSectionChange?.(current.id.replace("settings-", ""));
+    };
+    const schedule = () => {
+      if (!window.requestAnimationFrame) return update();
+      window.cancelAnimationFrame(frame);
+      frame = window.requestAnimationFrame(update);
+    };
+    window.addEventListener("scroll", schedule, { passive: true });
+    window.addEventListener("resize", schedule);
+    window.addEventListener(ZOOM_CHANGED, schedule);
+    const observer = typeof ResizeObserver === "undefined" ? null : new ResizeObserver(schedule);
+    sections.forEach((section) => observer?.observe(section));
+    schedule();
+    return () => {
+      window.removeEventListener("scroll", schedule);
+      window.removeEventListener("resize", schedule);
+      window.removeEventListener(ZOOM_CHANGED, schedule);
+      window.cancelAnimationFrame?.(frame);
+      observer?.disconnect();
+    };
+  }, [onSettingsSectionChange]);
   const [zoom, setZoom] = useState(displayZoom);
   useEffect(() => {
     const sync = (event: Event) => setZoom((event as CustomEvent<number>).detail);
@@ -1295,29 +1325,6 @@ export function SettingsView({
           "Configuration remains Agent-owned. This view intentionally exposes metadata, not credentials or raw environment values.",
         )}
       />
-      <nav className="section-nav" aria-label={t("Settings sections")}>
-        {(
-          [
-            ["display", "Appearance and display"],
-            ["harness", "Harness configuration"],
-            ["runtime", "Runtime and launch"],
-            ["repair", "Repair & reset"],
-            ["application", "Application and about"],
-          ] as const
-        ).map(([id, label]) => (
-          <a
-            key={id}
-            className="button"
-            href={`#settings-${id}`}
-            onClick={(event) => {
-              event.preventDefault();
-              scrollSection(id);
-            }}
-          >
-            {t(label)}
-          </a>
-        ))}
-      </nav>
       <section className="settings-section settings-group" id="settings-display">
         <Panel title={t("Appearance")} icon={<Gear size={18} />}>
           <label className="field-label" htmlFor="theme-mode">
@@ -1691,6 +1698,9 @@ export function SettingsView({
           />
         </Panel>
       </section>
+      <section className="settings-section settings-group" id="settings-notifications">
+        <NotificationSettings />
+      </section>
       <section className="settings-section settings-group" id="settings-repair">
         <Panel title={t("Repair & reset")} icon={<Gear size={18} />}>
           <p className="field-help">
@@ -1831,6 +1841,7 @@ export function SettingsView({
               <span>{t("Agent log level")}</span>
               <select
                 className="form-input"
+                aria-label={t("Agent log level")}
                 value={logLevel}
                 onChange={(event) => setLogLevel(event.target.value)}
               >
@@ -1860,8 +1871,7 @@ export function SettingsView({
             </p>
           </details>
         </Panel>
-        <NotificationSettings />
-        <MarketplaceSettings key={`${stringValue(snapshot.profiles, 'active_profile')}:${JSON.stringify(snapshot.config?.harness_preferences)}`} />
+
         <Panel title={t("Native integration")} icon={<Bell size={18} />}>
           <div className="integration-list">
             {desktopUpdate && (
@@ -1950,7 +1960,7 @@ export function SettingsView({
               </label>
             </div>
           </div>
-          {desktopUpdateError && <p role="alert">{desktopUpdateError}</p>}
+          {desktopUpdateError && <p className="form-error" role="alert">{desktopUpdateError}</p>}
         </Panel>
       </section>
     </>

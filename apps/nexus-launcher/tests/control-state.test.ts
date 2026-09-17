@@ -29,6 +29,8 @@ test("plugin isolation binds the policy to the selected original profile", () =>
     { action: "plugin_disable", profile: "web", package: "a" });
   assert.deepEqual(pluginIsolationChoice({ ...profiles, disabled_plugins: ["a"] }, "web", "a", false).command,
     { action: "plugin_enable", profile: "web", package: "a" });
+  assert.deepEqual(pluginIsolationChoice({ ...profiles, manifests: [{ ...source, bundles: ["@deepseek-ai/dsh-base"] }], disabled_plugins: ["a"] }, "web", "a", false).command,
+    { action: "plugin_enable", profile: "web", package: "a" });
   for (const packageName of ["@deepseek-ai/dsh-base", "dependency-only"]) {
     assert.equal(pluginIsolationChoice(profiles, "web", packageName, false).eligible, false);
   }

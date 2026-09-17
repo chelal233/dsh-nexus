@@ -15,9 +15,12 @@ test('marketplace selection sends the displayed profile scope once and reports f
     const react = await import('react'); act = react.act;
     const { createRoot } = await import('react-dom/client');
     const state = { profile: 'web', scope: 'C:/test/profiles/web', provider: 'none', status: 'ready', installed: false };
+    const profiles = {api_version:'v1',active_profile:'web',manifests:[{name:'web',bundles:[],plugins:[]}]};
     const posts = []; let settle;
     mockIPC((command, payload) => {
-      assert.equal(command, 'proxy_request'); assert.equal(payload.path, '/v1/market');
+      assert.equal(command, 'proxy_request');
+      if (payload.path === '/v1/profiles' && payload.method === 'GET') return profiles;
+      assert.equal(payload.path, '/v1/market');
       if (payload.method === 'GET') return { ...state };
       posts.push(payload.body);
       return new Promise((_resolve, reject) => { settle = () => reject(new Error('installation fixture failed')); });
@@ -25,12 +28,8 @@ test('marketplace selection sends the displayed profile scope once and reports f
     loader = await createUiTestLoader();
     const { MarketplaceSettings } = await loader.loadModule('/src/App.tsx');
     root = createRoot(document.getElementById('root'));
-    await act(async () => root.render(react.createElement(MarketplaceSettings)));
-    assert.deepEqual([...document.querySelectorAll('option')].map(o => o.value), ['none', 'dsh-market']);
-    await act(async () => {
-      const select = document.querySelector('select'); select.value = 'dsh-market';
-      select.dispatchEvent(new dom.window.Event('change', { bubbles: true }));
-    });
+    await act(async () => root.render(react.createElement(MarketplaceSettings, {snapshot: {profiles, startup: {available: true}, harnessRuntime:{harness:{state:'stopped'}}}, busyAction:null, refresh:async()=>{}, runAction:async()=>true})));
+    assert.equal(document.querySelector('select'), null);
     await act(async () => { document.querySelector('button').click(); document.querySelector('button').click(); });
     assert.deepEqual(posts, [{ profile: state.profile, scope: state.scope, provider: 'dsh-market' }]);
     assert.equal(document.querySelector('button').disabled, true);

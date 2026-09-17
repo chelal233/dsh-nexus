@@ -13,6 +13,29 @@ export type TranslationParams = Record<string, string | number>;
 export type Translator = (key: string, params?: TranslationParams) => string;
 
 const english: Record<string, string> = {
+  "Close": "Close",
+  "Loading request history": "Loading request history…",
+  "No request records to display": "No request records to display. Check previous requests to refresh.",
+  "View checkpoints": "View checkpoints",
+  "Slot": "Slot",
+  "Notifications": "Notifications",
+  "Built-in plugins": "Built-in plugins",
+  "Built-in plugin management": "Built-in plugin management",
+  "Manage Nexus plugin integrations for the active profile.": "Manage Nexus plugin integrations for the active profile.",
+
+  "A data file could not be parsed. Back up the file shown below, correct its syntax at the reported location, then retry. Nexus will not overwrite it.":
+    "A data file could not be parsed. Back up the file shown below, correct its syntax at the reported location, then retry. Nexus will not overwrite it.",
+  "Access was denied. Check the data directory permissions and security software, then retry.":
+    "Access was denied. Check the data directory permissions and security software, then retry.",
+  "A required path is missing. Check the configured location before restoring files or changing settings.":
+    "A required path is missing. Check the configured location before restoring files or changing settings.",
+  "The service is busy or unavailable. Wait and retry; do not edit data files for this error.":
+    "The service is busy or unavailable. Wait and retry; do not edit data files for this error.",
+  "Open the related module to inspect recovery options. Preserve existing files and export diagnostics if the cause is unclear.":
+    "Open the related module to inspect recovery options. Preserve existing files and export diagnostics if the cause is unclear.",
+  "Open related module": "Open related module",
+  "Open Nexus data directory": "Open Nexus data directory",
+  "Open Harness data directory": "Open Harness data directory",
   "Automatic Launcher updates": "Automatic Launcher updates",
   "Launcher updates": "Launcher updates",
   "Check for updates": "Check for updates",
@@ -993,22 +1016,22 @@ const english: Record<string, string> = {
 
   "Saved plugin choices; effective on next check": "Saved plugin choices; effective on next check",
   "Choose how to handle plugin errors": "Choose how to handle plugin errors",
-  "Disable plugin in isolated profiles": "Disable plugin in isolated profiles",
+  "Disable plugin in this profile": "Disable plugin in this profile",
   "Restore plugin on next check": "Restore plugin on next check",
   "Enable on next check": "Enable on next check",
   "Disable on next check": "Disable on next check",
   "Select the source profile and run its compatibility check to manage plugin choices.":
     "Select the source profile and run its compatibility check to manage plugin choices.",
-  "Plugin choices apply to the isolated profile on the next compatibility check. Nothing is uninstalled, the source profile stays unchanged, and running Harness is not changed immediately.":
-    "Plugin choices apply to the isolated profile on the next compatibility check. Nothing is uninstalled, the source profile stays unchanged, and running Harness is not changed immediately.",
+  "Plugin choices update this profile atomically. Disabled packages stay installed; enabling restores their load order. Stop Harness before making changes.":
+    "Plugin choices update this profile atomically. Disabled packages stay installed; enabling restores their load order. Stop Harness before making changes.",
   "Disabled by user": "Disabled by user",
   "Retry version switch": "Retry version switch",
   "Select all third-party plugins": "Select all third-party plugins",
   "Save disabled plugins": "Save disabled plugins",
   "Choose plugins to disable, then retry. Unattributed plugins are options, not confirmed faults. Nothing is uninstalled.":
     "Choose plugins to disable, then retry. Unattributed plugins are options, not confirmed faults. Nothing is uninstalled.",
-  "Saved choices apply to isolated profiles until restored. The original profile remains intact.":
-    "Saved choices apply to isolated profiles until restored. The original profile remains intact.",
+  "Saved choices belong to this profile. Disabled packages stay installed and can be enabled again in their previous order.":
+    "Saved choices belong to this profile. Disabled packages stay installed and can be enabled again in their previous order.",
   "After saving, select the upstream version again to retry.":
     "After saving, select the upstream version again to retry.",
   "Stop Harness before changing plugin isolation.":
@@ -1018,7 +1041,12 @@ const english: Record<string, string> = {
     "Not identified as faulty; optional isolation for troubleshooting",
   "Startup compatibility check": "Startup compatibility check",
   "Source profile": "Source profile",
-  "Effective isolated profile": "Effective isolated profile",
+  "Verified profile": "Verified profile",
+  "A legacy internal copy is selected. Stop Harness and explicitly select its source; edits in the copy will not overwrite the source:":
+    "A legacy internal copy is selected. Stop Harness and explicitly select its source; edits in the copy will not overwrite the source:",
+  "Legacy internal copies are archived intact and no longer used as profiles. Open the archive to inspect and recover any settings or plugin changes.":
+    "Legacy internal copies are archived intact and no longer used as profiles. Open the archive to inspect and recover any settings or plugin changes.",
+  "Open legacy archive": "Open legacy archive",
   "Started with isolated plugins": "Started with isolated plugins",
   "Startup check passed": "Startup check passed",
   "Checks plugin loading and initialization, not every runtime feature. Original profile and data remain unchanged.":
@@ -1044,6 +1072,9 @@ const english: Record<string, string> = {
   "Dismiss error": "Dismiss error",
   "Connecting to Nexus": "Connecting to Nexus",
   "Waiting for the local control plane.": "Waiting for the local control plane.",
+  "Loading workspace": "Loading workspace",
+  "Nexus is connected. Loading Harness status and profiles.":
+    "Nexus is connected. Loading Harness status and profiles.",
   "Launcher bridge unavailable": "Launcher bridge unavailable",
   "Agent unavailable": "Agent unavailable",
   "Action failed": "Action failed",
@@ -1610,6 +1641,29 @@ const english: Record<string, string> = {
 };
 
 const chinese: Record<string, string> = {
+  "Close": "关闭",
+  "Loading request history": "正在读取操作记录…",
+  "No request records to display": "暂无可显示的操作记录，可查询之前的请求以刷新。",
+  "View checkpoints": "查看检查点",
+  "Slot": "Slot",
+  "Notifications": "通知",
+  "Built-in plugins": "内置插件",
+  "Built-in plugin management": "内置插件管理",
+  "Manage Nexus plugin integrations for the active profile.": "管理 Nexus 提供的插件集成入口。插件安装到当前配置档。",
+
+  "A data file could not be parsed. Back up the file shown below, correct its syntax at the reported location, then retry. Nexus will not overwrite it.":
+    "数据文件解析失败。请先备份下方错误指向的文件，按报错行列修正格式后重试。Nexus 不会覆盖原文件。",
+  "Access was denied. Check the data directory permissions and security software, then retry.":
+    "访问被拒绝。请检查数据目录权限和安全软件的拦截记录，然后重试。",
+  "A required path is missing. Check the configured location before restoring files or changing settings.":
+    "所需路径不存在。请先核对配置的位置，再决定恢复文件或修改设置。",
+  "The service is busy or unavailable. Wait and retry; do not edit data files for this error.":
+    "服务暂时繁忙或不可用。请稍候重试，无需为此修改数据文件。",
+  "Open the related module to inspect recovery options. Preserve existing files and export diagnostics if the cause is unclear.":
+    "请进入相关模块查看恢复选项。原因不明时，保留现有文件并导出诊断。",
+  "Open related module": "前往相关模块",
+  "Open Nexus data directory": "打开 Nexus 数据目录",
+  "Open Harness data directory": "打开 Harness 数据目录",
   "Automatic Launcher updates": "Launcher 自动更新",
   "Launcher updates": "启动器更新",
   "Check for updates": "检测更新",
@@ -2543,7 +2597,7 @@ const chinese: Record<string, string> = {
 
   "Choose how to handle plugin errors": "请选择插件错误的处理方式",
   "Saved plugin choices; effective on next check": "已保存的停用选择；下次检查生效",
-  "Disable plugin in isolated profiles": "在隔离配置中停用插件",
+  "Disable plugin in this profile": "在此配置档中停用插件",
   "Restore plugin on next check": "下次检查时恢复插件",
   "Enable on next check": "下次检查时启用",
   "Runs plugin initialization in a temporary local process and closes it afterward. Recovery mode, the selected profile and the stopped Harness service remain unchanged. No browser is opened.":
@@ -2555,16 +2609,16 @@ const chinese: Record<string, string> = {
   "Disable on next check": "下次检查时禁用",
   "Select the source profile and run its compatibility check to manage plugin choices.":
     "请选中源 profile 并运行其兼容检查，再管理插件启用状态。",
-  "Plugin choices apply to the isolated profile on the next compatibility check. Nothing is uninstalled, the source profile stays unchanged, and running Harness is not changed immediately.":
-    "插件选择将在下次兼容检查生成的隔离 profile 中生效。不会卸载插件或修改源 profile，也不会立即改变运行中的 Harness。",
+  "Plugin choices update this profile atomically. Disabled packages stay installed; enabling restores their load order. Stop Harness before making changes.":
+    "插件选择会原子更新此配置档。停用后保留已安装的包，重新启用时恢复加载顺序。修改前需要停止 Harness。",
   "Disabled by user": "用户选择停用",
   "Retry version switch": "重试版本切换",
   "Select all third-party plugins": "选择全部第三方插件",
   "Save disabled plugins": "保存停用选择",
   "Choose plugins to disable, then retry. Unattributed plugins are options, not confirmed faults. Nothing is uninstalled.":
     "选择要停用的插件后重试。未定位的插件仅供排查选择，不代表已确认有故障。不会卸载任何插件。",
-  "Saved choices apply to isolated profiles until restored. The original profile remains intact.":
-    "停用选择持续用于隔离配置，直到手动恢复；原配置保持不变。",
+  "Saved choices belong to this profile. Disabled packages stay installed and can be enabled again in their previous order.":
+    "停用选择属于此配置档。插件包仍然保留，重新启用时恢复原有加载顺序。",
   "After saving, select the upstream version again to retry.": "保存后重新选择上游版本即可重试。",
   "Stop Harness before changing plugin isolation.": "请先停止 Harness，再调整插件停用选择。",
   "DSH reported a loader error for this plugin": "DSH 加载器报告此插件出错",
@@ -2572,7 +2626,12 @@ const chinese: Record<string, string> = {
     "尚未确认故障，可主动停用以排查",
   "Startup compatibility check": "启动兼容性自检",
   "Source profile": "原配置档",
-  "Effective isolated profile": "实际隔离配置档",
+  "Verified profile": "已验证配置档",
+  "A legacy internal copy is selected. Stop Harness and explicitly select its source; edits in the copy will not overwrite the source:":
+    "当前选择的是旧版内部副本。请停止 Harness 后，明确选择源配置档；旧副本中的修改不会自动覆盖源配置：",
+  "Legacy internal copies are archived intact and no longer used as profiles. Open the archive to inspect and recover any settings or plugin changes.":
+    "旧版内部副本已完整归档，不再作为配置档运行。如曾在副本中修改设置或插件，可打开归档检查并取回内容。",
+  "Open legacy archive": "打开旧副本归档",
   "Started with isolated plugins": "隔离不兼容插件后启动检查通过",
   "Startup check passed": "启动兼容性检查通过",
   "Checks plugin loading and initialization, not every runtime feature. Original profile and data remain unchanged.":
@@ -2603,6 +2662,9 @@ const chinese: Record<string, string> = {
   "Dismiss error": "关闭错误",
   "Connecting to Nexus": "正在连接 Nexus",
   "Waiting for the local control plane.": "正在等待本地控制平面。",
+  "Loading workspace": "正在加载工作区",
+  "Nexus is connected. Loading Harness status and profiles.":
+    "已连接 Nexus，正在加载 Harness 状态和配置档。",
   "Launcher bridge unavailable": "Launcher 桥接不可用",
   "Agent unavailable": "Agent 不可用",
   "Action failed": "操作失败",
@@ -3153,7 +3215,9 @@ function detectLocale(): Locale {
   } catch {
     // A restricted webview can disable storage. Browser language is still safe.
   }
-  return localeFromLanguages(window.nexusDesktop?.systemLanguages ?? navigator.languages ?? [navigator.language]);
+  return localeFromLanguages(
+    window.nexusDesktop?.systemLanguages ?? navigator.languages ?? [navigator.language],
+  );
 }
 export function localeFromLanguage(language: string): Locale {
   return localeFromLanguages([language]);

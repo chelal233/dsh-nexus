@@ -1,10 +1,18 @@
 import { useI18n } from "./i18n";
 import { Pulse, BracketsCurly, WarningCircle, ArrowClockwise, X } from "@phosphor-icons/react";
-import { localizeBackendError, compactError, errorMessage } from "./display-format";
+import { localizeBackendError, errorMessage } from "./display-format";
 import { type JsonObject } from "./app-types";
 import { useRef, useEffect, useState } from "react";
 import { isBrowserPreview } from "./agent-bridge";
 import { invoke } from "./desktop";
+import {
+  apiErrorInfo,
+  workspaceFailureKind,
+  workspaceRepairTarget,
+  type ApiErrorInfo,
+} from "./api-errors";
+import { proxyRequest } from "./agent-bridge";
+import type { ModuleId } from "./app-types";
 
 export function StatusPill({
   label,
@@ -21,14 +29,18 @@ export function StatusPill({
   );
 }
 
-export function LoadingState() {
+export function LoadingState({ connected = false }: { connected?: boolean }) {
   const { t } = useI18n();
   return (
     <div className="state-card loading-state" role="status" aria-live="polite">
       <Pulse size={22} className="spin" aria-hidden="true" />
       <div>
-        <strong>{t("Connecting to Nexus")}</strong>
-        <span>{t("Waiting for the local control plane.")}</span>
+        <strong>{connected ? t("Loading workspace") : t("Connecting to Nexus")}</strong>
+        <span>
+          {connected
+            ? t("Nexus is connected. Loading Harness status and profiles.")
+            : t("Waiting for the local control plane.")}
+        </span>
       </div>
     </div>
   );
@@ -73,23 +85,105 @@ export function ErrorState({
 
 export function DegradedNotice({
   errors,
+  failures,
+  onNavigate,
+  onRetry,
   readOnlyRecovery = false,
 }: {
   errors: Record<string, string>;
+  failures?: Record<string, ApiErrorInfo>;
+  onNavigate?: (module: ModuleId) => void;
+  onRetry?: () => void;
   readOnlyRecovery?: boolean;
 }) {
   const { t } = useI18n();
-  const details = Object.entries(errors)
-    .filter(([, message]) => !readOnlyRecovery || !message.includes("Read-only recovery:"))
-    .map(([path, message]) => `${path}: ${compactError(localizeBackendError(message, t))}`)
-    .join(" | ");
-  if (!details) return null;
+  const [openError, setOpenError] = useState<string | null>(null);
+  const [opening, setOpening] = useState(false);
+  const details = Object.entries(errors).filter(
+    ([, message]) => !readOnlyRecovery || !message.includes("Read-only recovery:"),
+  );
+  if (!details.length) return null;
+  const open = async (target: string) => {
+    setOpening(true);
+    setOpenError(null);
+    try {
+      await proxyRequest("/v1/profiles", "POST", { action: "open_path", target });
+    } catch (error) {
+      setOpenError(errorMessage(error));
+    } finally {
+      setOpening(false);
+    }
+  };
   return (
     <div className="notice degraded" role="status" aria-live="polite">
       <WarningCircle size={17} />{" "}
-      <span>
-        {t("Some workspace data is unavailable.")} {details}
-      </span>
+      <div className="workspace-repair">
+        <strong>{t("Some workspace data is unavailable.")}</strong>
+        {details.map(([path, message]) => {
+          const kind = workspaceFailureKind(failures?.[path] ?? apiErrorInfo(message));
+          return (
+            <div className="workspace-repair-item" key={path}>
+              <code>{path}</code>
+              <p>
+                {kind === "invalid_data"
+                  ? t(
+                      "A data file could not be parsed. Back up the file shown below, correct its syntax at the reported location, then retry. Nexus will not overwrite it.",
+                    )
+                  : kind === "permission_denied"
+                    ? t(
+                        "Access was denied. Check the data directory permissions and security software, then retry.",
+                      )
+                    : kind === "not_found"
+                      ? t(
+                          "A required path is missing. Check the configured location before restoring files or changing settings.",
+                        )
+                      : kind === "busy" || kind === "unavailable"
+                        ? t(
+                            "The service is busy or unavailable. Wait and retry; do not edit data files for this error.",
+                          )
+                        : t(
+                            "Open the related module to inspect recovery options. Preserve existing files and export diagnostics if the cause is unclear.",
+                          )}
+              </p>
+              <pre>{message}</pre>
+              {onNavigate && (
+                <button
+                  className="button subtle"
+                  onClick={() => onNavigate(workspaceRepairTarget(path))}
+                >
+                  {t("Open related module")}
+                </button>
+              )}
+            </div>
+          );
+        })}
+        <div className="workspace-repair-actions">
+          {onRetry && (
+            <button className="button subtle" onClick={onRetry}>
+              {t("Retry")}
+            </button>
+          )}
+          {!isBrowserPreview && (
+            <>
+              <button
+                className="button subtle"
+                disabled={opening}
+                onClick={() => void open("nexus_data")}
+              >
+                {t("Open Nexus data directory")}
+              </button>
+              <button
+                className="button subtle"
+                disabled={opening}
+                onClick={() => void open("harness_data")}
+              >
+                {t("Open Harness data directory")}
+              </button>
+            </>
+          )}
+        </div>
+        {openError && <p className="form-error" role="alert">{localizeBackendError(openError, t)}</p>}
+      </div>
     </div>
   );
 }
@@ -153,6 +247,7 @@ export function Modal({
   children: React.ReactNode;
   locked?: boolean;
 }) {
+  const { t } = useI18n();
   const dialog = useRef<HTMLDivElement>(null);
   useEffect(() => {
     const previous = document.activeElement as HTMLElement | null;
@@ -182,9 +277,9 @@ export function Modal({
           if (event.key === "Tab") {
             const items = [
               ...(dialog.current?.querySelectorAll<HTMLElement>(
-                'button:not(:disabled), input:not(:disabled), select:not(:disabled), [tabindex="0"]',
+                'button:not(:disabled), input:not(:disabled), select:not(:disabled), textarea:not(:disabled), a[href], summary, [tabindex="0"]',
               ) || []),
-            ];
+            ].filter((item) => item.tabIndex >= 0 && item.getClientRects().length > 0);
             const first = items[0],
               last = items.at(-1);
             if (!first) {
@@ -210,9 +305,9 @@ export function Modal({
         <div className="modal-header">
           <strong>{title}</strong>
           {!locked && (
-            <ActionButton onClick={onClose}>
+            <button type="button" className="button" onClick={onClose} aria-label={t("Close")} title={t("Close")}>
               <X size={16} />
-            </ActionButton>
+            </button>
           )}
         </div>
         <div className="modal-body">{children}</div>

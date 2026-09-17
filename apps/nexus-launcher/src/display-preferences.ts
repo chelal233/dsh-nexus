@@ -17,6 +17,7 @@ export function setDisplayZoom(value: number): void {
   if (!ZOOM_LEVELS.includes(value)) return;
   sessionZoom = value;
   document.documentElement.style.zoom = String(value / 100);
+  document.documentElement.style.setProperty("--ui-zoom", String(value / 100));
   try {
     window.localStorage.setItem(KEY, String(value));
   } catch {

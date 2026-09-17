@@ -73,6 +73,7 @@ export type StartupStatus = {
 export type Snapshot = {
   startup: StartupStatus | null;
   endpointErrors: Record<string, string>;
+  endpointFailures?: Record<string, import("./api-errors").ApiErrorInfo>;
   lifecycleBusy?: boolean;
   status: StartupStatus | null;
   health: AgentHealthResponse | null;
@@ -89,7 +90,8 @@ export type Snapshot = {
   config: JsonObject | null;
 };
 
-export type ModuleId = "workbench" | "guide" | "versions" | "profiles" | "maintenance" | "settings";
+export type ModuleId =
+  "workbench" | "guide" | "versions" | "profiles" | "maintenance" | "settings" | "plugins";
 
 export type ThemeMode = "system" | "light" | "dark";
 
@@ -105,10 +107,14 @@ export type ViewProps = {
   themeMode: ThemeMode;
   setThemeMode: (mode: ThemeMode) => void;
   openSettings?: () => void;
+  openProfiles?: () => void;
+  openCheckpoints?: () => void;
+  checkpointFocus?: { profile: string; id: number };
   openWorkbench?: () => void;
   onRepair?: (id: string) => void;
   recheckEpoch?: number;
   repairSection?: { section: string; id: number };
+  onSettingsSectionChange?: (section: string) => void;
   embedded?: boolean;
   autoLoadTags?: boolean;
 };

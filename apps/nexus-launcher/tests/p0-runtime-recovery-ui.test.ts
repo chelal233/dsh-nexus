@@ -7,6 +7,22 @@ import { createUiTestLoader } from "./ui-test-loader.ts";
 
 const startup = { available: true, running: true };
 
+test("damaged workspace records expose untruncated location and explicit repair actions", async () => {
+  const loader = await createUiTestLoader();
+  try {
+    const { DegradedNotice } = await loader.loadModule("/src/App.tsx");
+    const raw = 'C:/fixture/profiles.json: expected comma at line 15 column 9';
+    const markup = renderToStaticMarkup(createElement(DegradedNotice, {
+      errors: {"/v1/profiles": raw}, onNavigate: () => {}, onRetry: () => {},
+    }));
+    assert.match(markup, /profiles.json/);
+    assert.match(markup, /line 15 column 9/);
+    assert.match(markup, /Back up the file/);
+    assert.match(markup, /Open related module/);
+    assert.match(markup, /Retry/);
+  } finally { await loader.close(); }
+});
+
 test("read-only recovery omits duplicate endpoint rejection text but retains unrelated failures", async () => {
   const loader = await createUiTestLoader();
   try {
@@ -179,7 +195,7 @@ test("failed compatibility offers explicit plugin choices and retry without clai
     assert.match(markup, /Save disabled plugins/);
     assert.match(markup, /Retry version switch/);
     assert.match(markup, /not confirmed faults/);
-    assert.doesNotMatch(markup, /Startup check passed|Effective isolated profile/);
+    assert.doesNotMatch(markup, /Startup check passed|Verified profile/);
   } finally { await loader.close(); }
 });
 

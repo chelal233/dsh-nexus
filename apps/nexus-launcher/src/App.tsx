@@ -2,6 +2,10 @@ import {
   type IconProps,
   RocketLaunch,
   House,
+  PuzzlePiece,
+  Bell,
+  MonitorPlay,
+  Info,
   Package,
   SlidersHorizontal,
   Pulse,
@@ -32,6 +36,7 @@ import {
 } from "./views/startup";
 import { ReadOnlyRecoveryView, RecoveryModePanel } from "./views/recovery";
 import { UpdatesView } from "./views/updates";
+import { BuiltinPluginsView } from "./views/market";
 import { ProfilesView } from "./views/profiles";
 import { MaintenanceView } from "./views/maintenance";
 import { OperationStatusPanel, ToastNotice, requiresErrorBanner } from "./operation-notices";
@@ -96,6 +101,7 @@ const modules: ModuleDefinition[] = [
   { id: "workbench", label: "Workbench", icon: House },
   { id: "versions", label: "Updates", icon: Package },
   { id: "profiles", label: "Profiles and plugins", icon: SlidersHorizontal },
+  { id: "plugins", label: "Built-in plugins", icon: PuzzlePiece },
   { id: "maintenance", label: "Maintenance", icon: Pulse },
   { id: "settings", label: "Settings", icon: Gear },
 ];
@@ -120,7 +126,7 @@ const emptySnapshot: Snapshot = {
 
 type SnapshotEndpoint = Exclude<
   keyof Snapshot,
-  "startup" | "status" | "endpointErrors" | "lifecycleBusy"
+  "startup" | "status" | "endpointErrors" | "endpointFailures" | "lifecycleBusy"
 >;
 
 const endpointMap: Record<SnapshotEndpoint, string> = {
@@ -154,6 +160,17 @@ function systemTheme(): "light" | "dark" {
 }
 
 function App() {
+  const topbarRef = useRef<HTMLElement>(null);
+  useEffect(() => {
+    const bar = topbarRef.current;
+    if (!bar) return;
+    const measure = () => bar.parentElement?.style.setProperty("--topbar-height", `${bar.offsetHeight}px`);
+    measure();
+    if (typeof ResizeObserver === "undefined") return;
+    const observer = new ResizeObserver(measure);
+    observer.observe(bar);
+    return () => observer.disconnect();
+  }, []);
   const draftMemory = useRef(createDraftMemory());
   const draftRoot = useRef("unresolved");
   const requestClient = useRef<{
@@ -181,8 +198,10 @@ function App() {
     null,
   );
   const [recheckEpoch, setRecheckEpoch] = useState(0);
+  const [activeSettingsSection, setActiveSettingsSection] = useState("display");
   const [repairSection, setRepairSection] = useState<{ section: string; id: number } | undefined>();
 
+  const [checkpointFocus, setCheckpointFocus] = useState<{ profile: string; id: number }>();
   const [operationAnchor, setOperationAnchor] = useState<string | null>(null);
   useEffect(() => {
     if (operationAnchor) {
@@ -194,6 +213,7 @@ function App() {
   const [systemThemeMode, setSystemThemeMode] = useState<"light" | "dark">(systemTheme);
   const [snapshot, setSnapshot] = useState<Snapshot>(emptySnapshot);
   const [loading, setLoading] = useState(true);
+  const [controlPlaneReady, setControlPlaneReady] = useState(false);
   const [error, setErrorMessage] = useState<string | null>(null);
   const [errorSequence, setErrorSequence] = useState(0);
   const setError = useCallback((message: string | null) => {
@@ -317,6 +337,7 @@ function App() {
           setLoading(true);
           try {
             const startup = await commandStartupStatus();
+            setControlPlaneReady(startup.available);
             const next: Snapshot = {
               ...emptySnapshot,
               startup,
@@ -339,6 +360,7 @@ function App() {
             setBridgeError(null);
             setAgentUnavailable(null);
             const endpointErrors: Record<string, string> = {};
+            const endpointFailures: NonNullable<Snapshot["endpointFailures"]> = {};
             let lifecycleBusy = false;
             // These reads share the Agent lifecycle gate. Serialize them within a
             // refresh so our own reads do not look like an active mutation.
@@ -357,11 +379,21 @@ function App() {
                 const read = async () => {
                   try {
                     const value = await proxyRequest<Snapshot[SnapshotEndpoint]>(path);
+                    const warnings = asObject(value).warnings;
+                    if (path === "/v1/profiles" && Array.isArray(warnings)) {
+                      const messages = warnings.filter(
+                        (item): item is string => typeof item === "string",
+                      );
+                      if (messages.length) endpointErrors[path] = messages.join("\n");
+                    }
                     return [key as SnapshotEndpoint, value] as const;
                   } catch (cause) {
                     const message = errorMessage(cause);
                     if (isLifecycleBusyError(message)) lifecycleBusy = true;
-                    else endpointErrors[path] = message;
+                    else {
+                      endpointErrors[path] = message;
+                      endpointFailures[path] = apiErrorInfo(cause);
+                    }
                     return [key as SnapshotEndpoint, null] as const;
                   }
                 };
@@ -371,7 +403,7 @@ function App() {
                 return pending;
               }),
             );
-            Object.assign(next, Object.fromEntries(entries), { endpointErrors });
+            Object.assign(next, Object.fromEntries(entries), { endpointErrors, endpointFailures });
             const coldPhase = stringValue(asObject(asObject(next.updates).operation), "phase");
             harnessPollState.current =
               lifecycleBusy || (!!coldPhase && !coldOperationIsTerminal(coldPhase))
@@ -400,6 +432,7 @@ function App() {
               setCredentialInvalidationPending(false);
             }
           } catch (cause) {
+            setControlPlaneReady(false);
             harnessPollState.current = undefined;
             setSnapshot(failClosedSnapshot(emptySnapshot));
             setNotice(null);
@@ -813,8 +846,12 @@ function App() {
       const exitCode = runtime.exit_code;
       void notify(
         "Nexus Launcher",
-        [detail || t("Harness failed to start or crashed. Check the Overview page for details."),
-          typeof exitCode === "number" ? `Exit code: ${exitCode}` : ""].filter(Boolean).join(" — "),
+        [
+          detail || t("Harness failed to start or crashed. Check the Overview page for details."),
+          typeof exitCode === "number" ? `Exit code: ${exitCode}` : "",
+        ]
+          .filter(Boolean)
+          .join(" — "),
       );
     }
   }, [snapshot.harnessRuntime, t]);
@@ -837,9 +874,17 @@ function App() {
         setRepairSection({ section: "harness", id: Date.now() });
       },
       openWorkbench: () => setActiveModule("workbench"),
+      openProfiles: () => { setCheckpointFocus(undefined); setActiveModule("profiles"); window.scrollTo({ top: 0, behavior: "instant" }); },
+      openCheckpoints: () => {
+        const profile = stringValue(snapshot.profiles, "active_profile");
+        setCheckpointFocus(profile ? { profile, id: Date.now() } : undefined);
+        setActiveModule("profiles");
+      },
+      checkpointFocus,
       onRepair: navigateRepair,
       recheckEpoch,
       repairSection,
+      onSettingsSectionChange: setActiveSettingsSection,
     };
     if (booleanValue(snapshot.health, "degraded")) return <ReadOnlyRecoveryView {...common} />;
     switch (activeModule) {
@@ -847,6 +892,8 @@ function App() {
         return <GuideView {...common} />;
       case "versions":
         return <UpdatesView {...common} />;
+      case "plugins":
+        return <BuiltinPluginsView {...common} />;
       case "profiles":
         return <ProfilesView {...common} />;
       case "maintenance":
@@ -878,6 +925,9 @@ function App() {
     snapshot,
     t,
     themeMode,
+    repairSection,
+    recheckEpoch,
+    checkpointFocus,
   ]);
 
   return (
@@ -927,6 +977,26 @@ function App() {
                 ))}
               </div>
             ))}
+            {activeModule === "settings" && (
+              <div className="settings-subnav" aria-label={t("Settings sections")}>
+                {[
+                  { id: "display", label: "Appearance and display", icon: MonitorPlay },
+                  { id: "harness", label: "Harness configuration", icon: SlidersHorizontal },
+                  { id: "runtime", label: "Runtime and launch", icon: Cpu },
+                  { id: "notifications", label: "Notifications", icon: Bell },
+                  { id: "repair", label: "Repair & reset", icon: ArrowsClockwise },
+                  { id: "application", label: "Application and about", icon: Info },
+                ].map(({ id, label, icon: Icon }) => (
+                  <button type="button" key={id} className="settings-subitem"
+                    title={t(label)} aria-label={t(label)} aria-controls={`settings-${id}`}
+                    aria-current={activeSettingsSection === id ? "page" : undefined}
+                    disabled={booleanValue(snapshot.health, "degraded")}
+                    onClick={() => { setRepairSection({ section: id, id: Date.now() }); window.scrollTo({ top: 0, behavior: "instant" }); }}>
+                    <Icon size={16} aria-hidden="true" /><span>{t(label)}</span>
+                  </button>
+                ))}
+              </div>
+            )}
           </nav>
           <div className="sidebar-footer">
             <ShieldCheck size={16} />
@@ -976,7 +1046,7 @@ function App() {
         </aside>
 
         <main className="workspace">
-          <header className="topbar">
+          <header className="topbar" ref={topbarRef}>
             <div className="breadcrumbs">
               <span>{t("Nexus Launcher")}</span>
               <span className="crumb-separator">/</span>
@@ -1168,6 +1238,9 @@ function App() {
           {!error && Object.keys(snapshot.endpointErrors).length > 0 && (
             <DegradedNotice
               errors={snapshot.endpointErrors}
+              failures={snapshot.endpointFailures}
+              onNavigate={setActiveModule}
+              onRetry={() => void refresh()}
               readOnlyRecovery={booleanValue(snapshot.health, "read_only")}
             />
           )}
@@ -1177,7 +1250,7 @@ function App() {
               onRetry={() => void retryStartup()}
             />
           ) : contentMode === "loading" ? (
-            <LoadingState />
+            <LoadingState connected={controlPlaneReady} />
           ) : (
             <section className="page-content">{content}</section>
           )}

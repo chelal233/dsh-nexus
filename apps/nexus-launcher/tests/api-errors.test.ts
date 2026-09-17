@@ -1,7 +1,18 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { apiErrorInfo, recoverableNoop, errorWithExplanation } from "../src/api-errors.ts";
+import { apiErrorInfo, recoverableNoop, errorWithExplanation, workspaceFailureKind, workspaceRepairTarget } from "../src/api-errors.ts";
 import { createUiTestLoader } from "./ui-test-loader.ts";
+
+test("workspace recovery covers all modules and does not mistake transient failures for damaged files", () => {
+  assert.equal(workspaceRepairTarget("/v1/profiles"), "profiles");
+  for (const route of ["releases", "updates"]) assert.equal(workspaceRepairTarget(`/v1/${route}`), "versions");
+  for (const route of ["checkpoints", "diagnostics", "maintenance", "recovery", "state"]) assert.equal(workspaceRepairTarget(`/v1/${route}`), "maintenance");
+  assert.equal(workspaceRepairTarget("/v1/config"), "settings");
+  assert.equal(workspaceFailureKind(apiErrorInfo('expected `,` or `]` at line 15 column 9')), "invalid_data");
+  assert.equal(workspaceFailureKind(apiErrorInfo({kind:"permission_denied",message:"denied"})), "permission_denied");
+  assert.equal(workspaceFailureKind(apiErrorInfo({retryable:true,message:"unavailable"})), "unavailable");
+  assert.equal(workspaceFailureKind(apiErrorInfo("unexplained failure")), "other");
+});
 
 test("ambiguous local failures preserve raw errors without speculative repair advice", async () => {
   const loader = await createUiTestLoader();

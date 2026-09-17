@@ -19,7 +19,6 @@ import {
 } from "../ui-components";
 import { RestoreStatusPanel } from "../operation-notices";
 import { useI18n } from "../i18n";
-import { MarketplaceSettings } from './market';
 import { useState, useRef, useCallback, useEffect } from "react";
 import {
   createLatestRequest,
@@ -41,7 +40,15 @@ export function ProfilesView(props: ViewProps) {
   const { t, locale } = useI18n();
   const { snapshot, busyAction, runAction } = props;
   const active = stringValue(snapshot.profiles, "active_profile");
-  const [expandedProfiles, setExpandedProfiles] = useState<string[]>([]);
+  const [expandedProfiles, setExpandedProfiles] = useState<string[]>(() => props.checkpointFocus ? [props.checkpointFocus.profile] : []);
+  useEffect(() => {
+    if (props.checkpointFocus) setExpandedProfiles(current => current.includes(props.checkpointFocus!.profile) ? current : [...current, props.checkpointFocus!.profile]);
+  }, [props.checkpointFocus]);
+  useEffect(() => {
+    if (props.checkpointFocus && expandedProfiles.includes(props.checkpointFocus.profile)) {
+      document.getElementById("profile-checkpoints-" + encodeURIComponent(props.checkpointFocus.profile))?.scrollIntoView({block: "start", behavior: "instant"});
+    }
+  }, [props.checkpointFocus, expandedProfiles]);
   const [newProfileName, setNewProfileName] = useState("");
   const [pendingDelete, setPendingDelete] = useState<string | null>(null);
   const [deletedProfiles, setDeletedProfiles] = useState<JsonObject[]>([]);
@@ -100,8 +107,17 @@ export function ProfilesView(props: ViewProps) {
           "Select a profile to manage its checkpoints and plugins. Deleted profiles are kept for restoration; the current profile cannot be deleted.",
         )}
       />
-      <MarketplaceSettings key={`${archiveScope}:${active}`} />
       <Panel title={t("Profile catalog")} icon={<SlidersHorizontal size={18} />}>
+        {stringValue(snapshot.profiles, "legacy_selected_source") && <p className="notice degraded">
+          {t("A legacy internal copy is selected. Stop Harness and explicitly select its source; edits in the copy will not overwrite the source:")}
+          <strong>{stringValue(snapshot.profiles, "legacy_selected_source")}</strong>
+        </p>}
+        {stringValue(snapshot.profiles, "retired_profiles_directory") && <div className="status-block">
+          <p>{t("Legacy internal copies are archived intact and no longer used as profiles. Open the archive to inspect and recover any settings or plugin changes.")}</p>
+          <ActionButton disabled={busyAction !== null} onClick={() => void runAction(t("Open legacy archive"), "/v1/profiles", { action: "open_path", target: "retired_profiles" })}>
+            {t("Open legacy archive")}
+          </ActionButton>
+        </div>}
         <div className="button-row">
           {[
             ["settings", t("Open settings.yaml")],
@@ -119,10 +135,10 @@ export function ProfilesView(props: ViewProps) {
           ))}
         </div>
         {gate.reason === "stop_required" || gate.reason === "not_stopped" ? (
-          <p className="form-error">
-            <WarningCircle size={15} />
-            {t("Stop Harness before switching profiles or removing plugins.")}
-          </p>
+          <div className="notice degraded">
+            <WarningCircle size={17} />
+            <span>{t("Stop Harness before switching profiles or removing plugins.")}</span>
+          </div>
         ) : null}
         <DataList
           items={manifests}
@@ -205,7 +221,9 @@ export function ProfilesView(props: ViewProps) {
                 )}
                 {expanded && (
                   <div className="profile-children">
-                    <CheckpointsView {...props} embedded profileFilter={name} />
+                    <div className="profile-checkpoints" id={"profile-checkpoints-" + encodeURIComponent(name)}>
+                      <CheckpointsView {...props} embedded profileFilter={name} />
+                    </div>
                     <ProfilePlugins {...props} profile={name} />
                   </div>
                 )}
@@ -676,7 +694,7 @@ export function ProfilePlugins({
     <Panel title={t("Plugin inventory")} icon={<Package size={18} />}>
       <p className="field-help">
         {t(
-          "Plugin choices apply to the isolated profile on the next compatibility check. Nothing is uninstalled, the source profile stays unchanged, and running Harness is not changed immediately.",
+          "Plugin choices update this profile atomically. Disabled packages stay installed; enabling restores their load order. Stop Harness before making changes.",
         )}
       </p>
       <p className="field-help">
@@ -810,7 +828,7 @@ export function ProfilePlugins({
                     tone={removable ? "warn" : "neutral"}
                   />
                   {fixed && <StatusPill label={t("Fixed load position")} tone="neutral" />}
-                  {index < 0 && <span>{t("Dependency only; not in the load list")}</span>}
+                  {index < 0 && <span>{t(isolation.disabled ? "Disabled by user" : "Dependency only; not in the load list")}</span>}
                   <span>{stringValue(item, "version") || t("Unknown version")}</span>
                 </div>
                 <span className="row-meta button-row">

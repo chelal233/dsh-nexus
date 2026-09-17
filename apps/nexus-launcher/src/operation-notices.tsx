@@ -1,5 +1,5 @@
 import { useI18n } from "./i18n";
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { CheckCircle, WarningCircle, Info, X, Pulse } from "@phosphor-icons/react";
 import { type Snapshot, type JsonObject, type HarnessPanelProps } from "./app-types";
 import { Panel, StatusPill, ActionButton } from "./ui-components";
@@ -28,22 +28,39 @@ export function ToastNotice({
 }) {
   const { t } = useI18n();
   const [visible, setVisible] = useState(true);
-  const [paused, setPaused] = useState(false);
+  const [hovered, setHovered] = useState(false);
+  const [focused, setFocused] = useState(false);
+  const paused = hovered || focused;
+  const duration = kind === "error" ? 10000 : 5000;
+  const remaining = useRef(duration);
+  const [fraction, setFraction] = useState(1);
   useEffect(() => {
     if (paused || !visible) return;
-    const timer = window.setTimeout(() => setVisible(false), kind === "error" ? 10000 : 5000);
-    return () => window.clearTimeout(timer);
-  }, [paused, visible, kind]);
+    const started = performance.now();
+    const budget = remaining.current;
+    const update = () => {
+      remaining.current = Math.max(0, budget - (performance.now() - started));
+      setFraction(remaining.current / duration);
+      if (remaining.current === 0) setVisible(false);
+    };
+    const timer = window.setInterval(update, 100);
+    const deadline = window.setTimeout(update, budget);
+    return () => {
+      window.clearInterval(timer);
+      window.clearTimeout(deadline);
+      remaining.current = Math.max(0, budget - (performance.now() - started));
+    };
+  }, [paused, visible, duration]);
   if (!visible) return null;
   return (
     <div
-      className={`toast toast-${kind}`}
+      className={`toast toast-${kind === "success" ? "info" : kind}`}
       role={kind === "error" ? "alert" : "status"}
-      onMouseEnter={() => setPaused(true)}
-      onMouseLeave={() => setPaused(false)}
-      onFocus={() => setPaused(true)}
+      onMouseEnter={() => setHovered(true)}
+      onMouseLeave={() => setHovered(false)}
+      onFocus={() => setFocused(true)}
       onBlur={(event) => {
-        if (!event.currentTarget.contains(event.relatedTarget)) setPaused(false);
+        if (!event.currentTarget.contains(event.relatedTarget)) setFocused(false);
       }}
     >
       {kind === "success" ? (
@@ -54,10 +71,13 @@ export function ToastNotice({
         <Info size={18} />
       )}
       <span style={{ whiteSpace: "pre-line" }}>{message}</span>
-      {onDetails && <button onClick={onDetails}>{t("Open operation details")}</button>}
+      {onDetails && <button className="toast-details" onClick={onDetails}>{t("Open operation details")}</button>}
       <button onClick={() => setVisible(false)} aria-label={t("Dismiss notice")}>
         <X size={16} />
       </button>
+      <div className="toast-countdown" aria-hidden="true">
+        <div style={{ transform: `scaleX(${fraction})` }} />
+      </div>
     </div>
   );
 }

@@ -224,7 +224,7 @@ export function CompatibilitySummary({
     try {
       for (const packageName of selected) {
         if (
-          !(await runAction(t("Disable plugin in isolated profiles"), "/v1/profiles", {
+          !(await runAction(t("Disable plugin in this profile"), "/v1/profiles", {
             action: "plugin_disable",
             profile: source,
             package: packageName,
@@ -283,7 +283,7 @@ export function CompatibilitySummary({
       </p>
       {hasReport && !needsChoice && (
         <p>
-          {t("Effective isolated profile")}: {stringValue(report, "effective_profile")}
+          {t("Verified profile")}: {stringValue(report, "effective_profile")}
         </p>
       )}
       {hasReport && (
@@ -419,7 +419,7 @@ export function CompatibilitySummary({
           </div>
           <p>
             {t(
-              "Saved choices apply to isolated profiles until restored. The original profile remains intact.",
+              "Saved choices belong to this profile. Disabled packages stay installed and can be enabled again in their previous order.",
             )}
           </p>
           {!installed && !retryTag && (
@@ -517,7 +517,7 @@ export function StartupOperationPanel({
             ? t("Startup cancelled. The previous instance is not restarted automatically.")
             : t("Startup preparation failed");
   return (
-    <section className="notice" aria-live="polite">
+    <section className={`notice${error ? " action-error" : ""}`} aria-live="polite">
       <span>{label}</span>
       {error && <span role="alert">{error}</span>}
       {operation?.cancel_requested === true && (

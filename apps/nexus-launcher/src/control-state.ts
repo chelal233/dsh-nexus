@@ -45,7 +45,7 @@ export function pluginIsolationChoice(
     !!packageName &&
     !packageName.startsWith("@deepseek-ai/") &&
     Array.isArray(displayed?.bundles) &&
-    displayed.bundles.includes(packageName);
+    (displayed.bundles.includes(packageName) || (Array.isArray(policy) && policy.includes(packageName)));
   const known =
     profiles.api_version === "v1" &&
     eligible &&
