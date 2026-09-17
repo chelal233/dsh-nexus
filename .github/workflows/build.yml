@@ -75,7 +75,9 @@ jobs:
           pnpm format:check
           pnpm test
           pnpm test:electron
-          cargo test --manifest-path ../../Cargo.toml --workspace --locked -j 2 -- --test-threads=4
+          # Process-lifecycle fixtures fork and hold real OS locks; serialize
+          # them to avoid inherited-descriptor windows and runner contention.
+          cargo test --manifest-path ../../Cargo.toml --workspace --locked -j 2 -- --test-threads=1
       - name: Stage verified offline runtime
         run: |
           pnpm prepare:agent
