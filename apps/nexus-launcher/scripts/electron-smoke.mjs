@@ -62,10 +62,46 @@ try {
   // under the lifecycle gate, so wait for the explicit transient busy response.
   const state = await until(() => evaluate('window.nexusDesktop.invoke("proxy_request", {method:"GET",path:"/v1/state"}).catch(error=>{if(error.code==="lifecycle_busy")return null;throw error})'));
   assert.equal(state.state.lifecycle, 'running');
+  // An independent host must work without the Launcher renderer's bridge and
+  // must reject native calls after navigation to an unrelated document.
+  const shellChild = spawn(executable, [...(process.env.NEXUS_SMOKE_EXECUTABLE ? [] : [root]), `--user-data-dir=${userData}`, '--nexus-shell', '--remote-debugging-port=0'], {
+    cwd: root, env, stdio: ['ignore', 'ignore', 'ignore'], windowsHide: true,
+  });
+  let shellSocket;
+  try {
+    const shellPort = await until(async () => {
+      try { return (await readFile(path.join(`${userData}-shell`, 'DevToolsActivePort'), 'utf8')).split('\n')[0]; } catch { return null; }
+    });
+    const shellPage = await until(async () => (await (await fetch(`http://127.0.0.1:${shellPort}/json/list`)).json()).find(p => p.type === 'page' && p.url.endsWith('/shell-recovery.html')));
+    shellSocket = new WebSocket(shellPage.webSocketDebuggerUrl);
+    await new Promise((resolve, reject) => { shellSocket.addEventListener('open', resolve, { once: true }); shellSocket.addEventListener('error', reject, { once: true }); });
+    let id = 0; const requests = new Map();
+    shellSocket.addEventListener('message', event => {
+      const message = JSON.parse(event.data), receiver = requests.get(message.id);
+      if (receiver) { requests.delete(message.id); message.error ? receiver.reject(message.error) : receiver.resolve(message.result); }
+    });
+    const call = (method, params = {}) => new Promise((resolve, reject) => { requests.set(++id, { resolve, reject }); shellSocket.send(JSON.stringify({ id, method, params })); });
+    const evalShell = async expression => {
+      const result = await call('Runtime.evaluate', { expression, awaitPromise: true, returnByValue: true });
+      if (result.exceptionDetails) throw Error(JSON.stringify(result.exceptionDetails));
+      return result.result.value;
+    };
+    assert.equal(await evalShell('typeof process'), 'undefined');
+    assert.equal(await evalShell('typeof window.nexusDesktop'), 'undefined');
+    assert.equal(await evalShell('window.nexusShell.switchStatus().then(s=>s.phase)'), 'idle');
+    assert.equal(await evalShell('window.__DSH_DESKTOP_PICK_DIRECTORY__().then(()=>false,()=>true)'), true);
+    const recovery = await call('Page.captureScreenshot', { format: 'png' });
+    await writeFile(path.join(fixture, 'shell-recovery.png'), Buffer.from(recovery.data, 'base64'));
+    await call('Page.navigate', { url: 'data:text/html,<title>Untrusted smoke fixture</title>' });
+    await until(() => evalShell('location.protocol === "data:" && typeof window.nexusShell === "object"'));
+    assert.equal(await evalShell('window.nexusShell.switchStatus().then(()=>false,()=>true)'), true);
+    const shellExit = new Promise(resolve => shellChild.once('exit', resolve));
+    await Promise.race([call('Browser.close'), shellExit]);
+  } finally { shellSocket?.close(); if (shellChild.exitCode === null) shellChild.kill(); }
   const screenshot = await cdp('Page.captureScreenshot', { format: 'png' });
   await writeFile(path.join(fixture, 'launcher.png'), Buffer.from(screenshot.data, 'base64'));
   const report = { fixture, electron: await readFile(path.join(root, 'node_modules/electron/dist/version'), 'utf8'),
-    checks: ['real renderer loaded unchanged React UI', 'sandboxed renderer has no Node globals', 'allowlist rejected arbitrary command and path', 'private Rust bridge started isolated Agent', 'authenticated business status returned'],
+    checks: ['real renderer loaded unchanged React UI', 'sandboxed renderer has no Node globals', 'allowlist rejected arbitrary command and path', 'private Rust bridge started isolated Agent', 'authenticated business status returned', 'independent recovery window reached Agent', 'recovery and foreign documents cannot invoke Harness native chooser/privileged IPC'],
     screenshot: path.join(fixture, 'launcher.png') };
   // Explicit test-owned Agent stop, not the automatic updater's shutdown path.
   await evaluate('window.nexusDesktop.invoke("proxy_request", {method:"POST",path:"/v1/agent",body:{action:"stop"}})');

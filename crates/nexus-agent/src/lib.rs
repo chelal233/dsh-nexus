@@ -15,6 +15,9 @@ use checkpoint_api::{
 };
 
 mod profile_api;
+#[cfg(any(target_os = "macos", test))]
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+mod macos_terminal;
 #[cfg(test)]
 use profile_api::profile_list_response;
 use profile_api::{profile_control, profile_list};
@@ -23,12 +26,18 @@ mod canary;
 mod process_recovery;
 mod recovery_records;
 mod runtime_patches;
+mod notifications;
+mod desktop_plugins;
+mod desktop_profile;
+mod market;
 mod source_context;
 
 #[cfg(windows)]
 pub mod windows_harness;
 #[cfg(windows)]
 mod windows_terminal;
+#[cfg(unix)]
+mod unix_harness;
 
 use std::{
     env, fs, io,
@@ -515,6 +524,9 @@ fn build_router(state: AppState, credential: nexus_core::agent_auth::AgentCreden
         )
         .route("/v1/harness/discover", get(harness_discover))
         .route("/v1/harness/ui", get(harness_ui))
+        .route("/v1/notifications", get(notifications::status).post(notifications::configure))
+        .route("/v1/market", get(market::status).post(market::select))
+        .route("/v1/desktop/profile", get(desktop_profile::status).post(desktop_profile::select))
         .route("/v1/profiles", get(profile_list).post(profile_control))
         .route("/v1/canary", get(canary::status).post(canary::control))
         .route("/v1/recovery", get(recovery_status).post(recovery_control))

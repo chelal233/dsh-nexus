@@ -53,8 +53,8 @@ test("App aggregates completions, repeats errors, and serializes same-turn actio
     await act(async()=>emit("nexus-tray-action","terminal"));assert.equal(postCount,2,"completion releases the gate");
     await act(async()=>releasePost());
     const {localeFromLanguage}=await loader.loadModule("/src/i18n.ts");
-    for(const language of ["zh-TW","zh-HK","zh-Hant","zh_MO","zh-yue","zh-cmn","zh-XX","yue-HK"]) assert.equal(localeFromLanguage(language),"en");
-    for(const language of ["zh-CN","zh-SG","zh-Hans","zh"]) assert.equal(localeFromLanguage(language),"zh");
+    for(const language of ["fr-FR","ja-JP","yue-HK"]) assert.equal(localeFromLanguage(language),"en");
+    for(const language of ["zh-CN","zh-SG","zh-Hans","zh","zh-TW","zh-HK","zh-Hant","zh_MO"]) assert.equal(localeFromLanguage(language),"zh");
     const {UpdatesView}=await loader.loadModule("/src/App.tsx");
     const {renderToStaticMarkup}=await import("react-dom/server");
     for(const actionPending of [false,true]) {

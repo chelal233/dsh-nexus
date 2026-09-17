@@ -3,9 +3,10 @@ const { contextBridge, ipcRenderer } = require('electron');
 const commands = new Set(['startup_status', 'retry_startup', 'proxy_request', 'build_identity',
   'choose_local_path', 'set_native_locale', 'set_native_notifications', 'update_tray',
   'export_startup_diagnostics', 'autostart_status', 'autostart_set', 'agent_log_set',
-  'notify', 'update_status', 'update_check', 'update_settings', 'update_install']);
+  'notify', 'notification_test', 'update_status', 'update_check', 'update_settings', 'update_install']);
 const events = new Set(['nexus-native-error', 'nexus-tray-action', 'nexus-update']);
 contextBridge.exposeInMainWorld('nexusDesktop', Object.freeze({
+  systemLanguages: JSON.parse(process.argv.find(arg => arg.startsWith('--nexus-system-languages='))?.slice('--nexus-system-languages='.length) || '[]'),
   async invoke(command, args) {
     if (!commands.has(command)) throw new Error('Unknown desktop command');
     const result = await ipcRenderer.invoke('nexus:command', command, args);

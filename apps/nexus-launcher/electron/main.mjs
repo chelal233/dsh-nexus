@@ -1,12 +1,15 @@
 import { app, BrowserWindow, Menu, Tray, nativeImage, ipcMain, dialog, shell, Notification, globalShortcut, session } from 'electron';
 import electronUpdater from 'electron-updater';
 import { spawn } from 'node:child_process';
-import { readFileSync } from 'node:fs';
+import { readFileSync, statSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { RustBridge } from './bridge.mjs';
-import { harnessUrl, trustedFrame, validateRequest } from './policy.mjs';
+import { harnessUrl, trustedFrame, validateRequest, nativeEditAction } from './policy.mjs';
 import { DesktopUpdater, saveUpdateSettings } from './updater.mjs';
+import { EventCursor, settings as notificationSettings, shouldNotify, notificationContent, taskFocused } from './notifications.mjs';
+import { ShellController } from './shell-controller.mjs';
+import { NoticeCoordinator } from './notice-coordinator.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const { autoUpdater } = electronUpdater;
@@ -28,21 +31,63 @@ else {
 }
 
 async function run() {
-  let window, tray, bridge, updater;
+  let window, tray, bridge, updater, shellController, noticeCoordinator;
+  let pendingSession = process.argv.find(arg => arg.startsWith('--nexus-session='))?.slice(16);
   let quitting = false, updating = false, notifications = true, minimizedNotice = false, locale = 'en';
   let controls = {}, controlsAt = 0;
+  let noticeSettings = notificationSettings(), noticeReady = false, noticeBusy = false;
+  const noticeCursor = new EventCursor();
+  let noticeViews = [];
+  const noticeFocused = (kind, task) => ['harness-failed', 'update-ready'].includes(kind) ? noticeCoordinator?.peer('launcher')?.focused === true : taskFocused(task, noticeViews);
+  function deliverNotice(kind, test = false, task = undefined) {
+    if (!test && (!noticeReady || !shouldNotify(noticeSettings, kind, noticeFocused(kind, task)))) return;
+    if (!Notification.isSupported()) throw new Error('System notifications are unavailable');
+    const notice = new Notification(test ? { title: 'Nexus Launcher', body: text('Test notification', '测试通知') } : notificationContent(kind, locale, task));
+    notice.on('click', () => {
+      if (test) show();
+      else if (['harness-failed', 'update-ready'].includes(kind)) { if (shellMode) launchHost(false); else show(); }
+      else if (shellMode) {
+        pendingSession = task?.session; show();
+        window?.webContents.send('nexus:session', pendingSession);
+        void shellController?.tick();
+      } else if (noticeCoordinator?.peer('shell')) {
+        launchHost(true, task?.session);
+      } else void bridge.request('proxy_request', { method: 'GET', path: '/v1/harness/ui' })
+        .then(info => {
+          const url = harnessUrl(info.url);
+          if (validSession(task?.session)) url.searchParams.set('nexus-session', task.session);
+          return shell.openExternal(url.href);
+        }).catch(error);
+    });
+    notice.on('failed', (_event, failure) => emit('nexus-native-error', `Notification delivery failed: ${failure}`));
+    notice.show();
+    if (process.platform === 'win32') window?.flashFrame(true);
+  }
   const text = (en, zh) => locale.startsWith('zh') ? zh : en;
   const show = () => { if (window?.isMinimized()) window.restore(); window?.show(); window?.focus(); };
   const emit = (name, value) => { if (window && !window.isDestroyed()) window.webContents.send(name, value); };
   const error = e => { show(); emit('nexus-native-error', e.message ?? String(e)); };
+  const validSession = value => typeof value === 'string' && value.length > 0 && value.length <= 200 && !/[\u0000-\u001f]/.test(value);
+  function launchHost(asShell, sessionId) {
+    const args = [...(app.isPackaged ? [] : [root]), `--user-data-dir=${desktopData}`,
+      ...(asShell ? ['--nexus-shell'] : []), ...(validSession(sessionId) ? [`--nexus-session=${sessionId}`] : [])];
+    const child = spawn(process.execPath, args, { detached: true, stdio: 'ignore', windowsHide: true });
+    child.on('error', error); child.unref();
+  }
   app.on('second-instance', (_event, _argv, _cwd, data) => {
-    if (shellMode && data.closeShell) { quitting = true; app.quit(); } else show();
+    if (shellMode && data.closeShell) { quitting = true; app.quit(); }
+    else {
+      const id = _argv.find(arg => arg.startsWith('--nexus-session='))?.slice(16);
+      if (shellMode && validSession(id)) { pendingSession = id; window?.webContents.send('nexus:session', id); }
+      show();
+    }
   });
   app.on('activate', show);
   app.on('before-quit', () => { quitting = true; });
-  app.on('will-quit', () => { updater?.stop(); bridge?.close(); globalShortcut.unregisterAll(); });
+  app.on('will-quit', () => { shellController?.stop(); noticeCoordinator?.close(); updater?.stop(); bridge?.close(); globalShortcut.unregisterAll(); });
   await app.whenReady();
-  locale = process.env.NEXUS_LOCALE || app.getLocale();
+  const systemLanguages = app.getPreferredSystemLanguages();
+  locale = process.env.NEXUS_LOCALE || systemLanguages.find(language => /^(zh|en)(-|$)/i.test(language)) || 'en';
   // Default deny. Clipboard/IME/file inputs retain Chromium's ordinary user gestures.
   session.defaultSession.setPermissionRequestHandler((_contents, _permission, callback) => callback(false));
   session.defaultSession.setPermissionCheckHandler(() => false);
@@ -52,9 +97,11 @@ async function run() {
     minWidth: 680, minHeight: 520, show: false,
     icon: path.join(root, 'desktop/icons/icon.ico'),
     webPreferences: { sandbox: true, contextIsolation: true, nodeIntegration: false,
-      webviewTag: false, ...(shellMode ? {} : { preload: path.join(root, 'electron/preload.cjs') }) },
+      webviewTag: false, ...(shellMode ? { preload: path.join(root, 'electron/shell-preload.cjs') } : { preload: path.join(root, 'electron/preload.cjs'),
+        additionalArguments: [`--nexus-system-languages=${JSON.stringify(systemLanguages)}`] }) },
   });
   window.on('ready-to-show', show);
+  window.on('focus', () => window?.flashFrame(false));
   window.on('closed', () => { window = undefined; if (shellMode) app.quit(); });
   window.on('close', event => {
     if (!shellMode && !quitting) {
@@ -67,24 +114,100 @@ async function run() {
   });
   window.webContents.on('will-attach-webview', event => event.preventDefault());
   Menu.setApplicationMenu(null);
+  // A menu-less macOS window has no Edit menu accelerators. Keep ordinary
+  // editing available in both Launcher and the independent Harness window.
+  window.webContents.on('before-input-event', (event, input) => {
+    const action = nativeEditAction(process.platform, input);
+    if (action) { event.preventDefault(); window.webContents[action](); }
+  });
   window.webContents.on('context-menu', (_event, params) => {
     const items = params.isEditable ? [{ role: 'cut' }, { role: 'copy' }, { role: 'paste' }, { role: 'selectAll' }]
       : [{ role: 'copy', enabled: !!params.selectionText }];
     if (params.mediaType === 'image') items.push({ label: text('Copy image', '复制图片'), click: () => window.webContents.copyImageAt(params.x, params.y) });
     Menu.buildFromTemplate(items).popup({ window });
   });
+  noticeCoordinator = new NoticeCoordinator(desktopData, shellMode ? 'shell' : 'launcher');
+  noticeCoordinator.prune();
+  const heartbeat = () => { try { noticeCoordinator.heartbeat(window?.isFocused() === true); } catch {} };
+  window.on('focus', heartbeat); window.on('blur', heartbeat); heartbeat();
+  const pollNotices = async () => {
+    if (noticeBusy || quitting || updating) return;
+    noticeBusy = true;
+    try {
+      heartbeat();
+      const snapshot = await bridge.request('proxy_request', { method: 'GET', path: '/v1/notifications' });
+      noticeSettings = notificationSettings(snapshot.settings); noticeReady = true;
+      noticeViews = snapshot.views ?? [];
+      for (const task of noticeCursor.consume(snapshot)) {
+        if (shouldNotify(noticeSettings, task.kind, noticeFocused(task.kind, task)) && noticeCoordinator.claim(snapshot.epoch, task)) deliverNotice(task.kind, false, task);
+      }
+    } catch { /* Agent unavailable: retain cursor; discovery retries independently. */ }
+    finally { noticeBusy = false; }
+  };
+  const noticeTimer = setInterval(() => void pollNotices(), 1000); noticeTimer.unref();
+  app.on('will-quit', () => clearInterval(noticeTimer));
+  void pollNotices();
   if (shellMode) {
-    // Resolve the URL through Agent, never accept credentials or arbitrary URLs in argv.
-    const status = await bridge.request('proxy_request', { method: 'POST', path: '/v1/agent', body: { action: 'status' } });
-    if (!status.available) throw new Error(status.message || 'Agent unavailable');
-    const info = await bridge.request('proxy_request', { method: 'GET', path: '/v1/harness/ui' });
-    const url = harnessUrl(info.url);
-    window.webContents.on('will-navigate', (event, target) => { if (new URL(target).origin !== url.origin) event.preventDefault(); });
+    const recoveryUrl = pathToFileURL(path.join(root, 'electron/shell-recovery.html')).href;
+    let healthTimer;
+    const recover = () => { clearTimeout(healthTimer); return window && !window.isDestroyed() ? window.loadURL(recoveryUrl) : Promise.resolve(); };
+    shellController = new ShellController({
+      discover: async () => {
+        await bridge.request('startup_status');
+        return bridge.request('proxy_request', { method: 'GET', path: '/v1/harness/ui' });
+      },
+      load: url => {
+        clearTimeout(healthTimer);
+        healthTimer = setTimeout(() => void shellController.broken(), 45000); healthTimer.unref();
+        return window.loadURL(url);
+      }, recover,
+      changed: () => { if (validSession(pendingSession)) window.webContents.send('nexus:session', pendingSession); },
+    });
+    const trustedShell = event => !window?.isDestroyed() && event.sender === window.webContents
+      && event.senderFrame === window.webContents.mainFrame
+      && (event.senderFrame.url === recoveryUrl || new URL(event.senderFrame.url).origin === shellController.current?.origin);
+    ipcMain.handle('nexus:shell', async (event, action, value) => {
+      if (!trustedShell(event)) throw new Error('Untrusted Harness frame');
+      if (action === 'retry') { await bridge.request('retry_startup'); return shellController.retry(); }
+      if (action === 'launcher') return launchHost(false);
+      if (action === 'switch-status') {
+        const status = await bridge.request('proxy_request', { method: 'GET', path: '/v1/desktop/profile' });
+        return { phase: status.phase };
+      }
+      if (event.senderFrame.url === recoveryUrl) throw new Error('Harness is not ready');
+      if (action === 'health') { clearTimeout(healthTimer); if (value === false) await shellController.broken(); return; }
+      if (action === 'session') return validSession(pendingSession) ? pendingSession : null;
+      if (action === 'session-opened' && value === pendingSession) { pendingSession = undefined; return; }
+      if (action === 'pick-directory') {
+        const picked = await dialog.showOpenDialog(window, { properties: ['openDirectory'] });
+        return picked.canceled ? null : picked.filePaths[0];
+      }
+      if (action === 'validate-directory') {
+        if (typeof value !== 'string' || value.length > 32768 || value.includes('\0') || !path.isAbsolute(value)) return false;
+        try { return statSync(value).isDirectory(); } catch { return false; }
+      }
+      throw new Error('Unsupported Harness action');
+    });
+    window.webContents.on('will-navigate', (event, target) => {
+      const url = new URL(target);
+      if (url.origin !== shellController.current?.origin) {
+        event.preventDefault();
+        if (['http:', 'https:'].includes(url.protocol)) void shell.openExternal(url.href).catch(error);
+      }
+    });
     window.webContents.setWindowOpenHandler(({ url: target }) => {
       if (['https:', 'http:'].includes(new URL(target).protocol)) void shell.openExternal(target);
       return { action: 'deny' };
     });
-    await window.loadURL(url.href);
+    window.webContents.on('did-fail-load', (_event, code, _description, url, main) => {
+      if (main && code !== -3 && url !== recoveryUrl) void shellController.broken();
+    });
+    window.webContents.on('render-process-gone', () => void shellController.broken());
+    window.on('unresponsive', () => void shellController.broken());
+    await recover();
+    void shellController.tick();
+    const timer = setInterval(() => void shellController.tick(), 2000); timer.unref();
+    app.on('will-quit', () => { clearInterval(timer); clearTimeout(healthTimer); });
     return;
   }
   const documentUrl = pathToFileURL(path.join(root, 'dist/index.html')).href;
@@ -99,7 +222,10 @@ async function run() {
   let settings = {};
   try { settings = JSON.parse(readFileSync(settingsPath, 'utf8')); } catch (e) { if (e.code !== 'ENOENT') settings = { enabled: false }; }
   updater = new DesktopUpdater(autoUpdater, {
-    settings, packaged: app.isPackaged, changed: state => emit('nexus-update', state),
+    settings, packaged: app.isPackaged, changed: state => {
+      emit('nexus-update', state);
+      if (state.phase === 'ready') { try { deliverNotice('update-ready', false, { title: `Nexus ${state.version ?? ''}`, body: text('Restart to apply the update. Running Harness tasks will be stopped.', '重启后应用更新，正在运行的 Harness 任务会被中止。') }); } catch (e) { error(e); } }
+    },
     save: value => saveUpdateSettings(settingsPath, value),
     cancel: async () => {
       try { await bridge.request('cancel_update'); }
@@ -116,18 +242,11 @@ async function run() {
       } catch (e) { await bridge.request('cancel_update').catch(() => {}); updating = false; throw e; }
     },
   });
-  function launchShell() {
-    if (updating) throw new Error('Update in progress');
-    const child = spawn(process.execPath, [...(app.isPackaged ? [] : [root]), '--nexus-shell'], {
-      detached: true, stdio: 'ignore', env: process.env, windowsHide: false,
-    });
-    child.on('error', error); child.unref();
-  }
   async function closeIndependentShell() {
     const deadline = Date.now() + 15000;
     while (Date.now() < deadline) {
       const code = await new Promise((resolve, reject) => {
-        const child = spawn(process.execPath, [...(app.isPackaged ? [] : [root]), '--nexus-shell', '--prepare-update'], { stdio: 'ignore', windowsHide: true });
+        const child = spawn(process.execPath, [...(app.isPackaged ? [] : [root]), `--user-data-dir=${desktopData}`, '--nexus-shell', '--prepare-update'], { stdio: 'ignore', windowsHide: true });
         child.on('error', reject); child.on('exit', resolve);
       });
       if (code === 0) return;
@@ -182,7 +301,8 @@ async function run() {
         }
         case 'set_native_locale': locale = String(args.locale); rebuildTray(); break;
         case 'set_native_notifications': notifications = args.enabled === true; break;
-        case 'notify': if (notifications && Notification.isSupported()) new Notification({ title: String(args.title).slice(0, 256), body: String(args.body ?? '').slice(0, 4096) }).show(); break;
+        case 'notify': deliverNotice('harness-failed', false, { title: args?.title, body: args?.body }); break;
+        case 'notification_test': deliverNotice('completed', true); break;
         case 'update_tray': controls = args.controls ?? {}; controlsAt = Date.now(); rebuildTray(); break;
         case 'autostart_status': value = app.getLoginItemSettings().openAtLogin; break;
         case 'autostart_set': app.setLoginItemSettings({ openAtLogin: args.enabled === true }); break;
@@ -193,7 +313,7 @@ async function run() {
         case 'proxy_request':
           if (args.path === '/v1/harness/ui' && args.method === 'POST' && args.body?.action === 'open') {
             value = await bridge.request(command, { method: 'GET', path: '/v1/harness/ui' });
-            harnessUrl(value.url); launchShell(); break;
+            await shell.openExternal(harnessUrl(value.url).href); break;
           }
           value = await bridge.request(command, args); break;
         default:

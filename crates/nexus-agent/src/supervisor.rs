@@ -26,7 +26,7 @@ use tokio::{
 #[cfg(windows)]
 use crate::windows_harness::Child;
 #[cfg(not(windows))]
-use tokio::process::Child;
+use crate::unix_harness::Child;
 
 pub const DEFAULT_GRACEFUL_STOP_SECS: u64 = 5;
 pub const DEFAULT_READINESS_TIMEOUT_SECS: u64 = 30;
@@ -184,7 +184,7 @@ async fn spawn_owned_harness(command: Command, logs: Option<(&fs::File, &fs::Fil
         Ok(SpawnedHarness { child, job })
     }
     #[cfg(not(windows))]
-    { let _ = logs; let mut command = command; command.spawn().map(|child| SpawnedHarness { child }) }
+    { let _ = logs; crate::unix_harness::spawn(command).map(|child| SpawnedHarness { child }) }
 }
 
 #[cfg(windows)]
@@ -915,6 +915,10 @@ impl HarnessSupervisor {
         // explicit readiness contract and must still receive owned Web health checks.
         let configured_spec = spec.clone();
         nexus_core::apply_harness_preferences(&mut spec, &preferences, &capabilities);
+        let notifications = crate::notifications::prepare(&self.paths, &mut spec)
+            .map_err(HarnessSupervisorError::Configuration)?;
+        crate::desktop_plugins::prepare(&self.paths, &selected_home, profile, &mut spec)
+            .map_err(HarnessSupervisorError::Configuration)?;
         let mut readiness = readiness_config(&spec)?;
         let program = spec
             .render_path_for_context(&spec.program, profile, release_id, release_root.as_deref())
@@ -1085,6 +1089,16 @@ impl HarnessSupervisor {
             command.envs(runtime_env.iter().map(|(key, value)| (key, value)));
             command.envs(nexus_core::harness_preferences_environment(&preferences, &capabilities));
             command.env("DSH_HOME", &selected_home);
+            if let Some(slot) = release_root.as_deref() {
+                command.env("NEXUS_DESKTOP_CONTEXT", crate::desktop_plugins::context(&self.paths, &selected_home, profile,
+                    &program, slot, effective_runtime.pnpm.as_ref().map(|pin| pin.path.as_path()))
+                    .map_err(HarnessSupervisorError::Configuration)?);
+                command.env("NEXUS_DESKTOP_RUN", &inner.log_session.run_id);
+            }
+            if notifications {
+                command.env("NEXUS_NOTIFICATION_FILE", self.paths.run_dir.join("notifications.json"));
+                command.env("NEXUS_NOTIFICATION_RUN", &inner.log_session.run_id);
+            }
             command
                 .args(arguments.iter().enumerate().map(|(index, argument)| {
                     if index == 0 && spec.mode == HarnessLaunchMode::Node {
@@ -1376,10 +1390,7 @@ impl HarnessSupervisor {
             )));
         }
 
-        #[cfg(windows)]
         let stop_request_error = child.request_stop().await.err();
-        #[cfg(not(windows))]
-        let stop_request_error: Option<io::Error> = None;
         let mut killed = false;
         let exit = match wait_for_exit(&mut child, self.graceful_wait).await {
             Ok(Some(exit)) => exit,
@@ -2147,7 +2158,7 @@ impl HarnessSupervisor {
             if inner.readiness_owner != Some(owner) {
                 return false;
             }
-            if target.owned_web && !owned_web_listener(&inner, target) { return false; }
+            if target.owned_web && !owned_web_listener(&inner, target).await { return false; }
             inner.log_session.clone()
         };
         if !matches!(self.log_sessions.read(), Ok(Some(ref durable)) if durable == &session) {
@@ -2166,7 +2177,7 @@ impl HarnessSupervisor {
         }
         let session = {
             let inner = self.inner.lock().await;
-            if target.owned_web && !owned_web_listener(&inner, target) { return false; }
+            if target.owned_web && !owned_web_listener(&inner, target).await { return false; }
             inner.log_session.clone()
         };
         if !matches!(self.log_sessions.read(), Ok(Some(ref durable)) if durable == &session) {
@@ -2421,21 +2432,34 @@ fn observed_web_readiness(paths: &NexusPaths, session: &HarnessLogSession, obser
 }
 
 fn automatic_web_readiness_supported(spec: &HarnessLaunchSpec, root: Option<&Path>, home: &Path, profile: &str, arguments: &[String]) -> bool {
-    if !cfg!(windows) || spec.readiness_url.is_some() || spec.mode != HarnessLaunchMode::Node { return false; }
+    if !cfg!(any(windows, target_os = "macos")) || spec.readiness_url.is_some() || spec.mode != HarnessLaunchMode::Node { return false; }
     let Some(root) = root else { return false; };
     let managed = arguments.first().and_then(|entry| fs::canonicalize(entry).ok())
         .zip(fs::canonicalize(root.join("apps/cli/lib/bin.js")).ok()).is_some_and(|(entry, expected)| entry == expected);
     managed && crate::preference_capabilities::inspect(root, home, profile).is_ok_and(|evidence| evidence.capabilities.web)
 }
 
-fn owned_web_listener(inner: &SupervisorInner, target: &ReadinessTarget) -> bool {
+async fn owned_web_listener(inner: &SupervisorInner, target: &ReadinessTarget) -> bool {
     #[cfg(windows)]
     {
         let Some(pid) = inner.child.as_ref().and_then(Child::id) else { return false; };
         let Ok(owners) = windows_listener_owners(&target.host, target.port) else { return false; };
         !owners.is_empty() && owners.into_iter().all(|owner| owner == pid || inner.job.as_ref().is_some_and(|job| job.contains_pid(owner).unwrap_or(false)))
     }
-    #[cfg(not(windows))]
+    #[cfg(target_os = "macos")]
+    {
+        let Some(group) = inner.child.as_ref().and_then(Child::group) else { return false; };
+        let output = timeout(Duration::from_secs(1), Command::new("/usr/sbin/lsof")
+            .args(["-nP", "-t", "-a", &format!("-iTCP:{}", target.port), "-sTCP:LISTEN"])
+            .stdin(Stdio::null()).stderr(Stdio::null()).kill_on_drop(true).output()).await;
+        let Ok(Ok(output)) = output else { return false; };
+        if !output.status.success() || output.stdout.len() > 65536 { return false; }
+        let Ok(text) = std::str::from_utf8(&output.stdout) else { return false; };
+        let owners: Vec<_> = text.lines().collect();
+        !owners.is_empty() && owners.iter().all(|line| line.parse::<i32>().ok()
+            .is_some_and(|pid| pid > 1 && unsafe { libc::getpgid(pid) } == group))
+    }
+    #[cfg(not(any(windows, target_os = "macos")))]
     { let _ = (inner, target); false }
 }
 
@@ -3295,7 +3319,7 @@ mod tests {
         ReadinessConfig, ReadinessOwner, ReadinessTarget, RecoveryState, StartPersistGate,
     };
 
-    #[cfg(windows)]
+    #[cfg(any(windows, target_os = "macos"))]
     #[test]
     fn automatic_web_readiness_requires_managed_verified_web_and_owned_dynamic_listener() {
         let root = std::env::temp_dir().join(format!("nexus-auto-readiness-{}",unix_time_nanos_for_update()));

@@ -225,7 +225,12 @@ impl RecoveryRecords {
         if reveal {
             let target=match command["target"].as_str(){Some("source")=>source,Some("backup")=>backup,Some("replacement") if candidate.is_some()=>replacement,_=>return Err(invalid("Select a verified artifact location"))};
             #[cfg(windows)] {std::process::Command::new("explorer.exe").arg(format!("/select,{}",target.display())).spawn()?;}
-            #[cfg(not(windows))] {let _=target;return Err(invalid("Open this path manually on this platform"));}
+            #[cfg(target_os = "macos")] {
+                if !std::process::Command::new("/usr/bin/open").arg("-R").arg(&target).status()?.success() {
+                    return Err(invalid("Finder did not accept the artifact location"));
+                }
+            }
+            #[cfg(not(any(windows, target_os = "macos")))] {let _=target;return Err(invalid("Open this path manually on this platform"));}
         }
         Ok(json!({"artifact_id":id,"state":state,"backup_verified":true,"replacement_verified":candidate.is_some(),"automatic_replace":false}))
     }

@@ -62,6 +62,9 @@ const AGENT_ROUTES: &[&str] = &[
     "/v1/harness",
     "/v1/harness/startup",
     "/v1/harness/ui",
+    "/v1/notifications",
+    "/v1/market",
+    "/v1/desktop/profile",
     "/v1/harness/discover",
     "/v1/profiles",
     "/v1/recovery",
@@ -365,7 +368,7 @@ impl AgentClient {
             .base_url
             .join(path)
             .map_err(|error| AgentClientError::InvalidRequest(error.to_string()))?;
-        let compatibility_mutation = method == Method::POST && (matches!(path, "/v1/releases" | "/v1/harness")
+        let compatibility_mutation = method == Method::POST && (matches!(path, "/v1/releases" | "/v1/harness" | "/v1/market")
             || (path == "/v1/profiles" && body.as_ref().and_then(|bytes| serde_json::from_slice::<Value>(bytes).ok()).is_some_and(|body| matches!(body.get("action").and_then(Value::as_str), Some("select" | "compatibility_check")))));
         let patch_download = method == Method::POST && path == "/v1/config" && body.as_ref().and_then(|bytes| serde_json::from_slice::<Value>(bytes).ok()).is_some_and(|body| matches!(body.get("action").and_then(Value::as_str), Some("fetch_harness_patches" | "preview_harness_patches" | "list_harness_patch_refs" | "set_external_harness")));
         let offline_preview = method == Method::POST && path == "/v1/updates" && body.as_ref().and_then(|bytes| serde_json::from_slice::<Value>(bytes).ok()).is_some_and(|body| body.get("action").and_then(Value::as_str) == Some("offline_inspect"));
@@ -486,7 +489,7 @@ pub fn validate_agent_request(
         | "/v1/preflight" => *method == Method::GET,
         "/v1/runtime/plan" => *method == Method::POST,
         "/v1/harness/startup" | "/v1/canary" | "/v1/recovery" | "/v1/recovery/records" | "/v1/harness" | "/v1/profiles" | "/v1/checkpoints" | "/v1/releases" | "/v1/updates"
-        | "/v1/diagnostics" | "/v1/config" | "/v1/maintenance" => {
+        | "/v1/diagnostics" | "/v1/config" | "/v1/maintenance" | "/v1/notifications" | "/v1/market" | "/v1/desktop/profile" => {
             *method == Method::GET || *method == Method::POST
         }
         "/v1/lifecycle" | "/v1/shutdown" => *method == Method::POST,

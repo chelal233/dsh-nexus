@@ -760,6 +760,7 @@ version = "0.1.4"
 dependencies = [
  "getrandom 0.4.3",
  "hmac",
+ "libc",
  "nexus-private-file",
  "nexus-protocol",
  "nexus-snapshots",

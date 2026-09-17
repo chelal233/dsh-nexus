@@ -304,8 +304,8 @@ export async function check(options) {
   const slot = fs.realpathSync.native(options.slot);
   const source = sourceInfo(home, selected);
   const patches = options.patches ?? [];
-  const preferencesFingerprint = crypto.createHash('sha256').update(JSON.stringify({ environment: options.preferences_env ?? {}, capabilities: options.preference_capabilities ?? null }));
-  for (const patch of patches) preferencesFingerprint.update(patch).update(fs.readFileSync(patch));
+  const preferencesFingerprint = crypto.createHash('sha256').update(JSON.stringify({ environment: options.preferences_env ?? {}, capabilities: options.preference_capabilities ?? null, builtins: options.builtin_fingerprint ?? null }));
+  for (const patch of [...patches, ...(options.builtin_patches ?? [])]) preferencesFingerprint.update(patch).update(fs.readFileSync(patch));
   const key = crypto.createHash('sha256').update(JSON.stringify([checkerVersion, slot, release_id, source.source, source.fingerprint, preferencesFingerprint.digest('hex')])).digest('hex');
   const effective = 'nexus-' + key.slice(0, 24);
   const destination = path.join(home, 'profiles', effective);
@@ -359,7 +359,7 @@ export async function check(options) {
   }
   for (let attempt = 0; attempt <= Math.min(source.manifest.dsh.profile.bundles.length, 12); attempt++) {
     fs.writeFileSync(path.join(candidate, 'package.json'), JSON.stringify(manifest, null, 2));
-    const result = await probe(node, path.join(slot, 'apps/cli/lib/bin.js'), testHome, effective, timeout_ms, patches, options.owned_round === true);
+    const result = await probe(node, path.join(slot, 'apps/cli/lib/bin.js'), testHome, effective, timeout_ms, [...(options.builtin_patches ?? []), ...patches], options.owned_round === true);
     if (result.ok) {
       if (sourceInfo(home, source.source).fingerprint !== source.fingerprint) throw Error('Source profile changed during compatibility check');
       const report = { checker_version: checkerVersion, status: disabled.length ? 'isolated' : 'passed', source_profile: source.source,
@@ -406,6 +406,9 @@ export async function check(options) {
       }
       atomicJson(output, report);
       return report;
+    }
+    if (/failed to (?:import|apply) loader entry nexus-(?:desktop-compat|desktop-bridge|notifications)\b/.test(result.text)) {
+      throw Error('A Nexus built-in plugin failed to load. Update or repair Nexus, then retry startup; do not disable third-party plugins for this error. Original error: ' + result.text.slice(-4000));
     }
     if (options.owned_round) { failures = loaderFailures(result.text, manifest.dsh.profile.bundles); throw Error('Startup check needs an explicit plugin decision; original profile preserved. Original error: ' + result.text.slice(-4000)); }
     if (patches.length) throw Error('Enabled patch combination failed. Disable patches explicitly in Settings before retrying; no plugin was automatically removed. The failing patch could not be identified reliably.');
@@ -490,7 +493,8 @@ export async function checkCanary(options) {
       return crypto.createHash('sha256').update(buffer.subarray(0, size)).digest('hex');
     } finally { fs.closeSync(fd); }
   };
-  const patchHashes = patches.map(file => ({ file, sha256: patchHash(file) }));
+  const probePatches = [...(options.builtin_patches ?? []), ...patches];
+  const patchHashes = probePatches.map(file => ({ file, sha256: patchHash(file) }));
   const verifyPatches = () => { for (const {file, sha256} of patchHashes) if (patchHash(file) !== sha256) throw Error('Patch changed during Canary; attribution invalid'); };
   const started = Date.now();
   const result = await canarySearch(candidates, async enabled => {
@@ -514,7 +518,7 @@ export async function checkCanary(options) {
       fs.writeFileSync(path.join(candidate, 'package.json'), JSON.stringify(manifest));
       const remaining = 540000 - (Date.now() - started);
       if (remaining <= 0) return { outcome: 'inconclusive', reason: 'Total Canary budget exceeded', duration_ms: Date.now() - began };
-      const result = await probe(node, path.join(slot, 'apps/cli/lib/bin.js'), testHome, 'canary', Math.min(45000, remaining), patches, options.owned_round === true);
+      const result = await probe(node, path.join(slot, 'apps/cli/lib/bin.js'), testHome, 'canary', Math.min(45000, remaining), probePatches, options.owned_round === true);
       return { outcome: result.ok ? 'passed' : 'failed', reason: result.ok ? 'Loader and HTML readiness passed' : 'Process exited or reported a loader failure', raw_error: result.ok ? undefined : result.text.slice(-4000), duration_ms: Date.now() - began };
     } catch (error) {
       // Rust redacts the bounded report before publishing it to the API.

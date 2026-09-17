@@ -39,6 +39,7 @@ pub fn maintain(path: &Path, expected_identity: Option<&str>, protected: &[Range
     if !metadata.is_file() || crate::path_is_reparse(&metadata) { return Err(io::Error::other("Log is not an ordinary file")); }
     let mut options = fs::OpenOptions::new(); options.read(true).write(true);
     #[cfg(windows)] { use std::os::windows::fs::OpenOptionsExt; options.custom_flags(0x00200000); }
+    #[cfg(target_os = "macos")] { use std::os::unix::fs::OpenOptionsExt; options.custom_flags(libc::O_NOFOLLOW); }
     let file = options.open(path)?;
     let metadata = file.metadata()?;
     if !metadata.is_file() || crate::path_is_reparse(&metadata)
@@ -52,9 +53,34 @@ pub fn maintain(path: &Path, expected_identity: Option<&str>, protected: &[Range
     Ok(FileStatus { logical_bytes, allocated_bytes, tail_budget_bytes: TAIL_BYTES })
 }
 
-#[cfg(not(windows))]
+#[cfg(not(any(windows, target_os = "macos")))]
 fn reclaim(_file: &fs::File, _ranges: &[Range<u64>]) -> io::Result<u64> {
-    Err(io::Error::new(io::ErrorKind::Unsupported, "Live sparse log retention requires Windows"))
+    Err(io::Error::new(io::ErrorKind::Unsupported, "Live sparse log retention requires Windows or macOS"))
+}
+#[cfg(any(target_os = "macos", test))]
+fn whole_blocks(range: &Range<u64>, block: u64) -> Option<Range<u64>> {
+    if block == 0 { return None; }
+    let start = range.start.checked_add(block - 1)? / block * block;
+    let end = range.end / block * block;
+    (start < end).then_some(start..end)
+}
+
+#[cfg(target_os = "macos")]
+fn reclaim(file: &fs::File, ranges: &[Range<u64>]) -> io::Result<u64> {
+    use std::os::{fd::AsRawFd, unix::fs::MetadataExt};
+    let mut volume: libc::statfs = unsafe { std::mem::zeroed() };
+    if unsafe { libc::fstatfs(file.as_raw_fd(), &mut volume) } != 0 { return Err(io::Error::last_os_error()); }
+    let block = u64::try_from(volume.f_bsize).map_err(io::Error::other)?;
+    if block == 0 { return Err(io::Error::other("Invalid filesystem block size")); }
+    for range in ranges.iter().filter_map(|range| whole_blocks(range, block)) {
+        let hole = libc::fpunchhole_t { fp_flags: 0, reserved: 0,
+            fp_offset: range.start.try_into().map_err(io::Error::other)?,
+            fp_length: (range.end - range.start).try_into().map_err(io::Error::other)? };
+        // Darwin requires block alignment. Round inward to preserve evidence and tail.
+        // Never fall back to truncation if the volume does not support holes.
+        if unsafe { libc::fcntl(file.as_raw_fd(), libc::F_PUNCHHOLE, &hole as *const libc::fpunchhole_t) } == -1 { return Err(io::Error::last_os_error()); }
+    }
+    file.metadata()?.blocks().checked_mul(512).ok_or_else(|| io::Error::other("Invalid allocation size"))
 }
 #[cfg(windows)]
 fn reclaim(file: &fs::File, ranges: &[Range<u64>]) -> io::Result<u64> {
@@ -89,7 +115,14 @@ mod tests {
         assert_eq!(obsolete_ranges(TAIL_BYTES + 100, &[90..130]).unwrap(), vec![0..90]);
         assert!(obsolete_ranges(10, &[9..12]).is_err());
     }
-    #[cfg(windows)]
+    #[test]
+    fn block_alignment_never_reclaims_evidence_or_unscanned_bytes() {
+        assert_eq!(whole_blocks(&(30..12300), 4096), Some(4096..12288));
+        assert_eq!(whole_blocks(&(0..30), 4096), None);
+        assert_eq!(whole_blocks(&(4096..8192), 4096), Some(4096..8192));
+        assert_eq!(whole_blocks(&(u64::MAX - 1..u64::MAX), 4096), None);
+    }
+    #[cfg(any(windows, target_os = "macos"))]
     #[test]
     fn sparse_reclamation_preserves_identity_offsets_and_append() {
         use std::io::{Read, Seek, SeekFrom, Write};

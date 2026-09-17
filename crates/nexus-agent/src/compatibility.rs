@@ -220,12 +220,16 @@ async fn prepare_with_trigger(
     let output = work.join("result.json");
     let script = root.join("checker.mjs");
     fs::write(&script, include_bytes!("compatibility.mjs"))?;
+    let desktop_patch = crate::desktop_plugins::stage(paths, home, profile)?;
+    use sha2::Digest;
     nexus_core::write_private_json_atomic(&work, &input, &serde_json::json!({
         "home":home,"selected":profile,"release_id":release,"slot":slot,
         "node":node,"work":work,"output":output,"force":force,
         "trigger": trigger, "owned_round": true,
         "preference_capabilities": { "adapter_version": crate::preference_capabilities::VERIFIED_VERSION, "capabilities": capabilities },
         "patches": preferences.patches.as_deref().unwrap_or(&[]),
+        "builtin_patches": [desktop_patch],
+        "builtin_fingerprint": format!("{:x}", sha2::Sha256::digest(include_bytes!("../../../plugins/nexus-desktop-compat/index.mjs"))),
         "preferences_env": preferences_env.iter().filter(|(key, _)| key != "DSH_HOME")
             .map(|(key, value)| (key.to_string_lossy().into_owned(), value.to_string_lossy().into_owned()))
             .collect::<std::collections::BTreeMap<_, _>>(),
@@ -233,6 +237,9 @@ async fn prepare_with_trigger(
     let mut command = std::process::Command::new(node);
     command.envs(runtime_env.iter().cloned());
     command.envs(preferences_env);
+    let pnpm = nexus_core::ConfigStore::new(paths.clone()).load()?.runtime.and_then(|runtime| runtime.pnpm).map(|pin| pin.path);
+    command.env("NEXUS_DESKTOP_CONTEXT", crate::desktop_plugins::context(paths, home, profile, node, slot, pnpm.as_deref())?);
+    command.env("NEXUS_DESKTOP_PROBE", "1");
     command.arg(&script).arg(&input).current_dir(&root).stdin(Stdio::null()).stdout(Stdio::null());
     tracing::info!(release, profile, "checking target release plugin startup compatibility");
     write_json_atomic(&root, &pending, &serde_json::json!({"format_version":2,"work":work,"release":release,"profile":profile}))?;

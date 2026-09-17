@@ -19,6 +19,7 @@ import {
 } from "../ui-components";
 import { RestoreStatusPanel } from "../operation-notices";
 import { useI18n } from "../i18n";
+import { MarketplaceSettings } from './market';
 import { useState, useRef, useCallback, useEffect } from "react";
 import {
   createLatestRequest,
@@ -99,6 +100,7 @@ export function ProfilesView(props: ViewProps) {
           "Select a profile to manage its checkpoints and plugins. Deleted profiles are kept for restoration; the current profile cannot be deleted.",
         )}
       />
+      <MarketplaceSettings key={`${archiveScope}:${active}`} />
       <Panel title={t("Profile catalog")} icon={<SlidersHorizontal size={18} />}>
         <div className="button-row">
           {[

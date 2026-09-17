@@ -3,6 +3,7 @@ export const commands = new Set([
   'choose_local_path', 'set_native_locale', 'set_native_notifications',
   'update_tray', 'export_startup_diagnostics', 'autostart_status', 'autostart_set',
   'agent_log_set', 'notify', 'update_status', 'update_check', 'update_settings', 'update_install',
+  'notification_test',
 ]);
 export const events = new Set(['nexus-native-error', 'nexus-tray-action', 'nexus-update']);
 
@@ -25,4 +26,8 @@ export function validateRequest(command, args) {
     throw new Error('Desktop arguments must be an object');
   }
   if (Buffer.byteLength(JSON.stringify(args ?? {})) > 32768) throw new Error('Desktop request is too large');
+}
+export function nativeEditAction(platform, input) {
+  if (platform !== 'darwin' || input.type !== 'keyDown' || !input.meta || input.control || input.alt) return undefined;
+  return { a: 'selectAll', c: 'copy', x: 'cut', v: 'paste', z: input.shift ? 'redo' : 'undo' }[input.key.toLowerCase()];
 }

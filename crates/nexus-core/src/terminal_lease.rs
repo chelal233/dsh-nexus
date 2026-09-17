@@ -27,9 +27,29 @@ fn process_creation(pid: u32) -> io::Result<Option<u64>> {
     }
     Ok(Some((birth.dwHighDateTime as u64) << 32 | birth.dwLowDateTime as u64))
 }
-#[cfg(not(windows))]
+#[cfg(target_os = "macos")]
+fn process_creation(pid: u32) -> io::Result<Option<u64>> {
+    #[link(name = "proc")]
+    unsafe extern "C" {
+        fn proc_pidinfo(pid: i32, flavor: i32, arg: u64, buffer: *mut std::ffi::c_void, size: i32) -> i32;
+    }
+    if pid == 0 || pid > i32::MAX as u32 { return Ok(None); }
+    let mut info = std::mem::MaybeUninit::<libc::proc_bsdinfo>::zeroed();
+    let size = std::mem::size_of::<libc::proc_bsdinfo>() as i32;
+    let received = unsafe { proc_pidinfo(pid as i32, libc::PROC_PIDTBSDINFO, 0, info.as_mut_ptr().cast(), size) };
+    if received <= 0 {
+        let error = io::Error::last_os_error();
+        return if matches!(error.raw_os_error(), Some(libc::ESRCH | libc::ENOENT)) { Ok(None) } else { Err(error) };
+    }
+    if received != size { return Err(io::Error::other("Incomplete terminal process identity")); }
+    let info = unsafe { info.assume_init() };
+    if info.pbi_pid != pid { return Err(io::Error::other("Terminal process identity mismatch")); }
+    info.pbi_start_tvsec.checked_mul(1_000_000).and_then(|v| v.checked_add(info.pbi_start_tvusec))
+        .map(Some).ok_or_else(|| io::Error::other("Invalid terminal process creation time"))
+}
+#[cfg(not(any(windows, target_os = "macos")))]
 fn process_creation(_pid: u32) -> io::Result<Option<u64>> {
-    Err(io::Error::new(io::ErrorKind::Unsupported, "Interactive terminals require Windows"))
+    Err(io::Error::new(io::ErrorKind::Unsupported, "Interactive terminals require Windows or macOS"))
 }
 fn ordinary_dir(path: &Path) -> io::Result<()> {
     let m = fs::symlink_metadata(path)?;
@@ -122,6 +142,10 @@ pub fn ensure_all_idle(paths: &NexusPaths) -> io::Result<()> {
         }
     }
     Ok(())
+}
+/// Reconcile stale records before cleaning one terminal's generated launch files.
+pub fn is_live(paths: &NexusPaths, record: &Path) -> io::Result<bool> {
+    Ok(records(paths)?.iter().any(|(path, _)| path == record))
 }
 pub fn register(paths: &NexusPaths, release: &str, pid: u32) -> io::Result<PathBuf> {
     crate::validate_release_id(release)?;

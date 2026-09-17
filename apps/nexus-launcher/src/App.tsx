@@ -807,10 +807,14 @@ function App() {
   useEffect(() => {
     if (!snapshot.harnessRuntime) return;
     const fresh = failureNotices.current.observe(harnessFailureKeys(snapshot.harnessRuntime));
-    if (fresh && notificationsEnabledPreference()) {
+    if (fresh) {
+      const runtime = harnessRuntimeValue(snapshot.harnessRuntime);
+      const detail = stringValue(runtime, "error");
+      const exitCode = runtime.exit_code;
       void notify(
         "Nexus Launcher",
-        t("Harness failed to start or crashed. Check the Overview page for details."),
+        [detail || t("Harness failed to start or crashed. Check the Overview page for details."),
+          typeof exitCode === "number" ? `Exit code: ${exitCode}` : ""].filter(Boolean).join(" — "),
       );
     }
   }, [snapshot.harnessRuntime, t]);

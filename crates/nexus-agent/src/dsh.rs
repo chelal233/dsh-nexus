@@ -549,6 +549,17 @@ fn remove_profile_plugin_with_runner(
             "package is not a removable dependency of the selected profile",
         ));
     }
+    run_profile_plugin_command(paths, dsh_home, release_root, profile, "remove", package, runner)
+}
+
+pub(crate) fn install_market(paths: &NexusPaths, home: &Path, root: &Path, profile: &str)
+    -> io::Result<(PluginCommandOutcome, NativeProfilePayload)> {
+    run_profile_plugin_command(paths, home, root, profile, "add", "dshmarket@1.38.1", &SystemPluginCommandRunner)
+}
+
+fn run_profile_plugin_command(paths: &NexusPaths, dsh_home: &Path, release_root: &Path,
+    profile: &str, action: &str, package: &str, runner: &dyn PluginCommandRunner)
+    -> io::Result<(PluginCommandOutcome, NativeProfilePayload)> {
     let profile_dir = profile_directory(dsh_home, profile)?;
     let config = ConfigStore::new(paths.clone()).load()?;
     let runtime = config
@@ -567,7 +578,7 @@ fn remove_profile_plugin_with_runner(
         OsString::from("plugin"),
         OsString::from("--profile"),
         OsString::from(profile),
-        OsString::from("remove"),
+        OsString::from(action),
         OsString::from(package),
     ]);
     let mut child_env: BTreeMap<OsString, OsString> =

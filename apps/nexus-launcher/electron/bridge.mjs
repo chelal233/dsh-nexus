@@ -5,16 +5,23 @@ export class RustBridge {
   #child;
   #pending = new Map();
   #nextId = 0;
-  constructor(resources) {
-    this.#child = spawn(path.join(resources, process.platform === 'win32' ? 'nexus-desktop-bridge.exe' : 'nexus-desktop-bridge'), [], {
+  #closed = false;
+  constructor(resources, spawnProcess = spawn) {
+    this.resources = resources; this.spawnProcess = spawnProcess;
+    this.#start();
+  }
+  #start() {
+    const resources = this.resources;
+    const child = this.#child = this.spawnProcess(path.join(resources, process.platform === 'win32' ? 'nexus-desktop-bridge.exe' : 'nexus-desktop-bridge'), [], {
       windowsHide: true, stdio: ['pipe', 'pipe', 'inherit'],
       env: { ...process.env, NEXUS_DESKTOP_RESOURCES: resources },
     });
     let buffer = '';
-    this.#child.stdout.setEncoding('utf8');
-    this.#child.stdout.on('data', chunk => {
+    child.stdout.setEncoding('utf8');
+    child.stdout.on('data', chunk => {
+      if (this.#child !== child) return;
       buffer += chunk;
-      if (Buffer.byteLength(buffer) > 16 * 1024 * 1024) return this.#fail(new Error('Desktop response exceeds limit'));
+      if (Buffer.byteLength(buffer) > 16 * 1024 * 1024) return this.#fail(new Error('Desktop response exceeds limit'), child);
       let end;
       while ((end = buffer.indexOf('\n')) >= 0) {
         const line = buffer.slice(0, end); buffer = buffer.slice(end + 1);
@@ -24,19 +31,23 @@ export class RustBridge {
           if (!pending) continue;
           this.#pending.delete(message.id); clearTimeout(pending.timer);
           if (message.error) pending.reject(message.error); else pending.resolve(message.value);
-        } catch { this.#fail(new Error('Invalid desktop response')); }
+        } catch { this.#fail(new Error('Invalid desktop response'), child); return; }
       }
     });
-    this.#child.on('error', error => this.#fail(error));
-    this.#child.on('exit', () => this.#fail(new Error('Rust desktop adapter exited')));
-    this.#child.stdin.on('error', error => this.#fail(error));
+    child.on('error', error => this.#fail(error, child));
+    child.on('exit', () => this.#fail(new Error('Rust desktop adapter exited; check operation status before retrying'), child));
+    child.stdin.on('error', error => this.#fail(error, child));
   }
-  #fail(error) {
+  #fail(error, child) {
+    if (this.#child !== child) return;
+    this.#child = undefined; child.kill();
     for (const entry of this.#pending.values()) { clearTimeout(entry.timer); entry.reject(error); }
     this.#pending.clear();
   }
   request(command, args = {}) {
-    if (this.#child.exitCode !== null || this.#child.killed) return Promise.reject(new Error('Rust desktop adapter unavailable'));
+    if (this.#closed) return Promise.reject(new Error('Rust desktop adapter closed'));
+    // Recover transport for the NEXT request, never replay an uncertain mutation.
+    if (!this.#child) this.#start();
     if (this.#pending.size >= 64) return Promise.reject(new Error('Too many desktop requests'));
     return new Promise((resolve, reject) => {
       const id = ++this.#nextId;
@@ -45,5 +56,5 @@ export class RustBridge {
       this.#child.stdin.write(`${JSON.stringify({ id, command, args })}\n`);
     });
   }
-  close() { this.#child.stdin.end(); }
+  close() { this.#closed = true; this.#child?.stdin.end(); }
 }

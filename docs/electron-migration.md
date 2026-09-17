@@ -87,3 +87,83 @@ and full-download replacement using two signed versions. Check both architecture
 update metadata and SHA-512 assets. No production data or release was changed.
 
 Shared resources, icons and release scripts live in `desktop/`. There is no legacy host fallback.
+
+## Platform parity follow-up
+
+Windows and macOS share update, login startup, tray, system-browser, notification
+preferences and third-party marketplace selection flows. macOS now also has native
+Terminal.app sessions with pinned runtime/profile and durable terminal leases,
+Profile file opening, Finder recovery-artifact reveal, menu-less Command editing
+shortcuts, and a BEL fallback for Apple Terminal notifications.
+
+Harnesses on Unix start in their own process group, receive SIGTERM for graceful
+stop, and have remaining group members signalled before the leader is reaped.
+macOS automatic Web readiness checks listener process-group ownership with the
+system lsof, in addition to current-session credential evidence. macOS live log
+reclamation uses block-aligned F_PUNCHHOLE without truncation; unsupported volumes
+report failure and retain the file. API contract: Apple's
+[fcntl manual](https://github.com/apple-oss-distributions/xnu/blob/main/bsd/man/man2/fcntl.2).
+
+Local Windows regression: Agent 292 + main 1 and core 131 tests passed (6 ignored),
+plus 23 Electron tests. The Unix child module and its tests passed an isolated
+macOS ARM64 target typecheck. Full cross-check stopped at the missing native C
+cross-compiler; these results are not native Mac acceptance. Mac CI must compile
+and run the added graceful-stop, descendant cleanup, terminal handshake and sparse
+retention tests. Both Mac architectures still require real Terminal/Finder,
+notification, startup and signed-update acceptance before release.
+
+## Desktop compatibility completion
+
+The independent window now rediscovers the current Harness URL and credential,
+shows a local recovery page on service loss/renderer failure, and bounds client
+loader readiness to 45 seconds. Retry can restart Agent startup preparation;
+opening Launcher remains available during failure. Profile switches run under
+Agent lifecycle ownership and leave a durable completion/interruption status.
+An interrupted switch is reported, never replayed automatically.
+
+Launcher and the independent window both consume notification events. Shared
+event claims prevent duplicate banners. The client bridge reports visible,
+focused conversation identity with a ten-second lease; only the matching task
+page suppresses unfocused-only task reminders. Launcher focus applies only to
+management notices. Clicking a task notice
+opens its session through the built-in client plugin. If neither native host is
+running, native banners are not delivered. Notices include a bounded conversation
+title and visible reply, question, approval reason, failure or job detail; reasoning
+blocks and raw tool results are excluded. Previews are stored in the local bounded
+notification snapshot. Missing fields fall back to status text, never another turn.
+
+`plugins/nexus-desktop-compat` implements the public profile/package services;
+`plugins/nexus-desktop-bridge` provides native directory selection, window
+geometry and session navigation. The preload exposes the upstream file-path
+bridge for native File objects. All capabilities use a sandboxed renderer and
+main-frame/origin-checked IPC. Runtime imports from the upstream desktop package
+and private APIs are outside this compatibility contract.
+
+The selected third-party market remains optional. Its ordinary CLI path accepts
+the sources supported by the user's Harness (including GitHub); Nexus does not
+require all plugins to use the exact-npm compatibility entry. Compatibility and
+Canary probes load the same Host services but reject package writes and profile
+switches. Package operations retain ownership until subprocess-tree cleanup.
+
+Offline acceptance to perform on Windows and both Mac architectures:
+
+- Keep only the independent window open; complete/answer/approve tasks and verify
+  banner categories, focus conditions, deduplication and click-to-session behavior.
+- Stop/restart Harness, change its port, kill its renderer/Agent, and interrupt a
+  profile switch; verify recovery/retry and preserved configuration.
+- Choose self-managed or the third-party market; install/remove local test packages,
+  cancel an installation, kill during download, then reopen and inspect/retry.
+- Drag a real file, select/cancel a native directory, use clipboard/IME and native
+  terminal; verify file paths, pinned runtime and terminal-lease cleanup.
+- Test signed packaged updates, download interruption/newer-tag replacement and
+  notifications/OS permissions on each actual machine. Local automated checks
+  do not establish these platform acceptance results.
+
+Completion evidence (Windows, build `desktop-parity-test-20260916-02`): full Rust
+workspace tests passed; 118 UI tests and 33 Electron tests passed. The Electron
+suite included real Cordis and the published dshmarket 1.38.1 package-operation
+adapter, with controlled subprocess outcomes (not a live registry installation).
+The real Electron smoke passed Launcher startup, independent recovery-window
+Agent access, renderer sandboxing and rejection of native calls from a foreign
+document. Release binaries passed the static Windows runtime import check and
+the resource manifest verified 2,651 files. Native Mac acceptance remains open.

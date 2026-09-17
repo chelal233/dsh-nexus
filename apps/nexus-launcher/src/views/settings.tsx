@@ -9,6 +9,8 @@ import {
   booleanValue,
 } from "../json-values";
 import { useI18n, type Locale } from "../i18n";
+import { NotificationSettings } from './notifications';
+import { MarketplaceSettings } from './market';
 import { useDraftReference, useDraftState } from "../draft-memory";
 import { harnessUiMatchesRuntime } from "../harness-session";
 import { launchInputValueLabel, errorMessage, harnessOptionLabel } from "../display-format";
@@ -55,10 +57,6 @@ import {
   RuntimeStatusPanel,
 } from "../runtime-status";
 import { displayZoom, ZOOM_CHANGED, setDisplayZoom, ZOOM_LEVELS } from "../display-preferences";
-import {
-  notificationsEnabledPreference,
-  setNotificationsEnabledPreference,
-} from "../notifications";
 import { invoke } from "../desktop";
 import { useDesktopUpdate } from "../desktop-update";
 
@@ -988,9 +986,6 @@ export function SettingsView({
     return () => window.removeEventListener(ZOOM_CHANGED, sync);
   }, []);
   const { locale, setLocale, t } = useI18n();
-  const [notificationsEnabled, setNotificationsEnabled] = useState(
-    notificationsEnabledPreference(),
-  );
   const [autostartEnabled, setAutostartEnabled] = useState<boolean | null>(null);
   const desktopUpdate = useDesktopUpdate();
   const [desktopUpdateError, setDesktopUpdateError] = useState("");
@@ -1865,6 +1860,8 @@ export function SettingsView({
             </p>
           </details>
         </Panel>
+        <NotificationSettings />
+        <MarketplaceSettings key={`${stringValue(snapshot.profiles, 'active_profile')}:${JSON.stringify(snapshot.config?.harness_preferences)}`} />
         <Panel title={t("Native integration")} icon={<Bell size={18} />}>
           <div className="integration-list">
             {desktopUpdate && (
@@ -1927,21 +1924,6 @@ export function SettingsView({
               <CheckCircle size={18} />
               <span>{t("Single instance guard")}</span>
               <strong>{t("Enabled")}</strong>
-            </div>
-            <div>
-              <Bell size={18} />
-              <span>{t("Desktop notifications")}</span>
-              <label className="form-check">
-                <input
-                  type="checkbox"
-                  checked={notificationsEnabled}
-                  onChange={(event) => {
-                    setNotificationsEnabledPreference(event.target.checked);
-                    setNotificationsEnabled(event.target.checked);
-                  }}
-                />
-                <span>{t("Enabled")}</span>
-              </label>
             </div>
             <div>
               <Key size={18} />

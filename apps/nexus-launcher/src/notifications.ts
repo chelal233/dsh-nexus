@@ -20,7 +20,6 @@ export function setNotificationsEnabledPreference(enabled: boolean): void {
 }
 
 export async function notify(title: string, body?: string): Promise<void> {
-  if (!notificationsEnabledPreference()) return;
   try {
     if (window.nexusDesktop) {
       await invoke("notify", { title, body });

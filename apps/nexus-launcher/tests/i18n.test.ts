@@ -1,7 +1,15 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { translateForTest, translationKeysForTest } from "../src/i18n.ts";
+import { localeFromLanguages, translateForTest, translationKeysForTest } from "../src/i18n.ts";
+
+test("system language preferences select a supported language before falling back to English", () => {
+  assert.equal(localeFromLanguages(["zh-TW", "en-US"]), "zh");
+  assert.equal(localeFromLanguages(["en-GB", "zh-CN"]), "en");
+  assert.equal(localeFromLanguages(["ja-JP", "zh_CN"]), "zh");
+  assert.equal(localeFromLanguages(["fr-FR"]), "en");
+  assert.equal(localeFromLanguages([]), "en");
+});
 
 test("supports English and Simplified Chinese translations with interpolation", () => {
   assert.equal(translateForTest("en", "Overview"), "Overview");

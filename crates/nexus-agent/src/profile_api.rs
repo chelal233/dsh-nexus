@@ -585,6 +585,7 @@ async fn profile_open_terminal(
         profile.clone(),
     ];
     nexus_core::apply_harness_preferences(&mut terminal_spec, &preferences, &capabilities);
+    #[cfg(windows)]
     let terminal_args =
         serde_json::to_string(&terminal_spec.args[1..]).expect("terminal args serialization");
     let pnpm_pin = runtime.pnpm.as_ref().map(|pin| pin.path.clone());
@@ -622,10 +623,22 @@ async fn profile_open_terminal(
                 Err(error) => return data_error_response(error, "terminal_preparation_failed"),
             }
         ));
+        let notification_monitor = command.target.as_deref() == Some("notifications");
+        let monitor = state.paths.run_dir.join("notification-terminal.mjs");
+        if notification_monitor {
+            if let Err(e) = nexus_core::write_private_bytes_atomic(&state.paths.root, &monitor, include_bytes!("../../../plugins/nexus-notifications/terminal/monitor.mjs")) {
+                return data_error_response(e, "notification_terminal_failed");
+            }
+        }
         let mut command = std::process::Command::new(powershell);
+        command.env("NEXUS_NOTIFICATION_MONITOR", nexus_core::node_script_argument(&monitor));
+        command.env("NEXUS_NOTIFICATION_FILE", nexus_core::node_script_argument(&state.paths.run_dir.join("notifications.json")));
+        command.env("NEXUS_NOTIFICATION_SETTINGS", nexus_core::node_script_argument(&state.paths.root.join("notification-settings.json")));
         command
             .args(["-NoLogo", "-NoProfile", "-NoExit", "-Command"])
-            .arg(format!("{DSH_TERMINAL_WAIT}{DSH_TERMINAL_INIT}"))
+            .arg(if notification_monitor {
+                format!("{DSH_TERMINAL_WAIT}& $env:NEXUS_TERMINAL_NODE $env:NEXUS_NOTIFICATION_MONITOR $env:NEXUS_NOTIFICATION_FILE $env:NEXUS_NOTIFICATION_SETTINGS")
+            } else { format!("{DSH_TERMINAL_WAIT}{DSH_TERMINAL_INIT}") })
             .current_dir(&profile_dir);
         for (key, value) in nexus_core::harness_preferences_environment(&preferences, &capabilities)
         {
@@ -697,19 +710,33 @@ async fn profile_open_terminal(
             }
         });
     }
-    #[cfg(not(windows))]
+    #[cfg(target_os = "macos")]
+    {
+        let mut terminal_env = envs;
+        terminal_env.extend(nexus_core::harness_preferences_environment(&preferences, &capabilities));
+        terminal_env.push(("DSH_HOME".into(), dsh_home.as_os_str().to_owned()));
+        let options = crate::macos_terminal::Options {
+            node: &node, entry: &entry, args: &terminal_spec.args[1..],
+            pnpm: pnpm_pin.as_deref(), pnpm_is_script, profile_dir: &profile_dir,
+            env: &terminal_env, notification_monitor: command.target.as_deref() == Some("notifications"),
+        };
+        if let Err(error) = crate::macos_terminal::open(&state.paths, &release_id, &options).await {
+            return data_error_response(error, "terminal_spawn_failed");
+        }
+    }
+    #[cfg(not(any(windows, target_os = "macos")))]
     {
         // This terminal action requires a platform terminal emulator.
         // An invisible shell would not provide the requested interactive UI.
         return data_error_response(
             io::Error::new(
                 io::ErrorKind::Unsupported,
-                "DSH terminal is Windows-only in this release",
+                "DSH terminal supports Windows and macOS",
             ),
             "terminal_unsupported",
         );
     }
-    #[cfg(windows)]
+    #[cfg(any(windows, target_os = "macos"))]
     (
         StatusCode::OK,
         Json(serde_json::json!({
@@ -802,7 +829,10 @@ async fn profile_open_path(state: AppState, command: ProfileCommand) -> axum::re
         };
         output.map(|out| out.status.success()).unwrap_or(false)
     };
-    #[cfg(not(windows))]
+    #[cfg(target_os = "macos")]
+    let opened = std::process::Command::new("/usr/bin/open")
+        .arg(path.as_os_str()).status().map(|status| status.success()).unwrap_or(false);
+    #[cfg(not(any(windows, target_os = "macos")))]
     let opened = {
         std::process::Command::new("xdg-open")
             .arg(path.as_os_str())

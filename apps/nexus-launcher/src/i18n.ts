@@ -3153,11 +3153,17 @@ function detectLocale(): Locale {
   } catch {
     // A restricted webview can disable storage. Browser language is still safe.
   }
-  return localeFromLanguage(navigator.language);
+  return localeFromLanguages(window.nexusDesktop?.systemLanguages ?? navigator.languages ?? [navigator.language]);
 }
 export function localeFromLanguage(language: string): Locale {
-  const normalized = language.toLowerCase().replaceAll("_", "-");
-  return normalized === "zh" || /^zh-(cn|sg|hans)(-|$)/.test(normalized) ? "zh" : "en";
+  return localeFromLanguages([language]);
+}
+export function localeFromLanguages(languages: readonly string[]): Locale {
+  for (const language of languages) {
+    const base = language.trim().toLowerCase().replaceAll("_", "-").split("-")[0];
+    if (base === "zh" || base === "en") return base;
+  }
+  return "en";
 }
 
 function interpolate(value: string, params?: TranslationParams): string {
@@ -3191,18 +3197,19 @@ export function I18nProvider({
   children: ReactNode;
   initialLocale?: Locale;
 }) {
-  const [locale, setLocale] = useState<Locale>(() => initialLocale ?? detectLocale());
+  const [locale, updateLocale] = useState<Locale>(() => initialLocale ?? detectLocale());
   useEffect(() => {
     document.documentElement.lang = locale === "zh" ? "zh-CN" : "en";
     document.title = translate(locale, "Nexus Launcher");
   }, [locale]);
-  useEffect(() => {
+  const setLocale = (next: Locale) => {
+    updateLocale(next);
     try {
-      window.localStorage.setItem("nexus.launcher.locale", locale);
+      window.localStorage.setItem("nexus.launcher.locale", next);
     } catch {
       // The current choice still applies when persistence is unavailable.
     }
-  }, [locale]);
+  };
   const value = useMemo<I18nContextValue>(
     () => ({ locale, setLocale, t: (key, params) => translate(locale, key, params) }),
     [locale],

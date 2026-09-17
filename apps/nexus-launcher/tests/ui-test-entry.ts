@@ -55,3 +55,4 @@ export { HarnessSourcePanel } from "../src/views/settings";
 export { SettingsView } from "../src/views/settings";
 export { default as App } from "../src/App";
 export * as __testI18n from "../src/i18n";
+export { MarketplaceSettings } from '../src/views/market';

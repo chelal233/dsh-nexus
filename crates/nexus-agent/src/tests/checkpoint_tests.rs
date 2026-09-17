@@ -43,6 +43,65 @@ fn executable_on_path(name: &str) -> Option<PathBuf> {
 }
 
 #[tokio::test]
+async fn marketplace_selection_preserves_self_managed_plugins_and_rejects_stale_profile() {
+    let (state, root) = content_test_state("market-selection");
+    let home = state.snapshots.configured_dsh_home().unwrap();
+    let manifest = home.join("profiles/demo/package.json");
+    let original = br#"{"dsh":{"profile":{"bundles":["dshmarket"]}},"dependencies":{"dshmarket":"2.0.0"}}"#;
+    fs::write(&manifest, original).unwrap();
+    let scope = super::dsh::profile_directory(&home, "demo").unwrap().to_string_lossy().into_owned();
+    let command = serde_json::from_value(serde_json::json!({"profile":"demo","provider":"none","scope":scope})).unwrap();
+    let response = super::market::select(State(state.clone()), Json(command)).await;
+    assert!(response.status().is_success());
+    assert_eq!(fs::read(&manifest).unwrap(), original);
+    let marker = home.join("profiles/demo/.nexus-market.json");
+    let saved = fs::read(&marker).unwrap();
+    let command = serde_json::from_value(serde_json::json!({"profile":"other","provider":"dsh-market","scope":scope})).unwrap();
+    assert!(!super::market::select(State(state.clone()), Json(command)).await.status().is_success());
+    assert_eq!(fs::read(&marker).unwrap(), saved);
+    let command = serde_json::from_value(serde_json::json!({"profile":"demo","provider":"none","scope":"stale-home"})).unwrap();
+    assert!(!super::market::select(State(state.clone()), Json(command)).await.status().is_success());
+    assert_eq!(fs::read(&marker).unwrap(), saved);
+    assert!(serde_json::from_value::<super::market::Selection>(serde_json::json!({"profile":"demo","provider":"none","package":"arbitrary"})).is_err());
+    fs::write(&marker, b"[]").unwrap();
+    assert!(!super::market::status(State(state)).await.status().is_success());
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[tokio::test]
+async fn marketplace_install_uses_selected_cli_and_records_failure_for_retry() {
+    let (state, root) = content_test_state("market-install");
+    let home = state.snapshots.configured_dsh_home().unwrap();
+    let manifest = home.join("profiles/demo/package.json");
+    fs::write(&manifest, br#"{"dsh":{"profile":{"bundles":[]}},"dependencies":{}}"#).unwrap();
+    state.releases.register("market-fixture", "0.1.2-rc.1", None, None).unwrap();
+    state.releases.promote("market-fixture").unwrap();
+    let slot = state.releases.release_root("market-fixture").unwrap();
+    write_profile_file(&slot.join("apps/cli/package.json"), r#"{"bin":{"dsh":"lib/bin.js"}}"#);
+    let entry = slot.join("apps/cli/lib/bin.js");
+    write_profile_file(&entry, r#"const fs=require('node:fs'); const a=process.argv.slice(2); if(JSON.stringify(a)!==JSON.stringify(['plugin','--profile','demo','add','dshmarket@1.38.1'])) process.exit(42); const f='package.json'; const p=JSON.parse(fs.readFileSync(f)); p.dependencies.dshmarket='1.38.1'; p.dsh.profile.bundles.push('dshmarket'); fs.writeFileSync(f,JSON.stringify(p));"#);
+    state.config.write(&NexusConfigFile { runtime: Some(RuntimeConfig {
+        node: Some(RuntimePin {path: executable_on_path(if cfg!(windows) {"node.exe"} else {"node"}).unwrap(), ownership: RuntimeOwnership::System}),
+        pnpm: None, git: None, source: RuntimeSource::Official, mode: RuntimeInstallMode::Portable,
+    }), ..Default::default() }).unwrap();
+    let scope = super::dsh::profile_directory(&home, "demo").unwrap().to_string_lossy().into_owned();
+    let command = || Json(serde_json::from_value(serde_json::json!({"profile":"demo","provider":"dsh-market","scope":scope})).unwrap());
+    let response = super::market::select(State(state.clone()), command()).await;
+    assert!(response.status().is_success(), "{:?}", response.status());
+    let marker = home.join("profiles/demo/.nexus-market.json");
+    assert_eq!(serde_json::from_slice::<serde_json::Value>(&fs::read(&marker).unwrap()).unwrap()["status"], "ready");
+    write_profile_file(&entry, "console.error('fixture failure'); process.exit(23)");
+    let response = super::market::select(State(state.clone()), command()).await;
+    assert!(!response.status().is_success());
+    assert_eq!(serde_json::from_slice::<serde_json::Value>(&fs::read(&marker).unwrap()).unwrap()["status"], "failed");
+    fs::write(&marker, br#"{"provider":"dsh-market","status":"pending"}"#).unwrap();
+    let response = super::market::status(State(state)).await;
+    let body = axum::body::to_bytes(response.into_body(), 16384).await.unwrap();
+    assert_eq!(serde_json::from_slice::<serde_json::Value>(&body).unwrap()["status"], "pending");
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[tokio::test]
 async fn harness_preferences_switch_only_the_pointer_and_clear_to_original_home() {
     use nexus_protocol::{ConfigAction, ConfigCommand, HarnessPreferencesPayload};
     let (state, root) = content_test_state("preferences");
@@ -404,7 +463,7 @@ async fn harness_preferences_reach_child_without_changing_launch_directory() {
     assert_eq!(observed["cwd"], root.to_string_lossy().as_ref());
     assert_eq!(
         observed["args"],
-        serde_json::json!(["--profile", "web", "--port", "0", "--no-open"])
+        serde_json::json!(["--patch", state.paths.run_dir.join("desktop-compat-plugin.json").to_string_lossy(), "--patch", state.paths.run_dir.join("desktop-plugin.json").to_string_lossy(), "--patch", state.paths.run_dir.join("notification-plugin.json").to_string_lossy(), "--profile", "web", "--port", "0", "--no-open"])
     );
     assert_eq!(state.config.load().unwrap().harness, Some(launch));
     fs::remove_dir_all(root).unwrap();
@@ -2577,5 +2636,24 @@ async fn desktop_update_rejects_nonquiescent_failed_harness() {
     state.supervisor.inject_nonquiescent_failed_state(None, true).await.unwrap();
     assert_eq!(super::shutdown_if_idle(state.clone()).await.status(), StatusCode::CONFLICT);
     assert!(!*receiver.borrow());
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[tokio::test]
+async fn desktop_profile_switch_rejects_stale_callers_and_reports_interrupted_work_without_replaying() {
+    let (state, root) = content_test_state("desktop-profile-switch");
+    let before = state.profiles.load().unwrap();
+    let command = serde_json::from_value(serde_json::json!({"profile":"web", "run":"old-generation"})).unwrap();
+    let response = crate::desktop_profile::select(State(state.clone()), Json(command)).await;
+    assert!(!response.status().is_success());
+    assert_eq!(state.profiles.load().unwrap(), before);
+    let file = state.paths.run_dir.join("desktop-profile-switch.json");
+    let bytes = br#"{"id":"test","profile":"web","phase":"pending"}"#;
+    nexus_core::write_private_bytes_atomic(&state.paths.root, &file, bytes).unwrap();
+    let response = crate::desktop_profile::status(State(state.clone())).await;
+    let value: serde_json::Value = serde_json::from_slice(&axum::body::to_bytes(response.into_body(), 16384).await.unwrap()).unwrap();
+    assert_eq!(value["phase"], "interrupted");
+    assert_eq!(fs::read(file).unwrap(), bytes);
+    assert_eq!(state.profiles.load().unwrap(), before);
     fs::remove_dir_all(root).unwrap();
 }

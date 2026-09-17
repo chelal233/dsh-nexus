@@ -1,4 +1,5 @@
 type DesktopApi = {
+  readonly systemLanguages?: readonly string[];
   invoke<T>(command: string, args?: Record<string, unknown>): Promise<T>;
   listen<T>(event: string, callback: (event: { payload: T }) => void): () => void;
 };
