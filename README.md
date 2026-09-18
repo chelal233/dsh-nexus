@@ -60,3 +60,7 @@ Windows ZIP 必须完整解压，再运行目录内的 `Nexus Launcher.exe`，�
 - 状态：[变更记录](CHANGELOG.md)、[已知限制](docs/known-limitations.md)、[历史证据](docs/history/README.md)。
 
 Nexus 是独立项目，不代表上游 Harness 官方发布。自有代码采用 [MIT](LICENSE)，第三方组件遵循各自许可证，见[许可材料](THIRD_PARTY_NOTICES.md)。
+
+## 社区
+
+- 感谢 [LINUX DO](https://linux.do/) 社区提供开放、友善的技术交流平台。

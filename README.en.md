@@ -60,3 +60,7 @@ Initial Harness preparation may download dependencies and build them. A fully pr
 - Status: [changelog](CHANGELOG.en.md), [limitations](docs/known-limitations.en.md), [historical evidence](docs/history/README.en.md).
 
 Nexus is independent and is not an official upstream Harness release. Nexus code uses [MIT](LICENSE); dependencies retain their own licenses. See [third-party notices](THIRD_PARTY_NOTICES.en.md).
+
+## Community
+
+- Thanks to the [LINUX DO](https://linux.do/) community for providing an open and welcoming platform for technical discussion.
