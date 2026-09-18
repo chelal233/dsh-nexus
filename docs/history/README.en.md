@@ -2,10 +2,7 @@
 
 [简体中文](README.md)
 
-
 These records preserve original evidence and acceptance boundaries, not current usage instructions. Historical bodies are not individually translated; both language indexes point to the same originals. Old links, machine paths and commands may be obsolete. See [current documentation](../README.en.md).
-
-`.agent-memory/PROJECT_STATUS.md` is an internal historical handoff record, not a user guide; it has not been rewritten.
 
 ## Archived files
 
