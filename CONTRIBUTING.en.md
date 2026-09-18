@@ -27,3 +27,5 @@ Behavior-preserving refactors should compare outputs, errors, and side effects u
 Maintained guides pair Chinese `.md` and English `.en.md` with reciprocal links. Update both with behavior changes, distinguishing released, unreleased source, planned, and historical evidence. Screenshots must show real UI and record provenance; development previews are not installed-app acceptance.
 
 Describe the trigger, resulting behavior, validation, and unverified scope. Do not commit installers, runtime logs, tokens, private diagnostics, or user-specific paths. Preserve historical evidence rather than rewriting it as a new conclusion.
+
+The root overview is the exception: `README.md` is English, `README.zh-CN.md` is Chinese, and `README.en.md` preserves the old link only.
