@@ -8,11 +8,11 @@ Phase: `architecture-fix1`
 Owner: `verify_checkout`
 Base ref: `c9ae469668c649077241c323948306b52d20b431`
 Branch: `codex/nexus-takeover/architecture-fix1`
-Worktree: `E:\git\dsh-nexus-phases\architecture-fix1`
+Worktree: `<WORKSPACE>/dsh-nexus-phases\architecture-fix1`
 
 ## Worktree handshake
 
-`worktree_verified`: root `E:/git/dsh-nexus-phases/architecture-fix1`,
+`worktree_verified`: root `<WORKSPACE>/dsh-nexus-phases/architecture-fix1`,
 branch `codex/nexus-takeover/architecture-fix1`, and `HEAD` equal to the
 declared base `c9ae469668c649077241c323948306b52d20b431`. The worktree was
 clean before the document changes.

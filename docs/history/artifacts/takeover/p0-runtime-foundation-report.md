@@ -8,7 +8,7 @@
 - Status: foundation implementation complete; the independent-review deadline finding is resolved on the `runtime-fix1` isolation branch
 - Base: `f91f28d81a9ae72f88772f67e3ed23679462971b`
 - Branch: `codex/nexus-p0/runtime-foundation`
-- Worktree: `E:\git\dsh-nexus-phases\p0-runtime-foundation`
+- Worktree: `<WORKSPACE>/dsh-nexus-phases\p0-runtime-foundation`
 - Review fix branch/base: `codex/nexus-p0/runtime-fix1` at
   `8261a6e35c485a85c7b4e203c682bb956d52e62a`
 

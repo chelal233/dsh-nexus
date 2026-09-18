@@ -7,7 +7,7 @@
 
 - Task: `nexus-bootstrap`
 - Phase: `launcher-webshell`
-- Worktree: `E:\git\dsh-nexus-launcher`
+- Worktree: `<WORKSPACE>/dsh-nexus-launcher`
 - Branch: `codex/nexus-bootstrap/launcher-webshell`
 - Scope: Rust launcher lifecycle, Windows-safe detached process creation,
   foreground supervision, run metadata, static Console/WebShell assets, and
@@ -43,7 +43,7 @@
 - `cargo build --workspace --release --locked` — pass.
 - `git diff --check` — pass.
 - Release-binary lifecycle/WebShell smoke — pass via
-  `E:\git\dsh-nexus-controller-artifacts\launcher-webshell\launcher-smoke.ps1`:
+  `<WORKSPACE>/dsh-nexus-controller-artifacts\launcher-webshell\launcher-smoke.ps1`:
   detached start, idempotent start, status/log paths, stale-lock recovery,
   graceful/idempotent stop, foreground run under Windows PowerShell with
   redirected output, exact cleanup, and static asset/reference checks.

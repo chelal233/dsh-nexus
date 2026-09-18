@@ -5,7 +5,7 @@
 
 核对日期：2026-09-07。依据本机已安装的上游 `@deepseek-ai/dsh-root` 0.1.2-rc.1 源码及默认 bundles，不代表其他版本或任意第三方插件。未读取用户实际 `.env`、凭据或会话内容。
 
-源码根目录：`C:/Users/PC/AppData/Local/Nexus/releases/harness-dsh-v0-1-2-rc-1-1788609463088298700`。下文证据路径均相对此目录。
+源码根目录：`<HARNESS_ROOT>`。下文证据路径均相对此目录。
 
 ## 目录要分开看
 
@@ -16,7 +16,7 @@
 | Harness 数据目录 | profiles、持久配置及相关数据 | 上游支持 `DSH_HOME`，默认用户目录下 `.dsh` |
 | 项目工作目录 | 当前会话处理的项目和文件 | 与数据目录不同；Web 应沿用会话/工作区选择机制 |
 
-`DSH_HOME=D:\AIData\Harness` 是有效的选择方式，目录不必叫 `.dsh`。Nexus 可保存选择后，通过启动环境传给 Harness。目录读取、插件管理、兼容性检查、快照也必须使用同一位置，不能只改 Node 子进程。
+`DSH_HOME=<HARNESS_DATA>` 是有效的选择方式，目录不必叫 `.dsh`。Nexus 可保存选择后，通过启动环境传给 Harness。目录读取、插件管理、兼容性检查、快照也必须使用同一位置，不能只改 Node 子进程。
 
 首次使用内置 profile 时，上游 `loadProfile()` 会调用 `initProfile()`，递归建立 profile 目录和缺失配置。源码：`packages/boot/app-boot/src/profile.ts:196,805`。本次 Nexus 首启缺陷发生在它执行之前。
 
@@ -47,7 +47,7 @@
 
 ```text
 dsh --profile web --no-open --port 0
-dsh --profile web --patch D:\AIConfig\web.patch.yml --port 8080
+dsh --profile web --patch <PATCH_DIR>/web.patch.yml --port 8080
 dsh --profile headless "运行这个项目的测试并说明结果"
 ```
 
@@ -108,7 +108,7 @@ dsh --profile headless "运行这个项目的测试并说明结果"
 
 环境变量只是入口的一部分。上游有 117 个插件配置条目的生成目录：
 
-[上游完整插件配置目录](<C:/Users/PC/AppData/Local/Nexus/releases/harness-dsh-v0-1-2-rc-1-1788609463088298700/docs/config-catalog.md>)
+上游完整插件配置目录：`<HARNESS_ROOT>/docs/config-catalog.md`（相对于所选 Harness）
 
 目录列出了声明类型；其中标为 runtime-only、且不被运行时 schema 接受的字段，不能作为配置文件选项。插件还必须实际加载并满足所需服务，字段才有作用。
 

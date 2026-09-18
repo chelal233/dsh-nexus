@@ -12,6 +12,9 @@ on:
       - 'Cargo.toml'
       - 'Cargo.lock'
       - '.github/workflows/build.yml'
+      - '.github/scripts/check-source-privacy*'
+      - 'docs/**'
+      - '*.md'
 permissions:
   contents: read
 jobs:
@@ -50,6 +53,10 @@ jobs:
         with:
           node-version: '24.20.0'
           package-manager-cache: false
+      - name: Check source privacy
+        run: |
+          node --test ../../.github/scripts/check-source-privacy.test.mjs
+          node ../../.github/scripts/check-source-privacy.mjs
       - name: Prepare native tools
         run: |
           npm install --global pnpm@11.7.0

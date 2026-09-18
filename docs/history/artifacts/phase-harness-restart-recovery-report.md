@@ -193,7 +193,7 @@ the 64 KiB boundary or ending in an incomplete EOF fragment is never published.
 
 ## Boundaries
 
-No DeepSeek Harness source or data is modified. `D:\dsh-local` is outside the
+No DeepSeek Harness source or data is modified. `<HARNESS_DATA>` is outside the
 phase and was not accessed. Tests cover the control-plane state machine, proxy
 routing, log rotation, and frontend compilation. A packaged clean-machine
 Tauri/WebView2 launch and prolonged real Harness self-restart soak remain

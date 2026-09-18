@@ -7,7 +7,7 @@
 
 - Task / phase: `nexus-p0` / `snapshot-fix1`
 - Status: PASS candidate for independent fixed-commit review.
-- Worktree: `E:\git\dsh-nexus-phases\p0-snapshot-fix1`
+- Worktree: `<WORKSPACE>/dsh-nexus-phases\p0-snapshot-fix1`
 - Branch: `codex/nexus-p0/snapshot-fix1`
 - Fixed base: `0b8fb8110b921ba22122270338b89bd1e25f2536`
 - Scope: bounded follow-up changes in the snapshot crate's `lib.rs`, `validation.rs`, `restore.rs`, and `tests.rs`, plus this report.

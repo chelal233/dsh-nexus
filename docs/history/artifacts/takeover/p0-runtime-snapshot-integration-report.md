@@ -7,7 +7,7 @@ Date: 2026-09-05
 
 ## Scope and identity
 
-- Repository: `E:/git/dsh-nexus-phases/p0-integration`
+- Repository: `<WORKSPACE>/dsh-nexus-phases/p0-integration`
 - Branch: `codex/nexus-p0/integration`
 - Base: `f56c5e4b618ec9ee27c3baf2dc0e9dd4bac9da13`
 - Runtime-supply source: `ab8939e5dd121305c8f19af7c88637c984b20e7b`

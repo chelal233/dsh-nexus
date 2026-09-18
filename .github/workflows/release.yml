@@ -17,6 +17,10 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           persist-credentials: false
+      - name: Check source privacy before reusing release artifacts
+        run: |
+          node --test .github/scripts/check-source-privacy.test.mjs
+          node .github/scripts/check-source-privacy.mjs
       - name: Find a complete successful build of the tagged commit
         id: source
         env:

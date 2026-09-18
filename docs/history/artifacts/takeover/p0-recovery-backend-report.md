@@ -7,7 +7,7 @@ Date: 2026-09-05
 
 ## Scope and identity
 
-- Worktree: `E:/git/dsh-nexus-phases/p0-integration`
+- Worktree: `<WORKSPACE>/dsh-nexus-phases/p0-integration`
 - Branch: `codex/nexus-p0/integration`
 - Fixed starting HEAD: `4615f0e2e4422e7209f76152156080b24622af53`
 - This change extends the existing recovery transaction. It does not replace

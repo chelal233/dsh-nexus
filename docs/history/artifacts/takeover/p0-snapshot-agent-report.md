@@ -5,7 +5,7 @@
 
 ## Scope and result
 
-- Worktree: `E:\git\dsh-nexus-phases\p0-snapshot-agent`
+- Worktree: `<WORKSPACE>/dsh-nexus-phases\p0-snapshot-agent`
 - Branch: `codex/nexus-p0/snapshot-agent`
 - Fixed base: `f56c5e4b618ec9ee27c3baf2dc0e9dd4bac9da13`
 - Result: PASS candidate for fixed-commit review. This phase wires the frozen

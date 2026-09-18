@@ -6,9 +6,9 @@
 - Task / phase: `nexus-takeover` / `integration`
 - Status: PASS; reviewable isolated branch prepared for controller review
 - Base: `df3cff00cb5e740f223897756f2c7f5bf9c44207`
-- Branch / worktree: `codex/nexus-takeover/integration` / `E:\git\dsh-nexus-phases\integration`
+- Branch / worktree: `codex/nexus-takeover/integration` / `<WORKSPACE>/dsh-nexus-phases\integration`
 - Identity evidence: `HOST_ACCEPTED`; no resolved model/effort telemetry was fabricated
-- Scope: the 16 paths recorded in `E:\git\dsh-nexus-phases\integration-state.json`
+- Scope: the 16 paths recorded in `<WORKSPACE>/dsh-nexus-phases\integration-state.json`
 
 ## Cherry-pick provenance
 
@@ -38,12 +38,12 @@ The original phase reports remain unchanged historical evidence. Their independe
 
 | Command | Exit | Result | Log |
 | --- | ---: | --- | --- |
-| `cargo test --offline -p nexus-agent -p nexus-protocol -p nexus-launcher-core` | 0 | Agent 93/93, launcher-core 11/11, protocol 11/11; all three doc-test targets 0/0 | `E:\git\dsh-nexus-phases\reviews\integration-rust-combined.log` |
-| `COREPACK_ENABLE_NETWORK=0 pnpm install --offline --frozen-lockfile --ignore-scripts` from `apps/nexus-launcher` | 0 | lockfile accepted; 73 packages reused, 0 downloaded | `E:\git\dsh-nexus-phases\reviews\integration-pnpm-install.log` |
-| `pnpm typecheck` from `apps/nexus-launcher` | 0 | TypeScript check passed | `E:\git\dsh-nexus-phases\reviews\integration-frontend-typecheck.log` |
-| `pnpm test` from `apps/nexus-launcher` | 0 | 14/14 passed | `E:\git\dsh-nexus-phases\reviews\integration-frontend-test.log` |
-| `CARGO_NET_OFFLINE=true node apps/nexus-launcher/src-tauri/scripts/prepare-agent.mjs` | 0 | current integration source built release Agent/Launcher/CLI into ignored Tauri resources | `E:\git\dsh-nexus-phases\reviews\integration-prepare-agent.log` |
-| `cargo test --offline --manifest-path apps/nexus-launcher/src-tauri/Cargo.toml` | 0 | 7/7 passed | `E:\git\dsh-nexus-phases\reviews\integration-tauri-test.log` |
+| `cargo test --offline -p nexus-agent -p nexus-protocol -p nexus-launcher-core` | 0 | Agent 93/93, launcher-core 11/11, protocol 11/11; all three doc-test targets 0/0 | `<WORKSPACE>/dsh-nexus-phases\reviews\integration-rust-combined.log` |
+| `COREPACK_ENABLE_NETWORK=0 pnpm install --offline --frozen-lockfile --ignore-scripts` from `apps/nexus-launcher` | 0 | lockfile accepted; 73 packages reused, 0 downloaded | `<WORKSPACE>/dsh-nexus-phases\reviews\integration-pnpm-install.log` |
+| `pnpm typecheck` from `apps/nexus-launcher` | 0 | TypeScript check passed | `<WORKSPACE>/dsh-nexus-phases\reviews\integration-frontend-typecheck.log` |
+| `pnpm test` from `apps/nexus-launcher` | 0 | 14/14 passed | `<WORKSPACE>/dsh-nexus-phases\reviews\integration-frontend-test.log` |
+| `CARGO_NET_OFFLINE=true node apps/nexus-launcher/src-tauri/scripts/prepare-agent.mjs` | 0 | current integration source built release Agent/Launcher/CLI into ignored Tauri resources | `<WORKSPACE>/dsh-nexus-phases\reviews\integration-prepare-agent.log` |
+| `cargo test --offline --manifest-path apps/nexus-launcher/src-tauri/Cargo.toml` | 0 | 7/7 passed | `<WORKSPACE>/dsh-nexus-phases\reviews\integration-tauri-test.log` |
 
 The first pnpm install invocation was issued from the repository root and exited 1 because that directory has no `package.json`. This was a verification-command working-directory error; no code changed. The same required offline command then passed from the frontend package directory, and the table/log record the corrected acceptance run.
 

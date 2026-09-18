@@ -4,7 +4,7 @@
 # P0 authenticated Harness UI fallback report
 
 Task: `p0-integration` authenticated UI fallback
-Worktree: `E:\git\dsh-nexus-phases\p0-integration`
+Worktree: `<WORKSPACE>/dsh-nexus-phases\p0-integration`
 Base: `fdc7e353a6b54f8753df683e879bb3b454276bd2`
 
 ## Delivered

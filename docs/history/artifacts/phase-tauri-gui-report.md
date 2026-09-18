@@ -6,7 +6,7 @@
 Task: `nexus-native-launcher`
 Phase: `tauri-gui`
 Base: `8e794f24b6e1478b30dadd7a543076cceeb79d3c`
-Worktree: `E:\git\dsh-nexus-tauri`
+Worktree: `<WORKSPACE>/dsh-nexus-tauri`
 Branch: `codex/nexus-native-launcher/tauri-gui`
 
 ## Worktree handshake
@@ -61,7 +61,7 @@ and generated target output were kept outside the write scope.
 | --- | --- | --- |
 | Worktree and base handshake | PASS | `git status --short --branch`, `git rev-parse --show-toplevel`, `git branch --show-current`, and `git rev-parse HEAD` matched the declared worktree, branch, and base before edits. |
 | Old browser product | PASS | `apps/nexus-console/README.md`, `app.js`, `index.html`, and `styles.css` are deleted in the diff; no replacement static entry was added. |
-| Rust formatting | PASS | `C:\Users\PC\.cargo\bin\cargo.exe fmt --all -- --check`; nested Tauri `cargo fmt --manifest-path apps/nexus-launcher/src-tauri/Cargo.toml -- --check`. |
+| Rust formatting | PASS | `<USER_HOME>\.cargo\bin\cargo.exe fmt --all -- --check`; nested Tauri `cargo fmt --manifest-path apps/nexus-launcher/src-tauri/Cargo.toml -- --check`. |
 | Rust workspace tests | PASS | `cargo test --workspace --locked` completed with all workspace tests passing. |
 | Headless Launcher targeted checks | PASS | `cargo check -p nexus-launcher --locked` and `cargo test -p nexus-launcher --locked`; 8 tests passed, including API default mode and Harness URL validation. |
 | Tauri targeted checks | PASS | Nested `cargo check --locked` and `cargo test --locked`; 3 proxy/security tests passed. |
@@ -97,7 +97,7 @@ installed build must use a matching helper beside the GUI or an explicit
 PowerShell setting such as:
 
 ```text
-$env:NEXUS_LAUNCHER_BIN = 'C:\Program Files\Nexus Launcher\nexus-launcher.exe'
+$env:NEXUS_LAUNCHER_BIN = Join-Path $env:ProgramFiles 'Nexus Launcher/nexus-launcher.exe'
 $env:NEXUS_CONSOLE_PORT = '3091'
 ```
 

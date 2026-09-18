@@ -3,7 +3,7 @@
 
 # P0 模块农场修复验证
 
-2026-09-06；基线 433ebfa；任务工作树 E:/git/dsh-nexus-p0-module-farm。
+2026-09-06；基线 433ebfa；任务工作树 <WORKSPACE>/dsh-nexus-p0-module-farm。
 
 方向可行：启动前维护与当前槽位一致的模块链接，无需修改上游代码。此前“物化器将 rc.1 改回 alpha.1”的推断未获证实。
 

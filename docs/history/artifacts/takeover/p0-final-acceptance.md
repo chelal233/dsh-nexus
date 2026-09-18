@@ -18,9 +18,9 @@ Implementation head: `73dec3763d2e33775ec8511b94a6f7c08404d53a`, branch `codex/n
 
 ## Evidence and boundaries
 
-Evidence directory: `E:/git/dsh-nexus-phases/acceptance/p0-60c0faf`. Files include `final-rust-tests.log`, `native-build-final.log`, `cold-status-gitpin.json`, `installed-fast-switch.json`, `manual-restored.json`, `materialization-restore.json`, `local-plugin-remove-final.json`, and `final-stop.json`.
+Evidence directory: `<WORKSPACE>/dsh-nexus-phases/acceptance/p0-60c0faf`. Files include `final-rust-tests.log`, `native-build-final.log`, `cold-status-gitpin.json`, `installed-fast-switch.json`, `manual-restored.json`, `materialization-restore.json`, `local-plugin-remove-final.json`, and `final-stop.json`.
 
-Executable: `E:/git/dsh-nexus-phases/p0-integration/apps/nexus-launcher/src-tauri/target/debug/nexus-launcher-app.exe`.
+Executable: `<WORKSPACE>/dsh-nexus-phases/p0-integration/apps/nexus-launcher/src-tauri/target/debug/nexus-launcher-app.exe`.
 
 Authenticated Web uses a top-level browser; authenticated iframe embedding is not claimed. Actual runtime acquisition exercised reuse, not fresh Node/pnpm artifact download. MSI/script system installation and Unix runtime behavior were not exercised. No real user DSH data, global PATH/Git configuration, or upstream source was modified.
 

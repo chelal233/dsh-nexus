@@ -8,11 +8,11 @@ Phase: `runtime-ui-fix1`
 Owner: `verify_checkout`
 Base ref: `809dda1f6b327449e09b4cee5bbbf7dcba5e58a6`
 Branch: `codex/nexus-takeover/runtime-ui-fix1`
-Worktree: `E:\git\dsh-nexus-phases\runtime-ui-fix1`
+Worktree: `<WORKSPACE>/dsh-nexus-phases\runtime-ui-fix1`
 
 ## Worktree handshake
 
-`worktree_verified`: root `E:/git/dsh-nexus-phases/runtime-ui-fix1`, branch
+`worktree_verified`: root `<WORKSPACE>/dsh-nexus-phases/runtime-ui-fix1`, branch
 `codex/nexus-takeover/runtime-ui-fix1`, and `HEAD` equal to the declared base
 `809dda1f6b327449e09b4cee5bbbf7dcba5e58a6`. The worktree was clean before
 the fix.

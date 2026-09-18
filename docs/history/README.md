@@ -4,6 +4,8 @@
 
 以下记录保留当时的原文、证据与验收边界，不作为当前使用说明。历史正文未逐篇翻译；中英文入口共同指向同一份原始证据。旧链接、机器路径和命令可能失效。当前内容见[文档目录](../README.md)。
 
+历史记录中的本机绝对路径已脱敏，使用 `<WORKSPACE>`、`<USER_HOME>`、`<HARNESS_ROOT>`、`<HARNESS_DATA>` 和 `<PATCH_DIR>` 占位符；这些不是可直接执行的路径。验收结果与原有结论保持不变。
+
 ## 归档文件
 
 - [P0 authenticated Harness UI fallback report](artifacts/p0-authenticated-ui-report.md)

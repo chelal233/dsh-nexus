@@ -3,7 +3,7 @@
 
 # P0-4a runtime discovery / runtime-budget fix
 
-状态：runtime-budget 修复位于工作树 `E:\git\dsh-nexus-phases\runtime-budget`、分支
+状态：runtime-budget 修复位于工作树 `<WORKSPACE>/dsh-nexus-phases\runtime-budget`、分支
 `codex/nexus-takeover/runtime-budget`，固定基线
 `69d508493102c1460adb679f34aa89c9acebb630`；只改 Agent runtime 发现实现、此报告和项目状态，等待主控独立复核，不合并、不部署。
 

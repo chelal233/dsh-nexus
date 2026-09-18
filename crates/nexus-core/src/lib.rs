@@ -5142,7 +5142,7 @@ mod tests {
         let node = root.join("node/node.exe");
         #[cfg(windows)]
         let pnpm_verbatim = PathBuf::from(
-            r"\\?\C:\Users\PC\AppData\Local\node\corepack\v1\pnpm\11.7.0\bin\pnpm.mjs",
+            r"\\?\C:\Users\Fixture\AppData\Local\node\corepack\v1\pnpm\11.7.0\bin\pnpm.mjs",
         );
         #[cfg(not(windows))]
         let pnpm_verbatim = root.join("pnpm/bin/pnpm.mjs");
@@ -5166,7 +5166,7 @@ mod tests {
         assert_eq!(
             command.prefix_args,
             vec![OsString::from(
-                r"C:\Users\PC\AppData\Local\node\corepack\v1\pnpm\11.7.0\bin\pnpm.mjs"
+                r"C:\Users\Fixture\AppData\Local\node\corepack\v1\pnpm\11.7.0\bin\pnpm.mjs"
             )]
         );
         #[cfg(not(windows))]

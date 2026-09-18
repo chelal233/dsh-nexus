@@ -1,5 +1,7 @@
 # Contributing
 
+Before committing, run `node .github/scripts/check-source-privacy.mjs` from the repository root. Use path placeholders in documents and generic users in fixtures. Do not commit internal memory, real credentials or personal machine paths. This gate checks tracked paths and sensitive filenames; it does not replace a full credential scan. Both build and release workflows enforce it.
+
 [简体中文](CONTRIBUTING.md)
 
 

@@ -4,6 +4,8 @@
 
 These records preserve original evidence and acceptance boundaries, not current usage instructions. Historical bodies are not individually translated; both language indexes point to the same originals. Old links, machine paths and commands may be obsolete. See [current documentation](../README.en.md).
 
+Machine-specific paths in historical records are redacted as `<WORKSPACE>`, `<USER_HOME>`, `<HARNESS_ROOT>`, `<HARNESS_DATA>` and `<PATCH_DIR>`. These are placeholders, not executable paths. Acceptance results and original conclusions remain unchanged.
+
 ## Archived files
 
 - [P0 authenticated Harness UI fallback report](artifacts/p0-authenticated-ui-report.md)

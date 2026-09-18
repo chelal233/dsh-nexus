@@ -8,7 +8,7 @@
 - Task: `nexus-bootstrap`
 - Phase: `launcher-hardening`
 - Base: `4b8870b3ce5c8023026db774b4b66ffbcd0c98bb`
-- Worktree: `E:\git\dsh-nexus-launcher-hardening`
+- Worktree: `<WORKSPACE>/dsh-nexus-launcher-hardening`
 - Changed paths: `crates/nexus-launcher/src/main.rs`,
   `docs/architecture-baseline.md`, and this report.
 
