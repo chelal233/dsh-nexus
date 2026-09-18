@@ -12,6 +12,17 @@ export const isBrowserPreview = typeof window === "undefined" || !window.nexusDe
 /// Agent health endpoint, since the native auto-start command is unavailable.
 export async function commandStartupStatus(): Promise<StartupStatus> {
   if (!isBrowserPreview) {
+    let level: string | null = null;
+    try {
+      level = window.localStorage.getItem("nexus.launcher.agent-log-level");
+    } catch {
+      // Storage may be unavailable; retain the Agent default.
+    }
+    if (level && ["error", "warn", "info", "debug", "trace"].includes(level)) {
+      // Apply before startup_status can spawn an Agent, including after the
+      // desktop adapter restarts. Opening Settings must not be required.
+      await invoke("agent_log_set", { level });
+    }
     return invoke<StartupStatus>("startup_status");
   }
   const health = await fetch("/agent/v1/health").then(

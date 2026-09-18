@@ -1,38 +1,29 @@
-# Interrupted operation recovery
+# 中断操作恢复
 
-Nexus must not infer that a subprocess has exited merely because Agent restarted.
-Disposable commands persist an ownership record and hold an OS file lease across
-queued execution and process creation. Working files may be cleaned only after
-the lease and the recorded process tree are quiescent.
+[English](interrupted-operation-recovery.en.md)
 
-On Windows, process creation assigns the Job atomically with
-`PROC_THREAD_ATTRIBUTE_JOB_LIST`; closing the owner's Job terminates descendants.
-On Unix, the command records its process group before exec and starts a guardian
-that kills the group when the Agent pipe closes. The compatibility probe stays
-in this group. Recovery queries identity; it never kills an arbitrary reused PID.
 
-| Operation | Interrupted outcome and retry |
+Agent 重启不代表它此前启动的子进程已经退出。Nexus 为临时命令持久化所有权记录，并在排队、创建进程期间持有操作系统文件租约；只有租约和所属进程树均停止后才能清理工作文件。
+
+## 进程身份
+
+Windows 通过 `PROC_THREAD_ATTRIBUTE_JOB_LIST` 在创建进程时原子加入 Job，拥有者关闭 Job 时终止后代。Unix 在 exec 前记录进程组，由守护进程在 Agent 管道关闭时终止该组。兼容探针留在该组中。恢复必须核实身份，不能只凭 PID 杀进程。
+
+| 操作 | 中断后的处理 |
 | --- | --- |
-| Compatibility check / projection publication | Verify process ownership, discard only disposable work, rerun against current configuration. Never replay an old publication. |
-| Cold install / offline import or export | Reconcile command ownership before publication recovery or candidate cleanup; retry cleanup when the previous owner finishes. |
-| Update installation | Preserve primary failure and candidate while descendants remain; recover named or registry-backed ownership before admitting another install. |
-| Canary diagnostics | Set an abandoned operation to interrupted after quiescence; keep cancellation available if shutdown is still in progress. |
-| Checkpoint apply / dependency materialization | Both startup and explicit retry/abort check process quiescence before rollback or completion. Existing Prepared/Committed journal remains authoritative. |
-| Profile archive | Existing rename/catalog journal recovers; pre-journal empty owned directories are removed without recursive deletion. Nonempty evidence is retained. |
-| Configuration / release publication | Existing durable transaction rollback, commit verification, and external-edit conflict checks remain in force. |
-| Mutating HTTP request | Existing request receipts report interruption; uncertain side effects are not automatically replayed. |
-| Electron update preference | Write and fsync an exclusive temporary file, then replace atomically; interrupted temporary files do not change the previous preference. |
-| Harness launch / desktop update handoff | Preserve existing readiness-based startup recovery and OS lock handoff. Harness creation now also has atomic Job assignment on Windows. |
+| 兼容检查与投影发布 | 核实所有权，仅丢弃临时工作，按当前配置重跑；不重放旧发布。 |
+| 冷安装、离线导入/导出 | 先协调命令所有权，再恢复发布或清理候选；旧拥有者仍运行时等待。 |
+| 更新安装 | 后代未退出时保留原始失败与候选；确认命名或注册表支持的所有权后才接受新安装。 |
+| Canary 诊断 | 确认停止后标记为中断；关闭过程中保留取消入口。 |
+| 检查点应用与依赖准备 | 启动恢复和手动重试/中止均核实进程停止；以 Prepared/Committed 日志为准。 |
+| 配置档归档 | 恢复重命名/目录日志；仅移除日志前遗留的空自有目录，保留非空证据。 |
+| 配置与版本发布 | 保留持久事务回滚、提交校验和外部编辑冲突检查。 |
+| 修改型 HTTP 请求 | 回执报告中断，不自动重放结果不确定的副作用。 |
+| Electron 更新偏好 | 独占临时文件写入并 fsync 后原子替换；中断不改变原偏好。 |
+| Harness 启动与桌面更新交接 | 保留认证就绪检查与操作系统锁交接；Windows 创建 Harness 同样原子加入 Job。 |
 
-Old records lacking process ownership cannot safely be repaired by deleting a
-marker or trusting a dead parent PID. For these records, the migration requires
-one computer reboot and verifies that the record predates the current OS boot.
-Configuration and work evidence remain intact until this proof is available.
-Unknown schemas, changed paths, or denied ownership checks remain visible errors.
+## 旧记录与恢复边界
 
-Verification includes a real Agent-owner subprocess kill with a live child and
-grandchild, successful subsequent command execution, durable-cut compatibility
-tests, live-materializer checkpoint rollback exclusion, and interrupted Electron
-preference writing. Windows runtime acceptance does not establish macOS runtime
-acceptance. Unix process groups cannot contain third-party programs deliberately
-escaping the group with a new session; this is not a sandbox for hostile plugins.
+旧记录缺少进程身份时，删除标记或确认父进程消失都不足以证明安全。迁移要求重启计算机一次，并验证记录早于本次系统启动。证明到位前保留配置及工作证据。未知格式、路径变化或所有权查询被拒绝会保持为可见错误。
+
+验证应覆盖：杀死真实 Agent 拥有者后子孙进程退出、后续命令可执行、持久化切点恢复、依赖准备仍运行时禁止检查点回滚、Electron 偏好写入中断。Windows 验收不能代替 macOS 验收。Unix 进程组无法约束主动创建新会话逃离的第三方程序，不能视为恶意插件沙箱。

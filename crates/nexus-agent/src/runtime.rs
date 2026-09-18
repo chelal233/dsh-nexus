@@ -383,9 +383,22 @@ async fn observe_runtimes_with_selection_budget(
     RuntimeListResponse::new(tools)
 }
 
-/// Explicit pins are authoritative. An installed bundle is the default set,
+/// External pins are authoritative. Bundled pins follow the current installation.
+/// An installed bundle is the default set,
 /// including when a damaged bundle must be reported instead of hidden by PATH.
 fn prefer_bundled_runtime(mut runtime: RuntimeConfig, root: Option<&Path>) -> RuntimeConfig {
+    if let Some(root) = root {
+        for (pin, relative) in [
+            (&mut runtime.node, if cfg!(windows) { "node/node.exe" } else { "node/node" }),
+            (&mut runtime.pnpm, "pnpm/bin/pnpm.cjs"),
+        ] {
+            if let Some(pin) = pin.as_mut().filter(|pin| pin.ownership == RuntimeOwnership::Bundled) {
+                // Rebind even when the bundle is damaged: report the missing
+                // current file instead of using an old install or PATH fallback.
+                pin.path = root.join(relative);
+            }
+        }
+    }
     if let Some(root) = root.filter(|root| root.is_dir()) {
         runtime.node.get_or_insert_with(|| nexus_core::RuntimePin {
             path: root.join("node").join(if cfg!(windows) { "node.exe" } else { "node" }),
@@ -400,15 +413,30 @@ fn prefer_bundled_runtime(mut runtime: RuntimeConfig, root: Option<&Path>) -> Ru
 }
 
 /// Use the same effective Node and transitive PATH for observation and spawn.
+pub(crate) fn replace_runtime_settings(document: &mut nexus_core::NexusConfigFile, runtime: Option<RuntimeConfig>) {
+    if let Some(spec) = document.harness.as_mut() {
+        let follows_runtime = document.runtime.as_ref().and_then(|value| value.node.as_ref())
+            .is_some_and(|pin| pin.path == spec.program);
+        if spec.mode == nexus_protocol::HarnessLaunchMode::Node && follows_runtime {
+            // Keep the launch configuration symbolic so future runtime saves
+            // and installation moves cannot leave a second, stale Node pin.
+            spec.program = "node".into();
+        }
+    }
+    document.runtime = runtime;
+}
+
 /// Absolute launch programs remain authoritative; only bare Node is resolved.
 pub(crate) fn runtime_for_launch(spec: &mut nexus_core::HarnessLaunchSpec, configured: RuntimeConfig, root: Option<&Path>) -> RuntimeConfig {
     if spec.mode != nexus_protocol::HarnessLaunchMode::Node { return configured; }
+    let bundled_program = configured.node.as_ref().is_some_and(|pin|
+        pin.ownership == RuntimeOwnership::Bundled && pin.path == spec.program);
     let mut runtime = prefer_bundled_runtime(configured, root);
     let bare_node = spec.program.to_str().is_some_and(|program| {
         program == "node" || program == "node.exe"
             || (cfg!(windows) && (program.eq_ignore_ascii_case("node") || program.eq_ignore_ascii_case("node.exe")))
     });
-    if bare_node {
+    if bare_node || bundled_program {
         if let Some(node) = &runtime.node { spec.program = node.path.clone(); }
     } else if spec.program.is_absolute() {
         if runtime.node.as_ref().is_none_or(|node| node.path != spec.program) {
@@ -1863,6 +1891,65 @@ mod tests {
         assert_eq!(selected.pnpm.unwrap().path, root.join("pnpm/bin/pnpm.cjs"));
         assert_eq!(prefer_bundled_runtime(RuntimeConfig::default(), None), RuntimeConfig::default());
         assert_eq!(prefer_bundled_runtime(RuntimeConfig::default(), Some(&root.join("absent"))), RuntimeConfig::default());
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn saving_runtime_updates_linked_launch_without_overriding_independent_program() {
+        let root = fixture_root("runtime-save-launch");
+        let old = nexus_core::RuntimePin { path: root.join("old/node.exe"), ownership: RuntimeOwnership::Bundled };
+        let new = nexus_core::RuntimePin { path: root.join("new/node.exe"), ownership: RuntimeOwnership::System };
+        let mut spec = nexus_core::HarnessLaunchSpec::new(old.path.clone());
+        spec.mode = nexus_protocol::HarnessLaunchMode::Node;
+        let mut document = nexus_core::NexusConfigFile::default();
+        document.harness = Some(spec);
+        document.runtime = Some(RuntimeConfig { node: Some(old), ..RuntimeConfig::default() });
+        replace_runtime_settings(&mut document, Some(RuntimeConfig { node: Some(new.clone()), ..RuntimeConfig::default() }));
+        assert_eq!(document.harness.as_ref().unwrap().program, PathBuf::from("node"));
+        let mut next = document.harness.clone().unwrap();
+        runtime_for_launch(&mut next, document.runtime.clone().unwrap(), Some(&root));
+        assert_eq!(next.program, new.path);
+        replace_runtime_settings(&mut document, None);
+        let mut next = document.harness.clone().unwrap();
+        runtime_for_launch(&mut next, RuntimeConfig::default(), Some(&root));
+        assert_eq!(next.program, root.join(if cfg!(windows) { "node/node.exe" } else { "node/node" }));
+        let independent = root.join("independent/node.exe");
+        document.harness.as_mut().unwrap().program = independent.clone();
+        replace_runtime_settings(&mut document, Some(RuntimeConfig { node: Some(new), ..RuntimeConfig::default() }));
+        assert_eq!(document.harness.as_ref().unwrap().program, independent);
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn relocated_bundle_rebinds_pins_and_owned_launch_program_only() {
+        let root = fixture_root("relocated-bundle");
+        let old_node = root.join("old/node/node.exe");
+        let configured = RuntimeConfig {
+            node: Some(nexus_core::RuntimePin { path: old_node.clone(), ownership: RuntimeOwnership::Bundled }),
+            pnpm: Some(nexus_core::RuntimePin { path: root.join("old/pnpm/bin/pnpm.cjs"), ownership: RuntimeOwnership::Bundled }),
+            ..RuntimeConfig::default()
+        };
+        // No current files exist: resolution must still target the current
+        // bundle, so normal preflight reports damage without using stale files.
+        let current = root.join("new/runtime");
+        let mut spec = nexus_core::HarnessLaunchSpec::new(old_node);
+        spec.mode = nexus_protocol::HarnessLaunchMode::Node;
+        let runtime = runtime_for_launch(&mut spec, configured.clone(), Some(&current));
+        assert_eq!(spec.program, current.join(if cfg!(windows) { "node/node.exe" } else { "node/node" }));
+        assert_eq!(runtime.node.as_ref().unwrap().path, spec.program);
+        assert_eq!(runtime.node.as_ref().unwrap().ownership, RuntimeOwnership::Bundled);
+        assert_eq!(runtime.pnpm.unwrap().path, current.join("pnpm/bin/pnpm.cjs"));
+        let external = root.join("external/node.exe");
+        spec.program = external.clone();
+        let runtime = runtime_for_launch(&mut spec, configured.clone(), Some(&current));
+        assert_eq!(spec.program, external);
+        assert_eq!(runtime.node.unwrap().ownership, RuntimeOwnership::System);
+        for ownership in [RuntimeOwnership::System, RuntimeOwnership::Nexus] {
+            let mut pinned = configured.clone();
+            pinned.node.as_mut().unwrap().ownership = ownership;
+            pinned.pnpm.as_mut().unwrap().ownership = ownership;
+            assert_eq!(prefer_bundled_runtime(pinned.clone(), Some(&current)), pinned);
+        }
         let _ = fs::remove_dir_all(root);
     }
 

@@ -314,11 +314,12 @@ export function runtimeSettingsGate(
   coldPhase: unknown,
   cleanupPending: boolean,
   busy: boolean,
+  allowRunning = false,
 ): RuntimeSettingsGate {
   if (busy) return { disabled: true, reason: "busy" };
   if (
-    !["stopped", "detached", "failed"].includes(String(harnessState)) ||
-    harnessPid !== undefined
+    !(allowRunning && harnessState === "running") &&
+    (!["stopped", "detached", "failed"].includes(String(harnessState)) || harnessPid !== undefined)
   ) {
     return { disabled: true, reason: "harness_not_stopped" };
   }

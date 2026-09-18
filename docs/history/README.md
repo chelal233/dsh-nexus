@@ -1,0 +1,45 @@
+# 历史记录
+
+[English](README.en.md)
+
+
+以下记录保留当时的原文、证据与验收边界，不作为当前使用说明。历史正文未逐篇翻译；中英文入口共同指向同一份原始证据。旧链接、机器路径和命令可能失效。当前内容见[文档目录](../README.md)。
+
+`.agent-memory/PROJECT_STATUS.md` 是内部历史交接记录，不属于用户指南；本次未改写该记忆文件。
+
+## 归档文件
+
+- [P0 authenticated Harness UI fallback report](artifacts/p0-authenticated-ui-report.md)
+- [P0 模块农场修复验证](artifacts/p0-module-farm-result.md)
+- [Console CORS phase report](artifacts/phase-console-cors-report.md)
+- [Phase report: console-port](artifacts/phase-console-port-report.md)
+- [Launcher hardening report](artifacts/phase-hardening-report.md)
+- [Harness restart recovery phase report](artifacts/phase-harness-restart-recovery-report.md)
+- [Harness restart reconciliation phase report](artifacts/phase-harness-restart-report.md)
+- [Phase report: launcher-config](artifacts/phase-launcher-config-report.md)
+- [Phase 9 report: launcher bootstrap and replaceable WebShell foundation](artifacts/phase-report.md)
+- [Phase report: single-entry Console host](artifacts/phase-single-entry-console-report.md)
+- [Native Tauri Launcher phase report](artifacts/phase-tauri-gui-report.md)
+- [Architecture handoff report](artifacts/takeover/architecture-handoff-report.md)
+- [Nexus takeover isolated integration report](artifacts/takeover/integration-report.md)
+- [P0 cold-install orchestration report](artifacts/takeover/p0-cold-orchestration-report.md)
+- [P0 final acceptance — 2026-09-05](artifacts/takeover/p0-final-acceptance.md)
+- [P0 foundation isolated integration](artifacts/takeover/p0-foundation-integration-report.md)
+- [P0 recovery backend report](artifacts/takeover/p0-recovery-backend-report.md)
+- [P0 Runtime Foundation Phase Report](artifacts/takeover/p0-runtime-foundation-report.md)
+- [P0 runtime and recovery Launcher UI report](artifacts/takeover/p0-runtime-recovery-ui-report.md)
+- [P0 runtime-supply + snapshot-agent integration report](artifacts/takeover/p0-runtime-snapshot-integration-report.md)
+- [P0 runtime supply implementation report](artifacts/takeover/p0-runtime-supply-report.md)
+- [P0 snapshot Agent wiring report](artifacts/takeover/p0-snapshot-agent-report.md)
+- [P0 snapshot content engine report](artifacts/takeover/p0-snapshot-engine-report.md)
+- [P0-4a runtime discovery / runtime-budget fix](artifacts/takeover/runtime-discovery-report.md)
+- [Runtime status UI fix report](artifacts/takeover/runtime-status-ui-report.md)
+- [Switch ownership phase report](artifacts/takeover/switch-ownership-report.md)
+- [Nexus 当前架构与支持边界](baselines/architecture-baseline.md)
+- [Electron migration acceptance](baselines/electron-migration.md)
+- [Nexus 0.1.2 后续计划](baselines/follow-up-plan-0.1.2.md)
+- [GitHub 构建与发布](baselines/github-release.md)
+- [Harness 可配置项：0.1.2-rc.1](baselines/harness-configuration-0.1.2-rc.1.md)
+- [Nexus 实施与验收清单](baselines/implementation-roadmap.md)
+- [问题修复与验收记录](baselines/known-limitations.md)
+- [Nexus 0.1.2 手动验收](baselines/manual-acceptance-0.1.2.md)

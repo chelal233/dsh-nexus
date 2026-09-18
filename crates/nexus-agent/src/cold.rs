@@ -981,7 +981,7 @@ pub(crate) async fn initialize_selected_release(
     crate::compatibility::prepare(&state.paths, &state.snapshots.configured_dsh_home()?,
         &state.profiles.load()?.active_profile, id, &root, &node, true, &CancellationToken::default()).await?;
     config.harness = Some(HarnessLaunchSpec {
-        mode: HarnessLaunchMode::Node, program: node,
+        mode: HarnessLaunchMode::Node, program: "node".into(),
         args: vec!["{release_root}/apps/cli/lib/bin.js".into(), "--profile".into(), "{profile}".into()],
         working_dir: Some(PathBuf::from("{release_root}")), readiness_url: None,
         readiness_timeout_secs: None, readiness_token_required: false,

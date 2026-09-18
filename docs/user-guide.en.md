@@ -1,0 +1,47 @@
+# User guide
+
+[简体中文](user-guide.md)
+
+
+## Choose a program source
+
+The guide offers managed installation and an external source. Nexus downloads, prepares dependencies, and registers managed version slots. An external source must already be built; linking it does not copy or update it. Both paths require a usable runtime and startup checks.
+
+![Workbench before starting Harness](images/workbench-en.jpg)
+
+Having no sessions or versions is expected on first use. This screenshot is not a running Harness demonstration.
+
+## Distinguish three directories
+
+- Nexus program directory: the complete application and its `resources`.
+- Harness program directory: a managed slot or your external source/build directory.
+- Harness data directory: `DSH_HOME`, holding Harness user data; leaving it unset preserves the upstream default.
+
+Harness selects project workspaces separately. Changing `DSH_HOME` changes the location read, not the contents of the old directory. If sessions disappear after downgrading, first check the data directory, profile, and upstream data format rather than assuming deletion.
+
+## Startup and daily use
+
+Run startup checks and inspect each `blocked` item and repair link. Passing basic checks does not guarantee plugins will boot. Compatibility checks provide additional evidence, not a guarantee of every business workflow.
+
+Use Workbench to start or stop Harness and inspect the current instance. Browser and independent window entries are selectable; window-specific native interfaces may be unavailable in a browser. The DSH terminal uses the selected version and profile. A globally installed `dsh` command may point elsewhere.
+
+Closing the Launcher window normally hides it to the tray. Use an explicit stop or stop-services-and-exit action when needed; closing the interface does not itself stop tasks.
+
+## Plugins and notifications
+
+Built-in plugins offers a market choice, including no market and self-management. Local declaration checks inspect manifests of the local plugins being processed; they do not fetch every npm historical version while browsing. Valid declarations do not prove API, behavior, or data-format compatibility.
+
+Choose notifications by event, including turn completion, failure, approval, questions, and background tasks. Configure system and terminal delivery separately. Unfocused-only refers to the task page, not Launcher focus. The observer plugin toggle takes effect on the next Harness start. OS permissions, do-not-disturb, and terminal focus support affect delivery.
+
+
+## Two separate updates
+
+**Nexus update**: with automatic updates enabled, check once at application startup and every two hours thereafter. Manual checks remain available when automation is off. Updates download in the background with progress shown; after verification, Update applies them and restarts. Running Harness processes will be stopped, so finish important tasks first.
+
+**Harness update**: prepare an upstream version on the Updates page, then switch explicitly. Stop Harness before switching and follow the current protection checks. Versions may use different data formats; Nexus does not promise automatic downgrade compatibility.
+
+Portable users may download and fully extract a new package. v0.1.7 has a known stale bundled-runtime path issue; the source fix is not in that published package. See [troubleshooting](troubleshooting.en.md).
+
+## When something fails
+
+Keep the original error and build ID. Inspect the actual blocking item, then use its settings, recovery, or diagnostics entry. Do not delete transaction records to silence errors, or start by deleting `.dsh`. Checkpoints cover declared scope, not a complete backup of all projects, sessions, and secrets.

@@ -1,3 +1,6 @@
+> **历史归档 / Historical archive** — 保留原始记录，版本、路径、链接与结论可能已过时。Original evidence is preserved; versions, paths, links and conclusions may be obsolete.
+> [归档目录 / Archive index](../README.md) · [当前文档 / Current documentation](../../README.md)
+
 # Native Tauri Launcher phase report
 
 Task: `nexus-native-launcher`

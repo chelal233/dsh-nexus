@@ -1,5 +1,12 @@
 # Nexus 内置插件
 
+[English](README.en.md)
+
+
+[返回文档目录](../docs/README.md)
+
+## 模块与职责
+
 每项扩展能力独立放在 `plugins/<plugin-name>/`，各自维护包清单、Host/Client 入口与测试。
 Launcher/Agent 负责部署、生命周期、授权通信和原生能力；业务事件识别属于对应插件。
 插件通过 Harness 的 Cordis 组合机制装载，不修改上游源代码。

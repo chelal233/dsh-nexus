@@ -152,6 +152,9 @@ test("Harness and Agent lifecycle actions invalidate credentials before transpor
 
 test("runtime settings gate mirrors stopped, idle, and cold cleanup prerequisites", () => {
   assert.equal(runtimeSettingsGate("running", 42, "idle", undefined, false, false).reason, "harness_not_stopped");
+  assert.deepEqual(runtimeSettingsGate("running", 42, "idle", undefined, false, false, true), { disabled: false, reason: null });
+  assert.equal(runtimeSettingsGate("starting", 42, "idle", undefined, false, false, true).disabled, true);
+  assert.equal(runtimeSettingsGate("running", 42, "running", undefined, false, false, true).reason, "update_active");
   assert.equal(runtimeSettingsGate("stopped", undefined, "running", undefined, false, false).reason, "update_active");
   assert.equal(runtimeSettingsGate("stopped", undefined, "idle", "installing", false, false).reason, "cold_active");
   assert.equal(runtimeSettingsGate("stopped", undefined, "idle", "failed", true, false).reason, "cleanup_pending");

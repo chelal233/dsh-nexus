@@ -395,6 +395,10 @@ function App() {
                 return pending;
               }),
             );
+            // A save can finish while these reads are still in flight. Its
+            // refresh requests another pass; do not publish the older batch
+            // over the acknowledged settings or their launch explanation.
+            if (refreshPending.current) continue;
             Object.assign(next, Object.fromEntries(entries), { endpointErrors, endpointFailures });
             const coldPhase = stringValue(asObject(asObject(next.updates).operation), "phase");
             harnessPollState.current =

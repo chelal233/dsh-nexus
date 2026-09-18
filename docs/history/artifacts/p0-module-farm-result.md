@@ -1,3 +1,6 @@
+> **历史归档 / Historical archive** — 保留原始记录，版本、路径、链接与结论可能已过时。Original evidence is preserved; versions, paths, links and conclusions may be obsolete.
+> [归档目录 / Archive index](../README.md) · [当前文档 / Current documentation](../../README.md)
+
 # P0 模块农场修复验证
 
 2026-09-06；基线 433ebfa；任务工作树 E:/git/dsh-nexus-p0-module-farm。

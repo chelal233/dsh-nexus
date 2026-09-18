@@ -12,6 +12,15 @@ const resources = path.resolve(process.argv[2]);
 const gui = process.argv[3];
 if (gui && process.env.GITHUB_ACTIONS !== 'true') throw new Error('GUI package smoke runs only on disposable CI runners');
 const suffix = process.platform === 'win32' ? '.exe' : '';
+// Both installed and ZIP packages must carry the updater's runtime config.
+// Agent startup alone does not exercise either automatic or manual checks.
+const updateConfig = await readFile(path.join(resources, 'app-update.yml'), 'utf8');
+for (const line of [
+  'provider: github', 'owner: chelal233', 'repo: dsh-nexus',
+  `channel: latest-${process.arch}`, 'updaterCacheDirName: nexus-launcher-updater',
+]) {
+  assert.ok(updateConfig.split(/\r?\n/).includes(line), `Invalid packaged update configuration: expected ${line}`);
+}
 const bytes = await readFile(path.join(resources, 'release-manifest.json'));
 const manifest = JSON.parse(bytes);
 verifyIdentity(manifest, JSON.parse(await readFile(path.join(resources, 'release-identity.json'), 'utf8')),

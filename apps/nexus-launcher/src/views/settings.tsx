@@ -1041,6 +1041,11 @@ export function SettingsView({
     () => window.localStorage.getItem("nexus.launcher.agent-log-level") || "info",
   );
   useEffect(() => {
+    try {
+      window.localStorage.setItem("nexus.launcher.agent-log-level", logLevel);
+    } catch {
+      // Applying the current selection is still possible without persistence.
+    }
     // Re-apply the persisted level whenever settings open; best-effort in
     // browser-only previews.
     void invoke("agent_log_set", { level: logLevel }).catch(() => undefined);
@@ -1270,6 +1275,7 @@ export function SettingsView({
     runtimeOperationPhase,
     runtimeCleanupPending,
     busyAction !== null,
+    true,
   );
   const runtimeGateReason =
     runtimeGate.reason === "harness_not_stopped"
@@ -1312,13 +1318,25 @@ export function SettingsView({
     if (runtimeGate.disabled || runtimeSaving) return;
     setRuntimeSaving(true);
     try {
+      const pinPayload = (name: "node" | "pnpm" | "git") => {
+        const path = pins[name].trim();
+        if (!path) return null;
+        const previous = nestedValue(runtime, name);
+        return {
+          path,
+          ownership:
+            path === stringValue(previous, "path")
+              ? stringValue(previous, "ownership") || "system"
+              : "system",
+        };
+      };
       const saved = await runAction(t("Save runtime settings"), "/v1/config", {
         action: "set_runtime",
         expected_revision: runtimeRevision,
         runtime: {
-          node: pins.node.trim() ? { path: pins.node.trim(), ownership: "system" } : null,
-          pnpm: pins.pnpm.trim() ? { path: pins.pnpm.trim(), ownership: "system" } : null,
-          git: pins.git.trim() ? { path: pins.git.trim(), ownership: "system" } : null,
+          node: pinPayload("node"),
+          pnpm: pinPayload("pnpm"),
+          git: pinPayload("git"),
           source: runtimeSource,
           mode: stringValue(runtime, "mode") || "portable",
         },

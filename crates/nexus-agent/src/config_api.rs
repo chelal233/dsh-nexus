@@ -357,11 +357,8 @@ pub(super) async fn config_control(
             } else {
                 None
             };
-            let lifecycle = state.supervisor.acquire_lifecycle().await;
+            let _lifecycle = state.supervisor.acquire_lifecycle().await;
             if let Err(response) = ensure_checkpoint_mutation_ready(&state).await {
-                return response;
-            }
-            if let Err(response) = ensure_harness_stopped(&state, &lifecycle).await {
                 return response;
             }
             let _update_gate = match state.updater.try_acquire_gate() {
@@ -372,7 +369,7 @@ pub(super) async fn config_control(
                 return response;
             }
             transact_config_response(&state, expected, move |document| {
-                document.runtime = runtime;
+                crate::runtime::replace_runtime_settings(document, runtime);
                 Ok(())
             })
         }
