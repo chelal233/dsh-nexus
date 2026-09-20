@@ -5,24 +5,33 @@
 
 ## 0.1.8
 
-- Share Nexus Electron 44.0.0 and preassemble Desktop dependencies to reduce package size and first-start preparation. Preserve signed macOS resources, Unix offline permissions and process-stop ownership. Add native Linux ARM64 AppImage, DEB and RPM build and startup gates. Support only the intersection of Harness and Electron targets.
+1. **Use the official Harness Desktop**
 
-- Prepare official Desktop dependencies on clean CI from pinned, checksum-verified inputs. Ship preassembled runtime payloads for offline extraction and verify it after installation. Keep Windows ARM64 Web-only where upstream lacks Desktop support. Group tray actions into Browser and Official Desktop submenus.
+   Launch the Desktop included in your selected managed Harness release instead of a Nexus-built replacement client. The Desktop option appears only when both the selected release and your platform support it.
 
-- Maintain tray controls with detected official Desktop support, separate Web/Desktop stop actions, profile and maintenance shortcuts, explicit keep-running versus stop-all exit options, and guards against conflicting launch operations.
+2. **Clearer workbench and tray controls, with easier profile switching**
 
-- Turn reported plugin failures and built-in entry replacements alongside waiting official services into actionable recovery plans. After confirmation, temporarily disable recommended plugins and retry the normal startup checks, retaining packages, data and re-enable controls.
+   Web and Desktop now share one Harness area with clear mode, status and available actions, while profile switching remains easy to find. The tray adds Desktop launch, separate Web/Desktop stop controls, profile and maintenance shortcuts, and distinct options to exit only the launcher or stop all services.
 
-- Automatically check client plugins in the current Harness instance using the existing bridge audit. Replace the hidden check page for each run and close it on stop or exit.
-- Show a combined startup result on the workbench, distinguishing checking, limited functionality, client failure and unverified states. Failures name plugins and missing services, with profile, log, stop and retry actions.
-- Do not treat an accessible page as successful startup when client verification fails to load or produces no conclusive report within 45 seconds.
+3. **A practical recovery path when startup fails**
 
-- Rebind bundled runtimes after relocating a portable directory.
-- Use saved runtime settings on the next Harness start without affecting the running instance.
-- Prevent stale refreshes from replacing newly saved settings; persist Agent log level.
-- Restructure Chinese and English user, developer and maintenance documentation with actual UI screenshots.
+   Nexus distinguishes failing plugins, missing services and plugins still waiting for dependencies, then recommends repairs based on observed evidence. With your confirmation, it can temporarily disable the relevant plugins and check and start again. Packages and data remain available, and plugins can be re-enabled later.
 
+4. **More reliable startup results**
 
+   A running process or accessible webpage no longer counts as successful startup on its own. Nexus checks client plugins and core services, showing checking, limited functionality, startup failure or unverified states, including when loading remains blocked. These checks cover startup, not every conversation, tool or operation during use.
+
+5. **Fewer duplicate files and less first-start preparation**
+
+   Nexus and official Desktop share a matching Electron runtime, with Desktop dependencies prepared in advance and verified local files reused on later launches. Preparation shows its stage, elapsed time and a cancel action, so you can follow progress or stop waiting. It does not download missing dependencies during preparation.
+
+6. **More dependable offline packages and portable directory moves**
+
+   Full exports include matching Harness files and required runtimes, allowing import on the same OS and architecture without downloading dependencies. This release fixes stale paths after moving a portable directory and preserves Unix executable permissions and relative links. Configuration/data-only exports remain partial packages and do not replace a full offline package.
+
+7. **Linux ARM64 downloads and broader platform delivery**
+
+   AppImage, DEB and RPM packages join the existing Windows and macOS installers and archives. All five targets passed CI and package checks. Windows ARM64 and Linux ARM64 currently offer Web Harness; official Desktop appears only where both upstream Harness and Electron support it. Package checks do not establish compatibility with every Linux distribution or business workflow.
 
 ## 0.1.7
 

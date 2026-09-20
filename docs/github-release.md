@@ -3,15 +3,26 @@
 [English](github-release.en.md)
 
 
-当前使用 Electron，发行矩阵为 Windows x64/ARM64 和 macOS x64/ARM64。没有 Tauri、WebView2 安装器、x86 或第五个目标。
+当前使用 Electron，发行矩阵为 Windows x64/ARM64、macOS x64/ARM64 和 Linux ARM64。平台支持范围必须取 Harness 与 Electron 的交集。
 
 ## 两个工作流
 
 `Desktop build`：前端/Rust/Electron 检查 → 目标架构辅助程序与运行时 → 许可和资源清单 → 打包 → 安装/解压冒烟 → 收集附件。
 
-`Publish release`：在 `v*` 标签上运行，要求标签等于 `v<package version>`；复用同一提交、完整成功的四目标构建，否则运行构建矩阵。验证附件后生成签名校验清单，创建草稿、上传，全部成功后公开为预发布版。
+`Publish release`：在 `v*` 标签上运行，要求标签等于 `v<package version>`；复用同一提交、完整成功的五目标构建，否则运行构建矩阵。验证附件后生成签名校验清单，创建草稿、上传，全部成功后公开为预发布版。
 
 源码推送、tag 创建、构建通过、Release 公开是四种不同状态。已有草稿时不要盲目重跑创建步骤；先检查附件。不要移动已发布 tag 或拿其他提交的包补充该版本。
+
+## 改动与发布日志标准
+
+每个版本必须同步更新 `CHANGELOG.md`、`CHANGELOG.en.md` 和 `.github/RELEASE_TEMPLATE.md`，GitHub 发布页提供内容对应的中文与英文。以 v0.1.8 的说明作为详细程度示例，小版本不必凑相同条数。
+
+- 按用户能感受到的功能或问题归类。每个核心条目有清晰的价值标题，说明实际使用中有什么变化、解决什么问题，以及相关操作或限制。
+- 覆盖重要的新功能、体验优化、问题修复、离线行为和平台差异；同一变化不重复分列。改动少可以少写条目，但不能省略用户影响。
+- 不用提交记录、依赖版本、重构、API 名称或构建工具细节代替发布说明。技术细节仅在帮助用户理解收益、兼容要求或迁移步骤时出现。
+- 中英文在含义和详细程度上对等，限制与升级提示也必须同步；不允许一份完整、一份缩水摘要。
+- 只描述相对上一已发布版本实际交付的变化。数字对比须有证据，明确区分 CI／安装包检查与真机验收，不承诺未经验证的兼容性。
+- 发布前检查 GitHub 正文：不得残留占位符、旧版条目、重复内容或内部路径。已发布版本的文字纠正可更新正文，不移动 tag 或替换已验证安装包。
 
 ## 发布前
 
@@ -19,7 +30,7 @@
 2. 在匹配目标的原生平台构建，确认依赖锁文件、运行时摘要和许可材料。
 3. 执行工作流规定的测试和安装/解压检查；另行记录真实用户交互验收。
 4. 检查 EXE/DMG、ZIP、架构更新 YAML、`_build.json`、逐架构 SHA256 文件齐全；检查包内 `resources/app-update.yml`。
-5. 确认同一提交的四目标成功，再推送版本标签。查看发布任务和 Release，不把普通构建成功当成发布完成。
+5. 确认同一提交的五目标成功，再推送版本标签。查看发布任务和 Release，不把普通构建成功当成发布完成。
 
 ## 本地打包
 
@@ -33,7 +44,7 @@ pnpm electron:build
 
 ## 附件与校验
 
-文件名：`dsh-nexus_<version>_<windows|macos>_<x64|arm64>.<exe|dmg|zip>`。当前四目标完整 Release 有 20 个构建附件，加聚合 SHA256 清单、签名和证书，共 23 个附件。签名方法见[安全说明](../SECURITY.md)。
+文件名：`dsh-nexus_<version>_<windows|macos|linux>_<x64|arm64>.<exe|dmg|zip|AppImage|deb|rpm>`。当前五目标完整 Release 有 26 个构建附件，加聚合 SHA256 清单、签名和证书，共 29 个附件。签名方法见[安全说明](../SECURITY.md)。
 
 Windows：`Get-FileHash <文件> -Algorithm SHA256`。macOS：`shasum -a 256 -c <架构>_SHA256SUMS.txt`。自动校验脚本 `.github/scripts/verify-release-assets.mjs` 核对版本、提交、目标与摘要。
 
