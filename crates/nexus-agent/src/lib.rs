@@ -1406,6 +1406,7 @@ async fn harness_ui(State(state): State<AppState>) -> axum::response::Response {
 
     let mut response = serde_json::to_value(info).expect("Harness UI response is serializable");
     response["browser_health"] = desktop_plugins::browser_health(&state.paths, &session.run_id);
+    response["open_browser_after_ready"] = desktop_plugins::browser_open_deferred(&state.paths, &session.run_id).into();
     (StatusCode::OK, Json(response)).into_response()
 }
 

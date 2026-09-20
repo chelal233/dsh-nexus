@@ -249,13 +249,13 @@ export function ProfilesView(props: ViewProps) {
                 )}
                 {expanded && (
                   <div className="profile-children">
+                    <ProfilePlugins {...props} profile={name} />
                     <div
                       className="profile-checkpoints"
                       id={"profile-checkpoints-" + encodeURIComponent(name)}
                     >
                       <CheckpointsView {...props} embedded profileFilter={name} />
                     </div>
-                    <ProfilePlugins {...props} profile={name} />
                   </div>
                 )}
               </section>
@@ -407,6 +407,74 @@ export function CheckpointsView({
       {!embedded && (
         <RestoreStatusPanel snapshot={snapshot} busyAction={busyAction} runAction={runAction} />
       )}
+      <Panel title={t("Snapshot inventory")} icon={<ClipboardText size={18} />}>
+        <p className="field-help">
+          {t(
+            "Snapshots restore bounded profile and Harness settings files plus the pointer to an installed program version. Project files, full session data, runtimes and complete program copies are excluded. Install a missing version first. Use Retry or Abort for an interrupted restore.",
+          )}
+        </p>
+        {booleanValue(snapshot.checkpoints, "inventory_refresh_pending") ? (
+          <p className="field-help" role="status">
+            {t(
+              "Snapshot inventory refreshes after capture finishes. Existing snapshots have not been removed.",
+            )}
+          </p>
+        ) : (
+          <DataList
+            items={snapshots}
+            emptyTitle={t("No snapshots reported")}
+            emptyDetail={t("Healthy and manual snapshots appear here after capture.")}
+            render={(item) => {
+              const summary = asObject(asObject(item).summary);
+              const id =
+                stringValue(item, "snapshot_id") || stringValue(summary, "snapshot_id") || "";
+              return (
+                <>
+                  <div>
+                    <strong>{id}</strong>
+                    <StatusPill
+                      label={localizedRuntimeState(stringValue(summary, "kind"), t)}
+                      tone={booleanValue(item, "valid") ? "good" : "bad"}
+                    />
+                    <span>
+                      {stringValue(summary, "profile_name")} · {stringValue(summary, "dsh_version")}{" "}
+                      · {numberValue(summary, "file_count") ?? 0} {t("files")}
+                    </span>
+                  </div>
+                  <span className="row-meta">
+                    <ActionButton
+                      disabled={detailLoading}
+                      onClick={() => void loadDetail(id, "detail")}
+                    >
+                      {t("Detail")}
+                    </ActionButton>
+                    <ActionButton
+                      disabled={detailLoading}
+                      onClick={() => void loadDetail(id, "inspect")}
+                    >
+                      {t("Inspect")}
+                    </ActionButton>
+                    <ActionButton
+                      disabled={gate.disabled}
+                      onClick={async () => {
+                        if (
+                          await confirmAction(t("Restore this snapshot? Harness must be stopped."))
+                        )
+                          void runAction(t("Restore snapshot"), "/v1/checkpoints", {
+                            action: "restore",
+                            id,
+                          });
+                      }}
+                    >
+                      {t("Restore snapshot")}
+                    </ActionButton>
+                  </span>
+                </>
+              );
+            }}
+          />
+        )}
+      </Panel>
       <Panel title={t("Saved checkpoints")} icon={<ListChecks size={18} />}>
         <div className="panel-toolbar">
           <span className="toolbar-count">{t("{count} saved", { count: items.length })}</span>
@@ -491,74 +559,6 @@ export function CheckpointsView({
             );
           }}
         />
-      </Panel>
-      <Panel title={t("Snapshot inventory")} icon={<ClipboardText size={18} />}>
-        <p className="field-help">
-          {t(
-            "Snapshots restore bounded profile and Harness settings files plus the pointer to an installed program version. Project files, full session data, runtimes and complete program copies are excluded. Install a missing version first. Use Retry or Abort for an interrupted restore.",
-          )}
-        </p>
-        {booleanValue(snapshot.checkpoints, "inventory_refresh_pending") ? (
-          <p className="field-help" role="status">
-            {t(
-              "Snapshot inventory refreshes after capture finishes. Existing snapshots have not been removed.",
-            )}
-          </p>
-        ) : (
-          <DataList
-            items={snapshots}
-            emptyTitle={t("No snapshots reported")}
-            emptyDetail={t("Healthy and manual snapshots appear here after capture.")}
-            render={(item) => {
-              const summary = asObject(asObject(item).summary);
-              const id =
-                stringValue(item, "snapshot_id") || stringValue(summary, "snapshot_id") || "";
-              return (
-                <>
-                  <div>
-                    <strong>{id}</strong>
-                    <StatusPill
-                      label={localizedRuntimeState(stringValue(summary, "kind"), t)}
-                      tone={booleanValue(item, "valid") ? "good" : "bad"}
-                    />
-                    <span>
-                      {stringValue(summary, "profile_name")} · {stringValue(summary, "dsh_version")}{" "}
-                      · {numberValue(summary, "file_count") ?? 0} {t("files")}
-                    </span>
-                  </div>
-                  <span className="row-meta">
-                    <ActionButton
-                      disabled={detailLoading}
-                      onClick={() => void loadDetail(id, "detail")}
-                    >
-                      {t("Detail")}
-                    </ActionButton>
-                    <ActionButton
-                      disabled={detailLoading}
-                      onClick={() => void loadDetail(id, "inspect")}
-                    >
-                      {t("Inspect")}
-                    </ActionButton>
-                    <ActionButton
-                      disabled={gate.disabled}
-                      onClick={async () => {
-                        if (
-                          await confirmAction(t("Restore this snapshot? Harness must be stopped."))
-                        )
-                          void runAction(t("Restore snapshot"), "/v1/checkpoints", {
-                            action: "restore",
-                            id,
-                          });
-                      }}
-                    >
-                      {t("Restore snapshot")}
-                    </ActionButton>
-                  </span>
-                </>
-              );
-            }}
-          />
-        )}
       </Panel>
       {(detailLoading || detailError || detail) && (
         <Panel title={t("Snapshot detail")} icon={<ClipboardText size={18} />}>

@@ -39,6 +39,15 @@ pub(crate) fn host_startup_pid(paths: &NexusPaths, run: &str) -> Option<u32> {
     read().ok().flatten()
 }
 
+pub(crate) fn browser_open_deferred(paths: &NexusPaths, run: &str) -> bool {
+    let read = || -> io::Result<bool> {
+        let Some(bytes) = nexus_core::read_regular_file_bounded(&paths.run_dir.join("host-startup.json"), 4096)? else { return Ok(false); };
+        let value: serde_json::Value = serde_json::from_slice(&bytes)?;
+        Ok(value["run"].as_str() == Some(run) && value["state"] == "ready" && value["auto_open"] == true)
+    };
+    read().unwrap_or(false)
+}
+
 pub(crate) fn browser_health(paths: &NexusPaths, run: &str) -> serde_json::Value {
     use std::io::Read;
     let read = || -> io::Result<serde_json::Value> {

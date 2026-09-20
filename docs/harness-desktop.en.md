@@ -49,3 +49,7 @@ Web uses the profile selected in Nexus; official Desktop uses `profiles/desktop`
 Initial Web checks avoid a duplicate full dependency scan and move stopped probe directories to background cleanup. Cache reuse still checks configuration, dependencies and links. Desktop reuses the inventory made during extraction, verifying final links without a second complete traversal.
 
 Normal Web startup on verified Harness 0.1.6-alpha.2 observes the actual instance: it waits for official appReady, binds the evidence to the current run and Windows Job / Unix process group, then verifies the current Web endpoint and client. A delegated Host must belong to that same tree. Missing evidence cannot grant readiness. Unknown versions, custom launch commands and independent compatibility checks retain the existing flow; optimization never disables plugins automatically.
+
+## Third-party market profile selection
+
+Local inspection found that dshmarket 1.39.0 recognizes the `desktopProfiles` service from a different Desktop implementation. Official Harness 0.1.6-alpha.2 provides neither that service nor a `--profile` argument in its Host process, so the market falls back to `web` for installed listings and package operations. Its installed badge therefore does not prove that Desktop loads the plugin. Official Desktop still reads `profiles/desktop/package.json`; inspect that profile in Nexus. Until the market supports official Desktop, manage plugins through an entry point explicitly targeting desktop. Nexus does not rewrite user plugins or emulate another host contract.

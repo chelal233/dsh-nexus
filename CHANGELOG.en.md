@@ -5,6 +5,10 @@
 
 ## Unreleased
 
+- **Open Web only after client verification**: Fast startup opens the browser after the actual client becomes usable. Blocking failures stay in the Launcher instead of opening a broken page first; plugins are never disabled automatically.
+- **Clearer profile contents**: Expanded profiles show plugin inventory, snapshot inventory, then saved checkpoints.
+
+
 - **Normal Web startup launches Harness once**: verified Harness 0.1.6-alpha.2 uses the official backend startup commit followed by actual browser-client checks. It no longer starts and stops an isolated probe before launching the real instance. One same-machine, same-profile run improved from about 67 seconds to 10.4 seconds from click to client readiness; this is not a universal post-reboot performance guarantee.
 - **Fast startup retains failure checks**: commits must belong to the current owned process tree; stale evidence cannot make a new instance ready. Missing required services still fail with logs retained, and the failure dialog offers plugin diagnostics directly. Manual checks, version/profile-switch checks and unsupported versions retain isolated probes.
 

@@ -1,6 +1,6 @@
 import { app, BrowserWindow, Menu, Tray, nativeImage, ipcMain, dialog, shell, Notification, globalShortcut, session } from 'electron';
 import electronUpdater from 'electron-updater';
-import { readFileSync } from 'node:fs';
+import { readFileSync, writeFileSync, renameSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { RustBridge } from './bridge.mjs';
@@ -149,7 +149,18 @@ async function run() {
   app.on('will-quit', () => clearInterval(noticeTimer));
   void pollNotices();
   const documentUrl = pathToFileURL(path.join(root, 'dist/index.html')).href;
-  const clientAudit = new ClientAudit({ createWindow: options => new BrowserWindow(options) });
+  const openedRunFile = path.join(app.getPath('userData'), 'browser-opened-run.json');
+  let openedRun;
+  try { openedRun = JSON.parse(readFileSync(openedRunFile, 'utf8')).run; } catch {}
+  const clientAudit = new ClientAudit({ createWindow: options => new BrowserWindow(options), openedRun,
+    openReady: async (url, run) => {
+      // Persist only the run ID, never the authentication URL. Reopening Nexus
+      // must not reopen a tab for an already handled running instance.
+      writeFileSync(`${openedRunFile}.tmp`, JSON.stringify({ run }), { mode: 0o600 });
+      renameSync(`${openedRunFile}.tmp`, openedRunFile);
+      await shell.openExternal(harnessUrl(url).href);
+    },
+  });
   let auditBusy = false;
   const pollAudit = async () => {
     if (auditBusy || quitting || updating) return;

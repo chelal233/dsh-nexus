@@ -3,8 +3,8 @@ import { harnessUrl } from './policy.mjs';
 // Observe the real Host. Keep the page alive so the existing health report's
 // freshness boundary remains meaningful; never manufacture a successful audit.
 export class ClientAudit {
-  constructor({ createWindow, now = Date.now }) {
-    Object.assign(this, { createWindow, now });
+  constructor({ createWindow, now = Date.now, openReady, openedRun }) {
+    Object.assign(this, { createWindow, now, openReady, openedRun });
   }
   observe(info) {
     if (this.stopped) return info;
@@ -44,7 +44,13 @@ export class ClientAudit {
       window.on('unresponsive', fail);
       void window.loadURL(url.href).catch(fail);
     }
-    return this.result(info);
+    const result = this.result(info);
+    if (result.open_browser_after_ready === true && ['active', 'limited'].includes(result.browser_health?.state)
+        && this.openReady && this.openedRun !== result.run_id) {
+      this.openedRun = result.run_id; // Never retry an uncertain external open.
+      void Promise.resolve().then(() => this.openReady(url.href, result.run_id)).catch(() => {});
+    }
+    return result;
   }
   result(info) {
     let url;

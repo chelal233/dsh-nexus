@@ -911,6 +911,9 @@ impl HarnessSupervisor {
         // explicit readiness contract and must still receive owned Web health checks.
         let configured_spec = spec.clone();
         nexus_core::apply_harness_preferences(&mut spec, &preferences, &capabilities);
+        // The CLI otherwise opens a browser before client activation is known.
+        // Nexus opens it after the real client audit, preserving the preference.
+        if direct_startup { spec.args.push("--no-open".into()); }
         let notifications = crate::notifications::prepare(&self.paths, &mut spec)
             .map_err(HarnessSupervisorError::Configuration)?;
         crate::desktop_plugins::prepare(&self.paths, &selected_home, profile, &mut spec)
@@ -1088,7 +1091,10 @@ impl HarnessSupervisor {
             command.envs(runtime_env.iter().map(|(key, value)| (key, value)));
             command.envs(nexus_core::harness_preferences_environment(&preferences, &capabilities));
             command.env("DSH_HOME", &selected_home);
-            if direct_startup { command.env("NEXUS_HOST_STARTUP_FILE", self.paths.run_dir.join("host-startup.json")); }
+            if direct_startup {
+                command.env("NEXUS_HOST_STARTUP_FILE", self.paths.run_dir.join("host-startup.json"));
+                command.env("NEXUS_OPEN_AFTER_READY", if preferences.open_browser == Some(false) { "0" } else { "1" });
+            }
             else { command.env_remove("NEXUS_HOST_STARTUP_FILE"); }
             command.env("NEXUS_BROWSER_HEALTH_FILE", self.paths.run_dir.join("browser-health.json"));
             command.env("NEXUS_BROWSER_HEALTH_RUN", &inner.log_session.run_id);

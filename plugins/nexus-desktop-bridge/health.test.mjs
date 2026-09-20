@@ -130,6 +130,6 @@ test('host startup evidence waits for official commit and is cancelled on dispos
  const file=path.join(root,'ready.json');let committed,dispose;
  const ctx={inject:(names,apply)=>{assert.deepEqual(names,['appReady']);apply({effect:fn=>{dispose=fn();},appReady:{onReady:listener=>{committed=listener;return()=>{committed=undefined;};}}});}};
  observeHostStartup(ctx,file,'current-run');assert.equal(fs.existsSync(file),false);committed();
- assert.deepEqual(JSON.parse(fs.readFileSync(file,'utf8')),{run:'current-run',pid:process.pid,state:'ready'});
+ assert.deepEqual(JSON.parse(fs.readFileSync(file,'utf8')),{run:'current-run',pid:process.pid,state:'ready',auto_open:false});
  fs.unlinkSync(file);observeHostStartup(ctx,file,'next-run');dispose();assert.equal(committed,undefined);assert.equal(fs.existsSync(file),false);
 });

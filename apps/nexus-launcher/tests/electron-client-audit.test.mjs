@@ -73,3 +73,15 @@ test('crashed pages fail visibly without a reload loop and untrusted navigation 
   f.audit.observe({ ...f.info, url: 'https://example.com/' });
   assert.equal(f.windows.length, 1);
 });
+
+test('deferred browser open waits for verified client, honors opt-out and happens once per run',async()=>{
+ const f=fixture(), opened=[];f.audit.openReady=async(url,run)=>opened.push(run);
+ for(const state of ['unverified','checking','blocked']) f.audit.observe({...f.info,open_browser_after_ready:true,browser_health:{state}});
+ await Promise.resolve();assert.deepEqual(opened,[]);
+ f.audit.observe({...f.info,open_browser_after_ready:false,browser_health:{state:'active'}});await Promise.resolve();assert.deepEqual(opened,[]);
+ const ready={...f.info,open_browser_after_ready:true,browser_health:{state:'active'}};
+ f.audit.observe(ready);f.audit.observe(ready);await Promise.resolve();assert.deepEqual(opened,['one']);
+ f.audit.clear();f.audit.observe(ready);await Promise.resolve();assert.deepEqual(opened,['one']);
+ const restarted=fixture();restarted.audit.openReady=async()=>opened.push('duplicate');restarted.audit.openedRun='one';restarted.audit.observe(ready);await Promise.resolve();assert.deepEqual(opened,['one']);
+ f.audit.observe({...ready,run_id:'two',generation:2,browser_health:{state:'limited'}});await Promise.resolve();assert.deepEqual(opened,['one','two']);
+});

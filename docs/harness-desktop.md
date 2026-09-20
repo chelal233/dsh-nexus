@@ -51,3 +51,7 @@ macOS 签名会改写内嵌二进制。发布流程在内部签名完成后刷�
 「退出启动器（Harness 继续运行）」保留正在运行的 Harness；「中止所有服务并退出」先中止 Desktop，再由 Agent 执行 Web 和 Agent 的停止，成功后才退出。
 
 Web 正常启动在已验证的 Harness 0.1.6-alpha.2 中直接观察正式实例：等待官方 `appReady` 信号，并将信号的本次运行标识与 Windows Job／Unix 进程组核对，再验证当前网页地址和客户端。官方 CLI 的 Host 子进程也必须属于该进程树。缺失信号不会显示成功。未知版本、定制启动命令和独立兼容检查仍使用原流程；不会因提速自动禁用插件。
+
+## 第三方插件市场的配置来源
+
+本地核对发现，dshmarket 1.39.0 识别的是另一套 Desktop 的 `desktopProfiles` 接口。Harness 官方 0.1.6-alpha.2 未提供该接口，且 Host 不携带 `--profile` 命令行参数，市场会回退读取 `web`，包括已安装列表和包操作。因此市场中的“已安装”不能证明该插件正在 Desktop 加载。官方 Desktop 仍读取 `profiles/desktop/package.json`；可在 Nexus 对应配置档的插件清单核对。在市场修正官方 Desktop 适配前，请通过明确指定 desktop 配置的管理入口维护插件。Nexus 不会据此修改用户插件或伪造第三方宿主接口。
