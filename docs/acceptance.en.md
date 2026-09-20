@@ -16,7 +16,7 @@ Record version, commit, build ID, platform/architecture, package type, and data 
 | Plugins | Market and no-market paths work; declaration conflicts explain themselves; exercise real business functions |
 | Notifications | Completion/failure/approval/question, unfocused/always, foreground Launcher with background task, click-through |
 | Interruption recovery | Kill at authorized test points; restart does not replay uncertain actions, orphan owned processes, or delete business data |
-| Nexus update | Auto/manual checks, background download, interruption, superseding versions, clear Harness-stop warning before applying |
+| Nexus update | Auto/manual checks do not download; confirm before downloading with visible progress; recheck after interruption; defer or install only after verification; clear Harness-stop warning |
 | System integration | Windows/macOS/Linux pickers, terminal, clipboard, IME, zoom, tray, sleep/resume |
 | Official Desktop | Supported targets expose the option; unsupported targets hide it; stop before switching modes; preparation cancellation and failure recovery preserve data |
 | Full offline package | Export/import without network on matching OS/architecture; reject mismatches; retain Unix permissions/links and macOS signed app structure |

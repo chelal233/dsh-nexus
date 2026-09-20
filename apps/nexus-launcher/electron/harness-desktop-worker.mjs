@@ -92,7 +92,9 @@ try {
   const args = shared || portable ? [...(shared && recipe.electronApp ? [recipe.electronApp] : []), `--user-data-dir=${recipe.userData}`, `--nexus-official-desktop=${path.resolve(process.argv[2])}`]
     : [`--user-data-dir=${recipe.userData}`, launchApp];
   const child = activeChild = spawn(electron, args, {
-    cwd: launchApp, env: desktopEnv, detached: process.platform !== 'win32', stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true,
+    // This is the user-facing official app, not a console preparation helper.
+    // SW_HIDE on Windows suppresses its initial native BrowserWindow as well.
+    cwd: launchApp, env: desktopEnv, detached: process.platform !== 'win32', stdio: ['ignore', 'pipe', 'pipe'], windowsHide: false,
   });
   const append = chunk => { tail = (tail + chunk.toString()).slice(-12000).replace(/([?&]token=)[^\s&]+/g, '$1[redacted]'); };
   child.stdout.on('data', append); child.stderr.on('data', append);

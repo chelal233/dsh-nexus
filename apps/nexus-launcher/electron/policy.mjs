@@ -2,7 +2,7 @@ export const commands = new Set([
   'harness_desktop_capability', 'harness_desktop_status', 'harness_desktop_start', 'harness_desktop_stop', 'startup_status', 'retry_startup', 'proxy_request', 'build_identity',
   'choose_local_path', 'set_native_locale', 'set_native_notifications',
   'update_tray', 'export_startup_diagnostics', 'autostart_status', 'autostart_set',
-  'agent_log_set', 'notify', 'update_status', 'update_check', 'update_settings', 'update_install',
+  'agent_log_set', 'notify', 'update_status', 'update_check', 'update_download', 'update_settings', 'update_install',
   'notification_test',
 ]);
 export const events = new Set(['nexus-native-error', 'nexus-tray-action', 'nexus-update']);

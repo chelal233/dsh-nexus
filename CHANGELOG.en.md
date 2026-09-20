@@ -3,6 +3,13 @@
 [简体中文](CHANGELOG.md)
 
 
+## Unreleased
+
+- **Official Desktop opens visibly**: fix Windows launches where the official Desktop process started but its window remained hidden. Background preparation stays quiet while the actual desktop window opens normally.
+- **Consistent tray and workbench actions**: Web start, stop, open-page and terminal actions reuse the workbench flow, including checks, repair feedback and status refresh. Tray stop availability respects the same operation gates.
+
+- **Confirm before downloading updates**: update checks only announce availability. Click Update to review the confirmation dialog, then confirm the download and watch its progress. Only verified downloads offer Restart later or Update and restart; installation never starts just because a download completed.
+
 ## 0.1.8
 
 1. **Use the official Harness Desktop**

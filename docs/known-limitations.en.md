@@ -20,3 +20,7 @@ New entries should name affected versions, triggers, workarounds, fix versions, 
 ## Platform and offline boundaries
 
 Official Desktop currently supports Windows x64 and macOS x64/ARM64 with a compatible managed Harness release. Windows ARM64 and Linux ARM64 offer Web only. Linux ARM64 has AppImage, DEB and RPM packages; package format is not a guarantee for every distribution. Full offline transfer requires matching OS/architecture; partial exports are insufficient. Desktop process startup is not proof of internal plugin or business readiness. See [Desktop](harness-desktop.en.md).
+
+## Pending fixes after v0.1.8
+
+The published Windows build can start official Desktop with a hidden window. Current source removes the GUI hide flag, aligns tray Web actions with the workbench, and requires update-download confirmation. These changes are not in the existing v0.1.8 GitHub assets; a local fixed build must be identified by its build ID.

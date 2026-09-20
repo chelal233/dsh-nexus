@@ -20,3 +20,7 @@
 ## 平台与离线边界
 
 官方 Desktop 当前面向 Windows x64、macOS x64/ARM64，并要求兼容的受管 Harness 版本；Windows ARM64 与 Linux ARM64 仅提供 Web。Linux ARM64 提供 AppImage、DEB、RPM，包格式不代表所有发行版均兼容。完整离线迁移要求同系统、同架构，部分导出包不足以独立运行。Desktop 进程启动不代表内部插件和业务均已就绪。见[桌面端说明](harness-desktop.md)。
+
+## v0.1.8 之后的待发布修复
+
+已发布 Windows 包可能启动官方 Desktop 进程却隐藏窗口。当前源码已去除桌面进程的隐藏参数、统一托盘 Web 与工作台操作，并改为确认后下载更新；这些改动不在现有 GitHub v0.1.8 附件中，本地修复包须按构建编号识别。

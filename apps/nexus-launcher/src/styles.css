@@ -2964,3 +2964,12 @@ body,
     gap: 4px 10px;
   }
 }
+
+.desktop-update-progress {
+  width: 100%;
+  height: 12px;
+  accent-color: var(--accent);
+}
+.update-version {
+  font-weight: 600;
+}

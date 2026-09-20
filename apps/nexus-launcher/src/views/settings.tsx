@@ -968,6 +968,7 @@ function HarnessPreferencesPanel({
 }
 
 export function SettingsView({
+  onOpenUpdate,
   snapshot,
   themeMode,
   setThemeMode,
@@ -975,7 +976,7 @@ export function SettingsView({
   runAction,
   repairSection,
   onSettingsSectionChange,
-}: ViewProps) {
+}: ViewProps & { onOpenUpdate?: () => void }) {
   useEffect(() => {
     if (!repairSection) return;
     document
@@ -1909,7 +1910,7 @@ export function SettingsView({
               <>
                 <div>
                   <CheckCircle size={18} />
-                  <span>{t("Automatic Launcher updates")}</span>
+                  <span>{t("Automatic update checks")}</span>
                   <label className="form-check">
                     <input
                       type="checkbox"
@@ -1930,20 +1931,26 @@ export function SettingsView({
                   <span>{t("Launcher updates")}</span>
                   <button
                     className="button secondary small"
-                    disabled={["checking", "downloading", "ready", "installing"].includes(
-                      desktopUpdate.phase,
-                    )}
+                    disabled={["checking", "installing"].includes(desktopUpdate.phase)}
                     onClick={() => {
                       setDesktopUpdateError("");
-                      void invoke("update_check")
-                        .then(() => setDesktopUpdateError(t("Update check completed")))
+                      if (["available", "downloading", "ready"].includes(desktopUpdate.phase)) {
+                        onOpenUpdate?.();
+                        return;
+                      }
+                      void invoke<{ phase: string }>("update_check")
+                        .then((result) => {
+                          setDesktopUpdateError(t("Update check completed"));
+                          if (result.phase === "available" || result.phase === "ready")
+                            onOpenUpdate?.();
+                        })
                         .catch((error) => setDesktopUpdateError(error.message || String(error)));
                     }}
                   >
                     {desktopUpdate.phase === "checking"
                       ? t("Checking…")
-                      : desktopUpdate.phase === "ready"
-                        ? t("Update and restart")
+                      : ["available", "ready"].includes(desktopUpdate.phase)
+                        ? t("Update")
                         : desktopUpdate.phase === "downloading"
                           ? t("Downloading {percent}%", {
                               percent: Math.min(
@@ -1956,7 +1963,7 @@ export function SettingsView({
                 </div>
                 <p className="field-help">
                   {t(
-                    "Background downloads do not interrupt Harness. Stop Harness before applying an update; running tasks will be interrupted. Restart Harness manually after updating.",
+                    "Checks only notify you. Confirm in the update dialog to download, then choose when to restart. Stop Harness before applying the update.",
                   )}
                 </p>
               </>

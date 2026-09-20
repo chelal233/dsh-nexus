@@ -99,6 +99,7 @@ async function build(version, label) {
   const directory = path.join(fixture, label);
   const filename = `nexus-update-test-${version}.exe`;
   const configuration = { ...base, appId: `com.nexus.${suffix}`, productName, executableName,
+    win: { ...base.win, target: ['nsis'] },
     directories: { output: directory }, artifactName: filename, compression: 'store', forceCodeSigning: false,
     extraMetadata: { version, name, productName, main: 'electron/update-test-bootstrap.mjs' },
     files: [...base.files, { from: fixture, to: 'electron', filter: ['update-test-bootstrap.mjs'] }],
@@ -129,7 +130,13 @@ async function connect() {
     if (receiver) { pending.delete(message.id); message.error ? receiver.reject(message.error) : receiver.resolve(message.result); }
   });
   ws.addEventListener('close', () => { for (const receiver of pending.values()) receiver.reject(new Error('Desktop closed')); pending.clear(); });
-  const cdp = (method, params = {}) => new Promise((resolve, reject) => { const id = ++next; pending.set(id, { resolve, reject }); ws.send(JSON.stringify({ id, method, params })); });
+  const cdp = (method, params = {}) => new Promise((resolve, reject) => {
+    if (ws.readyState !== WebSocket.OPEN) return reject(new Error('Desktop debugger disconnected'));
+    const id = ++next;
+    const timer = setTimeout(() => { pending.delete(id); reject(new Error(`Desktop command timed out: ${method}`)); }, 20000);
+    pending.set(id, {resolve: value => {clearTimeout(timer);resolve(value);}, reject: error => {clearTimeout(timer);reject(error);}});
+    ws.send(JSON.stringify({ id, method, params }));
+  });
   const evaluate = async expression => {
     const result = await cdp('Runtime.evaluate', { expression, awaitPromise: true, returnByValue: true });
     if (result.exceptionDetails) throw new Error(JSON.stringify(result.exceptionDetails));
@@ -166,6 +173,14 @@ async function closeDesktop() {
 const feedRequests = () => requests.filter(request => request.path.endsWith('.yml'));
 const status = () => connected.evaluate('window.nexusDesktop.invoke("update_status")');
 const sha256 = async file => createHash('sha256').update(await readFile(file)).digest('hex');
+async function confirmDownload(version) {
+  await until('available update waiting for consent', async () => (await status()).phase === 'available');
+  assert.ok(!requests.some(request => request.path.endsWith(`nexus-update-test-${version}.exe`)), 'Checking must not download an installer');
+  await connected.evaluate('document.querySelector(".sidebar-footer button").click(); true');
+  await until('download confirmation', () => connected.evaluate('Array.from(document.querySelectorAll("[role=dialog] button")).some(b=>b.textContent.trim()==="确认并下载")'));
+  await connected.evaluate('Array.from(document.querySelectorAll("[role=dialog] button")).find(b=>b.textContent.trim()==="确认并下载").click(); true');
+}
+
 
 try {
   const baseline = await build('0.1.3', 'baseline');
@@ -193,11 +208,14 @@ try {
   progress('Force-closing during a real partial download before publishing a newer version');
   published = interrupted; interruptDownload = true;
   await launch();
+  progress('Waiting for explicit consent for interrupted download');
+  await confirmDownload(interrupted.version);
+  progress('Consent accepted; waiting for partial download progress');
   await until('partial installer download', async () => {
     const state = await status();
     return state.phase === 'downloading' && state.percent > 0 && state.percent < 100;
   });
-  assert.equal(await connected.evaluate('document.querySelector(".sidebar-footer button").disabled'), true);
+  assert.equal(await connected.evaluate('!!document.querySelector("[role=dialog] progress")'), true);
   connected.ws.close(); connected = undefined;
   launched.kill();
   await until('force-closed desktop', () => launched.exitCode !== null || launched.signalCode !== null);
@@ -208,6 +226,7 @@ try {
   await launch();
   const before = JSON.parse(await readFile(telemetry, 'utf8'));
   assert.equal(before.version, baseline.version);
+  await confirmDownload(update.version);
   await until('downloaded new release', async () => {
     const state = await status();
     if (state.phase === 'error') throw new Error(state.error);
@@ -221,6 +240,11 @@ try {
   await writeFile(path.join(fixture, 'update-ready.png'), Buffer.from(screenshot.data, 'base64'));
   progress('Clicking the real footer update button; awaiting NSIS replacement and restart');
   await connected.evaluate('Array.from(document.querySelectorAll(".sidebar-footer button")).find(b=>b.textContent.trim()==="更新").click(); true');
+  await until('verified update restart choice', () => connected.evaluate('Array.from(document.querySelectorAll("[role=dialog] button")).some(b=>b.textContent.trim()==="更新并重启")'));
+  await connected.evaluate('Array.from(document.querySelectorAll("[role=dialog] button")).find(b=>b.textContent.trim()==="稍后重启").click(); true');
+  assert.equal((await status()).phase,'ready','Deferring restart must preserve the verified download');
+  await connected.evaluate('document.querySelector(".sidebar-footer button").click(); true');
+  await connected.evaluate('Array.from(document.querySelectorAll("[role=dialog] button")).find(b=>b.textContent.trim()==="更新并重启").click(); true');
   connected.ws.close(); connected = undefined;
   const after = await until('upgraded application relaunched', async () => {
     try { const value = JSON.parse(await readFile(telemetry, 'utf8')); return value.pid !== before.pid && value.version === update.version && value; }
@@ -239,7 +263,7 @@ try {
     oldPid: before.pid, newPid: after.pid, installedAsarSha256: installedHash,
     checks: ['disabled startup made no feed request', 'normal desktop exit preserves the independent Agent and reconnects', 'enabled startup checked once', 'local publication was detected on restart',
       'force-close interrupted an actual installer transfer; restart fetched and installed the newer release',
-      'real NSIS installer downloaded and checksum-verified by electron-updater', 'footer update button installed and restarted',
+      'real NSIS installer downloaded and checksum-verified by electron-updater', 'explicit download consent, visible progress, deferred restart, then confirmed install and restart',
       'installed application hash matches the published package', 'isolated Agent available after restart', 'preference preserved and update button hidden when current'], requests };
   await connected.evaluate('window.nexusDesktop.invoke("proxy_request", {method:"POST",path:"/v1/agent",body:{action:"stop"}})');
   await closeDesktop();

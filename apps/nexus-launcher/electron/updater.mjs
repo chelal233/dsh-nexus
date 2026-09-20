@@ -31,7 +31,8 @@ export class DesktopUpdater {
     this.save = save;
     this.packaged = packaged;
     this.state = { enabled: settings.enabled !== false, phase: 'idle' };
-    // Downloads are coordinated here so manual checks work with automation off.
+    // Checking never authorizes a download. Both automatic and manual checks
+    // leave the decision to the user-facing confirmation dialog.
     updater.autoDownload = false;
     updater.autoInstallOnAppQuit = false;
     updater.disableDifferentialDownload = true;
@@ -40,8 +41,8 @@ export class DesktopUpdater {
     // channel is selected by the packaged app-update.yml, never renderer input.
     updater.allowPrerelease = true;
     updater.on('checking-for-update', () => this.publish({ phase: 'checking', error: undefined }));
-    updater.on('update-available', info => this.publish({ phase: 'available', version: info.version }));
-    updater.on('update-not-available', () => this.publish({ phase: 'idle' }));
+    updater.on('update-available', info => this.publish({ phase: 'available', version: info.version, percent: undefined }));
+    updater.on('update-not-available', () => this.publish({ phase: 'idle', version: undefined, percent: undefined }));
     updater.on('download-progress', progress => this.publish({ phase: 'downloading', percent: progress.percent }));
     updater.on('update-downloaded', info => this.publish({ phase: 'ready', version: info.version }));
     updater.on('error', error => {
@@ -62,10 +63,6 @@ export class DesktopUpdater {
     this.publish({ phase: 'checking', error: undefined, percent: undefined });
     try {
       await this.updater.checkForUpdates();
-      if (this.state.phase === 'available' && (manual || this.state.enabled)) {
-        this.publish({ phase: 'downloading', percent: 0 });
-        await this.updater.downloadUpdate();
-      }
       return this.state;
     } catch (error) {
       this.publish({ phase: 'error', error: error.message });
@@ -80,6 +77,20 @@ export class DesktopUpdater {
       this.updater.quitAndInstall(true, true);
     } catch (error) {
       await this.recoverInstall(error);
+      throw error;
+    }
+  }
+  async download(version) {
+    if (!this.packaged) throw new Error('Update downloads require an installed release');
+    if (typeof version !== 'string' || !version || version !== this.state.version) throw new Error('Update selection changed; check again');
+    if (this.state.phase === 'downloading') return this.state;
+    if (this.state.phase !== 'available') throw new Error('Check for an available update before downloading');
+    this.publish({ phase: 'downloading', percent: 0, error: undefined });
+    try {
+      await this.updater.downloadUpdate();
+      return this.state;
+    } catch (error) {
+      this.publish({ phase: 'error', error: error.message });
       throw error;
     }
   }

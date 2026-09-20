@@ -3,7 +3,7 @@ import test from "node:test";
 import { JSDOM } from "jsdom";
 import { createUiTestLoader } from "./ui-test-loader.ts";
 
-test("sidebar update shows download progress, becomes installable only when ready, and manual checks work with automation off", async () => {
+test("update dialog requires download confirmation, shows progress, and defers installation until verified", async () => {
   const dom = new JSDOM('<!doctype html><div id="root"></div>', { url: "http://localhost/" });
   dom.window.matchMedia = () => ({ matches: false, addEventListener() {}, removeEventListener() {} });
   dom.window.scrollTo = () => {};
@@ -27,7 +27,7 @@ test("sidebar update shows download progress, becomes installable only when read
         return state;
       }
       if (command === "startup_status") return { available: true, running: true };
-      return {};
+      return command === "update_check" ? { phase: "idle" } : {};
     },
     listen(name: string, callback: Function) {
       if (!listeners.has(name)) listeners.set(name, new Set());
@@ -41,32 +41,43 @@ test("sidebar update shows download progress, becomes installable only when read
     loader = await createUiTestLoader(); const { App } = await loader.loadModule("/src/App.tsx");
     root = createRoot(document.getElementById("root")!);
     await React.act(async () => root.render(React.createElement(App)));
-    const button = () => document.querySelector('.sidebar-footer button[title="Update and restart"]');
-    assert.equal(button(), null);
-    for (const phase of ["checking", "error", "idle"]) {
-      state = { enabled: true, phase };
-      await React.act(async () => { for (const callback of listeners.get("nexus-update") ?? []) callback({ payload: state }); });
-      assert.equal(button(), null);
-    }
-    await React.act(async () => { for (const callback of listeners.get("nexus-update") ?? []) callback({ payload: { enabled: true, phase: "downloading", percent: 42.8 } }); });
-    assert.equal(button()?.textContent, "Downloading 42%");
-    assert.equal((button() as HTMLButtonElement).disabled, true);
-    await React.act(async () => { for (const callback of listeners.get("nexus-update") ?? []) callback({ payload: { enabled: true, phase: "ready" } }); });
-    assert.equal(button()?.textContent, "Update");
-    await React.act(async () => (button() as HTMLButtonElement).click());
-    assert.equal(calls.filter(command => command === "update_install").length, 1);
-    assert.equal(document.querySelectorAll('.workspace-footer button').length, 0);
+    const button = () => document.querySelector('.sidebar-footer button[title="Update Nexus"]') as HTMLButtonElement;
+    const dialog = () => document.querySelector('[role="dialog"][aria-label="Update Nexus"]');
+    const action = (text: string) => [...(dialog()?.querySelectorAll('button') ?? [])].find(b => b.textContent === text) as HTMLButtonElement;
+    const publish = async (phase: string, extra = {}) => React.act(async () => {
+      for (const callback of listeners.get("nexus-update") ?? []) callback({payload:{enabled:true,phase,version:'0.2.0',...extra}});
+    });
+    assert.equal(button(),null);
+    await publish('available');
+    assert.equal(calls.filter(c=>c==='update_download').length,0);
+    await React.act(async()=>button().click());
+    assert.ok(dialog());assert.equal(action('Update and restart'),undefined);
+    await React.act(async()=>action('Not now').click());assert.equal(dialog(),null);
+    assert.equal(calls.filter(c=>c==='update_download').length,0);
+    await React.act(async()=>button().click());
+    await React.act(async()=>action('Confirm and download').click());
+    assert.equal(calls.filter(c=>c==='update_download').length,1);
+    await publish('downloading',{percent:42.8});
+    assert.equal(dialog()?.querySelector('progress')?.getAttribute('value'),'42');
+    assert.equal(action('Update and restart'),undefined);
+    await publish('ready');
+    assert.equal(calls.filter(c=>c==='update_install').length,0);
+    await React.act(async()=>action('Restart later').click());assert.equal(dialog(),null);
+    await React.act(async()=>button().click());
+    await React.act(async()=>action('Update and restart').click());
+    assert.equal(calls.filter(c=>c==='update_install').length,1);
+    await React.act(async()=>action('Restart later').click());
     const settings = [...document.querySelectorAll('nav button')].find(button => button.textContent?.includes('Settings'));
     assert.ok(settings);
     await React.act(async () => (settings as HTMLButtonElement).click());
-    const row = [...document.querySelectorAll('.integration-list > div')].find(element => element.textContent?.includes('Automatic Launcher updates'));
+    const row = [...document.querySelectorAll('.integration-list > div')].find(element => element.textContent?.includes('Automatic update checks'));
     assert.ok(row);
     const checkbox = row.querySelector('input') as HTMLInputElement;
     assert.equal(checkbox.checked, true);
     await React.act(async () => checkbox.click());
     assert.equal(calls.filter(command => command === 'update_settings').length, 1);
     assert.equal(checkbox.checked, false);
-    await React.act(async () => { for (const callback of listeners.get("nexus-update") ?? []) callback({ payload: { enabled: false, phase: "available" } }); });
+    await React.act(async () => { for (const callback of listeners.get("nexus-update") ?? []) callback({ payload: { enabled: false, phase: "idle" } }); });
     const manual = [...document.querySelectorAll('button')].find(b => b.textContent === 'Check for updates') as HTMLButtonElement;
     assert.ok(manual); assert.equal(manual.disabled, false);
     await React.act(async () => manual.click());

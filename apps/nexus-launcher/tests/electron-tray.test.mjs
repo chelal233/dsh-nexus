@@ -40,6 +40,9 @@ test('fresh runtime overrides stale renderer actions and distinguishes unavailab
  assert.match(menu({web:{state:'unknown'}})[0].label,/unavailable/);
  assert.match(menu({web:{state:'failed'}})[0].label,/failed/);
  assert.equal(by(menu({web:{state:'stopped',web:true}}),'web').enabled,false);
+ assert.equal(by(menu({web:{state:'stopped',stop:true}}),'stop').enabled,false);
+ assert.equal(by(menu({web:{state:'stopping',stop:true}}),'stop').enabled,false);
+ assert.equal(by(menu({web:{state:'running',stop:false}}),'stop').enabled,false,'runtime facts must not bypass the UI gate');
 });
 
 test('browser and official desktop controls occupy distinct submenus',()=>{

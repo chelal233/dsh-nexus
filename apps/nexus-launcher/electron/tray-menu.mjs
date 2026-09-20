@@ -18,7 +18,7 @@ export function trayEntries({ text, web = {}, desktop = {}, supported = false, b
     {id:'web-group',label:text('Browser mode','浏览器版'),submenu:[
       item('start','Start Harness','启动 Harness',!busy&&!nativeActive&&!webActive&&web.start),
       item('web','Open page','打开网页',!busy&&!nativeActive&&web.state==='running'&&web.web),
-      item('stop','Stop Harness','中止 Harness',!busy&&!nativeActive&&web.stop),
+      item('stop','Stop Harness','中止 Harness',!busy&&!nativeActive&&['running','starting','failed'].includes(web.state)&&web.stop),
     ]},
     ...(supported||nativeActive ? [{id:'desktop-group',label:text('Official Desktop','官方桌面版'),submenu:[
       item('desktop','Open Desktop','打开桌面端',!busy&&!nativeActive&&!webActive&&supported),

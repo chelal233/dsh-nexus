@@ -66,3 +66,55 @@ test('failed preparation stop retains ownership until retry and never starts Des
   assert.ok(!fs.existsSync(cache));
   assert.ok(!fs.existsSync(path.join(root, 'desktop-started')));
 });
+
+test('official Desktop worker opens a visible Windows window', { skip: process.platform !== 'win32', timeout: 30000 }, async t => {
+  const { createRequire } = await import('node:module');
+  const { execFileSync } = await import('node:child_process');
+  const electron = createRequire(import.meta.url)('electron');
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'nexus-visible-desktop-'));
+  const put = (name, content) => {
+    const file = path.join(root, name);
+    fs.mkdirSync(path.dirname(file), { recursive: true }); fs.writeFileSync(file, content); return file;
+  };
+  put('harness-desktop-worker.mjs', fs.readFileSync(new URL('../electron/harness-desktop-worker.mjs', import.meta.url)));
+  put('harness-desktop.mjs', 'export const desktopCapability = source => ({app:source});');
+  put('desktop-runtime.mjs', "export const digest=()=> 'lock'; export const legacyElectronEntry=()=>''; export const portableHostEntry=()=>'';");
+  put('desktop-paths.mjs', 'export const desktopSourceView=source=>source;');
+  put('desktop-process.mjs', fs.readFileSync(new URL('../electron/desktop-process.mjs', import.meta.url)));
+  put('node_modules/tsx/dist/loader.mjs', '');
+  put('node_modules/electron/package.json', JSON.stringify({version:'fixture'}));
+  put('kit/manifest.json', JSON.stringify({schema:3,electronVersion:'fixture',lockSha256:'lock'}));
+  put('apps/desktop/.keep', '');
+  put('prepare-harness-desktop.mjs', '');
+  const app = put('official.cjs', `const {app,BrowserWindow}=require('electron');
+    app.whenReady().then(()=>{new BrowserWindow({show:true,title:'Nexus visibility regression'});});`);
+  const stateFile = path.join(root,'state.json'), stopFile=path.join(root,'stop.json');
+  const recipe=put('recipe.json',JSON.stringify({source:root,kit:path.join(root,'kit'),home:root,userData:path.join(root,'user'),
+    stateFile,stopFile,operationId:'visibility-test',electronVersion:'fixture',electronNodeVersion:process.versions.node,
+    electronExecutable:electron,electronApp:app}));
+  const worker=spawn(process.execPath,[path.join(root,'harness-desktop-worker.mjs'),recipe],{stdio:'ignore',windowsHide:true});
+  const exited=once(worker,'exit');
+  t.after(async()=>{
+    put('stop.json',JSON.stringify({requestId:'cleanup'}));
+    await Promise.race([exited,new Promise(resolve=>setTimeout(resolve,6000))]);
+    if(worker.exitCode===null && worker.signalCode===null){
+      const state=fs.existsSync(stateFile)?JSON.parse(fs.readFileSync(stateFile)):{};
+      if(state.childPid) execFileSync('taskkill.exe',['/PID',String(state.childPid),'/T','/F'],{windowsHide:true,stdio:'ignore'});
+      worker.kill();await exited;
+    }
+    fs.rmSync(root,{recursive:true,force:true});
+  });
+  const deadline=Date.now()+15000;
+  let handle='0';
+  while(Date.now()<deadline){
+    const state=fs.existsSync(stateFile)?JSON.parse(fs.readFileSync(stateFile)):{};
+    assert.notEqual(state.phase,'failed',state.error);
+    if(state.phase==='launched'){
+      handle=execFileSync(process.env.NEXUS_TEST_POWERSHELL||'powershell.exe', ['-NoProfile','-NonInteractive','-Command',
+        `(Get-Process -Id ${Number(state.childPid)} -ErrorAction Stop).MainWindowHandle.ToInt64()`],{encoding:'utf8',windowsHide:true}).trim();
+      if(handle!=='0')break;
+    }
+    await new Promise(resolve=>setTimeout(resolve,100));
+  }
+  assert.notEqual(handle,'0','the actual official Desktop child must have a visible top-level window');
+});

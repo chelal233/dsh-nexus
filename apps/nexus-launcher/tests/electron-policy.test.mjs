@@ -24,3 +24,20 @@ test('Desktop boundary rejects arbitrary channels, malformed and oversized reque
   assert.throws(() => validateRequest('proxy_request', []));
   assert.throws(() => validateRequest('notify', { title: 'x'.repeat(32769) }));
 });
+
+test('sandbox preload forwards every permitted desktop command and rejects unknown commands', async () => {
+  const { readFileSync } = await import('node:fs');
+  const { runInNewContext } = await import('node:vm');
+  const { commands } = await import('../electron/policy.mjs');
+  let bridge;const forwarded=[];
+  runInNewContext(readFileSync(new URL('../electron/preload.cjs',import.meta.url),'utf8'),{
+    process:{argv:[]},require:name=>{
+      assert.equal(name,'electron');
+      return {contextBridge:{exposeInMainWorld:(_name,value)=>{bridge=value;}},ipcRenderer:{invoke:async(channel,command,args)=>{forwarded.push({channel,command,args});return {value:'ok'};}}};
+    },
+  });
+  for(const command of commands) assert.equal(await bridge.invoke(command,{version:'0.2.0'}),'ok',command);
+  assert.equal(forwarded.length,commands.size);
+  assert.ok(forwarded.every(call=>call.channel==='nexus:command'));
+  await assert.rejects(bridge.invoke('exec',{}),/Unknown desktop command/);
+});

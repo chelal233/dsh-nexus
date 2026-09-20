@@ -36,7 +36,7 @@ Choose notifications by event, including turn completion, failure, approval, que
 
 ## Two separate updates
 
-**Nexus update**: with automatic updates enabled, check once at application startup and every two hours thereafter. Manual checks remain available when automation is off. Updates download in the background with progress shown; after verification, Update applies them and restarts. Running Harness processes will be stopped, so finish important tasks first.
+**Nexus update (current source, not yet released)**: automatic checks run at startup and every two hours; manual checks remain available when disabled. Checks only announce availability. Click Update to open a confirmation dialog, then choose Confirm and download. Progress appears in that dialog; closing it keeps this explicitly requested download running. Once verified, choose Restart later or Update and restart. Save work and stop Harness before installing, then restart Harness manually afterward. The published v0.1.8 package still downloads automatically after detecting an update.
 
 **Harness update**: prepare an upstream version on the Updates page, then switch explicitly. Stop Harness before switching and follow the current protection checks. Versions may use different data formats; Nexus does not promise automatic downgrade compatibility.
 

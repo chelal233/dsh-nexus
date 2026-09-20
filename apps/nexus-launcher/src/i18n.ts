@@ -13,6 +13,25 @@ export type TranslationParams = Record<string, string | number>;
 export type Translator = (key: string, params?: TranslationParams) => string;
 
 const english: Record<string, string> = {
+  "Update Nexus": "Update Nexus",
+  "New version: {version}": "New version: {version}",
+  "Download verified. Choose when to restart.": "Download verified. Choose when to restart.",
+  "Update failed. Check again to retry.": "Update failed. Check again to retry.",
+  "No update available": "No update available",
+  "Download starts only after you confirm. Nexus will not restart automatically.":
+    "Download starts only after you confirm. Nexus will not restart automatically.",
+  "Update download progress": "Update download progress",
+  "Closing this dialog keeps your requested download running. Reopen Update to view progress.":
+    "Closing this dialog keeps your requested download running. Reopen Update to view progress.",
+  "Save your work and stop Harness before restarting Nexus.":
+    "Save your work and stop Harness before restarting Nexus.",
+  "Restart later": "Restart later",
+  "Not now": "Not now",
+  "Confirm and download": "Confirm and download",
+  "Check again": "Check again",
+  "Automatic update checks": "Automatic update checks",
+  "Checks only notify you. Confirm in the update dialog to download, then choose when to restart. Stop Harness before applying the update.":
+    "Checks only notify you. Confirm in the update dialog to download, then choose when to restart. Stop Harness before applying the update.",
   "Removing unused runtime copies": "Removing unused runtime copies",
   "Preparing offline dependencies": "Preparing offline dependencies",
   "Preparing the workspace": "Preparing the workspace",
@@ -1965,6 +1984,25 @@ const english: Record<string, string> = {
 };
 
 const chinese: Record<string, string> = {
+  "Update Nexus": "更新 Nexus",
+  "New version: {version}": "新版本：{version}",
+  "Download verified. Choose when to restart.": "下载已完成并通过校验，请选择重启时间。",
+  "Update failed. Check again to retry.": "更新失败，请重新检查后重试。",
+  "No update available": "暂无可用更新",
+  "Download starts only after you confirm. Nexus will not restart automatically.":
+    "确认后才开始下载，Nexus 不会自动重启。",
+  "Update download progress": "更新下载进度",
+  "Closing this dialog keeps your requested download running. Reopen Update to view progress.":
+    "关闭窗口后，本次下载会继续。可再次点击更新查看进度。",
+  "Save your work and stop Harness before restarting Nexus.":
+    "重启 Nexus 前，请保存工作并停止 Harness。",
+  "Restart later": "稍后重启",
+  "Not now": "暂不更新",
+  "Confirm and download": "确认并下载",
+  "Check again": "重新检查",
+  "Automatic update checks": "自动检查更新",
+  "Checks only notify you. Confirm in the update dialog to download, then choose when to restart. Stop Harness before applying the update.":
+    "检查仅提示新版本，在更新窗口确认后才下载，完成后可选择重启时间。应用更新前请停止 Harness。",
   "Removing unused runtime copies": "正在清理不再使用的运行时副本",
   "Preparing offline dependencies": "正在准备离线依赖",
   "Preparing the workspace": "正在准备工作区",

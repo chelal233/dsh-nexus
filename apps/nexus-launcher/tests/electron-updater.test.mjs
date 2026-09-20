@@ -108,7 +108,7 @@ test('Disabled automatic updates perform neither startup nor periodic checks', t
   assert.equal(f.checks(), 1);
 });
 
-test('Manual update downloads with automation disabled and never enables it', async () => {
+test('Manual checks wait for confirmation; requested downloads work with automation disabled', async () => {
   const f = fixture(); f.updater.setEnabled(false);
   let downloads = 0;
   f.native.checkForUpdates = async () => f.native.emit('update-available', { version: '0.2.0' });
@@ -119,6 +119,8 @@ test('Manual update downloads with automation disabled and never enables it', as
   };
   await f.updater.check(); assert.equal(downloads, 0);
   await f.updater.check({ manual: true });
+  assert.equal(downloads, 0); assert.equal(f.updater.state.phase, 'available');
+  await f.updater.download('0.2.0');
   assert.equal(downloads, 1); assert.equal(f.updater.state.enabled, false);
   assert.equal(f.updater.state.phase, 'ready'); assert.equal(f.installs(), 0);
 });
@@ -131,7 +133,7 @@ test('A ready download waits for the user even across automatic check ticks', as
   assert.equal(f.installs(), 0); assert.equal(f.checks(), 0);
 });
 
-test('Turning automation off during a check defers download but a subsequent manual check downloads', async () => {
+test('Automatic and repeated manual checks never download without confirmation', async () => {
   const f = fixture(); let release; let downloads = 0;
   f.native.checkForUpdates = async () => {
     await new Promise(resolve => { release = resolve; });
@@ -141,6 +143,8 @@ test('Turning automation off during a check defers download but a subsequent man
   const automatic = f.updater.check(); f.updater.setEnabled(false); release(); await automatic;
   assert.equal(downloads, 0); assert.equal(f.updater.state.phase, 'available');
   const manual = f.updater.check({ manual: true }); release(); await manual;
+  assert.equal(downloads, 0);
+  await f.updater.download('0.2.0');
   assert.equal(downloads, 1); assert.equal(f.updater.state.enabled, false);
 });
 
@@ -165,4 +169,20 @@ test('Installer error events and throws release coordination before allowing ret
     assert.equal(updater.state.phase, 'ready');
     assert.match(updater.state.error, /installer failed/);
   }
+});
+
+
+test('confirmation rejects stale versions and coalesces download clicks; failures require a new check', async () => {
+  const f=fixture();let downloads=0,release;
+  f.native.checkForUpdates=async()=>f.native.emit('update-available',{version:'0.2.0'});
+  f.native.downloadUpdate=()=>{downloads++;return new Promise((resolve,reject)=>{release=reject;});};
+  await f.updater.check(); assert.equal(downloads,0);
+  await assert.rejects(f.updater.download('0.1.9'),/selection changed/);
+  const first=f.updater.download('0.2.0');
+  await f.updater.download('0.2.0');assert.equal(downloads,1);
+  await assert.rejects(f.updater.install(),/No verified/);
+  release(new Error('network interrupted'));await assert.rejects(first,/network interrupted/);
+  assert.equal(f.updater.state.phase,'error');
+  await assert.rejects(f.updater.download('0.2.0'),/Check for an available/);
+  await f.updater.check({manual:true});assert.equal(f.updater.state.phase,'available');
 });

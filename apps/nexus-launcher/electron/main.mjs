@@ -209,7 +209,8 @@ async function run() {
       ]);
       if (runtime.status === 'fulfilled') {
         const harness = runtime.value.harness ?? {};
-        trayWeb = {state:harness.state, pid:harness.pid, stop:['running','starting','failed'].includes(harness.state)};
+        // Native polling refreshes facts, not the UI's operation/identity gate.
+        trayWeb = {state:harness.state, pid:harness.pid};
       } else trayWeb = {state:undefined,stop:false,start:false,web:false,terminal:false};
       traySupported = capability.status === 'fulfilled' && capability.value.supported === true;
     } finally { trayRefreshPending = undefined; rebuildTray(); }
@@ -219,6 +220,12 @@ async function run() {
   async function trayAction(id) {
     if (id === 'maintenance' || id === 'profiles') { show(); emit('nexus-tray-action',id); return; }
     if (trayBusy || updating || nativeMutationCount) throw new Error(text('Wait for the current operation to finish.', '请等待当前操作完成。'));
+    if (['start', 'stop', 'web', 'terminal'].includes(id)) {
+      if (desktopLocked()) throw new Error(text('Close Harness Desktop first.', '请先关闭 Harness 桌面端。'));
+      // Reuse Workbench's action flow, including readiness, receipts, repairs,
+      // credential invalidation and refresh, instead of bypassing it with HTTP.
+      show(); emit('nexus-tray-action', id); return;
+    }
     trayBusy = true; rebuildTray();
     try {
       if (id === 'desktop') await startDesktop();
@@ -228,16 +235,6 @@ async function run() {
         await nativeDesktop.stop();
         await bridge.request('proxy_request',{path:'/v1/agent',method:'POST',body:{action:'stop'}});
         quitting=true; app.quit();
-      } else {
-        if (desktopLocked()) throw new Error(text('Close Harness Desktop first.', '请先关闭 Harness 桌面端。'));
-        nativeMutationCount++;
-        try {
-          if (id==='web') {
-            const info=await bridge.request('proxy_request',{path:'/v1/harness/ui',method:'GET'});
-            await shell.openExternal(harnessUrl(info.url).href);
-          } else if (id==='start'||id==='stop') await bridge.request('proxy_request',{path:'/v1/harness',method:'POST',body:{action:id}});
-          else if (id==='terminal') await bridge.request('proxy_request',{path:'/v1/profiles',method:'POST',body:{action:'open_terminal'}});
-        } finally { nativeMutationCount--; }
       }
     } finally { trayBusy=false; if(!quitting) await refreshTray(); }
   }
@@ -279,6 +276,7 @@ async function run() {
         case 'autostart_set': app.setLoginItemSettings({ openAtLogin: args.enabled === true }); break;
         case 'update_status': value = updater.state; break;
         case 'update_check': value = await updater.check({ manual: true }); break;
+        case 'update_download': value = await updater.download(args.version); break;
         case 'update_settings': value = updater.setEnabled(args.enabled); break;
         case 'update_install': await updater.install(); break;
         case 'proxy_request':

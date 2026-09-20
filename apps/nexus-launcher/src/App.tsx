@@ -86,6 +86,7 @@ import {
 } from "./operation-status";
 import { invoke } from "./desktop";
 import { useDesktopUpdate } from "./desktop-update";
+import { DesktopUpdateDialog } from "./desktop-update-dialog";
 import { notificationsEnabledPreference, notify } from "./notifications";
 import { listen } from "./desktop";
 import { setDisplayZoom, displayZoom, ZOOM_LEVELS } from "./display-preferences";
@@ -269,6 +270,7 @@ function App() {
   ]);
   const [busyAction, setBusyAction] = useState<string | null>(null);
   const desktopUpdate = useDesktopUpdate();
+  const [updateOpen, setUpdateOpen] = useState(false);
   const updateRuntime = harnessRuntimeValue(snapshot.harnessRuntime);
   const updateNeedsHarnessStop =
     stringValue(updateRuntime, "state") === "running" ||
@@ -934,7 +936,7 @@ function App() {
           />
         );
       case "settings":
-        return <SettingsView {...common} />;
+        return <SettingsView {...common} onOpenUpdate={() => setUpdateOpen(true)} />;
       default:
         return <OverviewView {...common} />;
     }
@@ -1034,45 +1036,22 @@ function App() {
             <ShieldCheck size={16} />
             <span>{t("Loopback only")}</span>
             {desktopUpdate &&
-              ["available", "downloading", "ready", "installing"].includes(desktopUpdate.phase) && (
+              ["available", "downloading", "ready", "installing", "error"].includes(
+                desktopUpdate.phase,
+              ) && (
                 <button
                   className="button secondary small"
-                  title={t(
-                    updateNeedsHarnessStop
-                      ? "Stop Harness before updating; running tasks will be interrupted."
-                      : "Update and restart",
-                  )}
-                  disabled={desktopUpdate.phase !== "ready"}
-                  onClick={() => {
-                    if (updateNeedsHarnessStop) {
-                      setError(
-                        t("Stop Harness before updating; running tasks will be interrupted."),
-                      );
-                      return;
-                    }
-                    void invoke("update_install").catch((error) =>
-                      setError(error.message || String(error)),
-                    );
-                  }}
+                  title={t("Update Nexus")}
+                  onClick={() => setUpdateOpen(true)}
                 >
-                  {desktopUpdate.phase === "ready"
-                    ? t("Update")
+                  {desktopUpdate.phase === "downloading"
+                    ? t("Downloading {percent}%", {
+                        percent: Math.min(100, Math.max(0, Math.floor(desktopUpdate.percent ?? 0))),
+                      })
                     : desktopUpdate.phase === "installing"
                       ? t("Installing")
-                      : t("Downloading {percent}%", {
-                          percent: Math.min(
-                            100,
-                            Math.max(0, Math.floor(desktopUpdate.percent ?? 0)),
-                          ),
-                        })}
+                      : t("Update")}
                 </button>
-              )}
-            {desktopUpdate &&
-              updateNeedsHarnessStop &&
-              ["available", "downloading", "ready"].includes(desktopUpdate.phase) && (
-                <span className="desktop-update-warning">
-                  {t("Stop Harness before updating; running tasks will be interrupted.")}
-                </span>
               )}
           </div>
         </aside>
@@ -1282,6 +1261,13 @@ function App() {
               onRepair={navigateRepair}
               recheckEpoch={recheckEpoch}
               onClose={() => setCheckOpen(false)}
+            />
+          )}
+          {updateOpen && desktopUpdate && (
+            <DesktopUpdateDialog
+              state={desktopUpdate}
+              needsHarnessStop={updateNeedsHarnessStop}
+              onClose={() => setUpdateOpen(false)}
             />
           )}
           <BusyOverlay
