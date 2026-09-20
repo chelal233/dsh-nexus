@@ -35,6 +35,9 @@ jobs:
           - os: macos-15
             target: aarch64-apple-darwin
             arch: arm64
+          - os: ubuntu-22.04-arm
+            target: aarch64-unknown-linux-gnu
+            arch: arm64
     runs-on: ${{ matrix.os }}
     defaults:
       run:
@@ -53,6 +56,11 @@ jobs:
         with:
           node-version: '24.20.0'
           package-manager-cache: false
+      - name: Linux native package and display tools
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y xvfb xauth rpm cpio libgtk-3-0 libnss3 libasound2 libgbm1 libxss1 libatk-bridge2.0-0 libdrm2 libxkbcommon0 libfuse2
       - name: Check source privacy
         run: |
           node --test ../../.github/scripts/check-source-privacy.test.mjs
@@ -82,14 +90,27 @@ jobs:
           pnpm format:check
           pnpm test
           pnpm test:electron
+          node --test ../../crates/nexus-agent/tests/*.test.mjs ../../plugins/nexus-desktop-bridge/health.test.mjs
           # Process-lifecycle fixtures fork and hold real OS locks; serialize
           # them to avoid inherited-descriptor windows and runner contention.
           cargo test --manifest-path ../../Cargo.toml --workspace --locked -j 2 -- --test-threads=1
       - name: Stage verified offline runtime
         run: |
-          pnpm prepare:agent
+          if [[ "$RUNNER_OS" == "Linux" ]]; then
+            # Match a conservative glibc 2.28 floor, not the runner's newer libc.
+            # Only compilation runs in the container; GUI acceptance uses the
+            # ordinary non-root desktop runner with Chromium sandbox enabled.
+            node_bin=$(dirname "$(command -v node)")
+            docker run --rm --init -v "$GITHUB_WORKSPACE:$GITHUB_WORKSPACE" -v "$node_bin:$node_bin:ro" \
+              -w "$GITHUB_WORKSPACE/apps/nexus-launcher" \
+              -e CARGO_BUILD_TARGET -e NEXUS_BUILD_ID -e "NEXUS_BUILD_NODE_BIN=$node_bin" \
+              quay.io/pypa/manylinux_2_28_aarch64 bash desktop/scripts/build-linux-agent.sh
+          else
+            pnpm prepare:agent
+          fi
           pnpm prepare:runtime
           pnpm test:bundled-runtime
+          pnpm prepare:desktop
           pnpm prepare:notices
           pnpm prepare:release
           pnpm verify:release
@@ -160,6 +181,27 @@ jobs:
           ditto "$mount/Nexus Launcher.app" "$installed"
           node desktop/scripts/verify-installed.mjs "$installed/Contents/Resources"
           NEXUS_SMOKE_EXECUTABLE="$installed/Contents/MacOS/Nexus Launcher" node scripts/electron-smoke.mjs
+      - name: Linux ARM64 package smoke
+        if: runner.os == 'Linux'
+        run: |
+          set -euo pipefail
+          test "$(uname -m)" = aarch64
+          debs=(electron-dist/*.deb)
+          rpms=(electron-dist/*.rpm)
+          images=(electron-dist/*.AppImage)
+          test "${#debs[@]}" -eq 1 && test "${#rpms[@]}" -eq 1 && test "${#images[@]}" -eq 1
+          test "$(dpkg-deb -f "${debs[0]}" Architecture)" = arm64
+          test "$(rpm -qp --qf '%{ARCH}' "${rpms[0]}")" = aarch64
+          sudo dpkg -i "${debs[0]}"
+          installed='/opt/Nexus Launcher'
+          node desktop/scripts/verify-installed.mjs "$installed/resources"
+          NEXUS_SMOKE_EXECUTABLE="$installed/nexus-launcher" xvfb-run -a node scripts/electron-smoke.mjs
+          portable="$RUNNER_TEMP/nexus-rpm"
+          mkdir -p "$portable"
+          rpm2cpio "${rpms[0]}" | (cd "$portable" && cpio -id --quiet)
+          node desktop/scripts/verify-installed.mjs "$portable$installed/resources"
+          NEXUS_SMOKE_EXECUTABLE="$portable$installed/nexus-launcher" xvfb-run -a node scripts/electron-smoke.mjs
+          APPIMAGE_EXTRACT_AND_RUN=1 NEXUS_SMOKE_EXECUTABLE="$(realpath "${images[0]}")" xvfb-run -a node scripts/electron-smoke.mjs
       - name: Collect verified packages
         env:
           NEXUS_PACKAGE_SMOKE_PASSED: '1'

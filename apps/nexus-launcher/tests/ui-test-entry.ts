@@ -33,6 +33,7 @@ export { SpaceMaintenancePanel } from "../src/views/maintenance";
 export { OverviewView } from "../src/views/workbench";
 export { HarnessWebPanel } from "../src/views/workbench";
 export { CompatibilitySummary } from "../src/views/startup";
+export { BrowserHealth } from "../src/views/browser-health";
 export { CompatibilityDialog } from "../src/views/startup";
 export { BasicStartupCheck } from "../src/views/startup";
 export { ProfilesView } from "../src/views/profiles";
@@ -47,7 +48,6 @@ export { OfflinePackagePanel } from "../src/views/updates";
 export { OfflineOperationStatus } from "../src/views/updates";
 export { UpdatesView } from "../src/views/updates";
 export { ProfilePlugins } from "../src/views/profiles";
-export { RecoveryModePanel } from "../src/views/recovery";
 export { RequestHistory } from "../src/views/recovery";
 export { DiagnosticsView } from "../src/views/recovery";
 export { LaunchInputsPanel } from "../src/views/settings";
@@ -60,3 +60,8 @@ export { Modal } from "../src/ui-components";
 export { ConfirmationHost, confirmAction, BusyOverlay } from "../src/confirmation";
 
 export { StartupOperationPanel } from "../src/views/startup";
+export { startupRepairPlan, executeStartupRepair, StartupRepair } from "../src/views/startup-repair";
+
+export { clientCheckPending } from "../src/harness-session";
+export { launcherPollDelay } from "../src/control-state";
+export { clientStartupLabel } from "../src/views/browser-health";

@@ -72,7 +72,6 @@ async function loadViews() {
   const app = await loader.loadModule("/src/App.tsx");
   return {
     loader,
-    RecoveryModePanel: app.RecoveryModePanel,
     GuideView: app.GuideView,
     CompatibilitySummary: app.CompatibilitySummary,
     CompatibilityDialog: app.CompatibilityDialog,
@@ -221,7 +220,7 @@ test("compatibility summary identifies the checked release, projection, and disa
     const markup = renderToStaticMarkup(
       createElement(CompatibilitySummary, { ...props, snapshot }),
     );
-    assert.match(markup, /Startup compatibility check/);
+    assert.match(markup, /Plugin check result/);
     assert.match(markup, /desktop/);
     assert.match(markup, /nexus-projection/);
     assert.match(markup, /rc1/);
@@ -291,6 +290,7 @@ test("failed compatibility offers explicit plugin choices and retry without clai
               package: "third-party",
               reason: "Not identified as faulty; optional isolation for troubleshooting",
             },
+            { package: "broken-plugin", reason: "DSH reported a loader error for this plugin" },
           ],
         },
       },
@@ -299,9 +299,14 @@ test("failed compatibility offers explicit plugin choices and retry without clai
       createElement(CompatibilitySummary, { ...props, snapshot }),
     );
     assert.match(markup, /Choose how to handle plugin errors/);
+    assert.match(markup, /class="notice action-error plugin-fault"/);
+    assert.match(markup, /class="status-pill bad"/);
+    assert.ok(markup.indexOf("broken-plugin") < markup.indexOf("third-party"));
+    assert.match(markup, /<details><summary>Error details/);
     assert.match(markup, /type="checkbox"/);
     assert.doesNotMatch(markup, /checked=""/);
-    assert.match(markup, /Select all third-party plugins/);
+    assert.match(markup, /Select failing plugins/);
+    assert.match(markup, /<details><summary>Other plugins for troubleshooting/);
     assert.match(markup, /Save disabled plugins/);
     assert.match(markup, /Retry version switch/);
     assert.match(markup, /not confirmed faults/);
@@ -322,7 +327,7 @@ test("saved isolation is visible and reversible before another check", async () 
     const markup = renderToStaticMarkup(
       createElement(CompatibilitySummary, { ...props, snapshot }),
     );
-    assert.match(markup, /Saved plugin choices; effective on next check/);
+    assert.match(markup, /Disabled plugins/);
     assert.match(markup, /Restore plugin on next check/);
     assert.match(markup, /third-party/);
     assert.doesNotMatch(markup, /Startup check passed/);
@@ -637,38 +642,6 @@ test("a stale legacy success does not hide a running or failed cold operation", 
   }
 });
 
-test("recovery mode explains persistent pause and never labels leaving as startup", async () => {
-  const { loader, RecoveryModePanel } = await loadViews();
-  try {
-    const html = renderToStaticMarkup(
-      createElement(RecoveryModePanel, {
-        ...props,
-        snapshot: { ...baseSnapshot, recovery: { paused: true } },
-      }),
-    );
-    assert.match(html, /Harness startup is paused/);
-    assert.match(html, /Leaving does not start Harness/);
-    const control = renderToStaticMarkup(
-      createElement(RecoveryModePanel, {
-        ...props,
-        compact: true,
-        snapshot: { ...baseSnapshot, recovery: { paused: true } },
-      }),
-    );
-    assert.match(control, /Leave recovery mode/);
-    const invalid = renderToStaticMarkup(
-      createElement(RecoveryModePanel, {
-        ...props,
-        compact: true,
-        snapshot: { ...baseSnapshot, recovery: { paused: true, pause_error: "invalid JSON" } },
-      }),
-    );
-    assert.match(invalid, /Repair and enter recovery mode/);
-    assert.doesNotMatch(invalid, /Leave recovery mode/);
-  } finally {
-    await loader.close();
-  }
-});
 
 test("Nexus record recovery offers time selection without manual repair fields", async () => {
   const loader = await createUiTestLoader();
@@ -684,4 +657,33 @@ test("Nexus record recovery offers time selection without manual repair fields",
   } finally {
     await loader.close();
   }
+});
+
+test("blocking conflict is prominent and unrelated dependency inventory is hidden", async () => {
+  const {loader, CompatibilitySummary} = await loadViews();
+  try {
+    const html = renderToStaticMarkup(createElement(CompatibilitySummary, {...props, snapshot: {...baseSnapshot, profiles: {active_profile: 'web', compatibility: {
+      status:'needs_choice', source_profile:'web', release_id:'one', failure_stage:'plugin_loading',
+      error:'TypeError: duplicate loader entry id: file-upload',
+      candidates:[{package:'dsh-file-upload',reason:'Declares the duplicate loader entry ID'}],
+      dependency_origins:[{package:'@noble/hashes',chains:[],incomplete:true}],
+    }}}}));
+    assert.match(html, /Blocking startup error/);
+    assert.match(html, /Duplicate plugin entry ID: file-upload/);
+    assert.match(html, /dsh-file-upload/);
+    assert.doesNotMatch(html, /@noble\/hashes|Local dependency evidence is incomplete|Verified profile/);
+    assert.ok(html.indexOf('Blocking startup error') < html.indexOf('Plugin version declarations'));
+  } finally { await loader.close(); }
+});
+
+test("optional plugin limitation does not render a blocking alert or plugin-disable choices", async () => {
+  const {loader, CompatibilitySummary} = await loadViews();
+  try {
+    const html=renderToStaticMarkup(createElement(CompatibilitySummary,{...props,snapshot:{...baseSnapshot,profiles:{active_profile:'web',compatibility:{
+      status:'passed',source_profile:'web',release_id:'one',diagnosis:{level:'limited',summary:'Harness is ready; some optional plugins did not activate',remedy:'You can continue using Harness. Inspect only the listed optional plugins if you need their features.',evidence:['optional (plugin): missing service'],code:'optional_plugins'}
+    }}}}));
+    assert.match(html,/Limited functionality/);
+    assert.match(html,/You can continue using Harness/);
+    assert.doesNotMatch(html,/Blocking startup error|Choose how to handle plugin errors/);
+  } finally {await loader.close();}
 });

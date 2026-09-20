@@ -2291,6 +2291,27 @@ dt {
   min-width: 0;
   margin: 0;
 }
+.notice.browser-health {
+  display: block;
+}
+.browser-health > * + *,
+.startup-repair > * + * {
+  margin-top: 10px;
+}
+.browser-health ul,
+.startup-repair ul {
+  padding-left: 22px;
+}
+.browser-health li,
+.startup-repair li {
+  overflow-wrap: anywhere;
+  margin: 5px 0;
+}
+.startup-repair {
+  padding: 12px;
+  border: 1px solid currentColor;
+  border-radius: 8px;
+}
 .notice > span {
   flex: 1 1 240px;
 }
@@ -2532,4 +2553,414 @@ body,
 }
 .modal-body .status-block {
   margin-top: 16px;
+}
+
+/* Keep the failure badge beside the package name, with details on a new line. */
+.plugin-fault > .status-pill {
+  flex: 0 0 auto;
+}
+.plugin-fault > .plugin-fault-reason {
+  flex: 1 1 100%;
+}
+.modal-card progress {
+  width: 100%;
+  height: 8px;
+  accent-color: var(--accent);
+}
+
+.startup-overview {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 16px;
+}
+.startup-overview p {
+  margin: 0;
+  color: var(--muted);
+  font-size: 13px;
+}
+.startup-diagnostics {
+  margin-top: 16px;
+  min-width: 0;
+}
+.startup-diagnostics > summary {
+  cursor: pointer;
+  padding: 10px 0;
+}
+.startup-diagnostics[open] > * + * {
+  margin-top: 14px;
+}
+.startup-diagnostics .notice {
+  display: block;
+}
+.startup-diagnostics .notice > * + * {
+  margin-top: 10px;
+}
+.startup-diagnostics pre,
+.startup-repair pre {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  max-height: 240px;
+  overflow: auto;
+  font-size: 12px;
+}
+.startup-repair details {
+  margin-top: 6px;
+  font-size: 13px;
+}
+.startup-repair li + li {
+  margin-top: 16px;
+}
+.startup-repair code {
+  display: block;
+  margin-bottom: 4px;
+}
+/* Workbench: one launch surface, one primary action, secondary details below. */
+.workbench .page-heading {
+  margin-bottom: 22px;
+}
+.workbench .page-heading h1 {
+  margin: 0;
+  font-size: 27px;
+  line-height: 1.25;
+  letter-spacing: -0.025em;
+}
+.harness-launch-surface {
+  border: 1px solid var(--line-strong);
+  border-radius: 14px;
+  background: var(--surface);
+  overflow: hidden;
+  margin-bottom: 18px;
+}
+.harness-launch-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 20px;
+  padding: 18px 20px 0;
+}
+.harness-product {
+  display: flex;
+  align-items: center;
+  gap: 11px;
+  min-width: 0;
+}
+.harness-product > svg {
+  color: var(--accent);
+  flex-shrink: 0;
+}
+.harness-product h2 {
+  color: var(--text);
+  margin: 0;
+  font-size: 22px;
+  font-weight: 650;
+  letter-spacing: -0.02em;
+}
+.harness-mode-picker {
+  display: inline-flex;
+  flex-shrink: 0;
+  gap: 3px;
+  padding: 4px;
+  margin: 0;
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  background: var(--surface-soft);
+  min-width: 0;
+}
+.visually-hidden,
+.harness-mode-picker input {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+  border: 0;
+}
+.harness-mode-picker label {
+  position: relative;
+  cursor: pointer;
+}
+.harness-mode-picker label > span {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  padding: 8px 13px;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  color: var(--muted);
+  font-size: 13px;
+  font-weight: 550;
+  white-space: nowrap;
+}
+.harness-mode-picker input:checked + span {
+  color: var(--text);
+  background: var(--surface);
+  border-color: var(--line-strong);
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.06);
+}
+.harness-mode-picker input:focus-visible + span {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+.harness-mode-picker:disabled label {
+  cursor: not-allowed;
+}
+.harness-mode-picker:disabled input:not(:checked) + span {
+  opacity: 0.55;
+}
+.harness-mode-content {
+  display: grid;
+  align-content: center;
+  padding: 20px;
+}
+.harness-mode-content > .metric {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  column-gap: 24px;
+  padding: 0;
+  margin: 0;
+  border: 0;
+  background: transparent;
+}
+.harness-mode-content .metric > span {
+  display: none;
+}
+.harness-mode-content .metric > strong,
+.harness-status-copy > strong {
+  grid-column: 1;
+  display: block;
+  margin: 0 0 9px;
+  font-size: 20px;
+  line-height: 1.25;
+  font-weight: 650;
+  letter-spacing: -0.02em;
+  color: var(--text);
+  white-space: normal;
+}
+.harness-mode-content .metric > small,
+.harness-status-copy > p {
+  grid-column: 1;
+  display: block;
+  margin: 0;
+  font-size: 13px;
+  line-height: 1.65;
+  color: var(--muted);
+  white-space: normal;
+}
+.harness-mode-content .metric-actions,
+.harness-desktop-content > .button-row {
+  grid-column: 2;
+  grid-row: 1 / 3;
+  align-self: center;
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 8px;
+  max-width: 310px;
+  margin: 0;
+}
+.harness-mode-content .button {
+  min-height: 40px;
+  white-space: nowrap;
+}
+.harness-mode-content .button.primary {
+  padding-inline: 20px;
+}
+.harness-mode-content .metric > .button-row {
+  grid-column: 1 / -1;
+  margin-top: 14px;
+}
+.harness-desktop-content {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  column-gap: 24px;
+  align-content: center;
+}
+.harness-status-copy {
+  grid-column: 1;
+  grid-row: 1 / 3;
+}
+.harness-desktop-content > .error-text,
+.harness-desktop-content > details {
+  grid-column: 1 / -1;
+  margin-top: 16px;
+}
+.harness-launch-surface > .field-help,
+.harness-switch-hint {
+  padding: 0 20px;
+  margin: 0 0 18px;
+  color: var(--muted);
+  font-size: 12px;
+}
+.harness-context-row {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 16px;
+  flex-wrap: wrap;
+  padding: 10px 20px;
+  border-top: 1px solid var(--line);
+  background: var(--surface-soft);
+  font-size: 12px;
+  color: var(--muted);
+}
+.harness-profile {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 12px;
+  min-width: 0;
+}
+.harness-profile strong {
+  font-weight: 650;
+  font-size: 13px;
+  color: var(--text);
+  overflow-wrap: anywhere;
+}
+.workbench-text-action {
+  border: 0;
+  padding: 4px 0;
+  background: transparent;
+  color: var(--accent-strong);
+  font-size: 12px;
+}
+.workbench-text-action:hover {
+  text-decoration: underline;
+}
+.harness-source {
+  min-width: 0;
+}
+.harness-source summary {
+  cursor: pointer;
+}
+.harness-source p {
+  margin: 12px 0 0;
+  max-width: 65ch;
+  overflow-wrap: anywhere;
+  line-height: 1.6;
+}
+.workbench-disclosure {
+  padding: 13px 0;
+  border-bottom: 1px solid var(--line);
+  font-size: 12px;
+  color: var(--muted);
+}
+.workbench-disclosure > summary {
+  cursor: pointer;
+  width: fit-content;
+}
+.workbench-disclosure[open] > summary {
+  margin-bottom: 18px;
+}
+.workbench-disclosure > .panel {
+  margin: 0;
+  padding: 18px;
+}
+.workbench-maintenance > .metric {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 10px 14px;
+  padding: 14px 0;
+  border: 0;
+  background: transparent;
+}
+.workbench-maintenance > .metric > span {
+  color: var(--muted);
+  font-size: 12px;
+  letter-spacing: 0;
+}
+.workbench-maintenance > .metric > strong {
+  font-size: 13px;
+  margin: 0;
+  color: var(--text);
+}
+.workbench-maintenance > .metric > small {
+  font-size: 12px;
+  margin: 0;
+}
+.workbench-maintenance .metric-actions {
+  margin: 0 0 0 auto;
+}
+@media (max-width: 767px) {
+  .harness-launch-header {
+    align-items: flex-start;
+    flex-direction: column;
+    gap: 18px;
+    padding: 22px 20px 0;
+  }
+  .harness-mode-picker {
+    align-self: stretch;
+  }
+  .harness-mode-picker label {
+    flex: 1;
+  }
+  .harness-mode-content {
+    padding: 20px;
+  }
+  .harness-mode-content > .metric,
+  .harness-desktop-content {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 0;
+  }
+  .harness-mode-content .metric-actions,
+  .harness-desktop-content > .button-row {
+    grid-column: 1;
+    grid-row: auto;
+    justify-content: flex-start;
+    margin-top: 22px;
+  }
+  .harness-status-copy {
+    grid-row: auto;
+  }
+  .harness-context-row {
+    padding: 16px 20px;
+  }
+  .harness-launch-surface > .field-help,
+  .harness-switch-hint {
+    padding-inline: 20px;
+  }
+  .workbench-maintenance > .metric > small {
+    white-space: normal;
+  }
+}
+
+.workbench-profile-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 0 0 16px;
+  margin-bottom: 16px;
+  border-bottom: 1px solid var(--line);
+}
+.workbench-profile-bar > div {
+  display: flex;
+  align-items: baseline;
+  gap: 14px;
+  min-width: 0;
+}
+.workbench-profile-bar span {
+  color: var(--muted);
+  font-size: 13px;
+}
+.workbench-profile-bar strong {
+  color: var(--text);
+  font-size: 17px;
+  font-weight: 650;
+  overflow-wrap: anywhere;
+}
+.workbench-profile-bar > .button {
+  flex-shrink: 0;
+  min-height: 36px;
+}
+@media (max-width: 767px) {
+  .workbench-profile-bar > div {
+    flex-wrap: wrap;
+    gap: 4px 10px;
+  }
 }

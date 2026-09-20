@@ -6,15 +6,15 @@ export class RustBridge {
   #pending = new Map();
   #nextId = 0;
   #closed = false;
-  constructor(resources, spawnProcess = spawn) {
-    this.resources = resources; this.spawnProcess = spawnProcess;
+  constructor(resources, spawnProcess = spawn, environment = {}) {
+    this.resources = resources; this.spawnProcess = spawnProcess; this.environment = environment;
     this.#start();
   }
   #start() {
     const resources = this.resources;
     const child = this.#child = this.spawnProcess(path.join(resources, process.platform === 'win32' ? 'nexus-desktop-bridge.exe' : 'nexus-desktop-bridge'), [], {
       windowsHide: true, stdio: ['pipe', 'pipe', 'inherit'],
-      env: { ...process.env, NEXUS_DESKTOP_RESOURCES: resources },
+      env: { ...process.env, ...this.environment, NEXUS_DESKTOP_RESOURCES: resources },
     });
     let buffer = '';
     child.stdout.setEncoding('utf8');

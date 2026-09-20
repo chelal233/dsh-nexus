@@ -4,6 +4,9 @@ export const bundleFormats = {
   nsis: { extension: '.exe', count: 1 },
   dmg: { extension: '.dmg', count: 1 },
   zip: { extension: '.zip', count: 1 },
+  AppImage: { extension: '.AppImage', count: 1 },
+  deb: { extension: '.deb', count: 1 },
+  rpm: { extension: '.rpm', count: 1 },
 };
 
 export const targets = {
@@ -41,6 +44,15 @@ export const targets = {
   },
 };
 
+targets['aarch64-unknown-linux-gnu'] = {
+  platform: 'linux', arch: 'arm64', nodeVersion: '24.20.0',
+  archive: 'linux-arm64.tar.gz',
+  sha256: '3515603e2487879a39bc75716f1a2affd027500c64ba50e845cf72cb33219013',
+  bundles: ['AppImage', 'deb', 'rpm'],
+};
+
+export const updateChannelFile = spec => `latest-${spec.arch}${spec.platform === 'darwin' ? '-mac' : spec.platform === 'linux' ? '-linux' + (spec.arch === 'x64' ? '' : '-' + spec.arch) : ''}.yml`;
+
 export function selectPlatform(target, platform = process.platform, arch = process.arch) {
   target ||= Object.keys(targets).find(key => targets[key].platform === platform && targets[key].arch === arch);
   const spec = targets[target];
@@ -58,7 +70,7 @@ export function releaseBasename(target, version) {
   if (!/^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/.test(version)) {
     throw new Error(`Invalid release version: ${version}`);
   }
-  const system = spec.platform === 'win32' ? 'windows' : 'macos';
+  const system = ({ win32: 'windows', darwin: 'macos', linux: 'linux' })[spec.platform];
   const arch = spec.arch === 'ia32' ? 'x86' : spec.arch;
   return `dsh-nexus_${version}_${system}_${arch}`;
 }

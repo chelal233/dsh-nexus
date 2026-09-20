@@ -14,7 +14,7 @@ import {
   arrayValue,
   numberValue,
 } from "../json-values";
-import { ActionButton, StatusPill, Metric, Modal, Panel, EmptyState } from "../ui-components";
+import { ActionButton, Metric, Modal, Panel, EmptyState } from "../ui-components";
 import { useI18n, type Translator } from "../i18n";
 import {
   needsHarnessInstall,
@@ -25,24 +25,22 @@ import {
 import {
   TerminalWindow,
   ArrowsClockwise,
-  Info,
-  CheckCircle,
   StopCircle,
   Key,
   ClipboardText,
   RocketLaunch,
   MonitorPlay,
+  Globe,
+  Desktop,
+  ArrowRight,
 } from "@phosphor-icons/react";
-import {
-  localizedRuntimeState,
-  updateStateLabel,
-  localizeBackendError,
-  formatTimestamp,
-} from "../display-format";
+import { localizedRuntimeState, localizeBackendError, formatTimestamp } from "../display-format";
 import { RecoveryLogTail } from "./recovery";
 import { useState, useEffect } from "react";
 import { harnessUiMatchesRuntime } from "../harness-session";
+import { BrowserHealth, clientStartupLabel } from "./browser-health";
 import { isLoopbackUrl } from "../harness-config";
+import { HarnessDesktopPanel, useHarnessDesktop } from "./harness-desktop";
 
 export function HarnessTerminalButton({ snapshot, busyAction, runAction }: HarnessPanelProps) {
   const { t } = useI18n();
@@ -87,191 +85,280 @@ export function OverviewView({
   runAction,
   openProfiles,
   openCheckpoints,
+  onRepair,
 }: ViewProps) {
-  const { t } = useI18n();
-  const status = asObject(snapshot.status);
-  const health = asObject(snapshot.health);
+  const { t, locale } = useI18n();
   const state = nestedValue(snapshot.state, "state");
   const harness = harnessRuntimeValue(snapshot.harnessRuntime);
-  const profiles = arrayValue(snapshot.profiles, "profiles");
   const checkpoints = arrayValue(snapshot.checkpoints, "checkpoints");
-  const update = nestedValue(snapshot.updates, "update");
-  const agentRunning = status.running === true;
-  const agentLifecycle = stringValue(state, "lifecycle");
-  const agentStarting = agentLifecycle === "starting";
-  const agentStopping = agentLifecycle === "stopping";
-  const agentControlsUnavailable = busyAction !== null || snapshot.startup === null;
-  const agentRestartDisabled = agentControlsUnavailable || agentStarting || agentStopping;
+  const latestCheckpoint = Math.max(
+    0,
+    ...checkpoints.map((item) => numberValue(item, "created_at_unix") || 0),
+  );
+  const desktop = useHarnessDesktop(snapshot);
+  const [preferredMode, setPreferredMode] = useState<"web" | "desktop">("web");
+  const webActive =
+    ["running", "starting", "stopping"].includes(stringValue(harness, "state") || "") ||
+    !!numberValue(harness, "pid");
+  const mode =
+    desktop.active || desktop.starting
+      ? "desktop"
+      : webActive || !desktop.supported
+        ? "web"
+        : preferredMode;
+  const modeLocked =
+    webActive ||
+    desktop.active ||
+    desktop.starting ||
+    busyAction !== null ||
+    !!snapshot.lifecycleBusy;
   const [failLogOpen, setFailLogOpen] = useState(false);
+  const webUrlAvailable =
+    harnessUiMatchesRuntime(
+      snapshot.harnessRuntime,
+      snapshot.harnessUi,
+      credentialInvalidationPending,
+    ) && !!stringValue(snapshot.harnessUi, "url");
   return (
-    <>
+    <div className="workbench">
       <div className="page-heading">
         <div>
-          <span className="kicker">{t("Workbench")}</span>
           <h1>{t("Workbench")}</h1>
-          <p>
-            {t(
-              "Service status at a glance: Agent, Harness, active profile, and the Harness web UI.",
-            )}
-          </p>
         </div>
-        <StatusPill
-          label={agentRunning ? t("Running") : t("Standby")}
-          tone={agentRunning ? "good" : "warn"}
-        />
       </div>
-      {(() => {
-        const harnessState = stringValue(harness, "state");
-        const controlGate = harnessControlGate(
-          harnessState,
-          numberValue(harness, "pid"),
-          busyAction !== null,
-          snapshot.startup?.available === true,
-        );
-        const startDisabled =
-          controlGate.controlsDisabled ||
-          harnessState === "running" ||
-          harnessState === "starting" ||
-          harnessState === "stopping";
-        const restartDisabled =
-          controlGate.controlsDisabled ||
-          harnessState === "starting" ||
-          harnessState === "stopping" ||
-          harnessState === "detached";
-        const stopDisabled =
-          controlGate.controlsDisabled ||
-          !["running", "starting", "failed"].includes(harnessState || "");
-        const harnessAction = (action: string) =>
-          void runAction(t(`Harness ${action}`), "/v1/harness", { action });
-        return (
-          <div className="metric-grid">
-            <Metric
-              label={t("Agent lifecycle")}
-              value={localizedRuntimeState(stringValue(state, "lifecycle"), t)}
-              detail={localizedRuntimeState(stringValue(health, "status"), t)}
-              actions={
-                <ActionButton
-                  tone="default"
-                  disabled={agentRestartDisabled}
-                  onClick={() =>
-                    void runAction(t("Force restart Agent"), "/v1/agent", { action: "restart" })
+      <section className="workbench-profile-bar" aria-label={t("Browser profile")}>
+        <div>
+          <span>{t("Browser profile")}</span>
+          <strong>
+            {stringValue(snapshot.profiles, "active_profile") ||
+              stringValue(state, "profile") ||
+              t("None selected")}
+          </strong>
+        </div>
+        {openProfiles && (
+          <ActionButton
+            disabled={
+              desktop.active || desktop.starting || busyAction !== null || !!snapshot.lifecycleBusy
+            }
+            onClick={openProfiles}
+          >
+            {t("Switch profile")}
+          </ActionButton>
+        )}
+      </section>
+      <section className="harness-launch-surface" aria-label={t("Harness")}>
+        <header className="harness-launch-header">
+          <div className="harness-product">
+            <MonitorPlay size={24} />
+            <h2>{t("Harness")}</h2>
+          </div>
+          <fieldset className="harness-mode-picker" disabled={modeLocked}>
+            <legend className="visually-hidden">{t("Open with")}</legend>
+            <label>
+              <input
+                type="radio"
+                name="harness-mode"
+                value="web"
+                checked={mode === "web"}
+                onChange={() => setPreferredMode("web")}
+              />
+              <span>
+                <Globe size={16} />
+                {t("Browser mode")}
+              </span>
+            </label>
+            {(desktop.supported || desktop.active || desktop.starting) && (
+              <>
+                <label>
+                  <input
+                    type="radio"
+                    name="harness-mode"
+                    value="desktop"
+                    checked={mode === "desktop"}
+                    onChange={() => setPreferredMode("desktop")}
+                  />
+                  <span>
+                    <Desktop size={16} />
+                    {t("Official desktop mode")}
+                  </span>
+                </label>
+              </>
+            )}
+          </fieldset>
+        </header>
+        {desktop.probeFailed && (
+          <p className="field-help" role="status">
+            {t("Desktop support check unavailable")}
+          </p>
+        )}
+        {mode === "web" ? (
+          (() => {
+            const harnessState = stringValue(harness, "state");
+            const controlGate = harnessControlGate(
+              harnessState,
+              numberValue(harness, "pid"),
+              busyAction !== null,
+              snapshot.startup?.available === true,
+            );
+            const startDisabled =
+              controlGate.controlsDisabled ||
+              harnessState === "running" ||
+              harnessState === "starting" ||
+              harnessState === "stopping";
+            const restartDisabled =
+              controlGate.controlsDisabled ||
+              harnessState === "starting" ||
+              harnessState === "stopping" ||
+              harnessState === "detached";
+            const stopDisabled =
+              controlGate.controlsDisabled ||
+              !["running", "starting", "failed"].includes(harnessState || "");
+            const harnessAction = (action: string) =>
+              void runAction(t(`Harness ${action}`), "/v1/harness", { action });
+            return (
+              <div className="harness-mode-content">
+                <Metric
+                  label={null}
+                  value={
+                    harnessState === "running"
+                      ? clientStartupLabel(snapshot, t, true)
+                      : localizedRuntimeState(harnessState, t)
+                  }
+                  detail={t("Use Harness in your system browser.")}
+                  actions={
+                    <>
+                      {harnessState === "running" && webUrlAvailable && (
+                        <ActionButton
+                          tone="primary"
+                          disabled={busyAction !== null || !snapshot.startup?.available}
+                          onClick={() =>
+                            void runAction(t("Open Harness"), "/v1/harness/ui", { action: "open" })
+                          }
+                        >
+                          <RocketLaunch size={16} />
+                          {t("Open in system browser")}
+                        </ActionButton>
+                      )}
+                      {harnessState !== "running" && (
+                        <ActionButton
+                          tone="primary"
+                          disabled={startDisabled}
+                          onClick={() => harnessAction("start")}
+                        >
+                          {t("Start Harness")}
+                          <ArrowRight size={16} />
+                        </ActionButton>
+                      )}
+                      {(harnessState === "running" || harnessState === "failed") && (
+                        <ActionButton
+                          disabled={restartDisabled}
+                          onClick={() => harnessAction("restart")}
+                        >
+                          <ArrowsClockwise size={16} />
+                          {t("Restart")}
+                        </ActionButton>
+                      )}
+                      {(harnessState === "running" || harnessState === "starting") && (
+                        <ActionButton
+                          tone="danger"
+                          disabled={stopDisabled}
+                          onClick={() => harnessAction("stop")}
+                        >
+                          <StopCircle size={16} />
+                          {t("Stop")}
+                        </ActionButton>
+                      )}
+                    </>
                   }
                 >
-                  <ArrowsClockwise size={16} />
-                  {t("Force restart Agent")}
-                </ActionButton>
-              }
-            />
-            <Metric
-              label={
-                <>
-                  {t("Harness")}{" "}
-                  <span className="source-hint">
-                    <button
-                      type="button"
-                      className="icon-button"
-                      aria-label={t("Active program source")}
-                    >
-                      <Info size={16} />
-                    </button>
-                    <span role="tooltip">
-                      {t("Active program source")}: {activeProgramSource(snapshot, t)}
-                    </span>
-                  </span>
-                </>
-              }
-              value={localizedRuntimeState(harnessState, t)}
-              detail={
-                stringValue(harness, "pid")
-                  ? t("PID {pid}", { pid: stringValue(harness, "pid") || "" })
-                  : t("No child process")
-              }
-              actions={
-                <>
-                  {harnessState !== "running" && (
-                    <ActionButton
-                      tone="primary"
-                      disabled={startDisabled}
-                      onClick={() => harnessAction("start")}
-                    >
-                      <CheckCircle size={16} />
-                      {t("Start")}
-                    </ActionButton>
+                  {harnessState === "failed" && (
+                    <div className="button-row">
+                      <ActionButton onClick={() => setFailLogOpen(true)}>
+                        {t("Show startup log")}
+                      </ActionButton>
+                    </div>
                   )}
-                  {(harnessState === "running" || harnessState === "failed") && (
-                    <ActionButton
-                      disabled={restartDisabled}
-                      onClick={() => harnessAction("restart")}
-                    >
-                      <ArrowsClockwise size={16} />
-                      {t("Restart")}
-                    </ActionButton>
+                  {harnessState === "failed" && failLogOpen && (
+                    <Modal title={t("Startup log tail")} onClose={() => setFailLogOpen(false)}>
+                      <RecoveryLogTail snapshot={snapshot} />
+                    </Modal>
                   )}
-                  {(harnessState === "running" || harnessState === "starting") && (
-                    <ActionButton
-                      tone="danger"
-                      disabled={stopDisabled}
-                      onClick={() => harnessAction("stop")}
-                    >
-                      <StopCircle size={16} />
-                      {t("Stop")}
-                    </ActionButton>
-                  )}
-                </>
-              }
-            >
-              {harnessState === "failed" && (
-                <div className="button-row">
-                  <ActionButton onClick={() => setFailLogOpen(true)}>
-                    {t("Show startup log")}
-                  </ActionButton>
-                </div>
-              )}
-              {harnessState === "failed" && failLogOpen && (
-                <Modal title={t("Startup log tail")} onClose={() => setFailLogOpen(false)}>
-                  <RecoveryLogTail snapshot={snapshot} />
-                </Modal>
-              )}
-            </Metric>
-            <Metric
-              label={t("Active profile")}
-              value={
-                stringValue(snapshot.profiles, "active_profile") ||
-                stringValue(state, "profile") ||
-                t("None selected")
-              }
-              detail={t("{count} profiles available", { count: profiles.length })}
-              actions={
-                openProfiles && (
-                  <ActionButton onClick={openProfiles}>{t("Switch profile")}</ActionButton>
-                )
-              }
-            />
-            <Metric
-              label={t("Checkpoints")}
-              value={String(checkpoints.length)}
-              detail={updateStateLabel(update, t)}
-              actions={
-                openCheckpoints && (
-                  <ActionButton
-                    disabled={!stringValue(snapshot.profiles, "active_profile")}
-                    onClick={openCheckpoints}
-                  >
-                    {t("View checkpoints")}
-                  </ActionButton>
-                )
-              }
-            />
-          </div>
-        );
-      })()}
-      <HarnessAuthPanel
-        snapshot={snapshot}
-        busyAction={busyAction}
-        credentialInvalidationPending={credentialInvalidationPending}
-        runAction={runAction}
-      />
-    </>
+                </Metric>
+              </div>
+            );
+          })()
+        ) : (
+          <HarnessDesktopPanel
+            snapshot={snapshot}
+            busy={busyAction !== null || !!snapshot.lifecycleBusy}
+            controller={desktop}
+          />
+        )}
+        {webActive && (
+          <p className="harness-switch-hint">{t("Stop Harness Web before launching Desktop.")}</p>
+        )}
+        <footer className="harness-context-row">
+          {mode === "desktop" && (
+            <div className="harness-profile">
+              <span>{t("Desktop settings")}</span>
+              <strong>{t("Managed in the official window")}</strong>
+            </div>
+          )}
+          <details className="harness-source">
+            <summary>{t("Version and source")}</summary>
+            <p>{activeProgramSource(snapshot, t)}</p>
+          </details>
+        </footer>
+      </section>
+      {mode === "web" && (
+        <>
+          <BrowserHealth
+            showLifecycleControls={false}
+            snapshot={snapshot}
+            busyAction={busyAction}
+            runAction={runAction}
+            openProfiles={openProfiles}
+            onRepair={onRepair}
+          />
+          {webActive && (
+            <details className="workbench-disclosure">
+              <summary>{t("Web connection details")}</summary>
+              <HarnessAuthPanel
+                snapshot={snapshot}
+                busyAction={busyAction}
+                credentialInvalidationPending={credentialInvalidationPending}
+                runAction={runAction}
+              />
+            </details>
+          )}
+        </>
+      )}
+      <div className="workbench-maintenance">
+        <Metric
+          label={t("Checkpoints")}
+          value={String(checkpoints.length)}
+          detail={
+            latestCheckpoint
+              ? t("Latest checkpoint: {time}", {
+                  time: formatTimestamp(latestCheckpoint, t("Not available"), locale),
+                })
+              : checkpoints.length
+                ? t("Not available")
+                : t("No checkpoints yet")
+          }
+          actions={
+            openCheckpoints && (
+              <ActionButton
+                disabled={!stringValue(snapshot.profiles, "active_profile")}
+                onClick={openCheckpoints}
+              >
+                {t("View checkpoints")}
+              </ActionButton>
+            )
+          }
+        />
+      </div>
+    </div>
   );
 }
 
@@ -279,7 +366,6 @@ function HarnessAuthPanel({
   snapshot,
   busyAction,
   credentialInvalidationPending,
-  runAction,
 }: HarnessAuthPanelProps) {
   const { locale, t } = useI18n();
   const info = asObject(snapshot.harnessUi);
@@ -288,7 +374,6 @@ function HarnessAuthPanel({
     snapshot.harnessUi,
     credentialInvalidationPending,
   );
-  const uiUrl = currentUiAvailable ? stringValue(info, "url") : undefined;
   const token = currentUiAvailable ? stringValue(info, "token") : undefined;
   const sessionKey = currentUiAvailable
     ? `${numberValue(info, "generation")}:${stringValue(info, "run_id")}`
@@ -299,8 +384,6 @@ function HarnessAuthPanel({
   useEffect(() => {
     setRevealedSessionKey((revealed) => (revealed === sessionKey ? revealed : undefined));
   }, [sessionKey]);
-  const openSystemBrowser = () =>
-    void runAction(t("Open Harness"), "/v1/harness/ui", { action: "open" });
   return (
     <Panel title={t("Authentication metadata")} icon={<Key size={18} />}>
       {token ? (
@@ -333,9 +416,11 @@ function HarnessAuthPanel({
         <EmptyState
           title={t("No token observed")}
           detail={
-            info.message
-              ? localizeBackendError(stringValue(info, "message") || "", t)
-              : t("Start Harness and refresh when its loopback URL is ready.")
+            stringValue(harnessRuntimeValue(snapshot.harnessRuntime), "state") === "stopped"
+              ? t("Start Harness and refresh when its loopback URL is ready.")
+              : info.message
+                ? localizeBackendError(stringValue(info, "message") || "", t)
+                : t("Start Harness and refresh when its loopback URL is ready.")
           }
         />
       )}
@@ -358,14 +443,6 @@ function HarnessAuthPanel({
         >
           <ClipboardText size={16} />
           {t("Copy token")}
-        </ActionButton>
-        <ActionButton
-          tone="primary"
-          disabled={!uiUrl || controlsDisabled}
-          onClick={openSystemBrowser}
-        >
-          <RocketLaunch size={16} />
-          {t("Open in system browser")}
         </ActionButton>
       </div>
     </Panel>
@@ -394,6 +471,7 @@ export function HarnessWebPanel({
     void runAction(t("Open Harness"), "/v1/harness/ui", { action: "open" });
   return (
     <Panel title={t("Embedded Harness Web")} icon={<MonitorPlay size={18} />}>
+      <BrowserHealth snapshot={snapshot} busyAction={busyAction} runAction={runAction} />
       {tokenMode ? (
         <div className="status-block">
           <strong>{t("Harness authentication requires a system browser")}</strong>

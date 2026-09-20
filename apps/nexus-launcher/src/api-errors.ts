@@ -43,9 +43,13 @@ export function recoverableNoop(error: unknown): boolean {
   ].some((fragment) => legacy.includes(fragment));
 }
 export function errorWithExplanation(original: string, explanation: string, label: string): string {
-  return explanation && explanation !== original
-    ? explanation + "\n\n" + label + "\n" + original
-    : original;
+  const comparable = (value: string) =>
+    value
+      .trim()
+      .replace(/^(?:Backend error\s*:|后端错误\s*[：:])\s*/i, "")
+      .trim();
+  if (explanation && comparable(explanation) === comparable(original)) return explanation;
+  return explanation ? explanation + "\n\n" + label + "\n" + original : original;
 }
 
 export function workspaceRepairTarget(path: string): import("./app-types").ModuleId {

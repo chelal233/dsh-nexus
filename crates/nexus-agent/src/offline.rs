@@ -33,7 +33,7 @@ pub(crate) async fn inspect(state: &AppState, archive: &str) -> io::Result<serde
     let result = async {
         fs::write(work.join("offline-package.mjs"), HELPER)?;
         write_json_atomic(&work, &work.join("job.json"), &serde_json::json!({"action":"inspect","work":work,"archive":archive,"tools":tools,"id":"preview"}))?;
-        let mut command = std::process::Command::new(tools.join("node/node.exe"));
+        let mut command = std::process::Command::new(tools.join(if cfg!(windows) { "node/node.exe" } else { "node/node" }));
         command.arg(work.join("offline-package.mjs")).arg(work.join("job.json"))
             .env_remove("NODE_OPTIONS").env_remove("NODE_PATH");
         run_owned_command(command, "offline preview", OFFLINE_TIMEOUT, &state.paths.run_dir, &CancellationToken::default()).await?;
@@ -85,7 +85,7 @@ fn complete_runtime(state: &AppState) -> io::Result<PathBuf> {
 }
 
 fn validate_runtime_root(root: &Path) -> io::Result<PathBuf> {
-    for relative in ["node/node.exe", "node/npm.cmd", "node/node_modules/npm/bin/npm-cli.js", "pnpm/bin/pnpm.cjs"] {
+    for relative in [if cfg!(windows) { "node/node.exe" } else { "node/node" }, if cfg!(windows) { "node/npm.cmd" } else { "node/npm" }, "node/node_modules/npm/bin/npm-cli.js", "pnpm/bin/pnpm.cjs"] {
         let metadata = fs::symlink_metadata(root.join(relative))?;
         if !metadata.is_file() || nexus_core::path_is_reparse(&metadata) { return Err(io::Error::other("Offline packaging requires a complete portable Node/npm/pnpm runtime")); }
     }
@@ -98,7 +98,7 @@ fn import_tools() -> io::Result<PathBuf> {
 }
 
 pub(crate) async fn begin(state: &AppState, action: UpdateAction, archive: &str, release: Option<&str>, contents: Option<nexus_protocol::OfflineContents>) -> io::Result<ColdOperation> {
-    if !cfg!(all(windows, target_arch = "x86_64")) { return Err(io::Error::other("Offline packages currently support Windows x64")); }
+    if !cfg!(all(any(windows, target_os = "macos", target_os = "linux"), any(target_arch = "x86_64", target_arch = "aarch64"))) { return Err(io::Error::other("Offline packages require a supported 64-bit desktop platform")); }
     let exporting = action == UpdateAction::OfflineExport;
     if let Some(contents) = &contents {
         if contents.profiles.len() > 32 { return Err(io::Error::other("Select at most 32 profiles")); }
@@ -134,6 +134,7 @@ async fn helper(state: &AppState, operation: &ColdOperation, tools: &Path, actio
     let content = serde_json::json!({ "action":action,"id":operation.operation_id,"work":work,
         "private_writer":std::env::current_exe()?,
         "tools":tools,"slot":slot,"runtime":runtime,"archive":operation.archive_path,
+        "desktop_runtime":nexus_core::bundled_runtime_dir().map(|root|root.join("desktop")),
         "version":operation.tag,"contents":operation.offline_contents,
         "home":if action == "export" || action == "merge_environment" { Some(crate::dsh::resolve_dsh_home_for_paths(&state.paths)?) } else { None },
         "environment":environment_root(&state.paths, &operation.operation_id)?,
@@ -142,7 +143,7 @@ async fn helper(state: &AppState, operation: &ColdOperation, tools: &Path, actio
         "nexus":{"version":env!("CARGO_PKG_VERSION"),"build_id":option_env!("NEXUS_BUILD_ID").unwrap_or("development")} });
     write_json_atomic(&work, &job, &content)?;
     fs::write(&script, HELPER)?;
-    let mut command = std::process::Command::new(tools.join("node/node.exe"));
+    let mut command = std::process::Command::new(tools.join(if cfg!(windows) { "node/node.exe" } else { "node/node" }));
     command.arg(script).arg(job).current_dir(&work)
         .env_remove("NODE_OPTIONS").env_remove("NODE_PATH").env("npm_config_offline", "true");
     let cancellation = state.cold.token(&operation.operation_id).await;
@@ -218,12 +219,12 @@ async fn publish_verified_import(state: &AppState, mut operation: ColdOperation,
     if fs::symlink_metadata(&runtime_root).is_ok() { return Err(io::Error::other("Offline runtime destination already exists")); }
     let mut config = state.config.load()?;
     if base { config.runtime = Some(RuntimeConfig {
-        node: Some(RuntimePin { path: runtime_root.join("node/node.exe"), ownership: RuntimeOwnership::Nexus }),
+        node: Some(RuntimePin { path: runtime_root.join(if cfg!(windows) { "node/node.exe" } else { "node/node" }), ownership: RuntimeOwnership::Nexus }),
         pnpm: Some(RuntimePin { path: runtime_root.join("pnpm/bin/pnpm.cjs"), ownership: RuntimeOwnership::Nexus }),
         ..RuntimeConfig::default()
     });
     config.harness = Some(HarnessLaunchSpec {
-        mode: HarnessLaunchMode::Node, program: runtime_root.join("node/node.exe"),
+        mode: HarnessLaunchMode::Node, program: runtime_root.join(if cfg!(windows) { "node/node.exe" } else { "node/node" }),
         args: vec!["{release_root}\\apps/cli/lib/bin.js".into(), "--profile".into(), "{profile}".into()],
         working_dir: Some("{release_root}".into()), readiness_url: None, readiness_timeout_secs: None, readiness_token_required: false,
     });

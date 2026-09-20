@@ -5,7 +5,7 @@ import { offlineArchivePathValid, offlinePackageCommand, refreshEditableDraft } 
 import { actionNoticeKey, invalidatesHarnessCredentials } from "../src/control-state.ts";
 
 test("offline commands use absolute archive paths, retain draft selections, and invalidate credentials only for import", () => {
-  for (const path of ["D:/Offline/harness.tar.gz", String.raw`\\server\share\package.tar.gz`, " C:/Offline/package.TAR.GZ "]) assert.equal(offlineArchivePathValid(path), true, path);
+  for (const path of ["/home/user/Offline/harness.tar.gz", "/Users/user/Offline/harness.tar.gz", "D:/Offline/harness.tar.gz", String.raw`\\server\share\package.tar.gz`, " C:/Offline/package.TAR.GZ "]) assert.equal(offlineArchivePathValid(path), true, path);
   for (const path of ["relative.tar.gz", "C:relative.tar.gz", "D:/wrong.zip", "D:/bad\npath.tar.gz"]) assert.equal(offlineArchivePathValid(path), false, path);
   assert.deepEqual(offlinePackageCommand("offline_import", " D:/package.tar.gz "), { action: "offline_import", archive_path: "D:/package.tar.gz" });
   assert.deepEqual(offlinePackageCommand("offline_export", " D:/package.tar.gz ", "old-slot"), { action: "offline_export", archive_path: "D:/package.tar.gz", release_id: "old-slot" });

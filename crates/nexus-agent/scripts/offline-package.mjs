@@ -11,6 +11,9 @@ import { fileURLToPath } from 'node:url';
 import { isDeepStrictEqual } from 'node:util';
 
 const LIMIT = 12 * 1024 ** 3, COUNT = 250000, MANIFEST_LIMIT = 64 * 1024 ** 2;
+const windows = process.platform === 'win32';
+const nodeEntry = windows ? 'node/node.exe' : 'node/node';
+const npmEntry = windows ? 'node/npm.cmd' : 'node/npm';
 const fail = message => { throw new Error(message); };
 const slash = value => value.replaceAll('\\', '/');
 let progressFile, progressId, progressState, lastProgress = 0;
@@ -47,7 +50,9 @@ function safeName(name) {
   if (!['slot', 'runtime', 'environment', 'manifest.json'].includes(parts[0])) fail('Unknown offline package component');
   return name;
 }
-const excluded = name => { name = name.toLowerCase(); return ['.git', '.dsh', '.npmrc', '.pnpmfile.cjs'].includes(name) || name === '.env' || name.startsWith('.env.'); };
+// Generated Desktop views contain machine-specific links. The runtime component
+// carries the offline assets needed to recreate them without network access.
+const excluded = name => { name = name.toLowerCase(); return ['.git', '.dsh', '.desktop-build', '.npmrc', '.pnpmfile.cjs'].includes(name) || name === '.env' || name.startsWith('.env.'); };
 async function json(file, max = MANIFEST_LIMIT) {
   const stat = await fsp.lstat(file); if (!stat.isFile() || stat.isSymbolicLink() || stat.size > max) fail('Expected a bounded ordinary JSON file');
   return JSON.parse(await fsp.readFile(file, 'utf8'));
@@ -65,15 +70,15 @@ export function modules(runtime) {
   return { tar: require('tar'), readShim: require('read-cmd-shim'), shim: require('cmd-shim') };
 }
 function version(runtime, relative) {
-  const node = path.join(runtime, 'node/node.exe');
+  const node = path.join(runtime, nodeEntry);
   const args = relative ? [path.join(runtime, relative), '--version'] : ['--version'];
   const result = spawnSync(node, args, { encoding: 'utf8', timeout: 20000, windowsHide: true,
-    env: { ...process.env, PATH: `${path.dirname(node)}${path.delimiter}${process.env.SystemRoot || 'C:\\Windows'}\\System32`, NODE_OPTIONS: '', NODE_PATH: '', npm_config_offline: 'true' } });
+    env: { ...process.env, PATH: `${path.dirname(node)}${path.delimiter}${windows ? `${process.env.SystemRoot || 'C:\\Windows'}\\System32` : '/usr/bin:/bin'}`, NODE_OPTIONS: '', NODE_PATH: '', npm_config_offline: 'true' } });
   if (result.error || result.status !== 0 || !/^v?\d+\.\d+\.\d+(?:[-+].*)?\s*$/.test(result.stdout || '')) fail('Offline Node/npm/pnpm version probe failed');
   return result.stdout.trim();
 }
 async function runtimeIdentity(runtime) {
-  for (const relative of ['node/node.exe', 'node/npm.cmd', 'node/node_modules/npm/bin/npm-cli.js', 'pnpm/bin/pnpm.cjs']) {
+  for (const relative of [nodeEntry, npmEntry, 'node/node_modules/npm/bin/npm-cli.js', 'pnpm/bin/pnpm.cjs']) {
     if (!(await fsp.lstat(path.join(runtime, relative))).isFile()) fail('Offline runtime is incomplete');
   }
   return { node: version(runtime), npm: version(runtime, 'node/node_modules/npm/bin/npm-cli.js'), pnpm: version(runtime, 'pnpm/bin/pnpm.cjs') };
@@ -128,7 +133,7 @@ async function materialize(links, slot, runtime, environment) {
     for (let parent = path.posix.dirname(link.path); parent !== '.'; parent = path.posix.dirname(parent)) if (linkNames.has(parent.toLowerCase())) fail('A link cannot contain other entries');
     await fsp.mkdir(path.dirname(source), { recursive: true });
     try { await fsp.lstat(source); fail('Link destination already exists'); } catch (error) { if (error.code !== 'ENOENT') throw error; }
-    await fsp.symlink(link.directory ? target : path.relative(path.dirname(source), target), source, link.directory ? 'junction' : 'file');
+    await fsp.symlink(windows && link.directory ? target : path.relative(path.dirname(source), target), source, link.directory ? (windows ? 'junction' : 'dir') : 'file');
     report('restore_links', ++done, links.length);
   }
   for (const link of links) {
@@ -149,11 +154,11 @@ async function normalize(slot, tools) {
         if (!Number.isInteger(value.layoutVersion) || typeof value.virtualStoreDir !== 'string') fail('Unsupported pnpm modules metadata');
         value.virtualStoreDir = '.pnpm'; value.storeDir = '.nexus-offline-store';
         await fsp.writeFile(file, JSON.stringify(value, null, 2));
-      } else if (entry.name.endsWith('.cmd') && path.basename(directory) === '.bin' && path.basename(path.dirname(directory)) === 'node_modules') {
+      } else if ((windows ? entry.name.endsWith('.cmd') : !/\.(cmd|ps1)$/.test(entry.name)) && path.basename(directory) === '.bin' && path.basename(path.dirname(directory)) === 'node_modules') {
         const destination = await tools.readShim(file);
         const target = path.resolve(directory, destination);
         if (!within(slot, target) || !within(await fsp.realpath(slot), await fsp.realpath(target))) fail('pnpm executable shim leaves the slot');
-        await tools.shim(target, file.slice(0, -4));
+        await tools.shim(target, windows ? file.slice(0, -4) : file);
       }
     }
   }
@@ -171,7 +176,7 @@ async function inventory(root, environment = false, runtime = true) {
       for (const child of (await fsp.readdir(file)).sort()) await visit(path.join(relative, child));
     } else if (stat.isFile()) {
       total += stat.size; if (total > LIMIT) fail('Offline package is too large');
-      entries.push({ path: name, kind: 'file', size: stat.size });
+      entries.push({ path: name, kind: 'file', size: stat.size, ...(!windows ? { mode: stat.mode & 0o777 } : {}) });
     } else fail('Unexpected link or special file during package hashing');
   }
   if (runtime) { await visit('slot'); await visit('runtime'); }
@@ -182,7 +187,7 @@ async function inventory(root, environment = false, runtime = true) {
   return { entries, total };
 }
 function validateManifest(manifest) {
-  if (![1, 2, 3].includes(manifest.schema) || manifest.platform !== 'win32' || manifest.arch !== 'x64' || !Array.isArray(manifest.entries) || !Array.isArray(manifest.links)
+  if (![1, 2, 3].includes(manifest.schema) || manifest.platform !== process.platform || manifest.arch !== process.arch || !Array.isArray(manifest.entries) || !Array.isArray(manifest.links)
     || manifest.entries.length + manifest.links.length > COUNT || typeof manifest.version !== 'string' || manifest.version.length > 200) fail('Unsupported offline manifest');
   const map = new Map(); let size = 0;
   for (const entry of manifest.entries) {
@@ -191,6 +196,7 @@ function validateManifest(manifest) {
     if (entry.kind === 'file') { if (!Number.isSafeInteger(entry.size) || entry.size < 0 || !/^[a-f0-9]{64}$/.test(entry.sha256)) fail('Invalid file integrity metadata'); size += entry.size; }
     map.set(lower, entry);
   }
+  if (!windows && [...map.values()].some(entry => entry.kind === 'file' && (!Number.isInteger(entry.mode) || entry.mode < 0 || entry.mode > 0o777))) fail('Invalid executable mode metadata');
   if (size > LIMIT || size !== manifest.total) fail('Manifest exceeds size budget');
   for (const link of manifest.links) {
     safeName(link.path); safeName(link.target);
@@ -595,14 +601,99 @@ async function environmentShims(environment, slot, tools) {
   await visit(environment);
 }
 
+export async function desktopRuntimeForExport(slot, runtime, fallback) {
+  const lock = path.join(slot, 'apps/desktop/scripts/primary-runtime-lock.json');
+  if (!fs.existsSync(lock)) return null; // Older Web-only releases remain portable.
+  const spec = await json(lock), target = spec.targets[`${({ win32: 'win', darwin: 'mac', linux: 'linux' })[process.platform]}-${process.arch}`];
+  if (!target) return null; // Upstream has no Desktop for this platform; preserve Web portability.
+  const expected = await hash(lock);
+  const app = path.join(slot, 'apps/desktop');
+  const electron = await json(path.join(app, 'node_modules/electron/package.json'));
+  const pnpm = await json(path.join(app, 'node_modules/pnpm/package.json'));
+  for (const directory of [path.join(runtime, 'desktop'), fallback].filter(Boolean)) {
+    if (!fs.existsSync(path.join(directory, 'manifest.json'))) continue;
+    const manifest = await json(path.join(directory, 'manifest.json'));
+    if (manifest.lockSha256 !== expected || manifest.electronVersion !== electron.version || manifest.pnpmVersion !== pnpm.version) continue;
+    if (![1, 2, 3].includes(manifest.schema) || manifest.platform !== process.platform || manifest.arch !== process.arch || !Array.isArray(manifest.files)) fail('Invalid Desktop offline runtime');
+    const names = new Set();
+    for (const entry of manifest.files) {
+      safeName(`runtime/desktop/${entry.path}`);
+      if (names.has(entry.path)) fail('Duplicate Desktop offline runtime entry');
+      names.add(entry.path);
+      const file = path.join(directory, entry.path), stat = await fsp.lstat(file);
+      if (!stat.isFile() || stat.isSymbolicLink() || await hash(file) !== entry.sha256) fail('Desktop offline runtime integrity check failed');
+    }
+    if (manifest.schema === 3) {
+      if (manifest.supported !== true || manifest.electronMode !== 'launcher' || manifest.primarySmokePassed !== true ||
+          !names.has('primary.tar.gz') || !names.has('lock.json') || await hash(path.join(directory, 'lock.json')) !== expected ||
+          await hash(path.join(directory, 'primary.tar.gz')) !== manifest.primaryArchiveSha256) fail('Incomplete shared Desktop offline runtime');
+      if (manifest.hostArchiveSha256 && (!names.has('host.tar.gz') || await hash(path.join(directory, 'host.tar.gz')) !== manifest.hostArchiveSha256)) fail('Incomplete portable Electron host');
+      return directory; // Electron is supplied by the compatible Nexus installation.
+    }
+    const electronFile = manifest.schema === 2 ? 'electron.zip' : process.platform === 'win32' ? 'electron/electron.exe' : 'electron/Electron.app/Contents/MacOS/Electron';
+    if (!names.has(electronFile) || !names.has('lock.json') || await hash(path.join(directory, 'lock.json')) !== expected) fail('Incomplete Desktop offline runtime');
+    if (manifest.schema === 2 && (manifest.supported !== true || await hash(path.join(directory, electronFile)) !== manifest.electronArchiveSha256)) fail('Invalid Desktop offline archive');
+    for (const hash of [target.nodeSha256, target.pythonSha256, ...target.wheels.map(item => item.sha256), ...spec.wheels.map(item => item.sha256)]) {
+      if (!names.has(`assets/${hash}`)) fail('Incomplete Desktop offline assets; repair Nexus before exporting');
+    }
+    return directory;
+  }
+  fail('No matching Desktop offline runtime. Update or repair Nexus before exporting this Harness version.');
+}
+
+// Exports remain self-contained even if the receiving Nexus uses a different
+// Electron. Package only the immutable application host, never its data root.
+export async function desktopHostForExport(desktop, job) {
+  if (!desktop) return null;
+  const manifest = await json(path.join(desktop, 'manifest.json'));
+  if (manifest.schema !== 3 || manifest.hostArchiveSha256) return null;
+  if (!['win32', 'darwin'].includes(process.platform)) fail('Official Desktop host is unsupported on this platform');
+  const root = await fsp.realpath(job.desktop_host || path.join(path.dirname(job.private_writer), windows ? '..' : '../../..'));
+  const resources = windows ? 'resources' : 'Nexus Launcher.app/Contents/Resources';
+  const host = await json(path.join(root, resources, 'nexus-electron-host.json'));
+  if (host.schema !== 1 || host.entry !== 'nexus-official-desktop' || host.electronVersion !== manifest.electronVersion ||
+      host.appAsarSha256 !== await hash(path.join(root, resources, 'app.asar'))) fail('Export requires a verified Nexus host with official Desktop support');
+  const executable = path.join(root, windows ? 'Nexus Launcher.exe' : 'Nexus Launcher.app/Contents/MacOS/Nexus Launcher');
+  const probe = spawnSync(executable, ['-p', 'process.versions.electron'], {
+    encoding: 'utf8', windowsHide: true, timeout: 15000, env: { ...process.env, ELECTRON_RUN_AS_NODE: '1' },
+  });
+  if (probe.status !== 0 || probe.stdout.trim() !== manifest.electronVersion) fail('Export needs the matching Nexus Electron host or an existing complete offline package');
+  const names = windows ? ['Nexus Launcher.exe', 'chrome_100_percent.pak', 'chrome_200_percent.pak', 'd3dcompiler_47.dll', 'dxcompiler.dll', 'dxil.dll', 'ffmpeg.dll', 'icudtl.dat',
+    'resources.pak', 'snapshot_blob.bin', 'v8_context_snapshot.bin', 'vk_swiftshader.dll', 'vk_swiftshader_icd.json', 'vulkan-1.dll',
+    'LICENSE.electron.txt', 'LICENSES.chromium.html', 'locales', 'resources/app.asar', 'resources/app.asar.unpacked', 'resources/nexus-electron-host.json'] : ['Nexus Launcher.app'];
+  let bytes = 0, entries = 0;
+  async function measure(file) {
+    if (++entries > COUNT) fail('Portable Electron host has too many entries');
+    const stat = await fsp.lstat(file);
+    if (stat.isSymbolicLink()) {
+      const raw = await fsp.readlink(file), resolved = await fsp.realpath(file);
+      if (windows || path.isAbsolute(raw) || !within(path.join(root, 'Nexus Launcher.app'), resolved)) fail('Portable Electron host link escapes its app');
+      return;
+    }
+    if (stat.isDirectory()) for (const name of await fsp.readdir(file)) await measure(path.join(file, name));
+    else if (stat.isFile()) bytes += stat.size;
+    else fail('Invalid portable Electron host');
+  }
+  if (!windows) {
+    const verify = spawnSync('/usr/bin/codesign', ['--verify', '--deep', '--strict', path.join(root, 'Nexus Launcher.app')], { encoding: 'utf8', timeout: 30000 });
+    if (verify.status !== 0) fail('Cannot export an invalid macOS app signature');
+  }
+  for (const name of names) await measure(path.join(root, name));
+  return { root, names, bytes, entries };
+}
+
 async function pack(job, tools) {
   const base = job.contents?.runtime !== false;
+  const desktop = base ? await desktopRuntimeForExport(job.slot, job.runtime, job.desktop_runtime) : null;
+  const host = await desktopHostForExport(desktop, job);
+  const extraDesktop = desktop && path.resolve(desktop) !== path.resolve(job.runtime, 'desktop') ? desktop : null;
   job.contents = { profiles: [], configuration: false, plugins: false, credentials: false, ...job.contents, runtime: base, environment: job.contents?.environment ?? job.contents?.configuration ?? false, sessions: job.contents?.sessions ?? false };
   const sourceSlot = base ? await measureSource(job.slot, 'slot') : { bytes: 0, entries: 0 }, sourceRuntime = base ? await measureSource(job.runtime, 'runtime') : { bytes: 0, entries: 0 };
-  const sourceEntries = sourceSlot.entries + sourceRuntime.entries;
+  const desktopSize = extraDesktop ? await measureSource(extraDesktop, 'runtime') : { bytes: 0, entries: 0 };
+  const sourceEntries = sourceSlot.entries + sourceRuntime.entries + desktopSize.entries;
   // Reserve bounded manifest plus shim/path normalization growth. The archive
   // budget allows tar headers, long paths and incompressible gzip overhead.
-  const stageBytes = sourceSlot.bytes + sourceRuntime.bytes + sourceEntries * 8192 + MANIFEST_LIMIT;
+  const stageBytes = sourceSlot.bytes + sourceRuntime.bytes + desktopSize.bytes + (host ? archiveBudget(host.bytes, host.entries) : 0) + sourceEntries * 8192 + MANIFEST_LIMIT;
   await ensureSpaceBudget([
     { path: job.work, bytes: stageBytes, entries: sourceEntries + 1 },
     { path: path.dirname(job.archive), bytes: archiveBudget(stageBytes, sourceEntries), entries: 1 },
@@ -611,6 +702,21 @@ async function pack(job, tools) {
   const slot = path.join(stage, 'slot'), runtime = path.join(stage, 'runtime'), links = [];
   process.stderr.write('Offline: copying slot and runtime\n');
   if (base) { await walkCopy(job.slot, slot, 'slot', links); await walkCopy(job.runtime, runtime, 'runtime', links); }
+  if (extraDesktop) {
+    const target = path.resolve(runtime, 'desktop');
+    if (!within(stage, target)) fail('Invalid Desktop staging directory');
+    await fsp.rm(target, { recursive: true, force: true });
+    await walkCopy(extraDesktop, target, 'runtime/desktop', links);
+  }
+  if (host) {
+    const directory = path.join(runtime, 'desktop'), archive = path.join(directory, 'host.tar.gz');
+    await tools.tar.c({ cwd: host.root, file: archive, gzip: { level: 1 }, portable: true, noMtime: true, strict: true }, host.names);
+    const manifest = await json(path.join(directory, 'manifest.json'));
+    manifest.hostArchiveSha256 = await hash(archive);
+    manifest.files = manifest.files.filter(entry => entry.path !== 'host.tar.gz');
+    manifest.files.push({ path: 'host.tar.gz', sha256: manifest.hostArchiveSha256 });
+    await fsp.writeFile(path.join(directory, 'manifest.json'), JSON.stringify(manifest, null, 2));
+  }
   const migration = await captureEnvironment(job, stage, links);
   process.stderr.write(`Offline: normalizing ${links.length} internal links and executable shims\n`);
   await materialize(links, slot, runtime); if (base) await normalize(slot, tools);
@@ -621,7 +727,7 @@ async function pack(job, tools) {
   for (const link of links.reverse()) { await fsp.unlink(componentPath(link.path, slot, runtime)); report('remove_links', ++removed, links.length); } links.reverse();
   process.stderr.write('Offline: hashing normalized files\n');
   const files = await inventory(stage, !!migration, base);
-  const manifest = { schema: 3, platform: 'win32', arch: 'x64', nexus: job.nexus, version: job.version, versions, links, ...files, contents: job.contents, ...migration };
+  const manifest = { schema: 3, platform: process.platform, arch: process.arch, nexus: job.nexus, version: job.version, versions, links, ...files, contents: job.contents, ...migration };
   validateManifest(manifest);
   const text = JSON.stringify(manifest); if (Buffer.byteLength(text) > MANIFEST_LIMIT) fail('Manifest is too large');
   await fsp.writeFile(path.join(stage, 'manifest.json'), text);
@@ -670,20 +776,28 @@ async function unpack(job, tools) {
   // subsequent runtime/slot publication is rename-only, not another copy.
   await ensureSpaceBudget([{ path: job.work, bytes: manifest.total + MANIFEST_LIMIT + 1024 ** 2, entries: manifest.entries.length + manifest.links.length + 2 }]);
   report('extract', 0, manifest.entries.length + 1);
-  await tools.tar.x({ file: job.archive, cwd: stage, strict: true, preservePaths: false, noChmod: true, filter(name, entry) {
+  await tools.tar.x({ file: job.archive, cwd: stage, strict: true, preservePaths: false, noChmod: windows, filter(name, entry) {
     name = safeName(name.replace(/\/$/, '')); const lower = name.toLowerCase();
     if (extracted.has(lower) || !['File', 'Directory'].includes(entry.type)) fail('Tar changed during extraction'); extracted.add(lower);
     report('extract', extracted.size, manifest.entries.length + 1);
     if (name === 'manifest.json') return entry.type === 'File' && entry.size <= MANIFEST_LIMIT;
     const item = expected.get(lower);
     if (!item || item.path !== name || (item.kind === 'file' ? entry.type !== 'File' || entry.size !== item.size : entry.type !== 'Directory')) fail('Tar entry differs from manifest');
+    if (!windows) entry.mode = item.kind === 'file' ? item.mode : 0o755;
     return true;
   } });
   if (JSON.stringify(await json(path.join(stage, 'manifest.json'))) !== JSON.stringify(manifest)) fail('Tar manifest changed during extraction');
+  // File creation respects the receiver's umask. Restore only validated rwx
+  // bits on verified ordinary paths, before comparing the portable inventory.
+  if (!windows) await parallel(manifest.entries.filter(entry => entry.kind === 'file'), async entry => {
+    const file = path.join(stage, entry.path);
+    if (!(await fsp.lstat(file)).isFile()) fail('Imported executable is not an ordinary file');
+    await fsp.chmod(file, entry.mode);
+  });
   const base = manifest.contents?.runtime !== false;
   const actual = await inventory(stage, expected.has('environment'), base);
   if (JSON.stringify(actual.entries) !== JSON.stringify(manifest.entries) || actual.total !== manifest.total) fail('Offline file integrity check failed');
-  if (base) for (const required of ['slot/apps/cli/lib/bin.js', 'runtime/node/node.exe', 'runtime/node/npm.cmd', 'runtime/node/node_modules/npm/bin/npm-cli.js', 'runtime/pnpm/bin/pnpm.cjs']) if (expected.get(required)?.kind !== 'file') fail('Offline package is incomplete');
+  if (base) for (const required of ['slot/apps/cli/lib/bin.js', `runtime/${nodeEntry}`, `runtime/${npmEntry}`, 'runtime/node/node_modules/npm/bin/npm-cli.js', 'runtime/pnpm/bin/pnpm.cjs']) if (expected.get(required)?.kind !== 'file') fail('Offline package is incomplete');
   // The archive cannot opt the receiver into credentials, even for older clients.
   const selected = job.contents ? await selectImportContents(stage, manifest, job.contents)
     : manifest.schema >= 2 ? await selectImportContents(stage, manifest, { runtime: true, environment: manifest.contents.configuration, sessions: false, ...manifest.contents, credentials: false, credential_policy: 'preserve' }) : manifest;
@@ -772,7 +886,7 @@ async function inspect(job, tools) {
     contents: manifest.contents || null, active_profile: manifest.active_profile || null, files: manifest.entries.length, bytes: manifest.total }));
 }
 async function main() {
-  if (process.platform !== 'win32' || process.arch !== 'x64') fail('Offline packages currently support Windows x64');
+  if (!['win32', 'darwin', 'linux'].includes(process.platform) || !['x64', 'arm64'].includes(process.arch)) fail('Offline packages require a supported 64-bit desktop platform');
   const job = await json(process.argv[2], 65536); const tools = modules(job.tools);
   progressFile = path.join(job.work, 'progress.json'); progressId = job.id;
   report(job.action === 'finalize' ? 'publish' : 'prepare');

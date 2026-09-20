@@ -19,6 +19,7 @@ test("sidebar update shows download progress, becomes installable only when read
   dom.window.nexusDesktop = {
     async invoke(command: string, args?: { enabled?: boolean }) {
       calls.push(command);
+      if (command === "harness_desktop_status") return { phase: "idle" };
       if (command === "update_status") return state;
       if (command === "update_settings") {
         state = { ...state, enabled: args?.enabled === true };

@@ -5,7 +5,7 @@
 
 让 Harness 的版本、运行环境和数据由你掌控。
 
-Nexus 是面向 Windows 和 macOS 的本地 Harness 管理工具。它负责准备运行环境、安装或关联 Harness、启动检查、进程管理、版本切换和故障恢复。你可以使用系统浏览器，也可以选择现有独立窗口入口；两种方式复用同一个 Harness。
+Nexus 是本地 Harness 管理工具，支持 Windows、macOS，并新增 Linux ARM64 构建目标。它负责准备运行环境、安装或关联 Harness、启动检查、进程管理、版本切换和故障恢复。Web 使用系统浏览器；Desktop 直接启动当前受管 Harness 版本自带的原生客户端，不再维护 Nexus 自制客户端外壳。Desktop 依赖随 Nexus 提供，离线包携带完整运行时，导入和启动不补下载依赖。 当前固定的官方 Desktop 运行时支持 Windows x64、macOS x64／ARM64；Windows ARM64 和 Linux ARM64 当前提供 Web 模式。仅当所选 Harness 与系统支持时显示桌面入口。
 
 [下载安装](https://github.com/chelal233/dsh-nexus/releases) · [用户指南](docs/user-guide.md) · [常见问题](docs/faq.md) · [文档目录](docs/README.md)
 
@@ -15,11 +15,11 @@ Nexus 是面向 Windows 和 macOS 的本地 Harness 管理工具。它负责准�
 
 ## Nexus 提供什么
 
-- **版本选择自由**：准备上游标签对应的受管版本，确认后再切换；也可以使用自己的已构建 Harness 目录。
+- **版本选择自由**：默认保留最多 8 个受管版本槽位，准备上游标签对应的受管版本，确认后再切换；也可以使用自己的已构建 Harness 目录。
 - **环境随包提供**：包含 Chromium、Rust Agent、Node/npm/pnpm；普通用户不必先安装 Nexus 开发工具链。
 - **插件选择自由**：提供市场选择入口，也允许不安装市场；内置功能插件按模块维护，不自建插件目录源。
 - **任务通知**：按事件分类控制系统通知和终端提醒，支持仅失焦或始终提醒；可用事件取决于 Harness 及监听插件。
-- **故障可诊断**：启动检查、兼容性检查、恢复模式、检查点和诊断导出帮助定位问题，不用删除全部用户数据重新开始。
+- **故障可诊断**：启动检查、兼容性检查、检查点和诊断导出帮助定位问题，不用删除全部用户数据重新开始。
 - **中文与 English**：界面和当前使用文档均提供两种语言。
 
 Nexus 不替代 Harness 的 Agent、会话和模型能力，也不保证任意 Harness 与任意插件组合都兼容。更新 Nexus 与切换 Harness 是两个独立操作。
@@ -30,8 +30,9 @@ Nexus 不替代 Harness 的 Agent、会话和模型能力，也不保证任意 H
 | --- | --- | --- |
 | Windows | x64、ARM64 | EXE 安装包或 ZIP 免安装包 |
 | macOS | Intel x64、Apple Silicon ARM64 | DMG 或 ZIP 应用包 |
+| Linux | ARM64 | AppImage、DEB、RPM（待原生构建与验收） |
 
-不提供 x86 32 位或 Linux 发行包。按 Release 的标签、附件和 `_build.json` 选择版本，预发布版不是稳定版承诺。签名状态以具体附件为准，参见[安全说明](SECURITY.md)。
+只覆盖 Harness 与 Electron 均支持的平台，不自行移植上游未支持的目标。不提供 x86 32 位版本。Linux ARM64 构建流程已加入；是否提供下载以通过原生 CI 后的实际附件为准，不代表已验证所有国产发行版。按 Release 的标签、附件和 `_build.json` 选择版本，预发布版不是稳定版承诺。签名状态以具体附件为准，参见[安全说明](SECURITY.md)。
 
 Windows ZIP 必须完整解压，再运行目录内的 `Nexus Launcher.exe`，不能单独复制 EXE。免安装不代表所有用户数据都存放在解压目录。macOS 将完整应用复制到合适位置后启动。
 

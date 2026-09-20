@@ -50,3 +50,12 @@ export function credentialInvalidationCanSettle(
   const nextSessionKey = harnessSessionKey(snapshot);
   return previousSessionKey === undefined || nextSessionKey !== previousSessionKey;
 }
+
+/** Host readiness precedes the browser audit; keep observing that transition. */
+export function clientCheckPending(snapshot: Snapshot): boolean {
+  if (stringValue(harnessRuntimeValue(snapshot.harnessRuntime), "state") !== "running")
+    return false;
+  if (!harnessUiMatchesRuntime(snapshot.harnessRuntime, snapshot.harnessUi)) return true;
+  const health = asObject(asObject(snapshot.harnessUi).browser_health);
+  return !stringValue(health, "state") || health.state === "checking";
+}

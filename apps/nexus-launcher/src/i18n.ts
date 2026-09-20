@@ -13,6 +13,284 @@ export type TranslationParams = Record<string, string | number>;
 export type Translator = (key: string, params?: TranslationParams) => string;
 
 const english: Record<string, string> = {
+  "Removing unused runtime copies": "Removing unused runtime copies",
+  "Preparing offline dependencies": "Preparing offline dependencies",
+  "Preparing the workspace": "Preparing the workspace",
+  "Checking offline dependencies": "Checking offline dependencies",
+  "Opening the official desktop app": "Opening the official desktop app",
+  "Checking local files": "Checking local files",
+  "Stopping Desktop and its background processes.":
+    "Stopping Desktop and its background processes.",
+  "desktop_start_cancelled": "Desktop launch cancelled.",
+  "desktop_stop_timeout":
+    "Desktop has not stopped yet. Retry shortly or close its official window.",
+  "desktop_stop_unsupported":
+    "This Desktop was started by an older launcher. Close its official window first.",
+  "desktop_stop_changed": "The Desktop instance changed. Refresh its status and retry.",
+
+  "Desktop settings": "Desktop settings",
+  "Managed in the official window": "Managed in the official window",
+
+  "Browser profile": "Browser profile",
+  "Version and source": "Version and source",
+  "Open your workspace in the official desktop app.":
+    "Open your workspace in the official desktop app.",
+  "Preparing local files. This may take a moment.":
+    "Preparing local files. This may take a moment.",
+  "Continue in the desktop window. Close it to switch modes.":
+    "Continue in the desktop window. Close it to switch modes.",
+  "Desktop did not start. Check the error and try again.":
+    "Desktop did not start. Check the error and try again.",
+
+  "desktop_install_incomplete":
+    "This Harness version includes Desktop, but its local files are incomplete. Reimport a complete offline package.",
+  "Desktop support check unavailable":
+    "Desktop support could not be checked. Nexus will retry shortly.",
+  "Open with": "Open with",
+  "Browser mode": "Browser mode",
+  "Official desktop mode": "Official desktop mode",
+  "One Harness version, one running mode at a time.":
+    "One Harness version, one running mode at a time.",
+  "Stop the current mode before switching. Close the official window to stop Desktop.":
+    "Stop the current mode before switching. Close the official window to stop Desktop.",
+
+  "Preparing": "Preparing",
+  "Desktop process started": "Desktop process started",
+  "Not running": "Not running",
+
+  "Choose how to open Harness. Manage startup and recovery here.":
+    "Choose how to open Harness. Manage startup and recovery here.",
+  "Use Harness in your system browser.": "Use Harness in your system browser.",
+  "Web connection details": "Web connection details",
+  "Agent maintenance": "Agent maintenance",
+
+  "Harness Web": "Harness Web",
+  "Desktop status unavailable": "Desktop status unavailable; reopen Nexus to check again.",
+  "desktop_runtime_missing":
+    "The bundled Desktop runtime is missing. Repair Nexus or import a complete offline package. No download will be attempted.",
+  "desktop_runtime_incompatible":
+    "This Harness version requires a different Desktop runtime. Use a compatible Nexus release or a complete offline package.",
+  "desktop_runtime_invalid":
+    "The bundled Desktop runtime failed integrity checks. Repair Nexus or import a verified offline package.",
+  "Official Harness Desktop": "Official Harness Desktop",
+  "Launch official Desktop": "Launch official Desktop",
+  "Retry Desktop": "Retry Desktop",
+  "Launch the native client included in the selected managed Harness version. Nexus includes its runtime; preparation works offline.":
+    "Launch the native client included in the selected managed Harness version. Nexus includes its runtime; preparation works offline.",
+  "Preparing official Desktop dependencies. You can leave the launcher open while this completes.":
+    "Preparing official Desktop dependencies. You can leave the launcher open while this completes.",
+  "Desktop process started. Check its window for client readiness; close Desktop before changing versions or configuration in Nexus.":
+    "Desktop process started. Check its window for client readiness; close Desktop before changing versions or configuration in Nexus.",
+  "Desktop has exited. You can launch it again.": "Desktop has exited. You can launch it again.",
+  "Desktop could not start. Review the details below, then retry preparation.":
+    "Desktop could not start. Review the details below, then retry preparation.",
+  "Stop Harness Web before launching Desktop.": "Stop Harness Web before launching Desktop.",
+  "desktop_interrupted": "Desktop was interrupted. Close any remaining Desktop window, then retry.",
+  "desktop_no_release": "Select a Harness version managed by Nexus first.",
+  "desktop_invalid_source": "The selected Harness directory is invalid. Check the installation.",
+  "desktop_unsupported":
+    "This version lacks official Desktop artifacts or preparation scripts. Update or repair Harness.",
+  "desktop_invalid_home": "Harness home must be an absolute path. Check settings.",
+  "desktop_stop_web": "Stop Harness Web before launching Desktop.",
+  "desktop_already_active": "Desktop is already preparing or running.",
+  "desktop_close_first": "Close Harness Desktop before changing versions, configuration, or data.",
+  "Nexus integration failed to load": "Nexus integration failed to load",
+  "Repair or update the Nexus installation, then check startup again. Do not disable unrelated Harness plugins.":
+    "Repair or update the Nexus installation, then check startup again. Do not disable unrelated Harness plugins.",
+  "Startup could not write because the disk is full":
+    "Startup could not write because the disk is full",
+  "Free space on the affected drive, then retry. Preserve Harness profiles and session data.":
+    "Free space on the affected drive, then retry. Preserve Harness profiles and session data.",
+  "The startup check could not finish stopping its process":
+    "The startup check could not finish stopping its process",
+  "Inspect the startup log and confirm the previous process has stopped before retrying.":
+    "Inspect the startup log and confirm the previous process has stopped before retrying.",
+  "Startup inputs changed during verification": "Startup inputs changed during verification",
+  "Run the startup check again using the current configuration. No plugin change is required.":
+    "Run the startup check again using the current configuration. No plugin change is required.",
+  "Harness exited before becoming ready": "Harness exited before becoming ready",
+  "Inspect the exit status and startup log. An early exit alone does not identify a faulty plugin.":
+    "Inspect the exit status and startup log. An early exit alone does not identify a faulty plugin.",
+
+  "Ready with warnings": "Ready with warnings",
+  "Services unavailable": "Services unavailable",
+  "Client unavailable": "Client unavailable",
+  "Checking client": "Checking client",
+  "Awaiting verification": "Awaiting verification",
+  "Latest checkpoint: {time}": "Latest checkpoint: {time}",
+
+  "Disabled plugins": "Disabled plugins",
+  "Optional plugin issue": "Optional plugin issue",
+  "Plugin check result": "Plugin check result",
+  "Run additional checks": "Run additional checks",
+
+  "Diagnostics and manual recovery": "Diagnostics and manual recovery",
+  "Service and plugin details": "Service and plugin details",
+  "Temporarily disable the following plugins, then check and restart. Packages and data are retained.":
+    "Temporarily disable the following plugins, then check and restart. Packages and data are retained.",
+  "Run a fresh check to prepare a repair plan.": "Run a fresh check to prepare a repair plan.",
+
+  "Recommended recovery": "Recommended recovery",
+  "Apply startup repair": "Apply startup repair",
+  "Disable recommended plugins and retry": "Disable recommended plugins and retry",
+  "Recheck and prepare repair": "Recheck and prepare repair",
+  "This plugin reported its own failure": "This plugin reported its own failure",
+  "This plugin replaces a built-in entry while services are unavailable":
+    "This plugin replaces a built-in entry while services are unavailable",
+  "Stop Harness, temporarily disable {plugins}, then check and start again? Running tasks will stop. Packages and data are retained; plugins can be re-enabled in Profiles.":
+    "Stop Harness, temporarily disable {plugins}, then check and start again? Running tasks will stop. Packages and data are retained; plugins can be re-enabled in Profiles.",
+  "Stop Harness and run a fresh startup check to identify repair candidates? Running tasks will stop; no plugins will be changed.":
+    "Stop Harness and run a fresh startup check to identify repair candidates? Running tasks will stop; no plugins will be changed.",
+  "Temporarily disable these plugins, restore the remaining profile, then check and start again. This is a reversible recovery attempt, not an upgrade or deletion.":
+    "Temporarily disable these plugins, restore the remaining profile, then check and start again. This is a reversible recovery attempt, not an upgrade or deletion.",
+  "The disabled plugins' features will be unavailable. Re-enable them in Profiles after installing compatible versions.":
+    "The disabled plugins' features will be unavailable. Re-enable them in Profiles after installing compatible versions.",
+  "This report has no verified repair plan yet. Run a fresh check to identify failing plugins and replaced built-in entries before changing anything.":
+    "This report has no verified repair plan yet. Run a fresh check to identify failing plugins and replaced built-in entries before changing anything.",
+  "Plugin failures or replacements prevent Harness services from becoming ready":
+    "Plugin failures or replacements prevent Harness services from becoming ready",
+  "Temporarily disable the recommended third-party plugins, then check and start again. Installed packages and data are retained.":
+    "Temporarily disable the recommended third-party plugins, then check and start again. Installed packages and data are retained.",
+  "Startup checks passed": "Startup checks passed",
+  "Startup checks found limited functionality": "Startup checks found limited functionality",
+  "Client startup failed": "Client startup failed",
+  "Startup not yet verified": "Startup not yet verified",
+  "Client plugins activated, but required core services are missing. Review the listed services before use.":
+    "Client plugins activated, but required core services are missing. Review the listed services before use.",
+  "The host is ready. Nexus is checking client plugins in the same Harness instance before reporting startup success.":
+    "The host is ready. Nexus is checking client plugins in the same Harness instance before reporting startup success.",
+  "Client verification did not complete. Review the startup log and retry startup; an accessible web address alone does not prove readiness.":
+    "Client verification did not complete. Review the startup log and retry startup; an accessible web address alone does not prove readiness.",
+  "The client check page could not load or stopped responding.":
+    "The client check page could not load or stopped responding.",
+  "No conclusive client report arrived within 45 seconds.":
+    "No conclusive client report arrived within 45 seconds.",
+  "Profile reserved by Harness": "Profile reserved by Harness",
+  "Select a regular profile or a compatible Harness version.":
+    "Select a regular profile or a compatible Harness version.",
+  "Conflicting plugin entry ID": "Conflicting plugin entry ID",
+  "Inspect the declaring bundles and disable or adjust one conflicting third-party plugin.":
+    "Inspect the declaring bundles and disable or adjust one conflicting third-party plugin.",
+  "Invalid or unreadable configuration": "Invalid or unreadable configuration",
+  "Repair the named configuration or patch file; preserve a backup before editing.":
+    "Repair the named configuration or patch file; preserve a backup before editing.",
+  "Profile bundle is missing or invalid": "Profile bundle is missing or invalid",
+  "Repair the selected profile dependencies or select a package that declares a Harness bundle.":
+    "Repair the selected profile dependencies or select a package that declares a Harness bundle.",
+  "Package or runtime interface is incompatible": "Package or runtime interface is incompatible",
+  "Use compatible plugin, Harness and Node versions; reinstalling the same incompatible version may not help.":
+    "Use compatible plugin, Harness and Node versions; reinstalling the same incompatible version may not help.",
+  "Required module is missing": "Required module is missing",
+  "Repair the named package in the selected profile and inspect its dependency chain.":
+    "Repair the named package in the selected profile and inspect its dependency chain.",
+  "Installed module layout conflicts with Harness":
+    "Installed module layout conflicts with Harness",
+  "Stop Harness and repair the profile dependency installation. Preserve conflicting files before replacing them.":
+    "Stop Harness and repair the profile dependency installation. Preserve conflicting files before replacing them.",
+  "Dependency changes require a restart": "Dependency changes require a restart",
+  "Stop Harness completely and start it again to load the new dependency generation.":
+    "Stop Harness completely and start it again to load the new dependency generation.",
+  "Patch refers to an unavailable entry": "Patch refers to an unavailable entry",
+  "Update or disable the named patch for this Harness version; do not disable unrelated plugins.":
+    "Update or disable the named patch for this Harness version; do not disable unrelated plugins.",
+  "Listening port is occupied": "Listening port is occupied",
+  "Choose another port or stop the known application using it.":
+    "Choose another port or stop the known application using it.",
+  "File or port access was denied": "File or port access was denied",
+  "Check access to the named path or port and file locks; do not delete data to bypass the error.":
+    "Check access to the named path or port and file locks; do not delete data to bypass the error.",
+  "Required services did not become available": "Required services did not become available",
+  "Inspect the missing service names and their provider plugins; repair the provider rather than disabling the waiting consumer.":
+    "Inspect the missing service names and their provider plugins; repair the provider rather than disabling the waiting consumer.",
+  "Plugin activation failed": "Plugin activation failed",
+  "Inspect the reported package and its original cause before choosing a compatible version or disabling it.":
+    "Inspect the reported package and its original cause before choosing a compatible version or disabling it.",
+  "Harness launch arguments are invalid": "Harness launch arguments are invalid",
+  "Correct the profile or launch arguments for the selected Harness version.":
+    "Correct the profile or launch arguments for the selected Harness version.",
+  "Installed package metadata is invalid": "Installed package metadata is invalid",
+  "Repair or replace the named package with a complete published version.":
+    "Repair or replace the named package with a complete published version.",
+  "Harness did not become ready in time": "Harness did not become ready in time",
+  "Inspect the startup log and pending services; a timeout alone does not identify a faulty plugin.":
+    "Inspect the startup log and pending services; a timeout alone does not identify a faulty plugin.",
+  "Harness startup failed; cause not yet identified":
+    "Harness startup failed; cause not yet identified",
+  "Keep the original error and startup log. Do not disable plugins without evidence.":
+    "Keep the original error and startup log. Do not disable plugins without evidence.",
+  "Harness is ready; some optional plugins did not activate":
+    "Harness is ready; some optional plugins did not activate",
+  "You can continue using Harness. Inspect only the listed optional plugins if you need their features.":
+    "You can continue using Harness. Inspect only the listed optional plugins if you need their features.",
+  "Limited functionality": "Limited functionality",
+  "Affected optional plugins": "Affected optional plugins",
+  "Cause not confirmed. No plugin is identified as responsible.":
+    "Cause not confirmed. No plugin is identified as responsible.",
+  "How Nexus can help": "How Nexus can help",
+  "Browser plugin health": "Browser plugin health",
+  "This check runs the Harness host boot. Browser plugin activation is checked separately when the Harness page opens.":
+    "This check runs the Harness host boot. Browser plugin activation is checked separately when the Harness page opens.",
+  "Client plugins activated": "Client plugins activated",
+  "Browser startup blocked": "Browser startup blocked",
+  "Checking client plugins": "Checking client plugins",
+  "Browser health not yet verified": "Browser health not yet verified",
+  "Plugins that did not activate": "Plugins that did not activate",
+  "Start from these reported failures; the plugins listed below only wait on them.":
+    "Start from these reported failures; the plugins listed below only wait on them.",
+  "No plugin reported a failure of its own. A required service has no active provider; repair the provider instead of the plugins waiting for it.":
+    "No plugin reported a failure of its own. A required service has no active provider; repair the provider instead of the plugins waiting for it.",
+  "Open the profile patch file": "Open the profile patch file",
+  "Open Harness settings": "Open Harness settings",
+  "Go to profile management": "Go to profile management",
+  "Choose plugins to disable": "Choose plugins to disable",
+  "Repair profile dependencies": "Repair profile dependencies",
+  "Open the startup log": "Open the startup log",
+  "Client activation and core services were observed. This does not verify every conversation or tool operation.":
+    "Client activation and core services were observed. This does not verify every conversation or tool operation.",
+  "Harness is running, but its browser plugins are not ready. Stop, profile selection and dependency repair remain available.":
+    "Harness is running, but its browser plugins are not ready. Stop, profile selection and dependency repair remain available.",
+  "Open or refresh the Harness page to report its actual client state. An accessible web address alone is not proof of readiness.":
+    "Open or refresh the Harness page to report its actual client state. An accessible web address alone is not proof of readiness.",
+  "Unavailable core services": "Unavailable core services",
+  "Waiting consumers are not confirmed faulty. Inspect the missing service provider first; no provider is inferred from its name.":
+    "Waiting consumers are not confirmed faulty. Inspect the missing service provider first; no provider is inferred from its name.",
+  "Waiting plugins": "Waiting plugins",
+  "Diagnostic evidence was truncated; inspect the Harness browser error for the complete list.":
+    "Diagnostic evidence was truncated; inspect the Harness browser error for the complete list.",
+
+  "Open Settings or patch management to review the reported configuration. Nexus will not overwrite it automatically.":
+    "Open Settings or patch management to review the reported configuration. Nexus will not overwrite it automatically.",
+  "Select another profile. The current profile and its data remain available.":
+    "Select another profile. The current profile and its data remain available.",
+  "Inspect local plugin declarations and dependency chains. Disable only an implicated third-party plugin, then recheck.":
+    "Inspect local plugin declarations and dependency chains. Disable only an implicated third-party plugin, then recheck.",
+  "Review the original startup log and run the check again after addressing its cause.":
+    "Review the original startup log and run the check again after addressing its cause.",
+
+  "Blocking startup error": "Blocking startup error",
+  "Related plugins": "Related plugins",
+  "Duplicate plugin entry ID: {id}. Disable or adjust one of the conflicting plugins before retrying.":
+    "Duplicate plugin entry ID: {id}. Disable or adjust one of the conflicting plugins before retrying.",
+
+  "Additional dependency evidence": "Additional dependency evidence",
+  "Declares the duplicate loader entry ID": "Declares the duplicate loader entry ID",
+  "Failure stage": "Failure stage",
+  "Dependency preparation": "Dependency preparation",
+  "Profile restricted by Harness": "Profile restricted by Harness",
+  "Harness initialization": "Harness initialization",
+  "Plugin loading": "Plugin loading",
+  "Waiting for Harness readiness": "Waiting for Harness readiness",
+  "Stage not recorded": "Stage not recorded",
+  "Selection and startup are separate. After Harness stops, you can switch profiles or repair dependencies without passing this check.":
+    "Selection and startup are separate. After Harness stops, you can switch profiles or repair dependencies without passing this check.",
+  "No plugin is confirmed faulty. Disabling unrelated plugins may not resolve this failure.":
+    "No plugin is confirmed faulty. Disabling unrelated plugins may not resolve this failure.",
+
+  "Dependency source": "Dependency source",
+  "Declared dependency chains; these do not prove a plugin is faulty.":
+    "Declared dependency chains; these do not prove a plugin is faulty.",
+  "Dependency source not confirmed": "Dependency source not confirmed",
+  "Local dependency evidence is incomplete.": "Local dependency evidence is incomplete.",
   "Declaration details omitted: {count}. This does not affect the startup check.":
     "Declaration details omitted: {count}. This does not affect the startup check.",
   "Confirm": "Confirm",
@@ -129,8 +407,8 @@ const english: Record<string, string> = {
     "Recognized key, password and token fields are excluded. Custom plugin configuration may use other names; review it before sharing.",
   "Conversation history and project files are not included. Import keeps the previous data directory and activates a separate imported environment.":
     "Conversation history and project files are not included. Import keeps the previous data directory and activates a separate imported environment.",
-  "Packages include a built Windows x64 Harness and complete Node/npm/pnpm runtime. Optionally include selected profiles, installed plugins and credentials. Import needs no dependency downloads or builds.":
-    "Packages include a built Windows x64 Harness and complete Node/npm/pnpm runtime. Optionally include selected profiles, installed plugins and credentials. Import needs no dependency downloads or builds.",
+  "Packages include a built Harness for this operating system and architecture and complete Node/npm/pnpm runtime. Optionally include selected profiles, installed plugins and credentials. Import needs no dependency downloads or builds.":
+    "Packages include a built Harness for this operating system and architecture and complete Node/npm/pnpm runtime. Optionally include selected profiles, installed plugins and credentials. Import needs no dependency downloads or builds.",
   "Preparing package": "Preparing package",
   "Scanning Harness files": "Scanning Harness files",
   "Scanning runtime files": "Scanning runtime files",
@@ -273,6 +551,15 @@ const english: Record<string, string> = {
   "Unreadable or unsupported diagnostic record was preserved":
     "Unreadable or unsupported diagnostic record was preserved",
   "Checking startup inputs": "Checking startup inputs",
+  "Previous startup error": "Previous startup error",
+  "Select failing plugins": "Select failing plugins",
+  "Error details": "Error details",
+  "Other plugins for troubleshooting": "Other plugins for troubleshooting",
+  "No individual plugin was identified. Review error details before isolating plugins.":
+    "No individual plugin was identified. Review error details before isolating plugins.",
+  "Plugins with loader errors": "Plugins with loader errors",
+  "Loader error": "Loader error",
+  "Elapsed time: {seconds}s": "Elapsed time: {seconds}s",
   "Checking startup compatibility": "Checking startup compatibility",
   "Creating Harness process; use Stop after startup":
     "Creating Harness process; use Stop after startup",
@@ -529,11 +816,6 @@ const english: Record<string, string> = {
   "Retry or abort the pending restore in Checkpoints.":
     "Retry or abort the pending restore in Checkpoints.",
   "A checkpoint restore transaction is pending.": "A checkpoint restore transaction is pending.",
-  "Repair settings and run checks, then leave recovery mode before starting.":
-    "Repair settings and run checks, then leave recovery mode before starting.",
-  "Harness startup is paused in recovery mode.": "Harness startup is paused in recovery mode.",
-  "Export diagnostics and repair the recovery mode record.":
-    "Export diagnostics and repair the recovery mode record.",
   "Select a complete runtime in Settings or reinstall the bundled runtime.":
     "Select a complete runtime in Settings or reinstall the bundled runtime.",
   "Retry the check; export diagnostics if it fails again.":
@@ -589,8 +871,8 @@ const english: Record<string, string> = {
   "Cleanup preview is scanning in the background. Its saved result will appear automatically; no files are being removed.":
     "Cleanup preview is scanning in the background. Its saved result will appear automatically; no files are being removed.",
   "Details": "Details",
-  "Runs plugin initialization in a temporary local process and closes it afterward. Recovery mode, the selected profile and the stopped Harness service remain unchanged. No browser is opened.":
-    "Runs plugin initialization in a temporary local process and closes it afterward. Recovery mode, the selected profile and the stopped Harness service remain unchanged. No browser is opened.",
+  "Runs plugin initialization in a temporary local process and closes it afterward. The selected profile and the stopped Harness service remain unchanged. No browser is opened.":
+    "Runs plugin initialization in a temporary local process and closes it afterward. The selected profile and the stopped Harness service remain unchanged. No browser is opened.",
   "Saved plugin choices have not been verified. The report below describes an earlier check.":
     "Saved plugin choices have not been verified. The report below describes an earlier check.",
   "Manual plugin verification": "Manual plugin verification",
@@ -644,7 +926,9 @@ const english: Record<string, string> = {
     "Sizes are logical file sizes. Overlapping directories are shown separately and must not be added together. Unknown means inspection was incomplete.",
   "Keep logs and diagnostics for at least (days)": "Keep logs and diagnostics for at least (days)",
   "Working…": "Working…",
-  "Preview cleanup": "Preview cleanup",
+  "Preview cleanup": "Scan disk usage",
+  "No current disk preview. Scan to refresh usage and cleanup items.":
+    "No current disk preview. Scan to refresh usage and cleanup items.",
   "Refresh saved result": "Refresh saved result",
   "This preview expires after 15 minutes. Changed files are preserved. Stop Harness before cleanup. The newest logs and latest failure diagnostics are always retained.":
     "This preview expires after 15 minutes. Changed files are preserved. Stop Harness before cleanup. The newest logs and latest failure diagnostics are always retained.",
@@ -702,8 +986,8 @@ const english: Record<string, string> = {
   "Package to import (full .tar.gz path)": "Package to import (full .tar.gz path)",
   "Integrity checks detect damaged packages; they do not authenticate the publisher. Only import packages from sources you trust.":
     "Integrity checks detect damaged packages; they do not authenticate the publisher. Only import packages from sources you trust.",
-  "A package contains a built Windows x64 Harness version and its complete Node/npm/pnpm runtime, without user data. Dependency installation and builds are not performed; version probes will run.":
-    "A package contains a built Windows x64 Harness version and its complete Node/npm/pnpm runtime, without user data. Dependency installation and builds are not performed; version probes will run.",
+  "A package contains a built Harness for this operating system and architecture version and its complete Node/npm/pnpm runtime, without user data. Dependency installation and builds are not performed; version probes will run.":
+    "A package contains a built Harness for this operating system and architecture version and its complete Node/npm/pnpm runtime, without user data. Dependency installation and builds are not performed; version probes will run.",
   "Import or export an offline package": "Import or export an offline package",
   "Offline packages": "Offline packages",
   "Undo plugin order": "Undo plugin order",
@@ -793,20 +1077,12 @@ const english: Record<string, string> = {
     "Use Ctrl + / Ctrl - to zoom and Ctrl 0 to reset. Returning to this window refreshes service status.",
   "Closing the window keeps Nexus in the tray. The tray menu lets you exit the launcher while keeping services running, or stop services and exit.":
     "Closing the window keeps Nexus in the tray. The tray menu lets you exit the launcher while keeping services running, or stop services and exit.",
-  "Repair and enter recovery mode": "Repair and enter recovery mode",
   "The invalid pause record will be preserved before repair. Unsafe files cannot be repaired automatically.":
     "The invalid pause record will be preserved before repair. Unsafe files cannot be repaired automatically.",
 
-  "Harness recovery mode": "Harness recovery mode",
   "Harness startup is paused": "Harness startup is paused",
-  "Enter recovery mode": "Enter recovery mode",
-  "Leave recovery mode": "Leave recovery mode",
-  "Agent stays available. Repair profiles, plugins or configuration, run checks, then leave recovery mode. Leaving does not start Harness.":
-    "Agent stays available. Repair profiles, plugins or configuration, run checks, then leave recovery mode. Leaving does not start Harness.",
   "Pause Harness startup and stop it to repair profiles, plugins or configuration. This pause survives restarting Nexus.":
     "Pause Harness startup and stop it to repair profiles, plugins or configuration. This pause survives restarting Nexus.",
-  "Harness startup is paused. Checks remain available; leave recovery mode before starting.":
-    "Harness startup is paused. Checks remain available; leave recovery mode before starting.",
   "Re-enter the complete argument list. Previous arguments that are not entered again will be removed.":
     "Re-enter the complete argument list. Previous arguments that are not entered again will be removed.",
   "Snapshots restore bounded profile and Harness settings files plus the pointer to an installed program version. Project files, full session data, runtimes and complete program copies are excluded. Install a missing version first. Use Retry or Abort for an interrupted restore.":
@@ -1689,8 +1965,269 @@ const english: Record<string, string> = {
 };
 
 const chinese: Record<string, string> = {
+  "Removing unused runtime copies": "正在清理不再使用的运行时副本",
+  "Preparing offline dependencies": "正在准备离线依赖",
+  "Preparing the workspace": "正在准备工作区",
+  "Checking offline dependencies": "正在检查离线依赖",
+  "Opening the official desktop app": "正在打开官方桌面端",
+  "Checking local files": "正在检查本地文件",
+  "Stopping Desktop and its background processes.": "正在中止桌面端及其后台进程。",
+  "desktop_start_cancelled": "桌面端启动已取消。",
+  "desktop_stop_timeout": "桌面端尚未停止，请稍候重试或关闭官方窗口。",
+  "desktop_stop_unsupported": "此桌面端由旧版启动器启动，请先手动关闭官方窗口。",
+  "desktop_stop_changed": "桌面端实例已变化，请刷新状态后重试。",
+
+  "Desktop settings": "桌面端配置",
+  "Managed in the official window": "在官方窗口中管理",
+
+  "Browser profile": "浏览器配置",
+  "Version and source": "版本与来源",
+  "Open your workspace in the official desktop app.": "在官方桌面窗口中打开工作区。",
+  "Preparing local files. This may take a moment.": "正在准备本地文件，请稍候。",
+  "Continue in the desktop window. Close it to switch modes.":
+    "请在桌面窗口中继续，关闭窗口后可切换打开方式。",
+  "Desktop did not start. Check the error and try again.": "桌面端未能启动，请查看错误后重试。",
+
+  "desktop_install_incomplete":
+    "此 Harness 版本支持桌面端，但本地文件不完整。请重新导入完整离线包。",
+  "Desktop support check unavailable": "暂时无法检查桌面端支持情况，Nexus 将自动重试。",
+  "Open with": "打开方式",
+  "Browser mode": "浏览器",
+  "Official desktop mode": "官方桌面端",
+  "One Harness version, one running mode at a time.":
+    "使用同一个 Harness 版本，同一时间仅运行一种方式。",
+  "Stop the current mode before switching. Close the official window to stop Desktop.":
+    "切换前请先停止当前运行；桌面端请关闭官方窗口。",
+
+  "Preparing": "正在准备",
+  "Desktop process started": "进程已启动",
+  "Not running": "未启动",
+
+  "Choose how to open Harness. Manage startup and recovery here.":
+    "选择打开 Harness 的方式，在这里管理启动与恢复。",
+  "Use Harness in your system browser.": "在系统浏览器中使用 Harness。",
+  "Web connection details": "Web 连接详情",
+  "Agent maintenance": "Agent 维护",
+
+  "Harness Web": "Harness Web",
+  "Desktop status unavailable": "暂时无法获取 Desktop 状态，请重新打开 Nexus 检查。",
+  "desktop_runtime_missing":
+    "缺少自带的 Desktop 运行时。请修复 Nexus 或导入完整离线包，不会尝试联网下载。",
+  "desktop_runtime_incompatible":
+    "此 Harness 版本需要不同的 Desktop 运行时，请使用匹配的 Nexus 版本或完整离线包。",
+  "desktop_runtime_invalid":
+    "自带的 Desktop 运行时完整性校验失败。请修复 Nexus 或导入校验通过的离线包。",
+  "Official Harness Desktop": "Harness 官方桌面端",
+  "Launch official Desktop": "启动官方 Desktop",
+  "Retry Desktop": "重试 Desktop",
+  "Launch the native client included in the selected managed Harness version. Nexus includes its runtime; preparation works offline.":
+    "启动当前受管 Harness 版本自带的原生客户端。运行时由 Nexus 自带，可离线准备和启动。",
+  "Preparing official Desktop dependencies. You can leave the launcher open while this completes.":
+    "正在准备官方 Desktop 依赖，请稍候。",
+  "Desktop process started. Check its window for client readiness; close Desktop before changing versions or configuration in Nexus.":
+    "Desktop 进程已启动，请在其窗口中查看就绪情况。修改 Nexus 中的版本或配置前，请先关闭 Desktop。",
+  "Desktop has exited. You can launch it again.": "Desktop 已退出，可再次启动。",
+  "Desktop could not start. Review the details below, then retry preparation.":
+    "Desktop 启动失败。请查看错误详情，修复后重试。",
+  "Stop Harness Web before launching Desktop.": "请先停止 Harness Web，再启动 Desktop。",
+  "desktop_interrupted": "Desktop 启动进程已中断，请重试；若原窗口仍在，请先关闭它。",
+  "desktop_no_release": "请先选择一个由 Nexus 管理的 Harness 版本。",
+  "desktop_invalid_source": "当前 Harness 版本目录无效，请检查安装。",
+  "desktop_unsupported": "此版本缺少官方 Desktop 产物或准备脚本，请更新或修复 Harness 安装。",
+  "desktop_invalid_home": "Harness 数据目录必须是绝对路径，请检查设置。",
+  "desktop_stop_web": "请先停止 Harness Web，再启动 Desktop。",
+  "desktop_already_active": "Desktop 正在准备或运行，请勿重复启动。",
+  "desktop_close_first": "请先关闭 Harness Desktop，再修改版本、配置或数据。",
+  "Nexus integration failed to load": "Nexus 集成组件加载失败",
+  "Repair or update the Nexus installation, then check startup again. Do not disable unrelated Harness plugins.":
+    "请修复或更新 Nexus 安装，然后重新检查启动。无需停用无关的 Harness 插件。",
+  "Startup could not write because the disk is full": "磁盘空间不足，启动无法写入文件",
+  "Free space on the affected drive, then retry. Preserve Harness profiles and session data.":
+    "请释放对应磁盘的空间后重试，保留 Harness 配置和会话数据。",
+  "The startup check could not finish stopping its process": "启动检查进程未能完成停止",
+  "Inspect the startup log and confirm the previous process has stopped before retrying.":
+    "请查看启动日志，确认上次进程已停止后再重试。",
+  "Startup inputs changed during verification": "检查期间启动配置发生变化",
+  "Run the startup check again using the current configuration. No plugin change is required.":
+    "请使用当前配置重新执行启动检查，无需修改插件。",
+  "Harness exited before becoming ready": "Harness 在就绪前退出",
+  "Inspect the exit status and startup log. An early exit alone does not identify a faulty plugin.":
+    "请查看退出状态和启动日志，不能仅凭提前退出判断哪个插件有故障。",
+
+  "Ready with warnings": "可用，有警告",
+  "Services unavailable": "服务未就绪",
+  "Client unavailable": "客户端未就绪",
+  "Checking client": "检查客户端",
+  "Awaiting verification": "等待验证",
+  "Latest checkpoint: {time}": "最近创建：{time}",
+
+  "Disabled plugins": "已停用插件",
+  "Optional plugin issue": "可选插件异常",
+  "Plugin check result": "插件检查结果",
+  "Run additional checks": "执行其他检查",
+
+  "Diagnostics and manual recovery": "诊断详情与手动修复",
+  "Service and plugin details": "服务与插件详情",
+  "Temporarily disable the following plugins, then check and restart. Packages and data are retained.":
+    "暂时停用以下插件，重新检查并启动。插件文件和数据会保留。",
+  "Run a fresh check to prepare a repair plan.": "重新检查后，Nexus 会生成可用的修复方案。",
+
+  "Recommended recovery": "推荐恢复方案",
+  "Apply startup repair": "执行启动修复",
+  "Disable recommended plugins and retry": "暂时禁用推荐插件并重新启动",
+  "Recheck and prepare repair": "重新检查并生成修复方案",
+  "This plugin reported its own failure": "此插件已报告自身失败",
+  "This plugin replaces a built-in entry while services are unavailable":
+    "此插件替换了内置条目，当前有服务不可用",
+  "Stop Harness, temporarily disable {plugins}, then check and start again? Running tasks will stop. Packages and data are retained; plugins can be re-enabled in Profiles.":
+    "停止 Harness，暂时禁用 {plugins}，然后重新自检并启动？运行中的任务会停止。插件文件和数据会保留，可在配置与插件中重新启用。",
+  "Stop Harness and run a fresh startup check to identify repair candidates? Running tasks will stop; no plugins will be changed.":
+    "停止 Harness 并重新执行启动自检，生成有证据支持的修复方案？运行中的任务会停止，本次检查不会修改插件。",
+  "Temporarily disable these plugins, restore the remaining profile, then check and start again. This is a reversible recovery attempt, not an upgrade or deletion.":
+    "建议暂时禁用以下插件，使用剩余配置重新自检并启动。这是可撤销的恢复尝试，不会升级或删除插件。",
+  "The disabled plugins' features will be unavailable. Re-enable them in Profiles after installing compatible versions.":
+    "被禁用插件的功能会暂时不可用。安装兼容版本后，可在配置与插件中重新启用。",
+  "This report has no verified repair plan yet. Run a fresh check to identify failing plugins and replaced built-in entries before changing anything.":
+    "当前报告尚未生成可靠的修复方案。请重新检查，识别实际失败插件和被替换的内置条目后再修复。",
+  "Plugin failures or replacements prevent Harness services from becoming ready":
+    "插件失败或替换内置条目，导致 Harness 服务未能就绪",
+  "Temporarily disable the recommended third-party plugins, then check and start again. Installed packages and data are retained.":
+    "暂时禁用推荐的第三方插件，再自检并启动；已安装的插件文件和数据会保留。",
+  "Startup checks passed": "启动检查通过",
+  "Startup checks found limited functionality": "启动检查发现功能受限",
+  "Client startup failed": "客户端启动失败",
+  "Startup not yet verified": "启动尚未通过验证",
+  "Client plugins activated, but required core services are missing. Review the listed services before use.":
+    "客户端插件已激活，但缺少必需的核心服务。请先检查下方列出的服务。",
+  "The host is ready. Nexus is checking client plugins in the same Harness instance before reporting startup success.":
+    "宿主已就绪，Nexus 正在同一个 Harness 实例中检查客户端插件，检查通过后才会确认启动成功。",
+  "Client verification did not complete. Review the startup log and retry startup; an accessible web address alone does not prove readiness.":
+    "客户端验证未完成。请查看启动日志并重试启动；仅有网页地址可访问不能证明就绪。",
+  "The client check page could not load or stopped responding.":
+    "客户端检查页面无法加载或已停止响应。",
+  "No conclusive client report arrived within 45 seconds.": "45 秒内未收到明确的客户端检查结果。",
   "Declaration details omitted: {count}. This does not affect the startup check.":
     "已省略 {count} 个插件的声明明细，不影响启动检查结果。",
+  "Dependency source": "依赖来源",
+  "Declared dependency chains; these do not prove a plugin is faulty.":
+    "以下为声明依赖链，不代表关联插件已确认故障。",
+  "Dependency source not confirmed": "依赖来源尚未确认",
+  "Local dependency evidence is incomplete.": "本地依赖证据不完整。",
+  "Failure stage": "失败阶段",
+  "Dependency preparation": "依赖准备",
+  "Profile restricted by Harness": "Harness 限制此配置",
+  "Harness initialization": "Harness 初始化",
+  "Plugin loading": "插件加载",
+  "Waiting for Harness readiness": "等待 Harness 就绪",
+  "Stage not recorded": "未记录阶段",
+  "Selection and startup are separate. After Harness stops, you can switch profiles or repair dependencies without passing this check.":
+    "配置选择与启动相互独立。Harness 停止后，无需通过此检查即可切换配置或修复依赖。",
+  "No plugin is confirmed faulty. Disabling unrelated plugins may not resolve this failure.":
+    "尚未确认故障插件，禁用无关插件不一定能解决此问题。",
+  "Additional dependency evidence": "补充依赖线索（不代表本次失败原因）",
+  "Declares the duplicate loader entry ID": "声明了发生冲突的加载条目 ID",
+  "Blocking startup error": "阻断启动的错误",
+  "Related plugins": "相关插件",
+  "Duplicate plugin entry ID: {id}. Disable or adjust one of the conflicting plugins before retrying.":
+    "插件条目 ID 重复：{id}。请禁用或调整其中一个冲突插件后重试。",
+  "Profile reserved by Harness": "Harness 保留的配置名称",
+  "Select a regular profile or a compatible Harness version.":
+    "请选择普通配置或支持该配置的 Harness 版本。",
+  "Conflicting plugin entry ID": "插件条目 ID 冲突",
+  "Inspect the declaring bundles and disable or adjust one conflicting third-party plugin.":
+    "检查声明来源，禁用或调整其中一个冲突的第三方插件。",
+  "Invalid or unreadable configuration": "配置不可读取或格式错误",
+  "Repair the named configuration or patch file; preserve a backup before editing.":
+    "修复报错指定的配置或补丁文件，编辑前保留备份。",
+  "Profile bundle is missing or invalid": "配置使用的插件包缺失或无效",
+  "Repair the selected profile dependencies or select a package that declares a Harness bundle.":
+    "修复当前配置依赖，或选择声明了 Harness bundle 的插件包。",
+  "Package or runtime interface is incompatible": "插件或运行时接口不兼容",
+  "Use compatible plugin, Harness and Node versions; reinstalling the same incompatible version may not help.":
+    "选择互相兼容的插件、Harness 和 Node 版本；重装同一个不兼容版本不一定有效。",
+  "Required module is missing": "所需模块缺失",
+  "Repair the named package in the selected profile and inspect its dependency chain.":
+    "修复当前配置中报错指定的依赖包，并检查其依赖链。",
+  "Installed module layout conflicts with Harness": "已安装模块布局与 Harness 冲突",
+  "Stop Harness and repair the profile dependency installation. Preserve conflicting files before replacing them.":
+    "停止 Harness 后修复配置依赖，替换冲突文件前先保留备份。",
+  "Dependency changes require a restart": "依赖变更需要重新启动",
+  "Stop Harness completely and start it again to load the new dependency generation.":
+    "完全停止 Harness 后重新启动，以加载变更后的依赖。",
+  "Patch refers to an unavailable entry": "补丁引用的条目不存在",
+  "Update or disable the named patch for this Harness version; do not disable unrelated plugins.":
+    "更新或禁用不适用于当前 Harness 的补丁，不要禁用无关插件。",
+  "Listening port is occupied": "监听端口被占用",
+  "Choose another port or stop the known application using it.":
+    "更换端口，或停止已确认占用端口的应用。",
+  "File or port access was denied": "文件或端口访问被拒绝",
+  "Check access to the named path or port and file locks; do not delete data to bypass the error.":
+    "检查指定路径或端口的权限及文件占用，不要通过删除数据绕过错误。",
+  "Required services did not become available": "所需服务未就绪",
+  "Inspect the missing service names and their provider plugins; repair the provider rather than disabling the waiting consumer.":
+    "检查缺失服务及提供服务的插件，优先修复服务提供方，不要盲目禁用等待服务的插件。",
+  "Plugin activation failed": "插件激活失败",
+  "Inspect the reported package and its original cause before choosing a compatible version or disabling it.":
+    "检查报错插件及原始原因，再选择兼容版本或禁用相关插件。",
+  "Harness launch arguments are invalid": "Harness 启动参数无效",
+  "Correct the profile or launch arguments for the selected Harness version.":
+    "根据所选 Harness 版本修正配置名或启动参数。",
+  "Installed package metadata is invalid": "安装包元数据无效",
+  "Repair or replace the named package with a complete published version.":
+    "修复指定包，或换用完整发布版本。",
+  "Harness did not become ready in time": "Harness 未在时限内就绪",
+  "Inspect the startup log and pending services; a timeout alone does not identify a faulty plugin.":
+    "检查启动日志和等待中的服务；仅凭超时不能确认哪个插件故障。",
+  "Harness startup failed; cause not yet identified": "Harness 启动失败，原因尚未确认",
+  "Keep the original error and startup log. Do not disable plugins without evidence.":
+    "保留原始错误及启动日志，不要在缺乏证据时禁用插件。",
+  "Harness is ready; some optional plugins did not activate": "Harness 已就绪，部分可选插件未激活",
+  "You can continue using Harness. Inspect only the listed optional plugins if you need their features.":
+    "可以继续使用 Harness；如需相关功能，再处理列出的可选插件。",
+  "Limited functionality": "功能受限",
+  "Affected optional plugins": "受影响的可选插件",
+  "Cause not confirmed. No plugin is identified as responsible.":
+    "原因尚未确认，未判定任何插件为责任方。",
+  "How Nexus can help": "Nexus 可以协助",
+  "Browser plugin health": "浏览器插件自检",
+  "This check runs the Harness host boot. Browser plugin activation is checked separately when the Harness page opens.":
+    "此项检查执行 Harness 后端启动流程。打开 Harness 页面时，会单独执行浏览器插件激活检查。",
+  "Client plugins activated": "客户端插件已激活",
+  "Browser startup blocked": "浏览器启动被阻断",
+  "Checking client plugins": "正在检查客户端插件",
+  "Browser health not yet verified": "尚未验证浏览器状态",
+  "Plugins that did not activate": "未能激活的插件",
+  "Start from these reported failures; the plugins listed below only wait on them.":
+    "请从这些已报告的失败入手；下方列出的插件只是在等待它们。",
+  "No plugin reported a failure of its own. A required service has no active provider; repair the provider instead of the plugins waiting for it.":
+    "没有插件报告自身失败。某项必需服务没有可用的提供方，应修复提供方，而不是处理正在等待它的插件。",
+  "Open the profile patch file": "打开档案补丁文件",
+  "Open Harness settings": "打开 Harness 设置文件",
+  "Go to profile management": "前往档案管理",
+  "Choose plugins to disable": "选择要禁用的插件",
+  "Repair profile dependencies": "修复档案依赖",
+  "Open the startup log": "查看启动日志",
+  "Client activation and core services were observed. This does not verify every conversation or tool operation.":
+    "已确认客户端插件激活和核心服务可用；不代表每项对话或工具操作均已验证。",
+  "Harness is running, but its browser plugins are not ready. Stop, profile selection and dependency repair remain available.":
+    "Harness 进程运行中，但浏览器插件尚未就绪。仍可停止、切换配置和修复依赖。",
+  "Open or refresh the Harness page to report its actual client state. An accessible web address alone is not proof of readiness.":
+    "打开或刷新 Harness 页面以执行客户端自检。网页地址可访问不代表界面已就绪。",
+  "Unavailable core services": "不可用的核心服务",
+  "Waiting consumers are not confirmed faulty. Inspect the missing service provider first; no provider is inferred from its name.":
+    "等待中的插件不代表已确认故障。应先检查缺失服务的提供方；不会根据服务名称猜测责任插件。",
+  "Waiting plugins": "等待中的插件",
+  "Diagnostic evidence was truncated; inspect the Harness browser error for the complete list.":
+    "诊断证据已截断；可在 Harness 浏览器报错中查看完整列表。",
+
+  "Open Settings or patch management to review the reported configuration. Nexus will not overwrite it automatically.":
+    "在设置或补丁管理中检查报错配置，Nexus 不会自动覆盖它。",
+  "Select another profile. The current profile and its data remain available.":
+    "可以切换其他配置，原配置及其数据仍保留。",
+  "Inspect local plugin declarations and dependency chains. Disable only an implicated third-party plugin, then recheck.":
+    "查看本地插件声明和依赖链，仅在证据指向第三方插件时禁用它，然后重新检查。",
+  "Review the original startup log and run the check again after addressing its cause.":
+    "查看原始启动日志，处理原因后重新检查。",
   "Confirm": "确认",
   "Confirm action": "确认操作",
   "Please wait until this operation finishes before making other changes.":
@@ -1803,8 +2340,8 @@ const chinese: Record<string, string> = {
     "排除可识别的密钥、密码和令牌字段。自定义插件可能使用其他字段名称，分享前请检查其配置。",
   "Conversation history and project files are not included. Import keeps the previous data directory and activates a separate imported environment.":
     "不包含对话历史和项目文件。导入会保留原数据目录，并启用独立的导入环境。",
-  "Packages include a built Windows x64 Harness and complete Node/npm/pnpm runtime. Optionally include selected profiles, installed plugins and credentials. Import needs no dependency downloads or builds.":
-    "运行包包含已构建的 Windows x64 Harness 和完整 Node/npm/pnpm 运行时，可额外携带所选配置档、插件与凭据。导入无需下载依赖或构建。",
+  "Packages include a built Harness for this operating system and architecture and complete Node/npm/pnpm runtime. Optionally include selected profiles, installed plugins and credentials. Import needs no dependency downloads or builds.":
+    "运行包包含适用于当前操作系统与架构的已构建 Harness 和完整 Node/npm/pnpm 运行时，可额外携带所选配置档、插件与凭据。导入无需下载依赖或构建。",
   "Preparing package": "准备运行包",
   "Scanning Harness files": "扫描 Harness 文件",
   "Scanning runtime files": "扫描运行时文件",
@@ -1940,6 +2477,15 @@ const chinese: Record<string, string> = {
     "恢复文件已生成，但最新索引无法更新。请保留产物 ID，以便再次打开。",
   "Unreadable or unsupported diagnostic record was preserved": "无法读取或不支持的诊断记录已保留",
   "Checking startup inputs": "正在检查启动条件",
+  "Previous startup error": "上次启动错误",
+  "Select failing plugins": "选择出错插件",
+  "Error details": "错误详情",
+  "Other plugins for troubleshooting": "其他插件（仅供排查）",
+  "No individual plugin was identified. Review error details before isolating plugins.":
+    "尚未定位到具体插件，请先查看错误详情再选择停用。",
+  "Plugins with loader errors": "已确认加载出错的插件",
+  "Loader error": "加载出错",
+  "Elapsed time: {seconds}s": "已用时间：{seconds} 秒",
   "Checking startup compatibility": "正在检查启动兼容性",
   "Creating Harness process; use Stop after startup": "正在创建 Harness 进程；启动后请使用停止",
   "Startup cancelled. The previous instance is not restarted automatically.":
@@ -2172,10 +2718,6 @@ const chinese: Record<string, string> = {
   "No checkpoint restore is pending.": "没有待处理的检查点恢复。",
   "Retry or abort the pending restore in Checkpoints.": "请在检查点中重试或中止待处理的恢复。",
   "A checkpoint restore transaction is pending.": "有检查点恢复事务尚未完成。",
-  "Repair settings and run checks, then leave recovery mode before starting.":
-    "请修复设置并运行检查，再退出恢复模式后启动。",
-  "Harness startup is paused in recovery mode.": "恢复模式已暂停 Harness 启动。",
-  "Export diagnostics and repair the recovery mode record.": "请导出诊断并修复恢复模式记录。",
   "Select a complete runtime in Settings or reinstall the bundled runtime.":
     "请在设置中选择完整运行时，或重新安装内置运行时。",
   "Retry the check; export diagnostics if it fails again.": "请重试检查；若仍失败，请导出诊断。",
@@ -2276,7 +2818,9 @@ const chinese: Record<string, string> = {
     "容量按文件逻辑大小统计。相互重叠的目录单独显示，请勿将其相加。“未知”表示检查未完成。",
   "Keep logs and diagnostics for at least (days)": "日志与诊断至少保留（天）",
   "Working…": "处理中…",
-  "Preview cleanup": "预览清理",
+  "Preview cleanup": "扫描磁盘用量",
+  "No current disk preview. Scan to refresh usage and cleanup items.":
+    "当前没有有效的磁盘预览，请扫描以更新用量和可清理项目。",
   "Refresh saved result": "刷新已保存的结果",
   "This preview expires after 15 minutes. Changed files are preserved. Stop Harness before cleanup. The newest logs and latest failure diagnostics are always retained.":
     "预览在 15 分钟后过期。已发生变化的文件会保留。清理前请停止 Harness。最新日志和最近一次失败诊断始终保留。",
@@ -2334,8 +2878,8 @@ const chinese: Record<string, string> = {
   "Package to import (full .tar.gz path)": "待导入运行包（完整 .tar.gz 路径）",
   "Integrity checks detect damaged packages; they do not authenticate the publisher. Only import packages from sources you trust.":
     "完整性校验用于检测运行包损坏，不认证发布者身份。请仅导入来源可信的运行包。",
-  "A package contains a built Windows x64 Harness version and its complete Node/npm/pnpm runtime, without user data. Dependency installation and builds are not performed; version probes will run.":
-    "运行包包含已构建的 Windows x64 Harness 版本及完整 Node/npm/pnpm 运行时，不含用户数据。不执行依赖安装或构建，但会运行版本探针。",
+  "A package contains a built Harness for this operating system and architecture version and its complete Node/npm/pnpm runtime, without user data. Dependency installation and builds are not performed; version probes will run.":
+    "运行包包含适用于当前操作系统与架构的已构建 Harness 版本及完整 Node/npm/pnpm 运行时，不含用户数据。不执行依赖安装或构建，但会运行版本探针。",
   "Import or export an offline package": "导入或导出离线运行包",
   "Offline packages": "离线运行包",
   "Undo plugin order": "撤销插件排序",
@@ -2425,20 +2969,12 @@ const chinese: Record<string, string> = {
     "按 Ctrl + / Ctrl - 缩放，Ctrl 0 重置。回到此窗口时会刷新服务状态。",
   "Closing the window keeps Nexus in the tray. The tray menu lets you exit the launcher while keeping services running, or stop services and exit.":
     "关闭窗口后 Nexus 留在托盘。托盘菜单可选择仅退出启动器并保持服务运行，或停止服务并退出。",
-  "Repair and enter recovery mode": "修复并进入恢复模式",
   "The invalid pause record will be preserved before repair. Unsafe files cannot be repaired automatically.":
     "修复前将保留损坏的暂停记录。不安全的文件无法自动修复。",
 
-  "Harness recovery mode": "Harness 恢复模式",
   "Harness startup is paused": "Harness 启动已暂停",
-  "Enter recovery mode": "进入恢复模式",
-  "Leave recovery mode": "离开恢复模式",
-  "Agent stays available. Repair profiles, plugins or configuration, run checks, then leave recovery mode. Leaving does not start Harness.":
-    "Agent 保持可用。修复档案、插件或配置，运行检查后离开恢复模式；离开不会自动启动 Harness。",
   "Pause Harness startup and stop it to repair profiles, plugins or configuration. This pause survives restarting Nexus.":
     "暂停 Harness 启动并停止运行，以修复档案、插件或配置。重启 Nexus 后仍保持暂停。",
-  "Harness startup is paused. Checks remain available; leave recovery mode before starting.":
-    "Harness 启动已暂停。仍可进行检查；启动前请先离开恢复模式。",
   "Re-enter the complete argument list. Previous arguments that are not entered again will be removed.":
     "请重新输入完整参数；未重新输入的旧参数将被移除。",
   "Snapshots restore bounded profile and Harness settings files plus the pointer to an installed program version. Project files, full session data, runtimes and complete program copies are excluded. Install a missing version first. Use Retry or Abort for an interrupted restore.":
@@ -2561,7 +3097,7 @@ const chinese: Record<string, string> = {
   "The log level applies the next time the Agent starts.": "日志级别在下次 Agent 启动时生效。",
   "Harness fails to start": "Harness 无法启动",
   "Open the startup log from the Overview or Diagnostics page. Plugin mismatches are expected across versions; use Recovery to remove the affected plugin or restore a healthy snapshot.":
-    "在概览或诊断页查看启动日志。插件与版本不匹配是已知行为；请用恢复模式移除受影响插件，或恢复健康快照。",
+    "在概览或诊断页查看启动日志。插件与版本不匹配是已知行为；请在插件管理中处理受影响插件，或恢复健康快照。",
   "Dependency download is slow or times out": "依赖下载慢或超时",
   "Switch the dependency registry to npmmirror in Settings, then retry the install.":
     "在设置页把依赖安装源切换为 npmmirror，然后重试安装。",
@@ -2669,8 +3205,8 @@ const chinese: Record<string, string> = {
   "Disable plugin in this profile": "在此配置档中停用插件",
   "Restore plugin on next check": "下次检查时恢复插件",
   "Enable on next check": "下次检查时启用",
-  "Runs plugin initialization in a temporary local process and closes it afterward. Recovery mode, the selected profile and the stopped Harness service remain unchanged. No browser is opened.":
-    "会使用临时本地进程执行插件初始化，结束后关闭。恢复模式、所选配置及正式 Harness 的停止状态保持不变，不打开浏览器。",
+  "Runs plugin initialization in a temporary local process and closes it afterward. The selected profile and the stopped Harness service remain unchanged. No browser is opened.":
+    "会使用临时本地进程执行插件初始化，结束后关闭。所选配置及正式 Harness 的停止状态保持不变，不打开浏览器。",
   "Saved plugin choices have not been verified. The report below describes an earlier check.":
     "已保存的插件选择尚未验证。下方报告来自此前的检查。",
   "Manual plugin verification": "手动验证插件",
@@ -2906,7 +3442,7 @@ const chinese: Record<string, string> = {
   "Edit plugin manifest": "编辑插件清单",
   "Open profile directory": "打开 Profile 目录",
   "Plugins failed to load, likely a version mismatch between installed plugins and this Harness build. Open Recovery to remove the affected plugins or restore a healthy snapshot.":
-    "插件加载失败：已安装插件与当前 Harness 构建可能版本不兼容。请打开恢复模式移除问题插件，或恢复健康快照。",
+    "插件加载失败：已安装插件与当前 Harness 构建可能版本不兼容。请在插件管理中处理问题插件，或恢复健康快照。",
   "A plugin expects module APIs this Harness build does not have: the installed plugin set and the Harness version are out of sync. Restore a healthy snapshot or update the plugins.":
     "插件要求的模块 API 当前 Harness 构建不具备：插件集与 Harness 版本不同步。请恢复健康快照或更新插件。",
   "A profile plugin duplicates a plugin this Harness now ships built-in. Remove the older copy from the profile's plugin inventory.":

@@ -80,7 +80,9 @@ export function offlineArchivePathValid(value: string): boolean {
   return (
     !/[\r\n\0]/.test(path) &&
     /\.tar\.gz$/i.test(path) &&
-    (/^[a-z]:[\\/]/i.test(path) || /^\\\\[^\\/]+[\\/][^\\/]+[\\/]/.test(path))
+    (path.startsWith("/") ||
+      /^[a-z]:[\\/]/i.test(path) ||
+      /^\\\\[^\\/]+[\\/][^\\/]+[\\/]/.test(path))
   );
 }
 

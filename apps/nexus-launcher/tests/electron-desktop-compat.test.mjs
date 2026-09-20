@@ -103,7 +103,7 @@ test('client factory registers native geometry/chooser and routes a notification
   let plugin, poll, healthy, opened, ack; const cleanups = [], tasks = [];
   const native = () => Promise.resolve('/native'); const previous = () => Promise.resolve('/browser');
   const services = { uiWorkspace: { pickDirectory: previous }, sessions: { refresh: async () => {}, open: id => { opened = id; } } };
-  const context = { ...services, loader: { await: async () => {}, entries: () => [{ fiber: { state: 2 } }, { disabled: true }] },
+  const context = { ...services, get: name => services[name], loader: { await: async () => {}, entries: () => [{ fiber: { state: 2 } }] },
     reflect: { provide: (key, value) => { services[key] = value; return () => delete services[key]; } },
     effect: run => { const dispose = run(); if (dispose) cleanups.push(dispose); }, inject: (_names, run) => run(context) };
   const sandbox = { window: { __ModuleLoader__: { load: value => { plugin = value.factory(); } }, __DSH_DESKTOP_PICK_DIRECTORY__: native,

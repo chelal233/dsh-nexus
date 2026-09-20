@@ -1,6 +1,15 @@
 // Exact call expressions are an explicit review boundary: new dynamic call
 // sites must declare their key domain or why runtime text is passed through.
 export const dynamicTranslationKeys: Record<string, { keys?: string[]; reason: string }> = {
+  "App.tsx:event.payload": { reason: "Native operation errors use localized Desktop error codes; unknown details pass through" },
+  "views/harness-desktop.tsx:labels[state.phase]": { reason: "Fixed Desktop process states defined locally" },
+  "views/harness-desktop.tsx:failure": { reason: "Desktop preparation errors and fixed localized error codes" },
+  'views/startup.tsx:stringValue(diagnosis, "summary") || ""': {
+    reason: "Startup diagnosis summaries produced by the checker signature table",
+  },
+  'views/startup.tsx:stringValue(diagnosis, "remedy") || ""': {
+    reason: "Startup diagnosis remedies produced by the checker signature table",
+  },
   "App.tsx:`Harness ${action}`": {
     keys: ["Harness start", "Harness stop", "Harness restart"],
     reason: "Harness lifecycle actions",
@@ -54,9 +63,6 @@ export const dynamicTranslationKeys: Record<string, { keys?: string[]; reason: s
       "Run the startup check and start Harness",
     ],
     reason: "Guide step definition table",
-  },
-  "views/recovery.tsx:label": {
-    reason: "Shared controls consume labels from local UI definition tables",
   },
   "views/settings.tsx:label": {
     reason: "Shared controls consume labels from local UI definition tables",

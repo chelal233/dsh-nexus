@@ -3,7 +3,7 @@ import { createHash } from 'node:crypto';
 import { readdirSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
-import { bundleFormats, releaseBasename, targets } from '../../apps/nexus-launcher/desktop/scripts/release-platform.mjs';
+import { bundleFormats, releaseBasename, targets, updateChannelFile } from '../../apps/nexus-launcher/desktop/scripts/release-platform.mjs';
 
 export function verifyReleaseAssets(directory, tag, commit) {
   assert.match(commit, /^[a-f0-9]{40}$/);
@@ -45,7 +45,7 @@ export function verifyReleaseAssets(directory, tag, commit) {
     });
     assert.deepEqual(build.files.map(f => path.extname(f.name)).sort(), extensions.concat('.yml').sort());
     for (const file of build.files) {
-      assert.equal(file.name, path.extname(file.name) === '.yml' ? `latest-${spec.arch}${spec.platform === 'darwin' ? '-mac' : ''}.yml` : `${basename}${path.extname(file.name)}`);
+      assert.equal(file.name, path.extname(file.name) === '.yml' ? updateChannelFile(spec) : `${basename}${path.extname(file.name)}`);
       assert.ok(!/[\\/\r\n]/.test(file.name));
       assert.match(file.sha256, /^[a-f0-9]{64}$/);
       const actual = createHash('sha256').update(take(file.name)).digest('hex');
@@ -60,5 +60,5 @@ export function verifyReleaseAssets(directory, tag, commit) {
 
 if (process.argv[1] && import.meta.url === pathToFileURL(path.resolve(process.argv[1])).href) {
   const files = verifyReleaseAssets(...process.argv.slice(2));
-  console.log(`Verified ${files.length} release assets across all four targets`);
+  console.log(`Verified ${files.length} release assets across all configured targets`);
 }

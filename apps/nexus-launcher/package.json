@@ -14,6 +14,7 @@
     "build": "tsc --noEmit && vite build",
     "prepare:agent": "node desktop/scripts/prepare-agent.mjs",
     "prepare:runtime": "node desktop/scripts/prepare-runtime.mjs",
+    "prepare:desktop": "node desktop/scripts/prepare-desktop-runtime.mjs",
     "prepare:release": "node desktop/scripts/prepare-release.mjs",
     "verify:release": "node desktop/scripts/prepare-release.mjs --verify",
     "test:bundled-runtime": "node --test tests/bundled-runtime.test.mjs",
@@ -23,6 +24,7 @@
     "electron:dev": "pnpm build && electron .",
     "electron:build": "pnpm build && electron-builder --config electron-builder.cjs --publish never",
     "test:electron": "node --test tests/electron-*.test.mjs",
+    "test:electron-client-audit": "electron scripts/electron-client-audit-e2e.mjs",
     "test:electron-update": "node scripts/electron-update-e2e.mjs",
     "dev:web": "vite"
   },
@@ -36,14 +38,15 @@
     "@types/react": "^19.1.10",
     "@types/react-dom": "^19.1.7",
     "@vitejs/plugin-react": "^4.7.0",
-    "electron": "44.4.1",
+    "electron": "44.0.0",
     "electron-builder": "26.15.3",
+    "extract-zip": "2.0.1",
     "jsdom": "26.1.0",
     "prettier": "3.9.6",
     "typescript": "^5.9.2",
     "vite": "^7.1.3"
   },
-  "main": "electron/main.mjs",
+  "main": "electron/bootstrap.mjs",
   "description": "Nexus desktop control plane",
   "author": "Nexus maintainers"
 }

@@ -1,0 +1,75 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import { EventEmitter } from 'node:events';
+import { ClientAudit } from '../electron/client-audit.mjs';
+
+function fixture() {
+  let now = 0;
+  const windows = [];
+  const audit = new ClientAudit({ now: () => now, createWindow: options => {
+    const window = new EventEmitter();
+    window.options = options;
+    window.webContents = new EventEmitter();
+    window.webContents.session = { setPermissionRequestHandler: fn => { window.permission = fn; }, setPermissionCheckHandler: fn => { window.check = fn; } };
+    window.webContents.setWindowOpenHandler = fn => { window.open = fn; };
+    window.isDestroyed = () => !!window.destroyed;
+    window.destroy = () => { window.destroyed = true; };
+    window.loadURL = url => { window.url = url; return new Promise((_resolve, reject) => { window.reject = reject; }); };
+    windows.push(window); return window;
+  } });
+  const info = { available: true, generation: 1, run_id: 'one', url: 'http://127.0.0.1:1234/?token=a', browser_health: { state: 'unverified' } };
+  return { audit, windows, info, advance: ms => { now += ms; } };
+}
+
+test('loads only one real page per run and never treats HTTP load as activation', () => {
+  const f = fixture();
+  assert.equal(f.audit.observe(f.info).browser_health.state, 'checking');
+  f.audit.observe(f.info);
+  assert.equal(f.windows.length, 1);
+  assert.equal(f.windows[0].url, f.info.url);
+  assert.equal(f.windows[0].options.show, false);
+  assert.equal(f.windows[0].options.webPreferences.preload, undefined);
+  for (const state of ['active', 'limited', 'blocked']) {
+    const info = { ...f.info, browser_health: { state, entries: [{ name: 'actual-plugin' }] } };
+    assert.equal(f.audit.observe(info), info);
+  }
+  f.advance(45000);
+  const result = f.audit.observe(f.info).browser_health;
+  assert.equal(result.state, 'unverified');
+  assert.equal(result.reason, 'client_audit_timeout');
+  assert.equal(f.windows.length, 1);
+  f.audit.stop(); assert.equal(f.windows[0].destroyed, true);
+});
+
+test('same-port same-token restarts replace the page; late failures cannot affect the new run', async () => {
+  const f = fixture(); f.audit.observe(f.info);
+  const next = { ...f.info, run_id: 'two' };
+  f.audit.observe(next);
+  assert.equal(f.windows[0].destroyed, true);
+  assert.equal(f.windows.length, 2);
+  f.windows[0].reject(Error('old load failed'));
+  await Promise.resolve();
+  assert.equal(f.audit.result(next).browser_health.state, 'checking');
+  // A delayed UI response is read-only and must not roll back the observer.
+  assert.equal(f.audit.result(f.info), f.info);
+  f.audit.observe({ available: false });
+  assert.equal(f.windows[1].destroyed, true);
+  f.audit.stop(); f.audit.observe(next); assert.equal(f.windows.length, 2);
+});
+
+test('crashed pages fail visibly without a reload loop and untrusted navigation is rejected', () => {
+  const f = fixture(); f.audit.observe(f.info);
+  let prevented = false;
+  f.windows[0].webContents.emit('will-redirect', { preventDefault() { prevented = true; } }, 'https://example.com/');
+  assert.equal(prevented, true);
+  assert.equal(f.windows[0].destroyed, true);
+  assert.equal(f.audit.observe(f.info).browser_health.reason, 'client_audit_load_failed');
+  assert.equal(f.windows.length, 1);
+  assert.equal(f.windows[0].check(), false);
+  let permission;
+  f.windows[0].permission(null, 'notifications', allowed => { permission = allowed; });
+  assert.equal(permission, false);
+  assert.equal(f.windows[0].open().action, 'deny');
+  f.audit.observe({ ...f.info, url: 'https://example.com/' });
+  assert.equal(f.windows.length, 1);
+});

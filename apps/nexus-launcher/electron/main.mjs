@@ -1,24 +1,23 @@
 import { app, BrowserWindow, Menu, Tray, nativeImage, ipcMain, dialog, shell, Notification, globalShortcut, session } from 'electron';
 import electronUpdater from 'electron-updater';
-import { spawn } from 'node:child_process';
-import { readFileSync, statSync } from 'node:fs';
+import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { RustBridge } from './bridge.mjs';
 import { harnessUrl, trustedFrame, validateRequest, nativeEditAction } from './policy.mjs';
 import { DesktopUpdater, saveUpdateSettings } from './updater.mjs';
 import { EventCursor, settings as notificationSettings, shouldNotify, notificationContent, taskFocused } from './notifications.mjs';
-import { ShellController } from './shell-controller.mjs';
+import { HarnessDesktop, desktopActive, readDesktopState } from './harness-desktop.mjs';
+import { ClientAudit } from './client-audit.mjs';
+import { trayEntries } from './tray-menu.mjs';
 import { NoticeCoordinator } from './notice-coordinator.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const { autoUpdater } = electronUpdater;
 const resources = app.isPackaged ? process.resourcesPath : path.join(root, 'desktop/resources');
-const shellMode = process.argv.includes('--nexus-shell');
+const openNativeDesktop = process.argv.includes('--nexus-shell') || process.argv.includes('--harness-desktop');
 const closeShell = process.argv.includes('--prepare-update');
 const desktopData = app.getPath('userData');
-// Distinct userData gives Launcher and independent Shell distinct single-instance locks.
-if (shellMode) app.setPath('userData', `${desktopData}-shell`);
 const lock = app.requestSingleInstanceLock({ closeShell });
 if (!lock) { app.exit(closeShell ? 20 : 0); }
 else if (closeShell) { app.exit(0); }
@@ -39,10 +38,15 @@ else {
 }
 
 async function run() {
-  let window, tray, bridge, updater, shellController, noticeCoordinator;
-  let pendingSession = process.argv.find(arg => arg.startsWith('--nexus-session='))?.slice(16);
+  let window, tray, bridge, updater, nativeDesktop, noticeCoordinator;
   let quitting = false, updating = false, notifications = true, minimizedNotice = false, locale = 'en';
   let controls = {}, controlsAt = 0;
+  let nativeMutationCount = 0, trayBusy = false, trayRefreshPending, traySupported = false, trayWeb = {}, trayMenu;
+  const desktopLocked = () => nativeDesktop?.busy || desktopActive(nativeDesktop?.status());
+  const startDesktop = () => {
+    if (nativeMutationCount || updating) return Promise.reject(new Error(text('Wait for the current operation to finish.', '请等待当前操作完成。')));
+    return nativeDesktop.start();
+  };
   let noticeSettings = notificationSettings(), noticeReady = false, noticeBusy = false;
   const noticeCursor = new EventCursor();
   let noticeViews = [];
@@ -53,14 +57,8 @@ async function run() {
     const notice = new Notification(test ? { title: 'Nexus Launcher', body: text('Test notification', '测试通知') } : notificationContent(kind, locale, task));
     notice.on('click', () => {
       if (test) show();
-      else if (['harness-failed', 'update-ready'].includes(kind)) { if (shellMode) launchHost(false); else show(); }
-      else if (shellMode) {
-        pendingSession = task?.session; show();
-        window?.webContents.send('nexus:session', pendingSession);
-        void shellController?.tick();
-      } else if (noticeCoordinator?.peer('shell')) {
-        launchHost(true, task?.session);
-      } else void bridge.request('proxy_request', { method: 'GET', path: '/v1/harness/ui' })
+      else if (['harness-failed', 'update-ready'].includes(kind)) show();
+      else void bridge.request('proxy_request', { method: 'GET', path: '/v1/harness/ui' })
         .then(info => {
           const url = harnessUrl(info.url);
           if (validSession(task?.session)) url.searchParams.set('nexus-session', task.session);
@@ -74,45 +72,40 @@ async function run() {
   const text = (en, zh) => locale.startsWith('zh') ? zh : en;
   const show = () => { if (window?.isMinimized()) window.restore(); window?.show(); window?.focus(); };
   const emit = (name, value) => { if (window && !window.isDestroyed()) window.webContents.send(name, value); };
-  const error = e => { show(); emit('nexus-native-error', e.message ?? String(e)); };
+  const error = e => { if (e.message === 'desktop_start_cancelled') return; show(); emit('nexus-native-error', e.message ?? String(e)); };
   const validSession = value => typeof value === 'string' && value.length > 0 && value.length <= 200 && !/[\u0000-\u001f]/.test(value);
-  function launchHost(asShell, sessionId) {
-    const args = [...(app.isPackaged ? [] : [root]), `--user-data-dir=${desktopData}`,
-      ...(asShell ? ['--nexus-shell'] : []), ...(validSession(sessionId) ? [`--nexus-session=${sessionId}`] : [])];
-    const child = spawn(process.execPath, args, { detached: true, stdio: 'ignore', windowsHide: true });
-    child.on('error', error); child.unref();
-  }
-  app.on('second-instance', (_event, _argv, _cwd, data) => {
-    if (shellMode && data.closeShell) { quitting = true; app.quit(); }
-    else {
-      const id = _argv.find(arg => arg.startsWith('--nexus-session='))?.slice(16);
-      if (shellMode && validSession(id)) { pendingSession = id; window?.webContents.send('nexus:session', id); }
-      show();
-    }
+  app.on('second-instance', (_event, argv, _cwd, data) => {
+    if (data.closeShell) return;
+    show();
+    if (argv.some(arg => ['--nexus-shell', '--harness-desktop'].includes(arg))) void startDesktop().catch(error);
   });
   app.on('activate', show);
   app.on('before-quit', () => { quitting = true; });
-  app.on('will-quit', () => { shellController?.stop(); noticeCoordinator?.close(); updater?.stop(); bridge?.close(); globalShortcut.unregisterAll(); });
+  app.on('will-quit', () => { noticeCoordinator?.close(); updater?.stop(); bridge?.close(); globalShortcut.unregisterAll(); });
   await app.whenReady();
   const systemLanguages = app.getPreferredSystemLanguages();
   locale = process.env.NEXUS_LOCALE || systemLanguages.find(language => /^(zh|en)(-|$)/i.test(language)) || 'en';
   // Default deny. Clipboard/IME/file inputs retain Chromium's ordinary user gestures.
   session.defaultSession.setPermissionRequestHandler((_contents, _permission, callback) => callback(false));
   session.defaultSession.setPermissionCheckHandler(() => false);
-  bridge = new RustBridge(resources);
+  const nativeActive = desktopActive(readDesktopState(path.join(desktopData, 'harness-desktop/state.json')));
+  bridge = new RustBridge(resources, undefined, openNativeDesktop || nativeActive ? { NEXUS_HARNESS_AUTOSTART: '0' } : {});
+  nativeDesktop = new HarnessDesktop({ bridge, userData: desktopData, resources,
+    electronApp: app.isPackaged ? undefined : root,
+    executable: path.join(resources, 'runtime/node', process.platform === 'win32' ? 'node.exe' : 'node') });
   window = new BrowserWindow({
-    title: shellMode ? 'DSH — Nexus' : 'Nexus Launcher', width: 1180, height: 760,
+    title: 'Nexus Launcher', width: 1180, height: 760,
     minWidth: 680, minHeight: 520, show: false,
     icon: path.join(root, 'desktop/icons/icon.ico'),
     webPreferences: { sandbox: true, contextIsolation: true, nodeIntegration: false,
-      webviewTag: false, ...(shellMode ? { preload: path.join(root, 'electron/shell-preload.cjs') } : { preload: path.join(root, 'electron/preload.cjs'),
-        additionalArguments: [`--nexus-system-languages=${JSON.stringify(systemLanguages)}`] }) },
+      webviewTag: false, preload: path.join(root, 'electron/preload.cjs'),
+      additionalArguments: [`--nexus-system-languages=${JSON.stringify(systemLanguages)}`] },
   });
   window.on('ready-to-show', show);
   window.on('focus', () => window?.flashFrame(false));
-  window.on('closed', () => { window = undefined; if (shellMode) app.quit(); });
+  window.on('closed', () => { window = undefined; });
   window.on('close', event => {
-    if (!shellMode && !quitting) {
+    if (!quitting) {
       event.preventDefault(); window.hide();
       if (notifications && !minimizedNotice && Notification.isSupported()) {
         minimizedNotice = true;
@@ -134,7 +127,7 @@ async function run() {
     if (params.mediaType === 'image') items.push({ label: text('Copy image', '复制图片'), click: () => window.webContents.copyImageAt(params.x, params.y) });
     Menu.buildFromTemplate(items).popup({ window });
   });
-  noticeCoordinator = new NoticeCoordinator(desktopData, shellMode ? 'shell' : 'launcher');
+  noticeCoordinator = new NoticeCoordinator(desktopData, 'launcher');
   noticeCoordinator.prune();
   const heartbeat = () => { try { noticeCoordinator.heartbeat(window?.isFocused() === true); } catch {} };
   window.on('focus', heartbeat); window.on('blur', heartbeat); heartbeat();
@@ -155,70 +148,19 @@ async function run() {
   const noticeTimer = setInterval(() => void pollNotices(), 1000); noticeTimer.unref();
   app.on('will-quit', () => clearInterval(noticeTimer));
   void pollNotices();
-  if (shellMode) {
-    const recoveryUrl = pathToFileURL(path.join(root, 'electron/shell-recovery.html')).href;
-    let healthTimer;
-    const recover = () => { clearTimeout(healthTimer); return window && !window.isDestroyed() ? window.loadURL(recoveryUrl) : Promise.resolve(); };
-    shellController = new ShellController({
-      discover: async () => {
-        await bridge.request('startup_status');
-        return bridge.request('proxy_request', { method: 'GET', path: '/v1/harness/ui' });
-      },
-      load: url => {
-        clearTimeout(healthTimer);
-        healthTimer = setTimeout(() => void shellController.broken(), 45000); healthTimer.unref();
-        return window.loadURL(url);
-      }, recover,
-      changed: () => { if (validSession(pendingSession)) window.webContents.send('nexus:session', pendingSession); },
-    });
-    const trustedShell = event => !window?.isDestroyed() && event.sender === window.webContents
-      && event.senderFrame === window.webContents.mainFrame
-      && (event.senderFrame.url === recoveryUrl || new URL(event.senderFrame.url).origin === shellController.current?.origin);
-    ipcMain.handle('nexus:shell', async (event, action, value) => {
-      if (!trustedShell(event)) throw new Error('Untrusted Harness frame');
-      if (action === 'retry') { await bridge.request('retry_startup'); return shellController.retry(); }
-      if (action === 'launcher') return launchHost(false);
-      if (action === 'switch-status') {
-        const status = await bridge.request('proxy_request', { method: 'GET', path: '/v1/desktop/profile' });
-        return { phase: status.phase };
-      }
-      if (event.senderFrame.url === recoveryUrl) throw new Error('Harness is not ready');
-      if (action === 'health') { clearTimeout(healthTimer); if (value === false) await shellController.broken(); return; }
-      if (action === 'session') return validSession(pendingSession) ? pendingSession : null;
-      if (action === 'session-opened' && value === pendingSession) { pendingSession = undefined; return; }
-      if (action === 'pick-directory') {
-        const picked = await dialog.showOpenDialog(window, { properties: ['openDirectory'] });
-        return picked.canceled ? null : picked.filePaths[0];
-      }
-      if (action === 'validate-directory') {
-        if (typeof value !== 'string' || value.length > 32768 || value.includes('\0') || !path.isAbsolute(value)) return false;
-        try { return statSync(value).isDirectory(); } catch { return false; }
-      }
-      throw new Error('Unsupported Harness action');
-    });
-    window.webContents.on('will-navigate', (event, target) => {
-      const url = new URL(target);
-      if (url.origin !== shellController.current?.origin) {
-        event.preventDefault();
-        if (['http:', 'https:'].includes(url.protocol)) void shell.openExternal(url.href).catch(error);
-      }
-    });
-    window.webContents.setWindowOpenHandler(({ url: target }) => {
-      if (['https:', 'http:'].includes(new URL(target).protocol)) void shell.openExternal(target);
-      return { action: 'deny' };
-    });
-    window.webContents.on('did-fail-load', (_event, code, _description, url, main) => {
-      if (main && code !== -3 && url !== recoveryUrl) void shellController.broken();
-    });
-    window.webContents.on('render-process-gone', () => void shellController.broken());
-    window.on('unresponsive', () => void shellController.broken());
-    await recover();
-    void shellController.tick();
-    const timer = setInterval(() => void shellController.tick(), 2000); timer.unref();
-    app.on('will-quit', () => { clearInterval(timer); clearTimeout(healthTimer); });
-    return;
-  }
   const documentUrl = pathToFileURL(path.join(root, 'dist/index.html')).href;
+  const clientAudit = new ClientAudit({ createWindow: options => new BrowserWindow(options) });
+  let auditBusy = false;
+  const pollAudit = async () => {
+    if (auditBusy || quitting || updating) return;
+    auditBusy = true;
+    try {
+      clientAudit.observe(await bridge.request('proxy_request', { method: 'GET', path: '/v1/harness/ui' }));
+    } catch { clientAudit.clear(); }
+    finally { auditBusy = false; }
+  };
+  const auditTimer = setInterval(() => void pollAudit(), 2000); auditTimer.unref();
+  app.on('will-quit', () => { clearInterval(auditTimer); clientAudit.stop(); });
   session.defaultSession.webRequest.onHeadersReceived((details, callback) => {
     if (details.url !== documentUrl) return callback({ responseHeaders: details.responseHeaders });
     callback({ responseHeaders: { ...details.responseHeaders,
@@ -240,66 +182,87 @@ async function run() {
       finally { updating = false; quitting = false; }
     },
     coordinate: async () => {
-      if (updating) throw new Error('Update coordination already in progress');
+      if (updating || trayBusy || nativeMutationCount) throw new Error(text('Wait for the current operation to finish.', '请等待当前操作完成。'));
       updating = true;
       try {
         // Agent atomically rejects shutdown while Harness or a managed operation owns a gate.
+        if (desktopLocked()) throw new Error(text('Close Harness Desktop before changing versions, configuration, or data.', '请先关闭 Harness Desktop，再修改版本、配置或数据。'));
         await bridge.request('prepare_update');
-        await closeIndependentShell();
         quitting = true;
       } catch (e) { await bridge.request('cancel_update').catch(() => {}); updating = false; throw e; }
     },
   });
-  async function closeIndependentShell() {
-    const deadline = Date.now() + 15000;
-    while (Date.now() < deadline) {
-      const code = await new Promise((resolve, reject) => {
-        const child = spawn(process.execPath, [...(app.isPackaged ? [] : [root]), `--user-data-dir=${desktopData}`, '--nexus-shell', '--prepare-update'], { stdio: 'ignore', windowsHide: true });
-        child.on('error', reject); child.on('exit', resolve);
-      });
-      if (code === 0) return;
-      if (code !== 20) throw new Error('Shell exit coordination failed');
-      await new Promise(resolve => setTimeout(resolve, 250));
-    }
-    throw new Error('Shell is still open; update deferred');
-  }
   function rebuildTray() {
+    if (!tray) return;
     const fresh = Date.now() - controlsAt < 180000 ? controls : {};
-    const status = {
-      running: ['Harness: running', 'Harness：运行中'],
-      stopped: ['Harness: stopped', 'Harness：已停止'],
-      detached: ['Harness: stopped', 'Harness：已停止'],
-      starting: ['Harness: starting', 'Harness：启动中'],
-      stopping: ['Harness: stopping', 'Harness：停止中'],
-      failed: ['Harness: failed', 'Harness：运行失败'],
-    }[fresh.state] ?? ['Harness: status unavailable', 'Harness：状态不可用'];
-    tray.setContextMenu(Menu.buildFromTemplate([
-      { label: text(...status), enabled: false },
-      { label: text('Show launcher', '显示启动器'), click: show },
-      ...[fresh.stop ? ['stop', 'Stop Harness', '停止 Harness'] : ['start', 'Start Harness', '启动 Harness'],
-        ['web', 'Open Harness Web', '打开 Harness Web'], ['terminal', 'Open DSH terminal', '打开 DSH 终端']].map(([id, en, zh]) => ({
-        label: text(en, zh), enabled: fresh[id] === true,
-        click: () => { if (Date.now() - controlsAt < 180000) emit('nexus-tray-action', id); else show(); },
-      })),
-      { type: 'separator' },
-      { label: text('Exit launcher (keep services running)', '退出启动器（服务继续运行）'), click: () => { quitting = true; app.quit(); } },
-      { label: text('Stop services and exit', '停止服务并退出'), click: () => {
-        void bridge.request('proxy_request', { path: '/v1/agent', method: 'POST', body: { action: 'stop' } })
-          .then(() => { quitting = true; app.quit(); }).catch(error);
-      } },
-    ]));
+    trayMenu = Menu.buildFromTemplate(trayEntries({text, web: {...fresh, ...trayWeb}, desktop: nativeDesktop.status(), supported: traySupported,
+      busy: trayBusy || updating || nativeMutationCount > 0, show, act: id => void trayAction(id).catch(error)}));
+    if (process.platform !== 'win32') tray.setContextMenu(trayMenu);
+  }
+  function refreshTray() {
+    if (trayRefreshPending) return trayRefreshPending;
+    if (quitting) return Promise.resolve();
+    trayRefreshPending = (async () => {
+    try {
+      const [runtime, capability] = await Promise.allSettled([
+        bridge.request('proxy_request', {method:'GET',path:'/v1/harness'}), nativeDesktop.capability(),
+      ]);
+      if (runtime.status === 'fulfilled') {
+        const harness = runtime.value.harness ?? {};
+        trayWeb = {state:harness.state, pid:harness.pid, stop:['running','starting','failed'].includes(harness.state)};
+      } else trayWeb = {state:undefined,stop:false,start:false,web:false,terminal:false};
+      traySupported = capability.status === 'fulfilled' && capability.value.supported === true;
+    } finally { trayRefreshPending = undefined; rebuildTray(); }
+    })();
+    return trayRefreshPending;
+  }
+  async function trayAction(id) {
+    if (id === 'maintenance' || id === 'profiles') { show(); emit('nexus-tray-action',id); return; }
+    if (trayBusy || updating || nativeMutationCount) throw new Error(text('Wait for the current operation to finish.', '请等待当前操作完成。'));
+    trayBusy = true; rebuildTray();
+    try {
+      if (id === 'desktop') await startDesktop();
+      else if (id === 'desktop-stop') await nativeDesktop.stop();
+      else if (id === 'exit') { if(nativeDesktop.busy) throw new Error('Desktop preparation is still starting'); quitting=true; app.quit(); }
+      else if (id === 'stop-exit') {
+        await nativeDesktop.stop();
+        await bridge.request('proxy_request',{path:'/v1/agent',method:'POST',body:{action:'stop'}});
+        quitting=true; app.quit();
+      } else {
+        if (desktopLocked()) throw new Error(text('Close Harness Desktop first.', '请先关闭 Harness 桌面端。'));
+        nativeMutationCount++;
+        try {
+          if (id==='web') {
+            const info=await bridge.request('proxy_request',{path:'/v1/harness/ui',method:'GET'});
+            await shell.openExternal(harnessUrl(info.url).href);
+          } else if (id==='start'||id==='stop') await bridge.request('proxy_request',{path:'/v1/harness',method:'POST',body:{action:id}});
+          else if (id==='terminal') await bridge.request('proxy_request',{path:'/v1/profiles',method:'POST',body:{action:'open_terminal'}});
+        } finally { nativeMutationCount--; }
+      }
+    } finally { trayBusy=false; if(!quitting) await refreshTray(); }
   }
   tray = new Tray(nativeImage.createFromPath(path.join(root, 'desktop/icons/32x32.png')));
-  tray.setToolTip('Nexus Launcher'); tray.on('click', show); rebuildTray();
-  const trayTimer = setInterval(rebuildTray, 30000); trayTimer.unref();
+  tray.setToolTip('Nexus Launcher'); tray.on('click',show);
+  tray.on('right-click', () => { if (process.platform === 'win32') tray.popUpContextMenu(trayMenu); void refreshTray().catch(error); });
+  rebuildTray(); void refreshTray();
+  const trayTimer=setInterval(()=>void refreshTray(),5000); trayTimer.unref();
+  app.on('will-quit',()=>clearInterval(trayTimer));
   globalShortcut.register('CommandOrControl+Shift+N', show);
   ipcMain.handle('nexus:command', async (event, command, args = {}) => {
+    let trackedMutation = false;
     try {
       if (!trustedFrame(event, window, documentUrl)) throw new Error('Untrusted desktop frame');
       validateRequest(command, args);
       if (updating) throw new Error('Update coordination in progress');
+      if (trayBusy && ((command === 'proxy_request' && args.method === 'POST') || command === 'retry_startup')) throw new Error(text('Wait for the current operation to finish.', '请等待当前操作完成。'));
+      if (desktopLocked() && ((command === 'proxy_request' && args.method === 'POST') || command === 'retry_startup')) throw new Error(text('Close Harness Desktop before changing versions, configuration, or data.', '请先关闭 Harness Desktop，再修改版本、配置或数据。'));
+      if ((command === 'proxy_request' && args.method === 'POST') || command === 'retry_startup') { nativeMutationCount++; trackedMutation=true; }
       let value;
       switch (command) {
+        case 'harness_desktop_capability': value = await nativeDesktop.capability(); break;
+        case 'harness_desktop_status': value = nativeDesktop.status(); break;
+        case 'harness_desktop_start': if(trayBusy) throw new Error(text('Wait for the current operation to finish.', '请等待当前操作完成。')); value = await startDesktop(); break;
+        case 'harness_desktop_stop': value = await nativeDesktop.stop(); break;
         case 'build_identity': value = JSON.parse(readFileSync(path.join(resources, 'release-identity.json'), 'utf8')); break;
         case 'choose_local_path': {
           const filters = args.archive ? [{ name: 'Nexus offline package', extensions: ['tar.gz'] }] : [];
@@ -323,14 +286,18 @@ async function run() {
             value = await bridge.request(command, { method: 'GET', path: '/v1/harness/ui' });
             await shell.openExternal(harnessUrl(value.url).href); break;
           }
-          value = await bridge.request(command, args); break;
+          value = await bridge.request(command, args);
+          if (args.path === '/v1/harness/ui' && args.method === 'GET') value = clientAudit.result(value);
+          break;
         default:
           value = await bridge.request(command, args);
           if (command === 'export_startup_diagnostics' && value.export_path) shell.showItemInFolder(value.export_path);
       }
       return { value };
     } catch (e) { return { error: { code: e.code ?? 'desktop_error', message: e.message ?? String(e), ...e } }; }
+    finally { if(trackedMutation) nativeMutationCount--; rebuildTray(); }
   });
   await window.loadURL(documentUrl);
+  if (openNativeDesktop) void startDesktop().catch(error);
   if (app.isPackaged) updater.start();
 }

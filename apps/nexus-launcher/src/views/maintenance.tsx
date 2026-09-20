@@ -421,6 +421,14 @@ export function SpaceMaintenancePanel({ busyAction, snapshot }: ViewProps) {
         throw new Error(stringValue(asObject(value.error), "message") || errorMessage(value.error));
       setStatus(value);
       setCleanupSelection({ previewId: "", ids: [] });
+      if (cleanup) {
+        const refreshed = await proxyRequest("/v1/maintenance", "POST", {
+          action: "preview",
+          retention_days: Number(days),
+        });
+        if (refreshed.error) throw new Error(errorMessage(refreshed.error));
+        setStatus(refreshed);
+      }
     } catch (e) {
       setError(errorMessage(e));
       await load();
@@ -467,9 +475,6 @@ export function SpaceMaintenancePanel({ busyAction, snapshot }: ViewProps) {
           >
             {pending || scanning ? t("Working…") : t("Preview cleanup")}
           </ActionButton>
-          <ActionButton disabled={pending} onClick={() => void load(true)}>
-            {t("Refresh saved result")}
-          </ActionButton>
         </div>
         {scanning && (
           <p role="status">
@@ -490,6 +495,11 @@ export function SpaceMaintenancePanel({ busyAction, snapshot }: ViewProps) {
           </p>
         )}
         {error && <p className="form-error">{error}</p>}
+        {!scanning && !arrayValue(preview, "areas").length && (
+          <p role="status">
+            {t("No current disk preview. Scan to refresh usage and cleanup items.")}
+          </p>
+        )}
         {!arrayValue(preview, "areas").length && (
           <LiveLogRetention
             value={

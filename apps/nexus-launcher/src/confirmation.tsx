@@ -60,6 +60,16 @@ export function BusyOverlay({
   children?: React.ReactNode;
 }) {
   const { t } = useI18n();
+  const [elapsed, setElapsed] = useState(0);
+  useEffect(() => {
+    setElapsed(0);
+    if (!label) return;
+    const started = performance.now();
+    const timer = window.setInterval(() => {
+      setElapsed(Math.floor((performance.now() - started) / 1000));
+    }, 1000);
+    return () => window.clearInterval(timer);
+  }, [label]);
   return (
     label &&
     createPortal(
@@ -68,6 +78,8 @@ export function BusyOverlay({
           {label}
         </p>
         <p>{t("Please wait until this operation finishes before making other changes.")}</p>
+        <progress aria-label={t("Operation in progress")} />
+        <p role="timer">{t("Elapsed time: {seconds}s", { seconds: elapsed })}</p>
         {children}
       </Modal>,
       document.body,

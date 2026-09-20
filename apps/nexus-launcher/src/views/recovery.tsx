@@ -3,13 +3,7 @@ import { type HarnessPanelProps, type JsonObject, type ViewProps } from "../app-
 import { PageIntro, Panel, ActionButton, DataList, EmptyState } from "../ui-components";
 import { stringValue, arrayValue, asObject, booleanValue, numberValue } from "../json-values";
 import { useI18n } from "../i18n";
-import {
-  ShieldCheck,
-  WarningCircle,
-  TerminalWindow,
-  Pulse,
-  ListChecks,
-} from "@phosphor-icons/react";
+import { ShieldCheck, TerminalWindow, Pulse, ListChecks } from "@phosphor-icons/react";
 import { proxyRequest } from "../agent-bridge";
 import { errorMessage, localizedRuntimeState, formatTimestamp } from "../display-format";
 import { useState, useEffect, useRef } from "react";
@@ -195,60 +189,6 @@ export function RecoveryRecordWizard({
         </details>
       )}
     </Panel>
-  );
-}
-
-export function RecoveryModePanel({
-  snapshot,
-  busyAction,
-  runAction,
-  compact = false,
-}: Pick<ViewProps, "snapshot" | "busyAction" | "runAction"> & { compact?: boolean }) {
-  const { t } = useI18n();
-  const paused = booleanValue(snapshot.recovery, "paused");
-  const pauseError = stringValue(snapshot.recovery, "pause_error");
-  const action = pauseError || !paused ? "enter" : "leave";
-  const label = pauseError
-    ? "Repair and enter recovery mode"
-    : paused
-      ? "Leave recovery mode"
-      : "Enter recovery mode";
-  if (compact)
-    return (
-      <ActionButton
-        disabled={busyAction !== null}
-        onClick={() => void runAction(t(label), "/v1/recovery", { action })}
-      >
-        {t(label)}
-      </ActionButton>
-    );
-  return (
-    <section
-      className={`notice${pauseError ? " action-error" : " degraded"}`}
-      aria-label={t("Harness recovery mode")}
-    >
-      <WarningCircle size={17} />
-      <div>
-        <strong>{t(paused ? "Harness startup is paused" : "Harness recovery mode")}</strong>
-        <p>
-          {t(
-            paused
-              ? "Agent stays available. Repair profiles, plugins or configuration, run checks, then leave recovery mode. Leaving does not start Harness."
-              : "Pause Harness startup and stop it to repair profiles, plugins or configuration. This pause survives restarting Nexus.",
-          )}
-        </p>
-      </div>
-      {pauseError && (
-        <div role="alert">
-          <p>{pauseError}</p>
-          <p>
-            {t(
-              "The invalid pause record will be preserved before repair. Unsafe files cannot be repaired automatically.",
-            )}
-          </p>
-        </div>
-      )}
-    </section>
   );
 }
 

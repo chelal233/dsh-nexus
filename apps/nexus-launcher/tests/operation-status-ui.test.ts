@@ -32,10 +32,11 @@ test("cleanup scan is non-error progress, blocks duplicate previews, and retains
     assert.match(running, /original deadline message/);
     assert.doesNotMatch(running, /class="form-error"/);
     assert.match(running, /<button[^>]*disabled=""[^>]*>Working…<\/button>/);
-    assert.match(running, /<button(?![^>]*disabled)[^>]*>Refresh saved result<\/button>/);
+    assert.doesNotMatch(running, /Refresh saved result/);
+    assert.doesNotMatch(running, /No current disk preview/);
     const failed = render({ state: "failed", error: "RAW-PREVIEW-FAILURE" });
     assert.match(failed, /class="form-error" role="alert">RAW-PREVIEW-FAILURE/);
-    assert.match(failed, /<button(?![^>]*disabled)[^>]*>Preview cleanup<\/button>/);
+    assert.match(failed, /<button(?![^>]*disabled)[^>]*>Scan disk usage<\/button>/);
   } finally { await loader.close(); }
 });
 

@@ -1,3 +1,5 @@
+import { confirmAction } from "../confirmation";
+import { releasePromotionCommand } from "../settings-state";
 import { type ViewProps, type Snapshot, type JsonObject } from "../app-types";
 import {
   nestedValue,
@@ -28,6 +30,8 @@ import { Gear, Package, CheckCircle, SlidersHorizontal } from "@phosphor-icons/r
 import { formatTimestamp, errorMessage, preflightReasonLabel } from "../display-format";
 import { proxyRequest } from "../agent-bridge";
 import { RecoveryLogTail } from "./recovery";
+import { BrowserHealth } from "./browser-health";
+import { StartupRepair, startupRepairPlan } from "./startup-repair";
 
 export function GuideView(props: ViewProps) {
   const { t } = useI18n();
@@ -57,8 +61,7 @@ export function GuideView(props: ViewProps) {
   const prepareDisabled = sourceDisabled || installing;
   const startupAvailable =
     snapshot.startup?.available === true && !booleanValue(snapshot.health, "degraded");
-  const checksReady =
-    !!checkResult && booleanValue(checkResult, "ready") && !booleanValue(checkResult, "paused");
+  const checksReady = !!checkResult && booleanValue(checkResult, "ready");
   const steps = [
     { label: "Prepare", detail: "Choose the install method", done: sourceReady },
     {
@@ -274,12 +277,14 @@ export function CompatibilitySummary({
   snapshot,
   busyAction,
   runAction,
-}: Pick<ViewProps, "snapshot" | "busyAction" | "runAction">) {
+  onRepair,
+}: Pick<ViewProps, "snapshot" | "busyAction" | "runAction" | "onRepair">) {
   const { locale, t } = useI18n();
   const report = asObject(asObject(snapshot.profiles).compatibility);
   const policy = arrayValue(snapshot.profiles, "disabled_plugins").map(String);
   const [selected, setSelected] = useState<string[]>([]);
   const [saving, setSaving] = useState(false);
+  const [retryError, setRetryError] = useState("");
   const reportKey = `${stringValue(report, "source_profile")}:${stringValue(report, "release_id")}:${numberValue(report, "checked_at_unix")}`;
   useEffect(() => setSelected([]), [reportKey]);
   const hasReport = Object.keys(report).length > 0;
@@ -295,9 +300,39 @@ export function CompatibilitySummary({
           : value === "startup"
             ? t("Before startup or restart")
             : t("Legacy record: trigger not recorded");
-  const disabled = arrayValue(report, "disabled");
   const needsChoice = stringValue(report, "status") === "needs_choice";
   const failedReport = stringValue(report, "status") === "failed";
+  const rawError = stringValue(report, "error") || "";
+  const diagnosis = asObject(report.diagnosis);
+  const duplicateId = /duplicate loader entry id: ([\w.-]+)/i.exec(rawError)?.[1];
+  const blockingError = duplicateId
+    ? t(
+        "Duplicate plugin entry ID: {id}. Disable or adjust one of the conflicting plugins before retrying.",
+        { id: duplicateId },
+      )
+    : rawError
+        .replace(
+          /^Startup check needs an explicit plugin decision; original profile preserved\. Original error:\s*/i,
+          "",
+        )
+        .split("\n")
+        .find((line) => line.trim() && !line.startsWith("file:///")) || t("Startup check failed");
+  const relatedOrigins =
+    (failedReport || needsChoice) && !duplicateId
+      ? arrayValue(report, "dependency_origins")
+          .map(asObject)
+          .filter((origin) => {
+            const name = stringValue(origin, "package");
+            return (
+              !!name &&
+              (rawError.includes(`'${name}'`) ||
+                rawError.includes(`"${name}"`) ||
+                rawError.replaceAll("\\", "/").includes(`/node_modules/${name}`))
+            );
+          })
+      : [];
+
+  const repairPlan = startupRepairPlan(snapshot);
   const candidates = arrayValue(report, "candidates");
   const source =
     stringValue(report, "source_profile") || stringValue(snapshot.profiles, "active_profile");
@@ -342,183 +377,466 @@ export function CompatibilitySummary({
         : trigger === "startup"
           ? t("Retry Harness startup")
           : t("Retry version switch");
-  const retry = () =>
-    trigger === "manual_check"
-      ? runAction(retryLabel, "/v1/profiles", { action: "compatibility_check" })
-      : trigger === "profile_switch"
-        ? runAction(retryLabel, "/v1/profiles", { action: "select", profile: source })
-        : trigger === "startup"
-          ? runAction(retryLabel, "/v1/harness", { action: "start" })
-          : installed
-            ? runAction(t("Retry version switch"), "/v1/releases", {
-                action: "promote",
-                id: target,
-              })
-            : runAction(t("Retry version switch"), "/v1/updates", {
-                action: "switch",
-                tag: retryTag,
-                source: stringValue(operation, "source") || "official",
-                mode: stringValue(operation, "mode") || "portable",
-              });
-  return (
-    <Panel title={t("Startup compatibility check")} icon={<SlidersHorizontal size={18} />}>
-      <PluginDeclarations report={report} />
-      <p>
-        {t("Source profile")}: {source}
-        {hasReport && (
-          <>
-            {" "}
-            · {t("Release")}: {target}
-          </>
-        )}
-      </p>
-      {hasReport && !needsChoice && (
+  const retry = async () => {
+    setRetryError("");
+    setSaving(true);
+    try {
+      if (trigger === "manual_check")
+        return await runAction(retryLabel, "/v1/profiles", { action: "compatibility_check" });
+      if (trigger === "profile_switch")
+        return await runAction(retryLabel, "/v1/profiles", { action: "select", profile: source });
+      if (trigger === "startup")
+        return await runAction(retryLabel, "/v1/harness", { action: "start" });
+      if (installed && target) {
+        const preview = await proxyRequest<JsonObject>("/v1/releases", "POST", {
+          action: "promote",
+          id: target,
+          inspect_only: true,
+        });
+        const confirmation = stringValue(preview, "rollback_confirmation") || null;
+        const command = releasePromotionCommand(
+          target,
+          confirmation,
+          !confirmation ||
+            (await confirmAction(
+              t(
+                "There is no verified rollback version. Switch manually to {version} anyway? If it fails, automatic rollback will be unavailable. Harness will stay stopped.",
+                { version: target },
+              ),
+            )),
+        );
+        if (command) return await runAction(retryLabel, "/v1/releases", command);
+        return;
+      }
+      return await runAction(retryLabel, "/v1/updates", {
+        action: "switch",
+        tag: retryTag,
+        source: stringValue(operation, "source") || "official",
+        mode: stringValue(operation, "mode") || "portable",
+      });
+    } catch (cause) {
+      setRetryError(errorMessage(cause));
+    } finally {
+      setSaving(false);
+    }
+  };
+  const confirmedActivationFailures = new Set(
+    arrayValue(diagnosis, "repair_candidates")
+      .filter((item) => stringValue(item, "evidence") === "activation_failure")
+      .map((item) => stringValue(item, "package")),
+  );
+  const faulty = candidates.filter(
+    (item) =>
+      confirmedActivationFailures.has(stringValue(item, "package")) ||
+      [
+        "DSH reported a loader error for this plugin",
+        "Declares the duplicate loader entry ID",
+      ].includes(stringValue(item, "reason") || ""),
+  );
+  const others = candidates.filter((item) => !faulty.includes(item));
+  const renderCandidate = (item: unknown, fault: boolean) => {
+    const name = stringValue(item, "package") || "";
+    const saved = policy.includes(name);
+    return (
+      <label key={name} className={fault ? "notice action-error plugin-fault" : "form-check"}>
+        <input
+          type="checkbox"
+          checked={saved || selected.includes(name)}
+          disabled={blocked || saved}
+          onChange={(event) =>
+            setSelected((current) =>
+              event.target.checked ? [...current, name] : current.filter((p) => p !== name),
+            )
+          }
+        />
+        <strong>{name}</strong>
+        {fault && <StatusPill tone="bad" label={t("Loader error")} />}
+        <span className="plugin-fault-reason">
+          {saved ? t("Disabled") : t(stringValue(item, "reason") || "")}
+        </span>
+      </label>
+    );
+  };
+  const activation = asObject(diagnosis.activation);
+  const activationEntries = arrayValue(activation, "entries").map(asObject);
+  const reportedFailures = activationEntries.filter(
+    (entry) => stringValue(entry, "state") === "failed",
+  );
+  const activationWaiting = new Map<string, string[]>();
+  for (const entry of activationEntries)
+    for (const service of arrayValue(entry, "missing")) {
+      if (typeof service !== "string") continue;
+      const names = activationWaiting.get(service) || [];
+      names.push(stringValue(entry, "package") || "unknown");
+      activationWaiting.set(service, names);
+    }
+  // One audit, two readings: a reported failure is evidence, a pending entry is
+  // only its consequence. Lead with the former so a remedy has a target.
+  const activationReport = activationEntries.length > 0 && (
+    <div className="status-block">
+      <strong>{t("Plugins that did not activate")}</strong>
+      {reportedFailures.length > 0 ? (
+        <>
+          <p>
+            {t("Start from these reported failures; the plugins listed below only wait on them.")}
+          </p>
+          {reportedFailures.map((entry, index) => (
+            <p key={index}>
+              <strong>{stringValue(entry, "package")}</strong>: {stringValue(entry, "reason")}
+            </p>
+          ))}
+        </>
+      ) : (
         <p>
-          {t("Verified profile")}: {stringValue(report, "effective_profile")}
-        </p>
-      )}
-      {hasReport && (
-        <div className="status-block">
-          <span>
-            {t("Checked at")}:{" "}
-            {formatTimestamp(numberValue(report, "checked_at_unix"), t("Not available"), locale)} ·{" "}
-            {triggerLabel(stringValue(report, "trigger"))}
-          </span>
-          <span>
-            {booleanValue(report, "cache_reused")
-              ? t("Reused previous check result")
-              : stringValue(report, "trigger")
-                ? t("New check result")
-                : t("Legacy record: trigger not recorded")}
-            {numberValue(report, "last_used_at_unix")
-              ? ` · ${t("Last used")}: ${formatTimestamp(numberValue(report, "last_used_at_unix"), t("Not available"), locale)} · ${triggerLabel(stringValue(report, "last_trigger"))}`
-              : ""}
-          </span>
-          <span>
-            {t(
-              "Plugin errors below were recorded during this check; they are not new errors from viewing this page.",
-            )}
-          </span>
-        </div>
-      )}
-      {hasReport && !policyVerified && (
-        <p className="notice">
           {t(
-            "Saved plugin choices have not been verified. The report below describes an earlier check.",
+            "No plugin reported a failure of its own. A required service has no active provider; repair the provider instead of the plugins waiting for it.",
           )}
         </p>
       )}
-      {hasReport && (policyVerified || failedReport || needsChoice) && (
+      {[...activationWaiting]
+        .sort((a, b) => b[1].length - a[1].length)
+        .map(([service, names]) => (
+          <details key={service}>
+            <summary>
+              {service} · {t("Waiting plugins")}: {names.length}
+            </summary>
+            <ul>
+              {names.map((name, index) => (
+                <li key={index}>
+                  <code>{name}</code>
+                </li>
+              ))}
+            </ul>
+          </details>
+        ))}
+      {booleanValue(activation, "truncated") && (
+        <p>
+          {t(
+            "Diagnostic evidence was truncated; inspect the Harness browser error for the complete list.",
+          )}
+        </p>
+      )}
+    </div>
+  );
+  return (
+    <Panel title={t("Plugin check result")} icon={<SlidersHorizontal size={18} />}>
+      <div className="startup-overview">
         <StatusPill
+          tone={
+            failedReport
+              ? "bad"
+              : needsChoice || stringValue(diagnosis, "level") === "limited"
+                ? "warn"
+                : policyVerified
+                  ? "good"
+                  : "warn"
+          }
           label={
             failedReport
               ? t("Startup check failed")
               : needsChoice
                 ? t("Choose how to handle plugin errors")
-                : disabled.length
-                  ? t("Started with isolated plugins")
-                  : t("Startup check passed")
+                : policyVerified
+                  ? stringValue(diagnosis, "level") === "limited"
+                    ? t("Optional plugin issue")
+                    : t("Startup check passed")
+                  : t("Startup not yet verified")
           }
-          tone={failedReport ? "bad" : needsChoice || disabled.length ? "warn" : "good"}
         />
-      )}
-      <p>
-        {t(
-          "Checks plugin loading and initialization, not every runtime feature. Original profile and data remain unchanged.",
-        )}
-      </p>
-      {failedReport && (
-        <p className="form-error" role="alert">
-          {stringValue(report, "error")}
+        <p>
+          {source} · {t("Checked at")}:{" "}
+          {formatTimestamp(numberValue(report, "checked_at_unix"), t("Not available"), locale)}
         </p>
+      </div>
+      {(failedReport || needsChoice) && (
+        <StartupRepair snapshot={snapshot} busyAction={busyAction} runAction={runAction} />
       )}
-      {disabled.length > 0 && (
-        <ul>
-          {disabled.map((item) => (
-            <li key={stringValue(item, "package")}>
-              <strong>{stringValue(item, "package")}</strong>:{" "}
-              {t(stringValue(item, "reason") || "")}
-            </li>
-          ))}
-        </ul>
-      )}
-      {policy.length > 0 && (
-        <div className="status-block">
-          <strong>{t("Saved plugin choices; effective on next check")}</strong>
-          {policy.map((name) => (
-            <div key={name}>
-              {name}{" "}
-              <ActionButton
-                disabled={blocked}
-                onClick={() =>
-                  void runAction(t("Restore plugin on next check"), "/v1/profiles", {
-                    action: "plugin_enable",
-                    profile: source,
-                    package: name,
-                  })
-                }
-              >
-                {t("Restore plugin on next check")}
-              </ActionButton>
-            </div>
-          ))}
-        </div>
-      )}
-      {needsChoice && (
-        <div className="status-block">
-          <p className="form-error">{stringValue(report, "error")}</p>
-          <p>
+      <details className="startup-diagnostics">
+        <summary>{t("Diagnostics and manual recovery")}</summary>
+        {!(failedReport || needsChoice) && Object.keys(report).length > 0 && (
+          <p className="field-help">
             {t(
-              "Choose plugins to disable, then retry. Unattributed plugins are options, not confirmed faults. Nothing is uninstalled.",
+              "Checks plugin loading and initialization, not every runtime feature. Original profile and data remain unchanged.",
             )}
           </p>
-          {candidates.map((item) => {
-            const name = stringValue(item, "package") || "";
-            return (
-              <label key={name}>
-                <input
-                  type="checkbox"
-                  checked={selected.includes(name)}
-                  disabled={blocked}
-                  onChange={(event) =>
-                    setSelected((current) =>
-                      event.target.checked ? [...current, name] : current.filter((p) => p !== name),
-                    )
-                  }
-                />{" "}
-                <strong>{name}</strong> · {t(stringValue(item, "reason") || "")}
-              </label>
-            );
-          })}
-          <div className="button-row">
-            <ActionButton
-              disabled={blocked || !candidates.length}
-              onClick={() =>
-                setSelected(candidates.map((item) => stringValue(item, "package") || ""))
-              }
-            >
-              {t("Select all third-party plugins")}
-            </ActionButton>
-            <ActionButton disabled={blocked || !selected.length} onClick={() => void saveChoices()}>
-              {t("Save disabled plugins")}
-            </ActionButton>
-            {(installed || retryTag || trigger === "profile_switch" || trigger === "startup") && (
-              <ActionButton disabled={blocked || selected.length > 0} onClick={() => void retry()}>
-                {retryLabel}
-              </ActionButton>
+        )}
+        {stringValue(diagnosis, "level") === "limited" && !(failedReport || needsChoice) && (
+          <div className="notice" role="status">
+            <strong>
+              {t("Limited functionality")}: {t(stringValue(diagnosis, "summary") || "")}
+            </strong>
+            <p>{t(stringValue(diagnosis, "remedy") || "")}</p>
+            {activationReport}
+          </div>
+        )}
+        {(failedReport || needsChoice) && (
+          <div className="action-error" role="alert">
+            <strong>{t("Blocking startup error")}</strong>
+            <p style={{ whiteSpace: "pre-wrap", overflowWrap: "anywhere" }}>
+              {stringValue(diagnosis, "summary")
+                ? t(stringValue(diagnosis, "summary") || "")
+                : blockingError}
+            </p>
+            {stringValue(diagnosis, "remedy") && <p>{t(stringValue(diagnosis, "remedy") || "")}</p>}
+            {activationReport}
+            {stringValue(diagnosis, "certainty") === "unconfirmed" && (
+              <p>{t("Cause not confirmed. No plugin is identified as responsible.")}</p>
+            )}
+            {!repairPlan.length && (
+              <div className="button-row">
+                {stringValue(diagnosis, "help") === "settings" &&
+                  ["configuration", "patch_target"].includes(String(diagnosis.code)) && (
+                    <>
+                      <ActionButton
+                        disabled={blocked}
+                        onClick={() =>
+                          void runAction(t("Open the profile patch file"), "/v1/profiles", {
+                            action: "open_path",
+                            target: "profile_patch",
+                          })
+                        }
+                      >
+                        {t("Open the profile patch file")}
+                      </ActionButton>
+                      <ActionButton
+                        disabled={blocked}
+                        onClick={() =>
+                          void runAction(t("Open Harness settings"), "/v1/profiles", {
+                            action: "open_path",
+                            target: "settings",
+                          })
+                        }
+                      >
+                        {t("Open Harness settings")}
+                      </ActionButton>
+                    </>
+                  )}
+                {stringValue(diagnosis, "help") === "settings" &&
+                  !["configuration", "patch_target"].includes(String(diagnosis.code)) &&
+                  !!onRepair && (
+                    <ActionButton
+                      disabled={blocked}
+                      onClick={() =>
+                        onRepair(diagnosis.code === "runtime_arguments" ? "launch" : "port")
+                      }
+                    >
+                      {t("Open Harness settings")}
+                    </ActionButton>
+                  )}
+                {stringValue(diagnosis, "help") === "profiles" && !!onRepair && (
+                  <ActionButton disabled={blocked} onClick={() => onRepair("profile")}>
+                    {t("Go to profile management")}
+                  </ActionButton>
+                )}
+                {stringValue(diagnosis, "help") === "plugins" && !needsChoice && !!onRepair && (
+                  <ActionButton disabled={blocked} onClick={() => onRepair("profile")}>
+                    {t("Repair profile dependencies")}
+                  </ActionButton>
+                )}
+                {stringValue(diagnosis, "help") === "logs" && !!onRepair && (
+                  <ActionButton disabled={blocked} onClick={() => onRepair("recovery")}>
+                    {t("Open the startup log")}
+                  </ActionButton>
+                )}
+                <ActionButton disabled={blocked || saving} onClick={() => void retry()}>
+                  {retryLabel}
+                </ActionButton>
+              </div>
+            )}
+            {!!faulty.length && (
+              <p>
+                {t("Related plugins")}:{" "}
+                {faulty.map((item) => stringValue(item, "package")).join(", ")}
+              </p>
             )}
           </div>
-          <p>
-            {t(
-              "Saved choices belong to this profile. Disabled packages stay installed and can be enabled again in their previous order.",
+        )}
+
+        {relatedOrigins.length > 0 && (
+          <details>
+            <summary>{t("Additional dependency evidence")}</summary>
+            {relatedOrigins.map((origin) => (
+              <div className="notice" key={stringValue(origin, "package")}>
+                <strong>
+                  {t("Dependency source")}: {stringValue(origin, "package")}
+                </strong>
+                <p>{t("Declared dependency chains; these do not prove a plugin is faulty.")}</p>
+                {arrayValue(origin, "chains").map((chain, index) => (
+                  <p key={index}>{Array.isArray(chain) ? chain.map(String).join(" → ") : ""}</p>
+                ))}
+                {!arrayValue(origin, "chains").length && (
+                  <p>{t("Dependency source not confirmed")}</p>
+                )}
+                {booleanValue(origin, "incomplete") && (
+                  <p>{t("Local dependency evidence is incomplete.")}</p>
+                )}
+                {!!arrayValue(origin, "loader_failures").length && (
+                  <p>
+                    {t("Loader error")}:{" "}
+                    {arrayValue(origin, "loader_failures").map(String).join(", ")}
+                  </p>
+                )}
+              </div>
+            ))}
+          </details>
+        )}
+        <details>
+          <summary>{t("Plugin version declarations")}</summary>
+          <PluginDeclarations report={report} />
+        </details>
+        <p>
+          {t("Source profile")}: {source} · {triggerLabel(stringValue(report, "trigger"))}
+          {hasReport && (
+            <>
+              {" "}
+              · {t("Release")}: {target}
+            </>
+          )}
+        </p>
+        {hasReport && (
+          <p className="field-help">
+            {booleanValue(report, "cache_reused")
+              ? t("Reused previous check result")
+              : stringValue(report, "trigger")
+                ? t("New check result")
+                : t("Legacy record: trigger not recorded")}
+            {!!numberValue(report, "last_used_at_unix") && (
+              <>
+                {" "}
+                · {t("Last used")}:{" "}
+                {formatTimestamp(
+                  numberValue(report, "last_used_at_unix"),
+                  t("Not available"),
+                  locale,
+                )}{" "}
+                · {triggerLabel(stringValue(report, "last_trigger"))}
+              </>
             )}
           </p>
-          {!installed && !retryTag && (
-            <p>{t("After saving, select the upstream version again to retry.")}</p>
+        )}
+        {hasReport && !policyVerified && (
+          <p className="notice">
+            {t(
+              "Saved plugin choices have not been verified. The report below describes an earlier check.",
+            )}
+          </p>
+        )}
+        {failedReport && (
+          <details>
+            <summary>{t("Error details")}</summary>
+            <pre style={{ whiteSpace: "pre-wrap", overflowWrap: "anywhere" }}>{rawError}</pre>
+          </details>
+        )}
+        {stringValue(report, "effective_profile") &&
+          stringValue(report, "effective_profile") !== source && (
+            <p>
+              {t("Verified profile")}: {stringValue(report, "effective_profile")}
+            </p>
           )}
-          {blocked && <p>{t("Stop Harness before changing plugin isolation.")}</p>}
-        </div>
-      )}
+        {!Object.hasOwn(asObject(snapshot.profiles), "disabled_plugins") &&
+          arrayValue(report, "disabled").length > 0 && (
+            <ul>
+              {arrayValue(report, "disabled").map((item) => (
+                <li key={stringValue(item, "package")}>
+                  <code>{stringValue(item, "package")}</code>:{" "}
+                  {t(stringValue(item, "reason") || "")}
+                </li>
+              ))}
+            </ul>
+          )}
+        {policy.length > 0 && (
+          <div className="status-block">
+            <strong>{t("Disabled plugins")}</strong>
+            {policy.map((name) => (
+              <div key={name}>
+                {name}{" "}
+                <ActionButton
+                  disabled={blocked}
+                  onClick={() =>
+                    void runAction(t("Restore plugin on next check"), "/v1/profiles", {
+                      action: "plugin_enable",
+                      profile: source,
+                      package: name,
+                    })
+                  }
+                >
+                  {t("Restore plugin on next check")}
+                </ActionButton>
+              </div>
+            ))}
+          </div>
+        )}
+        {needsChoice && (
+          <div className="status-block" id="compatibility-plugin-choices">
+            <strong>{t("Plugins with loader errors")}</strong>
+            {faulty.length ? (
+              faulty.map((item) => renderCandidate(item, true))
+            ) : (
+              <p>
+                {t(
+                  "No individual plugin was identified. Review error details before isolating plugins.",
+                )}
+              </p>
+            )}
+            <p>
+              {t(
+                "Choose plugins to disable, then retry. Unattributed plugins are options, not confirmed faults. Nothing is uninstalled.",
+              )}
+            </p>
+            {others.length > 0 && (
+              <details>
+                <summary>
+                  {t("Other plugins for troubleshooting")} ({others.length})
+                </summary>
+                {others.map((item) => renderCandidate(item, false))}
+              </details>
+            )}
+            <details>
+              <summary>{t("Error details")}</summary>
+              <pre style={{ maxHeight: "16rem", overflow: "auto", whiteSpace: "pre-wrap" }}>
+                {stringValue(report, "error")}
+              </pre>
+            </details>
+            {retryError && (
+              <p className="form-error" role="alert">
+                {retryError}
+              </p>
+            )}
+            <div className="button-row">
+              <ActionButton
+                disabled={
+                  blocked ||
+                  !faulty.some((item) => !policy.includes(stringValue(item, "package") || ""))
+                }
+                onClick={() =>
+                  setSelected(
+                    faulty
+                      .map((item) => stringValue(item, "package") || "")
+                      .filter((name) => !policy.includes(name)),
+                  )
+                }
+              >
+                {t("Select failing plugins")}
+              </ActionButton>
+              <ActionButton
+                disabled={blocked || !selected.length}
+                onClick={() => void saveChoices()}
+              >
+                {t("Save disabled plugins")}
+              </ActionButton>
+            </div>
+            <p>
+              {t(
+                "Saved choices belong to this profile. Disabled packages stay installed and can be enabled again in their previous order.",
+              )}
+            </p>
+            {!installed && !retryTag && (
+              <p>{t("After saving, select the upstream version again to retry.")}</p>
+            )}
+            {blocked && <p>{t("Stop Harness before changing plugin isolation.")}</p>}
+          </div>
+        )}
+      </details>
     </Panel>
   );
 }
@@ -551,6 +869,7 @@ export function StartupOperationPanel({
     let active = false;
     setOperation(null);
     setCancelling(false);
+    setError("");
     if (!available) return;
     const poll = async () => {
       try {
@@ -596,17 +915,15 @@ export function StartupOperationPanel({
     }
   };
   const phase = stringValue(operation, "phase");
-  if (!available || (!phase && !error) || phase === "idle" || phase === "submitted") return null;
+  // This panel describes live work. Historical failures belong to the failure
+  // details, not every later operation that happens to mount this panel.
+  if (!available || !["checking", "compatibility", "spawning"].includes(phase || "")) return null;
   const label =
     phase === "checking"
       ? t("Checking startup inputs")
       : phase === "compatibility"
         ? t("Checking startup compatibility")
-        : phase === "spawning"
-          ? t("Creating Harness process; use Stop after startup")
-          : phase === "cancelled"
-            ? t("Startup cancelled. The previous instance is not restarted automatically.")
-            : t("Startup preparation failed");
+        : t("Creating Harness process; use Stop after startup");
   return (
     <section className={`notice${error ? " action-error" : ""}`} aria-live="polite">
       <span>{label}</span>
@@ -653,44 +970,27 @@ export function CompatibilityDialog({
   const report = asObject(asObject(snapshot.profiles).compatibility);
   return (
     <Modal title={t("Startup compatibility check")} onClose={onClose}>
+      <BrowserHealth
+        snapshot={snapshot}
+        busyAction={busyAction}
+        runAction={
+          ["failed", "needs_choice"].includes(String(report.status)) ? undefined : runAction
+        }
+        onRepair={["failed", "needs_choice"].includes(String(report.status)) ? undefined : onRepair}
+      />
       <StartupOperationPanel
         available={
           snapshot.startup?.available === true && !booleanValue(snapshot.health, "degraded")
         }
         identity={`${stringValue(snapshot.health, "instance_id")}:${stringValue(snapshot.health, "data_root_id")}`}
       />
-      <BasicStartupCheck
-        onRepair={onRepair}
-        recheckEpoch={recheckEpoch}
-        disabled={pending || busyAction !== null}
-        initialResult={basicResult}
-        initialError={basicError}
-      />
-      <section aria-label={t("Verify plugins")}>
-        <h3>{t("Verify plugins")}</h3>
-        <p>
-          {t(
-            "This checks plugin loading only. Browser commands, panels and interactions have not been verified.",
-          )}
-        </p>
-        <p>
-          {t(
-            "Runs plugin initialization in a temporary local process and closes it afterward. Recovery mode, the selected profile and the stopped Harness service remain unchanged. No browser is opened.",
-          )}
-        </p>
-        <ActionButton
-          disabled={gate.disabled || snapshot.startup?.available !== true}
-          onClick={() =>
-            void runAction(t("Verify plugins"), "/v1/profiles", { action: "compatibility_check" })
-          }
-        >
-          {t("Verify plugins")}
-        </ActionButton>
-      </section>
-      {snapshot.startup?.harness_startup_error && (
-        <p className="form-error" role="alert">
-          {snapshot.startup.harness_startup_error}
-        </p>
+      {!Object.keys(report).length && snapshot.startup?.harness_startup_error && (
+        <details>
+          <summary>{t("Previous startup error")}</summary>
+          <pre style={{ maxHeight: "12rem", overflow: "auto", whiteSpace: "pre-wrap" }}>
+            {snapshot.startup.harness_startup_error}
+          </pre>
+        </details>
       )}
       {pending ? (
         <p role="status">
@@ -700,7 +1000,7 @@ export function CompatibilityDialog({
         </p>
       ) : (
         <>
-          {failed && (
+          {failed && !["failed", "needs_choice"].includes(String(report.status)) && (
             <div role="alert">
               <p className="form-error">
                 {t(
@@ -718,12 +1018,48 @@ export function CompatibilityDialog({
               </ActionButton>
             </div>
           )}
-          <CompatibilitySummary snapshot={snapshot} busyAction={busyAction} runAction={runAction} />
+          <CompatibilitySummary
+            snapshot={snapshot}
+            busyAction={busyAction}
+            runAction={runAction}
+            onRepair={onRepair}
+          />
           {!Object.keys(report).length && !failed && (
             <p>{t("No compatibility check result yet.")}</p>
           )}
         </>
       )}
+      <details className="startup-diagnostics">
+        <summary>{t("Run additional checks")}</summary>
+        <BasicStartupCheck
+          onRepair={onRepair}
+          recheckEpoch={recheckEpoch}
+          disabled={pending || busyAction !== null}
+          initialResult={basicResult}
+          initialError={basicError}
+        />
+        <section aria-label={t("Verify plugins")}>
+          <h3>{t("Verify plugins")}</h3>
+          <p>
+            {t(
+              "This checks plugin loading only. Browser commands, panels and interactions have not been verified.",
+            )}
+          </p>
+          <p>
+            {t(
+              "Runs plugin initialization in a temporary local process and closes it afterward. The selected profile and the stopped Harness service remain unchanged. No browser is opened.",
+            )}
+          </p>
+          <ActionButton
+            disabled={gate.disabled || snapshot.startup?.available !== true}
+            onClick={() =>
+              void runAction(t("Verify plugins"), "/v1/profiles", { action: "compatibility_check" })
+            }
+          >
+            {t("Verify plugins")}
+          </ActionButton>
+        </section>
+      </details>
     </Modal>
   );
 }
@@ -795,15 +1131,6 @@ export function BasicStartupCheck({
       )}
       {result && (
         <div className="status-block" aria-live="polite">
-          <>
-            {booleanValue(result, "paused") && (
-              <p className="notice">
-                {t(
-                  "Harness startup is paused. Checks remain available; leave recovery mode before starting.",
-                )}
-              </p>
-            )}
-          </>
           <strong>
             {t(
               booleanValue(result, "ready")

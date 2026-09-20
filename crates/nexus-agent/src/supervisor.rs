@@ -54,41 +54,7 @@ pub(crate) fn normalize_managed_launch(
     let roots = catalog.releases.iter().map(|release| {
         releases.release_root(&release.id).and_then(fs::canonicalize)
     }).collect::<io::Result<Vec<_>>>()?;
-    let normalize = |path: &Path| -> Option<PathBuf> {
-        let input = if path.is_relative() {
-            spec.working_dir.as_deref().unwrap_or(Path::new(".")).join(path)
-        } else {
-            path.to_owned()
-        };
-        let resolved = fs::canonicalize(input).ok()?;
-        roots.iter().find_map(|root| {
-            resolved.strip_prefix(root).ok().map(|suffix| {
-                Path::new("{release_root}").join(suffix)
-            })
-        })
-    };
-    let entry = if spec.mode == HarnessLaunchMode::Node {
-        spec.args.first().map(Path::new)
-    } else {
-        Some(spec.program.as_path())
-    };
-    let Some(entry) = entry else { return Ok(()); };
-    let normalized_entry = normalize(entry);
-    if normalized_entry.is_none() && !entry.to_string_lossy().contains("{release_root}") {
-        return Ok(());
-    }
-    let normalized_cwd = spec.working_dir.as_deref().and_then(normalize);
-    if let Some(entry) = normalized_entry {
-        if spec.mode == HarnessLaunchMode::Node {
-            spec.args[0] = entry.to_string_lossy().into_owned();
-        } else {
-            spec.program = entry;
-        }
-    }
-    if let Some(cwd) = normalized_cwd {
-        spec.working_dir = Some(cwd);
-    }
-    Ok(())
+    nexus_core::normalize_launch_for_roots(spec, &roots)
 }
 
 pub(crate) struct HarnessLifecycleGuard {
@@ -101,7 +67,6 @@ pub enum HarnessSupervisorError {
     Cancelled,
     Busy,
     Preflight(serde_json::Value),
-    RecoveryPaused,
     AlreadyRunning,
     Unattached,
     InvalidProfile(String),
@@ -122,7 +87,6 @@ impl fmt::Display for HarnessSupervisorError {
                 formatter,
                 "Harness is not configured; set harness.program in Nexus config.json or {HARNESS_PROGRAM_ENV}"
             ),
-            Self::RecoveryPaused => formatter.write_str("Harness startup is paused in recovery mode; leave recovery mode before starting"),
             Self::AlreadyRunning => formatter.write_str("Harness is already running"),
             Self::Unattached => formatter.write_str(
                 "Harness is running but is not attached to this Agent instance; stop it from its owning Agent",
@@ -861,7 +825,6 @@ impl HarnessSupervisor {
         if self.desktop_shutdown.load(std::sync::atomic::Ordering::Acquire) {
             return Err(HarnessSupervisorError::Busy);
         }
-        crate::recovery_mode::ensure_start_allowed(&self.paths)?;
         validate_profile_name(profile)
             .map_err(|error| HarnessSupervisorError::InvalidProfile(error.to_string()))?;
         let health_config_revision = nexus_core::ConfigStore::new(self.paths.clone()).snapshot().ok().map(|snapshot| snapshot.revision);
@@ -917,7 +880,7 @@ impl HarnessSupervisor {
                     }
                     let home = selected_home.clone();
                     verified_profile = crate::compatibility::prepare(&self.paths, &home, profile, id, root,
-                        &spec.program, false, &cancellation).await
+                        &spec.program, false, &cancellation, "startup", &runtime_env).await
                         .map_err(|e|if cancellation.is_cancelled()&&e.kind()==io::ErrorKind::Interrupted {HarnessSupervisorError::Cancelled}else{HarnessSupervisorError::Configuration(e)})?.map(|report| report.source_profile);
                 }
             }
@@ -929,7 +892,7 @@ impl HarnessSupervisor {
             let missing = || HarnessSupervisorError::Configuration(io::Error::other("external Harness identity is missing; confirm the external Harness source again"));
             let id=crate::source_context::compatibility_id(&self.paths,&self.releases).map_err(HarnessSupervisorError::Configuration)?.ok_or_else(missing)?;
             let root=release_root.as_deref().ok_or_else(missing)?;
-            verified_profile=crate::compatibility::prepare(&self.paths,&selected_home,profile,&id,root,&spec.program,false,&cancellation).await.map_err(|e|if cancellation.is_cancelled()&&e.kind()==io::ErrorKind::Interrupted {HarnessSupervisorError::Cancelled}else{HarnessSupervisorError::Configuration(e)})?.map(|report|report.source_profile);
+            verified_profile=crate::compatibility::prepare(&self.paths,&selected_home,profile,&id,root,&spec.program,false,&cancellation,"startup",&runtime_env).await.map_err(|e|if cancellation.is_cancelled()&&e.kind()==io::ErrorKind::Interrupted {HarnessSupervisorError::Cancelled}else{HarnessSupervisorError::Configuration(e)})?.map(|report|report.source_profile);
         }
         if let Some(prepared)=&prepared {prepared.recheck(&self.paths,profile).map_err(HarnessSupervisorError::Configuration)?;}
         let profile = verified_profile.as_deref().unwrap_or(profile);
@@ -1032,6 +995,9 @@ impl HarnessSupervisor {
                     let repaired = ReleaseStore::heal_module_farm(&home, root)
                         .map_err(HarnessSupervisorError::Configuration)?;
                     tracing::info!(repaired, release = ?release_id, "prepared Harness module farm");
+                    let archived = ReleaseStore::heal_profile_modules(&home, profile, root)
+                        .map_err(HarnessSupervisorError::Configuration)?;
+                    tracing::info!(archived, "reconciled profile module shadows");
                 }
             }
             let generation = inner.generation.wrapping_add(1).max(1);
@@ -1113,6 +1079,8 @@ impl HarnessSupervisor {
             command.envs(runtime_env.iter().map(|(key, value)| (key, value)));
             command.envs(nexus_core::harness_preferences_environment(&preferences, &capabilities));
             command.env("DSH_HOME", &selected_home);
+            command.env("NEXUS_BROWSER_HEALTH_FILE", self.paths.run_dir.join("browser-health.json"));
+            command.env("NEXUS_BROWSER_HEALTH_RUN", &inner.log_session.run_id);
             if let Some(slot) = release_root.as_deref() {
                 command.env("NEXUS_DESKTOP_CONTEXT", crate::desktop_plugins::context(&self.paths, &selected_home, profile,
                     &program, slot, effective_runtime.pnpm.as_ref().map(|pin| pin.path.as_path()))
@@ -1633,7 +1601,6 @@ impl HarnessSupervisor {
         profile: &str,
         _lifecycle: &HarnessLifecycleGuard,
     ) -> Result<HarnessRuntimeInfo, HarnessSupervisorError> {
-        crate::recovery_mode::ensure_start_allowed(&self.paths)?;
         let _ = self.stop_inner().await?;
         self.start_with_profile_inner(profile,None).await
     }

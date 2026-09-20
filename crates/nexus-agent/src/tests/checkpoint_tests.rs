@@ -543,152 +543,6 @@ fn preflight_custom_command_does_not_require_managed_runtime_or_slot() {
 }
 
 #[tokio::test]
-async fn recovery_mode_blocks_start_restart_and_leaves_stopped() {
-    let (state, root) = content_test_state("recovery-mode");
-    fs::write(state.paths.run_dir.join("harness-recovery.json"), b"{").unwrap();
-    let response = super::recovery_status(State(state.clone())).await;
-    let bytes = axum::body::to_bytes(response.into_body(), 64 * 1024)
-        .await
-        .unwrap();
-    let report: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
-    assert!(report["pause_error"].is_string());
-    assert_eq!(report["paused"], true);
-    let response = super::recovery_control(
-        State(state.clone()),
-        Json(super::RecoveryCommand {
-            action: super::RecoveryAction::Enter,
-        }),
-    )
-    .await;
-    assert_eq!(response.status(), StatusCode::OK);
-    assert!(super::recovery_mode::paused(&state.paths).unwrap());
-    let response = axum::response::IntoResponse::into_response(
-        super::preflight::check(State(state.clone())).await,
-    );
-    let bytes = axum::body::to_bytes(response.into_body(), 64 * 1024)
-        .await
-        .unwrap();
-    let check: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
-    assert_eq!(check["paused"], true);
-    assert!(check["checks"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .any(|item| item["id"] == "recovery_mode" && item["status"] == "warning"));
-    assert!(matches!(
-        state.supervisor.start().await,
-        Err(super::HarnessSupervisorError::RecoveryPaused)
-    ));
-    assert!(matches!(
-        state.supervisor.restart().await,
-        Err(super::HarnessSupervisorError::RecoveryPaused)
-    ));
-    let response = super::recovery_control(
-        State(state.clone()),
-        Json(super::RecoveryCommand {
-            action: super::RecoveryAction::Leave,
-        }),
-    )
-    .await;
-    assert_eq!(response.status(), StatusCode::OK);
-    assert!(!super::recovery_mode::paused(&state.paths).unwrap());
-    assert!(
-        state
-            .supervisor
-            .selection_change_is_quiescent(&state.supervisor.acquire_lifecycle().await)
-            .await
-    );
-    fs::remove_dir_all(root).unwrap();
-}
-
-#[tokio::test]
-async fn recovery_mode_selects_valid_profile_without_launch_probe_and_creates_blank_profile() {
-    let (state, root) = content_test_state("recovery-select");
-    let home = state.snapshots.configured_dsh_home().unwrap().clone();
-    write_profile_file(
-        &home.join("profiles/target/package.json"),
-        r#"{"name":"target","dsh":{"profile":{"bundles":["plugin-one"]}}}"#,
-    );
-    let mut config = state.config.load().unwrap();
-    config.harness_preferences = Some(nexus_protocol::HarnessPreferencesPayload {
-        home: Some(home.to_string_lossy().into_owned()),
-        ..Default::default()
-    });
-    let mut harness = HarnessLaunchSpec::new(root.join("missing-runtime").join("node.exe"));
-    harness.mode = nexus_protocol::HarnessLaunchMode::Node;
-    harness.args = vec!["{release_root}/apps/cli/lib/bin.js".to_owned()];
-    config.harness = Some(harness);
-    state.config.write(&config).unwrap();
-    state
-        .releases
-        .register("recovery-version", "test", None, None)
-        .unwrap();
-    state.releases.promote("recovery-version").unwrap();
-    super::recovery_mode::set_paused(&state.paths, true).unwrap();
-    for (action, name) in [
-        (nexus_protocol::ProfileAction::Select, "target"),
-        (nexus_protocol::ProfileAction::Create, "new-empty"),
-    ] {
-        let response = super::profile_control(
-            State(state.clone()),
-            Json(nexus_protocol::ProfileCommand {
-                action,
-                profile: Some(name.to_owned()),
-                package: None,
-                target: None,
-            }),
-        )
-        .await;
-        assert!(response.status().is_success(), "{}", response.status());
-    }
-    assert_eq!(state.profiles.load().unwrap().active_profile, "target");
-    assert!(!state.paths.root.join("compatibility/latest.json").exists());
-    for (profile, target) in [(None, None), (Some("other"), None), (None, Some("invalid"))] {
-        let response = super::profile_control(
-            State(state.clone()),
-            Json(nexus_protocol::ProfileCommand {
-                action: nexus_protocol::ProfileAction::CompatibilityCheck,
-                profile: profile.map(str::to_owned),
-                package: None,
-                target: target.map(str::to_owned),
-            }),
-        )
-        .await;
-        assert!(
-            !response.status().is_success(),
-            "missing runtime/entry and invalid targets must not pass verification"
-        );
-        assert!(super::recovery_mode::paused(&state.paths).unwrap());
-        assert_eq!(state.profiles.load().unwrap().active_profile, "target");
-    }
-    // Creation must still honor the same mutation exclusion as configuration edits.
-    let _snapshot = state.snapshots.try_acquire_configuration().unwrap();
-    let check = super::profile_control(
-        State(state.clone()),
-        Json(nexus_protocol::ProfileCommand {
-            action: nexus_protocol::ProfileAction::CompatibilityCheck,
-            profile: None,
-            package: None,
-            target: None,
-        }),
-    )
-    .await;
-    assert!(!check.status().is_success());
-    let response = super::profile_control(
-        State(state.clone()),
-        Json(nexus_protocol::ProfileCommand {
-            action: nexus_protocol::ProfileAction::Create,
-            profile: Some("blocked".to_owned()),
-            package: None,
-            target: None,
-        }),
-    )
-    .await;
-    assert!(!response.status().is_success());
-    fs::remove_dir_all(root).unwrap();
-}
-
-#[tokio::test]
 async fn corrupt_install_journal_keeps_control_plane_and_diagnostics_available() {
     let (state, root) = content_test_state("corrupt-install-journal");
     let journal = state.paths.root.join("install-operation.json");
@@ -979,7 +833,7 @@ server.listen(0, '127.0.0.1', () => console.log('dsh web: http://127.0.0.1:' + s
         "{profile}".into(),
     ];
     state.config.write(&config).unwrap();
-    super::recovery_mode::set_paused(&state.paths, true).unwrap();
+    fs::write(state.paths.run_dir.join("harness-recovery.json"), br#"{"schema_version":1,"paused":true}"#).unwrap();
     let before_profiles = state.profiles.load().unwrap();
     let before_releases = state.releases.load().unwrap();
     let check = ProfileCommand {
@@ -1004,7 +858,7 @@ server.listen(0, '127.0.0.1', () => console.log('dsh web: http://127.0.0.1:' + s
             )
         );
     }
-    assert!(super::recovery_mode::paused(&state.paths).unwrap());
+    assert!(state.paths.run_dir.join("harness-recovery.json").exists());
     assert_eq!(state.profiles.load().unwrap(), before_profiles);
     assert_eq!(state.releases.load().unwrap(), before_releases);
     assert!(
@@ -1198,7 +1052,7 @@ async fn reorder_accepts_a_non_active_ordinary_profile_without_selecting_it() {
 }
 
 #[tokio::test]
-async fn profile_selection_preflight_failure_does_not_publish_target() {
+async fn profile_selection_allows_repair_when_runtime_and_plugins_are_unavailable() {
     let (state, root) = content_test_state("profile-preflight-failure");
     let home = state.snapshots.configured_dsh_home().unwrap().clone();
     write_profile_file(
@@ -1210,8 +1064,6 @@ async fn profile_selection_preflight_failure_does_not_publish_target() {
         .register("profile-runtime", "test", None, None)
         .unwrap();
     state.releases.promote("profile-runtime").unwrap();
-    let before = state.profiles.load().unwrap();
-    let runtime_before = state.runtime.read().await.profile.clone();
     let mut config = state.config.load().unwrap();
     let mut harness = HarnessLaunchSpec::new(root.join("unused-runtime/node.exe"));
     harness.mode = nexus_protocol::HarnessLaunchMode::Node;
@@ -1228,16 +1080,13 @@ async fn profile_selection_preflight_failure_does_not_publish_target() {
         }),
     )
     .await;
-    assert!(!response.status().is_success());
-    let body = axum::body::to_bytes(response.into_body(), 64 * 1024)
-        .await
-        .unwrap();
-    assert!(String::from_utf8_lossy(&body).contains("profile_compatibility_failed"));
-    assert_eq!(state.profiles.load().unwrap(), before);
-    assert_eq!(state.runtime.read().await.profile, runtime_before);
-    // A profile-switch report grants choices for that unselected target,
-    // and consecutive choices must preserve the report and current profile.
+    assert_eq!(response.status(), StatusCode::OK);
+    let before = state.profiles.load().unwrap();
+    assert_eq!(before.active_profile, "target");
+    assert!(!state.paths.root.join("compatibility/latest.json").exists());
+    // Selecting the target still allows explicit plugin repair without starting it.
     let report = nexus_protocol::CompatibilityReport {
+        diagnosis: None,        failure_stage: None,        dependency_origins: Vec::new(),
         declarations: Vec::new(), declarations_omitted: 0,
         checker_version: 1,
         status: "needs_choice".to_owned(),
@@ -1877,8 +1726,7 @@ async fn dated_record_restore_through_real_agent_survives_restart_without_launch
             }
         }
         if phase > 0 {
-            assert!(super::recovery_mode::paused(&paths).unwrap());
-            assert!(super::recovery_mode::ensure_start_allowed(&paths).is_err());
+            assert!(!paths.run_dir.join("harness-recovery.json").exists());
             assert!(client
                 .post_json::<_, serde_json::Value>(
                     "/v1/harness",
@@ -2664,5 +2512,19 @@ async fn desktop_profile_switch_rejects_stale_callers_and_reports_interrupted_wo
     assert_eq!(value["phase"], "interrupted");
     assert_eq!(fs::read(file).unwrap(), bytes);
     assert_eq!(state.profiles.load().unwrap(), before);
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[tokio::test]
+async fn retired_recovery_mode_records_do_not_pause_or_break_diagnostics() {
+    let (state, root) = content_test_state("retired-recovery-mode");
+    for bytes in [b"{".as_slice(), br#"{"schema_version":1,"paused":true}"#.as_slice()] {
+        fs::write(state.paths.run_dir.join("harness-recovery.json"), bytes).unwrap();
+        let response = super::recovery_status(State(state.clone())).await;
+        let bytes = axum::body::to_bytes(response.into_body(), 64 * 1024).await.unwrap();
+        let report: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(report["paused"], false);
+        assert!(report["pause_error"].is_null());
+    }
     fs::remove_dir_all(root).unwrap();
 }

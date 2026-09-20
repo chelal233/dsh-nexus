@@ -342,6 +342,8 @@ export function launcherPollDelay(
   if (hidden) return 8000;
   if (state === "busy") return 1000;
   if (state === "starting") return 400;
+  if (state === "client_pending")
+    return Math.min(8000, 1000 * 2 ** Math.min(3, Math.floor(unchangedFailures / 15)));
   if (state === "failed") return Math.min(8000, 400 * 2 ** Math.min(unchangedFailures, 5));
   return 8000;
 }

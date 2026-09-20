@@ -978,8 +978,9 @@ pub(crate) async fn initialize_selected_release(
     }
     let runtime = runtime_from_plan(&plan)?;
     let node = runtime.node.as_ref().ok_or_else(|| io::Error::other("Verified Node runtime is missing"))?.path.clone();
+    let runtime_env = nexus_core::build_runtime_child_env(&runtime, std::env::var_os("PATH").as_deref())?;
     crate::compatibility::prepare(&state.paths, &state.snapshots.configured_dsh_home()?,
-        &state.profiles.load()?.active_profile, id, &root, &node, true, &CancellationToken::default()).await?;
+        &state.profiles.load()?.active_profile, id, &root, &node, false, &CancellationToken::default(), "version_switch", &runtime_env).await?;
     config.harness = Some(HarnessLaunchSpec {
         mode: HarnessLaunchMode::Node, program: "node".into(),
         args: vec!["{release_root}/apps/cli/lib/bin.js".into(), "--profile".into(), "{profile}".into()],

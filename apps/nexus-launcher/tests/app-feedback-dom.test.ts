@@ -25,6 +25,7 @@ test("App aggregates completions, repeats errors, and serializes same-turn actio
     };
     let postCount=0,releasePost;
     mockIPC((command,payload)=>{
+      if(command==="harness_desktop_status") return {phase:"idle"};
       if(command==="startup_status") return {available:true,running:true};
       if(command==="proxy_request") {
         if(payload.method==="GET") return structuredClone(fixtures[payload.path]??{});

@@ -109,7 +109,9 @@ async fn startup_status(state: &AppState) -> Result<StartupResponse, String> {
             status.message = Some(error.to_string());
             return Ok(startup_response(&state, status));
         }
-        schedule_configured_harness(state.clone());
+        if std::env::var("NEXUS_HARNESS_AUTOSTART").as_deref() != Ok("0") {
+            schedule_configured_harness(state.clone());
+        }
     }
     Ok(startup_response(&state, state.runtime.status().await))
 }
@@ -341,6 +343,12 @@ async fn dispatch(state: &AppState, request: &Request) -> Result<Value, BridgeEr
             Ok(json!({"ready":true}))
         },
         "startup_status" => Ok(serde_json::to_value(startup_status(state).await?).unwrap()),
+        // A Desktop launch must inspect Agent without scheduling the Web CLI.
+        "desktop_launch_context" => {
+            state.runtime.ensure_started(START_WAIT_SECS).await.map_err(|error| error.to_string())?;
+            state.startup_attempted.store(true, Ordering::Release);
+            Ok(serde_json::to_value(startup_response(state, state.runtime.status().await)).unwrap())
+        },
         "retry_startup" => Ok(serde_json::to_value(retry_startup(state).await?).unwrap()),
         "proxy_request" => proxy_request(state,
             args["method"].as_str().ok_or_else(|| "Missing method".to_owned())?.into(),

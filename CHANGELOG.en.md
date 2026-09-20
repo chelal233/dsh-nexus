@@ -5,6 +5,16 @@
 
 ## Unreleased
 
+- Prepare official Desktop dependencies on clean CI from pinned, checksum-verified inputs. Ship the original Electron archive for offline extraction and verify it after installation. Keep Windows ARM64 Web-only where upstream lacks Desktop support. Group tray actions into Browser and Official Desktop submenus.
+
+- Maintain tray controls with detected official Desktop support, separate Web/Desktop stop actions, profile and maintenance shortcuts, explicit keep-running versus stop-all exit options, and guards against conflicting launch operations.
+
+- Turn reported plugin failures and built-in entry replacements alongside waiting official services into actionable recovery plans. After confirmation, temporarily disable recommended plugins and retry the normal startup checks, retaining packages, data and re-enable controls.
+
+- Automatically check client plugins in the current Harness instance using the existing bridge audit. Replace the hidden check page for each run and close it on stop or exit.
+- Show a combined startup result on the workbench, distinguishing checking, limited functionality, client failure and unverified states. Failures name plugins and missing services, with profile, log, stop and retry actions.
+- Do not treat an accessible page as successful startup when client verification fails to load or produces no conclusive report within 45 seconds.
+
 - Rebind bundled runtimes after relocating a portable directory.
 - Use saved runtime settings on the next Harness start without affecting the running instance.
 - Prevent stale refreshes from replacing newly saved settings; persist Agent log level.

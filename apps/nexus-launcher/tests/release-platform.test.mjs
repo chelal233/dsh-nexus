@@ -9,7 +9,7 @@ test('all products select their native Node archive and packaging format', () =>
   }
   assert.throws(() => selectPlatform('i686-pc-windows-msvc', 'win32', 'x64'), /Unsupported/);
   for (const spec of Object.values(targets)) {
-    assert.deepEqual(spec.bundles, spec.platform === 'win32' ? ['nsis', 'zip'] : ['dmg', 'zip']);
+    assert.deepEqual(spec.bundles, spec.platform === 'win32' ? ['nsis', 'zip'] : spec.platform === 'darwin' ? ['dmg', 'zip'] : ['AppImage', 'deb', 'rpm']);
   }
 });
 
@@ -21,7 +21,7 @@ test('unsupported or mismatched targets fail before staging host binaries', () =
 });
 
 test('public download names identify product, version, system and architecture', () => {
-  const expected = ['windows_x64', 'windows_arm64', 'macos_x64', 'macos_arm64'];
+  const expected = ['windows_x64', 'windows_arm64', 'macos_x64', 'macos_arm64', 'linux_arm64'];
   assert.deepEqual(Object.keys(targets).map(target => releaseBasename(target, '0.1.3')),
     expected.map(suffix => 'dsh-nexus_0.1.3_' + suffix));
   assert.equal(releaseBasename('x86_64-pc-windows-msvc', '0.1.3-rc.1'), 'dsh-nexus_0.1.3-rc.1_windows_x64');

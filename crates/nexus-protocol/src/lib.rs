@@ -402,6 +402,12 @@ pub struct CompatibilityDisabledPlugin {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct CompatibilityReport {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub diagnosis: Option<serde_json::Value>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub failure_stage: Option<String>,
+    #[serde(default)]
+    pub dependency_origins: Vec<serde_json::Value>,
     #[serde(default)]
     pub declarations: Vec<serde_json::Value>,
     #[serde(default)]

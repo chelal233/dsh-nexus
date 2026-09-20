@@ -23,6 +23,17 @@ v0.1.7 can retain an automatically selected bundled runtime as an old absolute p
 
 ## Diagnostics and recovery
 
-Launcher startup diagnostics may remain available without the Agent. Recovery mode pauses Harness startup; repair, recheck, then start explicitly. Legacy records without recoverable process identity may require one computer reboot as directed. Ordinary path configuration errors should not require rebooting the computer.
+Launcher startup diagnostics may remain available without the Agent. Blocking startup checks prevent Harness startup; repair the reported issue, recheck, then start explicitly. Legacy records without recoverable process identity may require one computer reboot as directed. Ordinary path configuration errors should not require rebooting the computer.
 
 Report a minimal reproduction, original error, version, build ID, and redacted screenshots. Inspect diagnostics before sharing; do not publish tokens, API keys, private conversations, or full configurations. See [security reporting](../SECURITY.en.md).
+
+## Nexus diagnostic thresholds
+
+- **Blocking**: this startup failed. Show the category, original evidence, remedy, and applicable Nexus settings, profile, plugin or log assistance.
+- **Limited functionality**: upstream explicitly reports optional activation warnings and authenticated Web readiness succeeds. These warnings do not block use or automatically disable plugins.
+- **Informational**: version declarations and unrelated fallback links are not startup failures.
+- **Unconfirmed cause**: preserve the failure without assigning blame or recommending arbitrary plugin isolation.
+
+Signatures are grounded in deepseek-ai/deepseek-harness commit `ddefc45fbc7f8e46dd73185e68295696d1297887` (`dsh-v0.1.6-alpha.2`): app-boot `index.ts`, `profile.ts`, `profile-resolution/resolver.ts`, loader `config/tree.ts`, and CLI `args.ts`. Coverage includes configuration parsing, reserved profiles, missing bundles/modules, export incompatibility, module layout/resolution conflicts, restart requirements, patch targets, ports/permissions, required activation/services, and readiness timeouts. Older releases retain conservative loader checks. Unknown upstream or third-party exceptions retain their original text; coverage is not exhaustive.
+
+Repair suggestions never automatically overwrite configuration, install dependencies, remove files, terminate unrelated processes or disable plugins.

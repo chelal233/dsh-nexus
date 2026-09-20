@@ -9,7 +9,7 @@ import { spawnSync } from 'node:child_process';
 // Run after prepare:runtime. No system Node/npm/pnpm or developer tools may
 // satisfy the nested build commands that failed on a clean Windows machine.
 for (const systemRootKey of (process.platform === 'win32' ? ['SystemRoot', 'SYSTEMROOT'] : ['unix'])) test(`bundled pnpm -> npm -> node works without system tools (${systemRootKey})`, {
-  skip: !['win32', 'darwin'].includes(process.platform),
+  skip: !['win32', 'darwin', 'linux'].includes(process.platform),
 }, () => {
   const runtime = process.env.NEXUS_TEST_RUNTIME_DIR
     || fileURLToPath(new URL('../desktop/resources/runtime/', import.meta.url));

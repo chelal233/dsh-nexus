@@ -117,7 +117,6 @@ mod log_retention;
 mod preference_capabilities;
 mod preflight;
 mod profile_archive;
-mod recovery_mode;
 mod request_receipts;
 mod runtime;
 mod runtime_plan;
@@ -538,7 +537,7 @@ fn build_router(state: AppState, credential: nexus_core::agent_auth::AgentCreden
         .route("/v1/desktop/profile", get(desktop_profile::status).post(desktop_profile::select))
         .route("/v1/profiles", get(profile_list).post(profile_control))
         .route("/v1/canary", get(canary::status).post(canary::control))
-        .route("/v1/recovery", get(recovery_status).post(recovery_control))
+        .route("/v1/recovery", get(recovery_status))
         .route("/v1/preflight", get(preflight::check))
         .route(
             "/v1/checkpoints",
@@ -1223,46 +1222,6 @@ fn recovery_log_payload(mut bytes: Vec<u8>, limit: usize, truncated: bool) -> (S
     (content, fatal)
 }
 
-#[derive(serde::Deserialize)]
-#[serde(deny_unknown_fields)]
-struct RecoveryCommand {
-    action: RecoveryAction,
-}
-#[derive(serde::Deserialize)]
-#[serde(rename_all = "snake_case")]
-enum RecoveryAction {
-    Enter,
-    Leave,
-}
-
-async fn recovery_control(
-    State(state): State<AppState>,
-    Json(command): Json<RecoveryCommand>,
-) -> axum::response::Response {
-    // Keep the operation owned if the requesting window closes.
-    match tokio::spawn(async move {
-        let lifecycle = state.supervisor.acquire_lifecycle().await;
-        let paused = matches!(command.action, RecoveryAction::Enter);
-        if let Err(error) = recovery_mode::set_paused(&state.paths, paused) {
-            return data_error_response(error, "recovery_mode_invalid");
-        }
-        if paused {
-            if let Err(error) = state.supervisor.stop_locked(&lifecycle).await {
-                return harness_error_response(error);
-            }
-        }
-        drop(lifecycle);
-        recovery_status(State(state)).await
-    })
-    .await
-    {
-        Ok(response) => response,
-        Err(error) => {
-            data_error_response(io::Error::other(error.to_string()), "recovery_mode_failed")
-        }
-    }
-}
-
 async fn recovery_status(State(state): State<AppState>) -> axum::response::Response {
     let lifecycle = match try_read_lifecycle(&state) {
         Ok(guard) => guard,
@@ -1280,14 +1239,8 @@ async fn recovery_status(State(state): State<AppState>) -> axum::response::Respo
     };
     let mut log_tail = Vec::new();
     let mut diagnostic_errors = Vec::new();
-    let (paused, pause_error) = match recovery_mode::paused(&state.paths) {
-        Ok(value) => (value, None),
-        Err(error) => {
-            let message = bounded_checkpoint_diagnostic(&error);
-            diagnostic_errors.push(format!("Recovery mode record: {message}"));
-            (true, Some(message))
-        }
-    };
+    let paused = false;
+    let pause_error = None;
     let mut fatal_prefix_observed = false;
     match HarnessLogSessionStore::new(state.paths.clone()).read() {
         Ok(Some(session)) => {
@@ -1451,7 +1404,9 @@ async fn harness_ui(State(state): State<AppState>) -> axum::response::Response {
         );
     }
 
-    (StatusCode::OK, Json(info)).into_response()
+    let mut response = serde_json::to_value(info).expect("Harness UI response is serializable");
+    response["browser_health"] = desktop_plugins::browser_health(&state.paths, &session.run_id);
+    (StatusCode::OK, Json(response)).into_response()
 }
 
 /// A PID is required for lifecycle control, but a recovered descendant has no
@@ -2138,7 +2093,7 @@ async fn release_control_inner(
             if let Err(error) = compatibility::for_release(
                 &state,
                 id,
-                true,
+                false,
                 &nexus_core::CancellationToken::default(),
             )
             .await
@@ -2235,7 +2190,7 @@ async fn release_control_inner(
                 if let Err(error) = compatibility::for_release(
                     &state,
                     id,
-                    true,
+                    false,
                     &nexus_core::CancellationToken::default(),
                 )
                 .await
@@ -3455,7 +3410,6 @@ fn harness_error_response(error: HarnessSupervisorError) -> axum::response::Resp
         HarnessSupervisorError::NotConfigured => {
             (StatusCode::UNPROCESSABLE_ENTITY, "harness_not_configured")
         }
-        HarnessSupervisorError::RecoveryPaused => (StatusCode::CONFLICT, "harness_start_paused"),
         HarnessSupervisorError::AlreadyRunning => (StatusCode::CONFLICT, "harness_already_running"),
         HarnessSupervisorError::Unattached => (StatusCode::CONFLICT, "harness_unattached"),
         HarnessSupervisorError::InvalidProfile(_) => {

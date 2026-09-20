@@ -420,7 +420,14 @@ impl MaintenanceStore {
                 value.state = "interrupted".into();
             }
         }
-        Ok(MaintenanceStatus { preview: preview.map(|v| v.preview), result })
+        // A saved scan is not live disk usage. Never present a consumed,
+        // expired, or externally deleted inventory as the current state.
+        // Keep the record on disk for cleanup retry/replay protection.
+        let preview = preview.map(|v| v.preview).filter(|preview|
+            now().saturating_sub(preview.created_at_unix) <= 900
+            && !result.as_ref().is_some_and(|value| value.preview_id == preview.preview_id)
+            && preview.items.iter().all(|item| item.path.try_exists().unwrap_or(false)));
+        Ok(MaintenanceStatus { preview, result })
     }
     pub fn preview(&self, retention_days: u32, protected_logs: &[String]) -> io::Result<MaintenanceStatus> {
         if !(1..=3650).contains(&retention_days) { return Err(invalid("Retention must be between 1 and 3650 days")); }
@@ -707,7 +714,7 @@ impl MaintenanceStore {
             save(&result)?;
         }
         result.state = "completed".into(); save(&result)?;
-        Ok(MaintenanceStatus { preview: Some(record.preview), result: Some(result) })
+        Ok(MaintenanceStatus { preview: None, result: Some(result) })
     }
 }
 
@@ -773,6 +780,17 @@ mod tests {
         fs::write(path.join("payload"), "original").unwrap(); path
     }
     fn preview(store: &MaintenanceStore) -> CleanupPreview { store.preview(30, &[]).unwrap().preview.unwrap() }
+    #[test]
+    fn removed_slots_invalidate_saved_disk_usage_without_another_scan() {
+        let (paths, store) = fixture();
+        free_release(&paths, "unused");
+        preview(&store);
+        assert!(store.status().unwrap().preview.is_some());
+        ReleaseStore::new(paths.clone()).remove("unused").unwrap();
+        assert!(store.status().unwrap().preview.is_none());
+        assert!(preview(&store).items.iter().all(|item| item.name != "unused"));
+        fs::remove_dir_all(paths.root).unwrap();
+    }
     fn selected(preview: &CleanupPreview, name: &str) -> String {
         preview.items.iter().find(|item| item.name == name && item.eligible)
             .unwrap_or_else(|| panic!("Expected eligible item {name}; preview: {preview:?}")).id.clone()
@@ -802,6 +820,7 @@ mod tests {
         assert!(store.cleanup("wrong", &[id.clone()], &[]).is_err()); assert!(slot.exists());
         let result = store.cleanup(&p.preview_id, &[id.clone()], &[]).unwrap().result.unwrap();
         assert_eq!(result.items[0].state, "removed"); assert!(!slot.exists());
+        assert!(store.status().unwrap().preview.is_none());
         assert!(unknown.join("user-file").exists()); assert!(backup.join("config.json").exists());
         assert_eq!(MaintenanceStore::new(paths.clone()).status().unwrap().result.unwrap().state, "completed");
         assert!(store.cleanup(&p.preview_id, &[id], &[]).is_err());

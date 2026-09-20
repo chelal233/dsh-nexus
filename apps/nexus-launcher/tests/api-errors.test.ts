@@ -1,6 +1,15 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { apiErrorInfo, recoverableNoop, errorWithExplanation, workspaceFailureKind, workspaceRepairTarget } from "../src/api-errors.ts";
+
+test("backend labels do not duplicate the original error", () => {
+  const raw = "Previous owned command is still stopping; retry after it exits";
+  for (const prefix of ["后端错误：", "Backend error: "]) {
+    assert.equal(errorWithExplanation(raw, prefix + raw, "原始错误"), prefix + raw);
+  }
+  assert.equal(errorWithExplanation(raw, "Wait for the previous process to stop.", "Original error"),
+    "Wait for the previous process to stop.\n\nOriginal error\n" + raw);
+});
 import { createUiTestLoader } from "./ui-test-loader.ts";
 
 test("workspace recovery covers all modules and does not mistake transient failures for damaged files", () => {

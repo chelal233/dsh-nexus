@@ -6,7 +6,7 @@ import path from 'node:path';
 import test from 'node:test';
 import { verifyReleaseAssets } from './verify-release-assets.mjs';
 
-test('release gate requires four tested targets, exact provenance and unmodified files', () => {
+test('release gate requires all tested targets, exact provenance and unmodified files', () => {
   const dir = mkdtempSync(path.join(os.tmpdir(), 'nexus-release-assets-'));
   const commit = 'a'.repeat(40);
   const targets = {
@@ -14,17 +14,19 @@ test('release gate requires four tested targets, exact provenance and unmodified
     'aarch64-pc-windows-msvc': ['.exe', '.zip'],
     'x86_64-apple-darwin': ['.dmg', '.zip'],
     'aarch64-apple-darwin': ['.dmg', '.zip'],
+    'aarch64-unknown-linux-gnu': ['.AppImage', '.deb', '.rpm'],
   };
   const names = {
     'x86_64-pc-windows-msvc': 'windows_x64',
     'aarch64-pc-windows-msvc': 'windows_arm64',
     'x86_64-apple-darwin': 'macos_x64',
     'aarch64-apple-darwin': 'macos_arm64',
+    'aarch64-unknown-linux-gnu': 'linux_arm64',
   };
   try {
     for (const [target, extensions] of Object.entries(targets)) {
       const basename = `dsh-nexus_0.1.2_${names[target]}`;
-      const channel = `latest-${target.startsWith('aarch64') ? 'arm64' : 'x64'}${target.includes('apple') ? '-mac' : ''}.yml`;
+      const channel = `latest-${target.startsWith('aarch64') ? 'arm64' : 'x64'}${target.includes('apple') ? '-mac' : target.includes('linux') ? '-linux-arm64' : ''}.yml`;
       const files = extensions.concat('.yml').map(ext => {
         const name = ext === '.yml' ? channel : `${basename}${ext}`;
         writeFileSync(path.join(dir, name), 'test installer');
@@ -34,7 +36,7 @@ test('release gate requires four tested targets, exact provenance and unmodified
         buildId: 'test', automatedChecks: 'passed', installedPackageSmoke: 'passed-on-ci-runner', files }));
       writeFileSync(path.join(dir, `${basename}_SHA256SUMS.txt`), files.map(f => `${f.sha256}  ${f.name}\n`).join(''));
     }
-    assert.equal(verifyReleaseAssets(dir, 'v0.1.2', commit).length, 20);
+    assert.equal(verifyReleaseAssets(dir, 'v0.1.2', commit).length, 26);
     assert.throws(() => verifyReleaseAssets(dir, 'v0.1.3', commit));
     assert.throws(() => verifyReleaseAssets(dir, 'v0.1.2', 'b'.repeat(40)));
     const metadata = path.join(dir, 'dsh-nexus_0.1.2_windows_x64_build.json');

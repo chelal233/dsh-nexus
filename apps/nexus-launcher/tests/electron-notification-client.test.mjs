@@ -12,6 +12,7 @@ test('browser client reports matching conversation focus, visibility, session ch
     crypto: { randomUUID: () => 'browser-page' }, AbortSignal, URL,
     location: { href: 'http://127.0.0.1:1234/' }, history: { replaceState() {} },
     fetch: async (url, options) => { assert.equal(url, '/nexus-notifications/view'); requests.push(JSON.parse(options.body)); },
+    setTimeout: () => 1, clearTimeout() {},
     setInterval: fn => { timers.add(fn); return fn; }, clearInterval: fn => timers.delete(fn),
   };
   const ctx = { sessions: { list: { getSnapshot: () => ({ current }), subscribe: fn => { subscriber = fn; return () => { subscriber = undefined; }; } } },

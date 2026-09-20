@@ -1388,7 +1388,7 @@ pub struct HealthyReleaseEvidence {
 /// Release slots are bounded so an unbounded stream of installed upstream
 /// tags can never fill the data root silently. The user removes slots
 /// explicitly; Nexus never auto-deletes one.
-pub const DEFAULT_MAX_RELEASE_SLOTS: usize = 3;
+pub const DEFAULT_MAX_RELEASE_SLOTS: usize = 8;
 
 #[derive(Clone)]
 pub struct ReleaseStore {
@@ -1988,6 +1988,52 @@ pub fn heal_module_farm(dsh_home: &Path, slot_root: &Path) -> io::Result<usize> 
     Ok(repaired)
 }
 
+/// Archive profile-local official packages that would shadow the selected slot.
+/// The shared farm must already be healed while Harness is stopped. Each rename
+/// is atomic; interruption leaves either the original or its preserved backup.
+pub fn heal_profile_modules(home: &Path, profile: &str, slot: &Path) -> io::Result<usize> {
+    validate_profile_name(profile)?;
+    let profiles = home.join("profiles");
+    let profile_dir = profiles.join(profile);
+    let modules = profile_dir.join("node_modules");
+    if !modules.try_exists()? { return Ok(0); }
+    for dir in [home, profiles.as_path(), profile_dir.as_path(), modules.as_path()] {
+        Self::ensure_module_directory(dir)?;
+    }
+    let farm = profiles.join("node_modules");
+    let slot = fs::canonicalize(slot)?;
+    let mut entries = Vec::new();
+    for entry in fs::read_dir(&modules)? {
+        let entry = entry?;
+        let name = entry.file_name().to_string_lossy().into_owned();
+        if name.starts_with('@') {
+            Self::ensure_module_directory(&entry.path())?;
+            for child in fs::read_dir(entry.path())? { entries.push(child?.path()); }
+        } else { entries.push(entry.path()); }
+    }
+    let mut repaired = 0;
+    for path in entries {
+        let relative = path.strip_prefix(&modules).map_err(io::Error::other)?;
+        let target = farm.join(relative);
+        let Ok(resolved) = fs::canonicalize(&target) else { continue; };
+        if !resolved.starts_with(&slot) || Self::same_directory(&path, &target) { continue; }
+        let expected = relative.to_string_lossy().replace('\\', "/");
+        Self::validate_module_name(&expected)?;
+        let manifest: serde_json::Value = serde_json::from_slice(&fs::read(resolved.join("package.json"))?).map_err(invalid_data)?;
+        if manifest["name"].as_str() != Some(expected.as_str()) { return Err(invalid_data("Official module identity mismatch")); }
+        // Never discard or overwrite user-installed files, including links.
+        let backup = home.join(".nexus-module-backups");
+        Self::ensure_module_directory(&backup)?;
+        let round = backup.join(format!("{}-{}", profile, unix_time_nanos_for_update()));
+        fs::create_dir(&round)?;
+        let destination = round.join(relative);
+        if let Some(parent) = destination.parent() { fs::create_dir_all(parent)?; }
+        fs::rename(&path, &destination)?;
+        repaired += 1;
+    }
+    Ok(repaired)
+}
+
 fn same_directory(link: &Path, target: &Path) -> bool {
     match (fs::canonicalize(link), fs::canonicalize(target)) {
         (Ok(actual), Ok(expected)) => actual == expected,
@@ -2140,63 +2186,21 @@ fn create_dir_junction(link: &Path, target: &Path) -> io::Result<()> {
         old_current: &str,
         new_current: Option<&str>,
     ) -> io::Result<()> {
-        let Some(new_current) = new_current else {
-            return Ok(());
-        };
-        if old_current.is_empty() || old_current == new_current {
-            return Ok(());
-        }
-        let store = ConfigStore::new(self.paths.clone());
-        store
-            .transaction(|document| {
-                let Some(harness) = document.harness.as_mut() else {
-                    return Ok(false);
-                };
-                // Windows paths are case-insensitive and a shorter slot id
-                // must never match a longer sibling (`rc1` inside `rc10`), so
-                // the search lowercases and requires a non-identifier
-                // boundary after the match.
-                let needle = format!("releases\\{old_current}");
-                let needle_forward = format!("releases/{old_current}");
-                let rewrite = |value: &mut String| -> bool {
-                    let lowered = value.to_lowercase();
-                    for candidate in [&needle, &needle_forward] {
-                        let lowered_candidate = candidate.to_lowercase();
-                        if let Some(position) = lowered.find(lowered_candidate.as_str()) {
-                            let end = position + candidate.len();
-                            let rest = value[end..].chars().next();
-                            if rest.is_some_and(|character| {
-                                character.is_alphanumeric()
-                                    || character == '_'
-                                    || character == '.'
-                            }) {
-                                continue;
-                            }
-                            // Cut everything before the slot segment too: the
-                            // parent prefix must not survive, or rendering
-                            // would produce a doubled absolute path.
-                            *value = format!("{{release_root}}{}", &value[end..]);
-                            return true;
-                        }
-                    }
-                    false
-                };
-                let mut changed = false;
-                let mut program = harness.program.to_string_lossy().into_owned();
-                changed |= rewrite(&mut program);
-                harness.program = program.into();
-                for argument in &mut harness.args {
-                    changed |= rewrite(argument);
-                }
-                if let Some(working_dir) = harness.working_dir.as_mut() {
-                    let mut text = working_dir.to_string_lossy().into_owned();
-                    changed |= rewrite(&mut text);
-                    *working_dir = text.into();
-                }
-                Ok(changed)
-            })?;
-        Ok(())
+        if new_current.is_none() { return Ok(()); }
+        let _ = old_current;
+        let catalog = self.load_unlocked()?;
+        let roots = catalog.releases.iter()
+            .map(|release| self.release_root_unlocked(&release.id, &catalog).and_then(fs::canonicalize))
+            .collect::<io::Result<Vec<_>>>()?;
+        ConfigStore::new(self.paths.clone()).transaction(|document| {
+            if document.external_harness.is_some() { return Ok(false); }
+            let Some(harness) = document.harness.as_mut() else { return Ok(false); };
+            let before = serde_json::to_vec(harness).map_err(invalid_data)?;
+            normalize_launch_for_roots(harness, &roots)?;
+            Ok(before != serde_json::to_vec(harness).map_err(invalid_data)?)
+        }).map(|_| ())
     }
+
 
     /// Atomically restore the release selection captured by a checkpoint.
     /// A selected release must still be a registered, contained slot. A
@@ -4223,6 +4227,46 @@ mod tests {
         fs::remove_dir_all(root).unwrap();
     }
     #[test]
+    fn default_release_capacity_and_legacy_default_allow_eight() {
+        let root = unique_test_root("eight-slots");
+        let store = ReleaseStore::new(NexusPaths::from_root(root.clone()));
+        assert_eq!(ReleasesConfig { max_slots: 3 }.max_slots_usize(), 8);
+        assert_eq!(ReleasesConfig { max_slots: 12 }.max_slots_usize(), 12);
+        for index in 0..8 { store.register(&format!("release-{index}"), "1.0", None, None).unwrap(); }
+        assert!(store.register("release-9", "1.0", None, None).is_err());
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn stale_managed_slot_references_follow_selection_but_extra_arguments_stay_protected() {
+        use super::{write_json_atomic, configuration_launch_paths, configuration_paths_overlap};
+        let root = unique_test_root("stale-slot-reference");
+        let paths = NexusPaths::from_root(root.clone());
+        let store = ReleaseStore::new(paths.clone());
+        for id in ["old", "current", "target"] {
+            store.register(id, "1.0", None, None).unwrap();
+            let dir = paths.releases_dir.join(id).join("apps/cli/lib");
+            fs::create_dir_all(&dir).unwrap(); fs::write(dir.join("bin.js"), "entry").unwrap();
+        }
+        store.promote("current").unwrap();
+        let old = paths.releases_dir.join("old");
+        let config = serde_json::json!({"harness":{"mode":"node", "program":"node", "args":[old.join("apps/cli/lib/bin.js"),"--profile","{profile}"],"working_dir":old}});
+        write_json_atomic(&paths.root, &paths.config_file, &config).unwrap();
+        let references = configuration_launch_paths(&paths).unwrap();
+        assert!(!configuration_paths_overlap(&old, &references).unwrap());
+        assert!(configuration_paths_overlap(&paths.releases_dir.join("current"), &references).unwrap());
+        store.promote("target").unwrap();
+        let saved = ConfigStore::new(paths.clone()).load().unwrap().harness.unwrap();
+        assert_eq!(saved.working_dir.unwrap(), PathBuf::from("{release_root}"));
+        assert!(saved.args[0].starts_with("{release_root}"));
+        let mut pinned = config;
+        pinned["harness"]["args"].as_array_mut().unwrap().push(serde_json::json!(old.join("custom-data")));
+        write_json_atomic(&paths.root, &paths.config_file, &pinned).unwrap();
+        assert!(configuration_paths_overlap(&old, &configuration_launch_paths(&paths).unwrap()).unwrap());
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
     fn release_store_registers_promotes_and_rolls_back_atomically() {
         let root = unique_test_root("releases");
         let paths = NexusPaths::from_root(root.clone());
@@ -5232,6 +5276,29 @@ mod tests {
     }
 
     #[test]
+    fn profile_module_shadows_are_archived_and_retries_preserve_user_packages() {
+        let root = unique_test_root("profile-shadows");
+        let home = root.join("home");
+        let slot = root.join("slot");
+        let package = slot.join("packages/example");
+        fs::create_dir_all(&package).unwrap();
+        fs::write(package.join("package.json"), r#"{"name":"@dsh/example"}"#).unwrap();
+        ReleaseStore::heal_module_farm(&home, &slot).unwrap();
+        let shadow = home.join("profiles/web/node_modules/@dsh/example");
+        fs::create_dir_all(&shadow).unwrap();
+        fs::write(shadow.join("user-edit.txt"), "preserve").unwrap();
+        let custom = home.join("profiles/web/node_modules/custom");
+        fs::create_dir_all(&custom).unwrap();
+        assert_eq!(ReleaseStore::heal_profile_modules(&home, "web", &slot).unwrap(), 1);
+        assert!(!shadow.exists());
+        assert!(custom.is_dir());
+        let round = fs::read_dir(home.join(".nexus-module-backups")).unwrap().next().unwrap().unwrap().path();
+        assert_eq!(fs::read_to_string(round.join("@dsh/example/user-edit.txt")).unwrap(), "preserve");
+        assert_eq!(ReleaseStore::heal_profile_modules(&home, "web", &slot).unwrap(), 0);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
     fn module_farm_retargets_real_links_and_preserves_user_directories() {
         let root = unique_test_root("module-farm-retarget");
         let home = root.join("home");
@@ -5348,6 +5415,44 @@ pub struct HarnessLaunchSpec {
     pub readiness_token_required: bool,
 }
 
+/// Normalize only executable, Node entry and cwd; custom arguments remain pins.
+pub fn normalize_launch_for_roots(spec: &mut HarnessLaunchSpec, roots: &[PathBuf]) -> io::Result<()> {
+    let normalize = |path: &Path| -> Option<PathBuf> {
+        let input = if path.is_relative() {
+            spec.working_dir.as_deref().unwrap_or(Path::new(".")).join(path)
+        } else {
+            path.to_owned()
+        };
+        let resolved = fs::canonicalize(input).ok()?;
+        roots.iter().find_map(|root| {
+            resolved.strip_prefix(root).ok().map(|suffix| {
+                Path::new("{release_root}").join(suffix)
+            })
+        })
+    };
+    let entry = if spec.mode == HarnessLaunchMode::Node {
+        spec.args.first().map(Path::new)
+    } else {
+        Some(spec.program.as_path())
+    };
+    let Some(entry) = entry else { return Ok(()); };
+    let normalized_entry = normalize(entry);
+    if normalized_entry.is_none() && !entry.to_string_lossy().contains("{release_root}") {
+        return Ok(());
+    }
+    let normalized_cwd = spec.working_dir.as_deref().and_then(normalize);
+    if let Some(entry) = normalized_entry {
+        if spec.mode == HarnessLaunchMode::Node {
+            spec.args[0] = entry.to_string_lossy().into_owned();
+        } else {
+            spec.program = entry;
+        }
+    }
+    if let Some(cwd) = normalized_cwd {
+        spec.working_dir = Some(cwd);
+    }
+    Ok(())
+}
 impl HarnessLaunchSpec {
     pub fn new(program: PathBuf) -> Self {
         Self {
@@ -6470,7 +6575,8 @@ pub struct ReleasesConfig {
 
 impl ReleasesConfig {
     pub fn max_slots_usize(&self) -> usize {
-        self.max_slots as usize
+        // Three was the shipped default before the eight-slot migration.
+        if self.max_slots == 3 { DEFAULT_MAX_RELEASE_SLOTS } else { self.max_slots as usize }
     }
 }
 
@@ -6748,7 +6854,15 @@ fn configuration_launch_paths(paths: &NexusPaths) -> io::Result<Vec<PathBuf>> {
     if let Some(runtime) = config.runtime {
         for pin in [runtime.node, runtime.pnpm, runtime.git].into_iter().flatten() { references.push(pin.path); }
     }
-    if let Some(harness) = parse_harness_launch_spec(bytes.as_deref())? {
+    if let Some(mut harness) = parse_harness_launch_spec(bytes.as_deref())? {
+        if config.external_harness.is_none() {
+            let store = ReleaseStore::new(paths.clone());
+            let catalog = store.load_unlocked()?;
+            if catalog.current_release.is_some() {
+                let roots = catalog.releases.iter().map(|r| store.release_root_unlocked(&r.id, &catalog).and_then(fs::canonicalize)).collect::<io::Result<Vec<_>>>()?;
+                normalize_launch_for_roots(&mut harness, &roots)?;
+            }
+        }
         let pointers = read_regular_file_bounded(&paths.release_pointers_file, 1024 * 1024)?
             .map(|bytes| decode_json::<ReleasePointerDocument>(&bytes).map_err(invalid_data)).transpose()?;
         if pointers.as_ref().is_some_and(|p| p.schema_version != RELEASE_SCHEMA_VERSION) {

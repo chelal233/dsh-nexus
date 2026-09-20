@@ -97,6 +97,8 @@ function readAgentIdentity(resources) {
 
 async function main() {
   const resources = path.join(appRoot, "desktop/resources");
+  const { verifyDesktopKit } = await import('../../electron/desktop-runtime.mjs');
+  verifyDesktopKit(path.join(resources, 'runtime/desktop'));
   const manifestPath = path.join(resources, "release-manifest.json");
   if (process.argv.includes("--verify")) {
     const manifest = JSON.parse(await readFile(manifestPath, "utf8"));

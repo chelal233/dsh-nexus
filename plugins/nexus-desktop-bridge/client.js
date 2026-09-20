@@ -1,8 +1,89 @@
 // Harness closure-factory client bundle. No imports and no Electron privileges.
 window.__ModuleLoader__.load({ id: '@nexus/desktop-bridge', factory() {
-  return { apply(ctx) {
+  const labels = ['pending', 'loading', 'active', 'failed', 'disposed', 'unloading'];
+  function inspectClient(ctx, settled = true, elapsed = 30000) {
+        const entries = [];
+        let truncated = false, unknown = false;
+        for (const entry of ctx.loader.entries()) {
+          // A plugin the user disabled is a deliberate choice, not a failure.
+          // Such an entry has no fiber and must never be read as a broken import.
+          if (entry.disabled || entry.options?.disabled) continue;
+          const state = entry.fiber === undefined ? 'import_failed' : labels[entry.fiber.state];
+          if (state === 'active') continue;
+          if (!state) unknown = true;
+          if (entries.length >= 128) { truncated = true; break; }
+          const missing = Object.keys(entry.fiber?.inject || {}).filter(service => ctx.get(service) === undefined);
+          if (missing.length > 32) truncated = true;
+          entries.push({ name: String(entry.options?.name || entry.id || 'unknown').slice(0, 240),
+            state: state || 'unknown', missing: missing.slice(0, 32).map(s => s.slice(0, 240)) });
+        }
+        const missing_core = ['sessions', 'uiRenderer', 'uiSession', 'uiWorkspace']
+          .filter(service => ctx.get(service) === undefined);
+        const state = !settled && elapsed < 30000 ? 'checking'
+          : unknown ? 'unverified' : entries.length ? 'blocked' : !settled ? 'unverified' : missing_core.length ? 'limited' : 'active';
+    const result = { state, entries, missing_core, truncated };
+    while (JSON.stringify(result).length > 12000 && result.entries.length) {
+      result.entries.pop(); result.truncated = true;
+    }
+    return result;
+  }
+  return { inspectClient, apply(ctx) {
     const shell = window.nexusShell;
     let disposed = false;
+    // The same activation audit as Harness web boot, also in system browsers.
+    // HTTP availability alone must never be presented as client activation.
+    let settled = false, healthBusy = false, healthToken;
+    const healthStarted = Date.now();
+    const reportHealth = async () => {
+      if (disposed || healthBusy) return;
+      healthBusy = true;
+      let observedState;
+      try {
+        const evidence = inspectClient(ctx, settled, Date.now() - healthStarted);
+        const { state } = evidence;
+        observedState = state;
+        if (healthToken === undefined) {
+          const response = await fetch('/nexus-browser-health', {
+            method: 'POST', credentials: 'same-origin', headers: { 'content-type': 'application/json', 'x-nexus-health': '1' },
+            body: JSON.stringify({ action: 'begin' }), signal: AbortSignal.timeout(2000),
+          });
+          if (!response.ok) return;
+          const value = await response.json();
+          if (typeof value.token !== 'string') return;
+          healthToken = value.token;
+        }
+        if (disposed) return;
+        const response = await fetch('/nexus-browser-health', {
+          method: 'POST', credentials: 'same-origin', headers: { 'content-type': 'application/json', 'x-nexus-health': '1' },
+          body: JSON.stringify({ ...evidence, token: healthToken }), signal: AbortSignal.timeout(2000),
+        });
+        // Do not renew a stale token: this page belongs to an older Host run.
+        if (response.status === 409) { disposed = true; clearInterval(healthTimer); return; }
+      } catch { /* Unsupported observer or disconnected page: no false success. */ }
+      finally {
+        healthBusy = false;
+        if (!disposed && shell && ['active', 'limited', 'blocked'].includes(observedState)) {
+          try { await shell.health(observedState !== 'blocked'); } catch {}
+        }
+      }
+    };
+    let auditing = false;
+    const audit = async () => {
+      if (disposed || auditing) return;
+      auditing = true;
+      try {
+        // Wait for the same quiescence boundary as upstream, including hot reloads.
+        await ctx.loader.await();
+        if (!disposed) { settled = true; await reportHealth(); }
+      } catch { /* No positive evidence if the Loader API is unavailable. */ }
+      finally { auditing = false; }
+    };
+    // A hung import/apply must not suppress the bounded startup observation.
+    // Keep one quiescence waiter, but report independently while it is pending.
+    const heartbeat = async () => { await reportHealth(); void audit(); };
+    const healthStart = setTimeout(heartbeat, 0);
+    const healthTimer = setInterval(heartbeat, 5000);
+    ctx.effect(() => () => { disposed = true; clearTimeout(healthStart); clearInterval(healthTimer); });
     if (shell) {
       ctx.effect(() => ctx.reflect.provide('desktopWindow', Object.freeze({
         mode: 'compatibility', platform: shell.platform,
@@ -18,15 +99,6 @@ window.__ModuleLoader__.load({ id: '@nexus/desktop-bridge', factory() {
         service.pickDirectory = pick;
         return () => { if (service.pickDirectory === pick) service.pickDirectory = previous; };
       }));
-      // Settle only after this plugin's apply has returned (avoid Loader deadlock).
-      const timer = setTimeout(async () => {
-        try {
-          await ctx.loader.await();
-          const failed = [...ctx.loader.entries()].some(entry => !entry.disabled && !entry.options?.disabled && entry.fiber?.state !== 2);
-          if (!disposed) await shell.health(!failed);
-        } catch { if (!disposed) void shell.health(false).catch(() => {}); }
-      }, 0);
-      ctx.effect(() => () => { disposed = true; clearTimeout(timer); });
     }
     ctx.inject(['sessions'], c => c.effect(() => {
       let stopped = false, busy = false;

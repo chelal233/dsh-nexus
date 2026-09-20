@@ -1,0 +1,15 @@
+{
+  "schema": 1,
+  "repository": "deepseek-ai/deepseek-harness",
+  "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",
+  "sourceArchiveSha256": "4efcbff7321911b9c0a6f7f4fe1d9659ae8442438c34b9eb9221336e8133d81c",
+  "version": "0.1.6-alpha.2",
+  "lockSha256": "9bbff362145b796cdbf673cb9d1dbf5d8342d43fdb5096932315735f28bf107a",
+  "electronVersion": "44.0.0",
+  "pnpmVersion": "11.7.0",
+  "electronArchives": {
+    "win32-x64": "e61aa3bcea8152bc0730abd015e47c032d778a0ef10e2a1c78ba3c4ea47942f9",
+    "darwin-x64": "28429e700ad68d9624aaa90b6543ffe891a48c14121fd904cd294e5edcee63ff",
+    "darwin-arm64": "076d79742986e1b100b69ebecc691cb07368045e54c9087cef631b8622b76a80"
+  }
+}

@@ -25,10 +25,13 @@ export function inspectFile(name, text) {
 }
 
 export function checkRepository(root) {
-  const files = execFileSync('git', ['ls-files', '-z'], { cwd: root, encoding: 'utf8' }).split('\0').filter(Boolean);
+  const files = [...new Set(execFileSync('git', ['ls-files', '--cached', '--others', '--exclude-standard', '-z'], { cwd: root, encoding: 'utf8' }).split('\0').filter(Boolean))];
   let failures = 0;
   for (const name of files) {
-    const findings = inspectFile(name, readFileSync(path.join(root, name), 'utf8'));
+    let contents;
+    try { contents = readFileSync(path.join(root, name), 'utf8'); }
+    catch (error) { if (error.code === 'ENOENT') continue; throw error; }
+    const findings = inspectFile(name, contents);
     for (const finding of findings) {
       // Never echo the matched contents: CI logs are public too.
       console.error(`${name}:${finding.line}: ${finding.rule}`);
@@ -36,7 +39,7 @@ export function checkRepository(root) {
     }
   }
   if (failures) throw new Error(`Source privacy check failed: ${failures} findings`);
-  console.log(`Source privacy check passed (${files.length} tracked files)`);
+  console.log(`Source privacy check passed (${files.length} source paths)`);
 }
 
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {

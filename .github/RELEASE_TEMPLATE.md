@@ -2,17 +2,17 @@
 
 ## 下载 / Downloads
 
-Windows x64/ARM64：EXE 安装包或 ZIP 免安装包。macOS Intel/Apple Silicon：DMG 或 ZIP。无 32 位版本。
+Windows x64/ARM64：EXE 安装包或 ZIP 免安装包。macOS Intel/Apple Silicon：DMG 或 ZIP。Linux ARM64：AppImage、DEB、RPM（仅列入已通过原生构建和启动检查的附件）。无 32 位版本。
 
-Windows x64/ARM64: EXE installer or portable ZIP. macOS Intel/Apple Silicon: DMG or ZIP. No 32-bit builds.
+Windows x64/ARM64: EXE installer or portable ZIP. macOS Intel/Apple Silicon: DMG or ZIP. Linux ARM64: AppImage, DEB and RPM (include only artifacts that passed native build and launch checks). No 32-bit builds.
 
 Windows ZIP 请完整解压并运行 `Nexus Launcher.exe`，不能单独复制 EXE。免安装不等于数据便携：用户配置与 Harness 数据仍保留在用户数据目录。
 
 Extract the entire Windows ZIP and run `Nexus Launcher.exe`; do not copy the EXE alone. Portable means no installer is required, not that user configuration and Harness data move with the application folder.
 
-包内含 Chromium、Rust Agent 与 Node/npm/pnpm。Harness 首次在线依赖准备不属于桌面离线安装。
+包内含 Chromium、Rust Agent、Node/npm/pnpm，以及支持平台的官方 Desktop 离线运行时。取得 Harness 版本后，Desktop 准备与完整离线包导入均不需要联网。官方 Desktop 支持 Windows x64、macOS Intel／Apple Silicon；Windows ARM64 和 Linux ARM64 当前提供 Web 模式。兼容范围取 Harness 与 Electron 的交集。
 
-Includes Chromium, Rust Agent and Node/npm/pnpm. Initial online Harness dependency preparation is separate from offline desktop installation.
+Includes Chromium, Rust Agent, Node/npm/pnpm and the official Desktop offline runtime on supported platforms. After acquiring Harness, Desktop preparation and full offline-package import need no network. Official Desktop supports Windows x64 and macOS Intel/Apple Silicon; Windows ARM64 and Linux ARM64 currently provide Web mode. Supported targets are the intersection of Harness and Electron support.
 
 ## 本次变化 / Changes in this release
 

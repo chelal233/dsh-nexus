@@ -5,7 +5,7 @@ use super::windows_terminal;
 use super::{
     api_error_response, compatibility, data_error_response, dsh, ensure_checkpoint_mutation_ready,
     ensure_harness_selection_quiescent, ensure_harness_stopped, ensure_update_idle, io,
-    profile_archive, recovery_mode, settle_checkpoint_restore, source_context, try_read_lifecycle,
+    profile_archive, settle_checkpoint_restore, source_context, try_read_lifecycle,
     update_agent_state, update_error_response, AppState, HarnessLaunchSpec, Json,
     PluginRemoveResponse, ProfileAction, ProfileCatalog, ProfileCommand, ProfileListResponse,
     ProfileOpenPathResponse, ProfileSelectResponse, State, StatusCode, DEFAULT_PROFILE,
@@ -231,15 +231,7 @@ async fn profile_control_inner(
             {
                 return response;
             }
-            let paused = match recovery_mode::paused(&state.paths) {
-                Ok(value) => value,
-                Err(error) => return data_error_response(error, "recovery_mode_invalid"),
-            };
-            if !paused {
-                if let Err(error) = compatibility::for_profile_selection(&state, profile).await {
-                    return data_error_response(error, "profile_compatibility_failed");
-                }
-            }
+            // Selection enables repair; actual startup owns runtime/plugin validation.
             let catalog = match ProfileCatalog::new(
                 profile,
                 manifests.iter().map(|item| item.name.clone()).collect(),

@@ -78,11 +78,7 @@ pub(crate) async fn evaluate(state: AppState) -> (Value,Option<PreparedStart>) {
                 if tool.available { "" } else { "Select a complete runtime in Settings or reinstall the bundled runtime." }));
         }
     }
-    let paused = match crate::recovery_mode::paused(&state.paths) {
-        Ok(value) => value,
-        Err(error) => { checks.push(item("recovery_mode", "blocked", error, "Export diagnostics and repair the recovery mode record.")); true }
-    };
-    if paused { checks.push(item("recovery_mode", "warning", "Harness startup is paused in recovery mode.", "Repair settings and run checks, then leave recovery mode before starting.")); }
+    let paused = false;
     let ready = !checks.iter().any(|check| check["status"] == "blocked");
     (json!({"api_version":nexus_protocol::API_VERSION,"checked_at_unix":nexus_core::unix_time_seconds(),
         "ready":ready,"paused":paused,"checks":checks,"note":"This is an observation, not a startup guarantee; startup protection and plugin compatibility checks still apply."}),prepared)

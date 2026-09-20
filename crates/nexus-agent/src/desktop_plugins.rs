@@ -2,6 +2,31 @@
 use std::io;
 use nexus_core::{NexusPaths, HarnessLaunchSpec};
 
+pub(crate) fn browser_health(paths: &NexusPaths, run: &str) -> serde_json::Value {
+    use std::io::Read;
+    let read = || -> io::Result<serde_json::Value> {
+        let file = paths.run_dir.join("browser-health.json");
+        let meta = std::fs::symlink_metadata(&file)?;
+        if !meta.is_file() || nexus_core::path_is_reparse(&meta) || meta.len() > 65536 {
+            return Err(io::Error::other("Invalid browser health evidence"));
+        }
+        let mut bytes = Vec::new();
+        std::fs::File::open(file)?.take(65537).read_to_end(&mut bytes)?;
+        if bytes.len() > 65536 { return Err(io::Error::other("Browser health evidence too large")); }
+        Ok(serde_json::from_slice(&bytes)?)
+    };
+    if let Ok(mut value) = read() {
+        let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_millis() as u64;
+        if value["run"].as_str() == Some(run) && value["observed_at"].as_u64().is_some_and(|time| time <= now && now - time <= 20000)
+            && matches!(value["state"].as_str(), Some("checking" | "blocked" | "active" | "limited" | "unverified"))
+            && value["entries"].as_array().is_some_and(|entries| entries.len() <= 128) {
+            value.as_object_mut().unwrap().remove("run");
+            return value;
+        }
+    }
+    serde_json::json!({"state":"unverified"})
+}
+
 pub(crate) fn module_url(path: &std::path::Path) -> io::Result<String> {
     let path = std::path::PathBuf::from(nexus_core::node_script_argument(path));
     reqwest::Url::from_file_path(path).map(|url| url.to_string())
@@ -60,6 +85,24 @@ pub(crate) fn prepare(paths: &NexusPaths, home: &std::path::Path, profile: &str,
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn browser_health_requires_current_run_and_fresh_evidence() {
+        let root = std::env::temp_dir().join(format!("nexus-browser-health-{}", nexus_core::unix_time_nanos_for_update()));
+        let paths = NexusPaths::from_root(root);
+        paths.ensure_directories().unwrap();
+        let file = paths.run_dir.join("browser-health.json");
+        let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_millis() as u64;
+        let mut report = serde_json::json!({"run":"current", "observed_at":now, "state":"blocked", "entries":[]});
+        std::fs::write(&file, serde_json::to_vec(&report).unwrap()).unwrap();
+        assert_eq!(browser_health(&paths, "current")["state"], "blocked");
+        assert_eq!(browser_health(&paths, "next")["state"], "unverified");
+        report["observed_at"] = serde_json::json!(now - 30000);
+        std::fs::write(&file, serde_json::to_vec(&report).unwrap()).unwrap();
+        assert_eq!(browser_health(&paths, "current")["state"], "unverified");
+        std::fs::write(&file, b"{broken").unwrap();
+        assert_eq!(browser_health(&paths, "current")["state"], "unverified");
+        std::fs::remove_dir_all(paths.root).unwrap();
+    }
     #[test]
     fn generated_plugin_json_uses_string_paths_and_loads_in_upstream_loader() {
         let root = std::env::temp_dir().join(format!("nexus-plugin-json 空格#-{}-{}", std::process::id(), nexus_core::unix_time_nanos_for_update()));

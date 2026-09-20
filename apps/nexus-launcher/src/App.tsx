@@ -28,14 +28,18 @@ import {
   numberValue,
 } from "./json-values";
 import { errorMessage, localizeBackendError, isRecoverableNoopError } from "./display-format";
-import { credentialInvalidationCanSettle, harnessSessionKey } from "./harness-session";
+import {
+  credentialInvalidationCanSettle,
+  harnessSessionKey,
+  clientCheckPending,
+} from "./harness-session";
 import {
   currentStartupFailure,
   GuideView,
   StartupOperationPanel,
   CompatibilityDialog,
 } from "./views/startup";
-import { ReadOnlyRecoveryView, RecoveryModePanel } from "./views/recovery";
+import { ReadOnlyRecoveryView } from "./views/recovery";
 import { UpdatesView } from "./views/updates";
 import { BuiltinPluginsView } from "./views/market";
 import { ProfilesView } from "./views/profiles";
@@ -404,7 +408,9 @@ function App() {
             harnessPollState.current =
               lifecycleBusy || (!!coldPhase && !coldOperationIsTerminal(coldPhase))
                 ? "busy"
-                : stringValue(harnessRuntimeValue(next.harnessRuntime), "state");
+                : clientCheckPending(next)
+                  ? "client_pending"
+                  : stringValue(harnessRuntimeValue(next.harnessRuntime), "state");
             setSnapshot((previous) => {
               if (!lifecycleBusy) return next;
               const instance = stringValue(next.health, "instance_id");
@@ -460,7 +466,9 @@ function App() {
         failures,
         document.visibilityState === "hidden",
       );
-      failures = harnessPollState.current === "failed" ? failures + 1 : 0;
+      failures = ["failed", "client_pending"].includes(harnessPollState.current || "")
+        ? failures + 1
+        : 0;
       timer = window.setTimeout(() => void poll(), interval);
     };
     void poll();
@@ -486,9 +494,9 @@ function App() {
     void invoke("set_native_notifications", { enabled: notificationsEnabledPreference() }).catch(
       () => undefined,
     );
-    const unlisten = listen<string>("nexus-native-error", (event) => setError(event.payload)).catch(
-      () => () => undefined,
-    );
+    const unlisten = listen<string>("nexus-native-error", (event) =>
+      setError(t(event.payload)),
+    ).catch(() => () => undefined);
     setDisplayZoom(displayZoom());
     const zoomKey = (event: KeyboardEvent) => {
       if (
@@ -513,7 +521,7 @@ function App() {
       window.removeEventListener("keydown", zoomKey);
       void unlisten.then((stop) => stop());
     };
-  }, []);
+  }, [t]);
 
   const retryStartup = useCallback(async () => {
     try {
@@ -590,7 +598,6 @@ function App() {
         if (
           path === "/v1/profiles" &&
           body.action === "select" &&
-          !booleanValue(snapshot.recovery, "paused") &&
           needsHarnessInstall(snapshot.config, snapshot.releases)
         ) {
           showHarnessInstall();
@@ -691,6 +698,13 @@ function App() {
               );
             setCheckOpen(true);
           }
+          if (
+            info.code === "profile_compatibility_failed" ||
+            (path === "/v1/harness" && ["start", "restart"].includes(String(body?.action))) ||
+            original.includes("Plugin compatibility needs a choice")
+          ) {
+            setCheckOpen(true);
+          }
           const explanation =
             info.code === "config_revision_conflict"
               ? t(
@@ -775,6 +789,14 @@ function App() {
   }, [snapshot, busyAction]);
   const trayActionHandler = useRef<(action: string) => void>(() => {});
   trayActionHandler.current = (action) => {
+    if (action === "maintenance") {
+      setActiveModule("maintenance");
+      return;
+    }
+    if (action === "profiles") {
+      setActiveModule("profiles");
+      return;
+    }
     if (busyAction !== null) return;
     if (action === "start" || action === "stop")
       void runAction(t(`Harness ${action}`), "/v1/harness", { action });
@@ -791,7 +813,7 @@ function App() {
     return () => {
       void unlisten.then((stop) => stop());
     };
-  }, []);
+  }, [t]);
 
   useEffect(() => {
     if (!snapshot.startup?.available || snapshot.lifecycleBusy) return;
@@ -1070,16 +1092,6 @@ function App() {
                 busyAction={busyAction}
                 runAction={runAction}
               />
-              {snapshot.startup?.available && !booleanValue(snapshot.health, "degraded") && (
-                <RecoveryModePanel
-                  snapshot={snapshot}
-                  busyAction={
-                    busyAction ?? (snapshot.lifecycleBusy ? t("Operation in progress") : null)
-                  }
-                  runAction={runAction}
-                  compact
-                />
-              )}
               <ActionButton
                 disabled={booleanValue(snapshot.health, "degraded")}
                 onClick={() => setCheckOpen(true)}
@@ -1209,16 +1221,6 @@ function App() {
               onReinstall={() => setActiveModule("guide")}
             />
           )}
-          {!booleanValue(snapshot.health, "degraded") &&
-            snapshot.startup?.available &&
-            (booleanValue(snapshot.recovery, "paused") ||
-              stringValue(snapshot.recovery, "pause_error")) && (
-              <RecoveryModePanel
-                snapshot={snapshot}
-                busyAction={busyAction}
-                runAction={runAction}
-              />
-            )}
           {snapshot.lifecycleBusy && (
             <div className="notice" role="status">
               <ArrowsClockwise size={17} />
@@ -1296,34 +1298,38 @@ function App() {
                 {error}
               </p>
             )}
-            {snapshot.lifecycleBusy && (
-              <>
-                <OperationStatusPanel snapshot={snapshot} />
-                {stringValue(asObject(asObject(snapshot.updates).operation), "operation_id") &&
-                  !coldOperationIsTerminal(
-                    stringValue(asObject(asObject(snapshot.updates).operation), "phase"),
-                  ) && (
-                    <ActionButton
-                      disabled={
-                        busyAction !== null ||
-                        stringValue(asObject(asObject(snapshot.updates).operation), "phase") ===
-                          "cancelling"
-                      }
-                      onClick={() =>
-                        void runAction(t("Cancel"), "/v1/updates", {
-                          action: "cancel",
-                          operation_id: stringValue(
-                            asObject(asObject(snapshot.updates).operation),
-                            "operation_id",
-                          ),
-                        })
-                      }
-                    >
-                      {t("Cancel")}
-                    </ActionButton>
-                  )}
-              </>
-            )}
+            {snapshot.lifecycleBusy &&
+              stringValue(asObject(asObject(snapshot.updates).operation), "operation_id") &&
+              !coldOperationIsTerminal(
+                stringValue(asObject(asObject(snapshot.updates).operation), "phase"),
+              ) && (
+                <>
+                  <OperationStatusPanel snapshot={snapshot} />
+                  {stringValue(asObject(asObject(snapshot.updates).operation), "operation_id") &&
+                    !coldOperationIsTerminal(
+                      stringValue(asObject(asObject(snapshot.updates).operation), "phase"),
+                    ) && (
+                      <ActionButton
+                        disabled={
+                          busyAction !== null ||
+                          stringValue(asObject(asObject(snapshot.updates).operation), "phase") ===
+                            "cancelling"
+                        }
+                        onClick={() =>
+                          void runAction(t("Cancel"), "/v1/updates", {
+                            action: "cancel",
+                            operation_id: stringValue(
+                              asObject(asObject(snapshot.updates).operation),
+                              "operation_id",
+                            ),
+                          })
+                        }
+                      >
+                        {t("Cancel")}
+                      </ActionButton>
+                    )}
+                </>
+              )}
           </BusyOverlay>
           <footer className="workspace-footer">
             <span>

@@ -7,6 +7,7 @@ This page tracks user-visible boundaries rather than historical reviewer batches
 
 - v0.1.7 may retain old bundled paths after portable relocation and override saved runtime settings with an old launch path. Current local source fixes these; unrevised packages remain affected.
 - Declaration compatibility does not guarantee plugin behavior or data-format compatibility. Downgrading Harness may hide sessions using newer formats.
+- Unreleased source checks client plugins after host readiness by keeping a hidden page in the same instance while Launcher runs. Missing bridge reports, load failures and timeouts remain unverified. The real Electron path with a controlled plugin tree has passed locally; each Harness release still needs separate acceptance. Plugin activation does not verify all conversations, tools or UI interactions.
 - Browsers cannot directly expose every Electron native interface. Full compatibility with third-party private Desktop APIs is not promised.
 - Bundled runtimes simplify setup but do not remove upstream native dependencies' compiler requirements.
 - Incomplete downloads are not installable updates. Portable packages require more than the EXE. End-to-end updates require build-specific acceptance.

@@ -186,9 +186,6 @@ impl RecoveryRecords {
         self.quiescent()?;
         // Atomic publication either keeps the old record or publishes the
         // validated complete file. Failed writes never delete the old record.
-        // Native Agent restart also schedules Harness bootstrap; a durable
-        // pause prevents that from launching the restored profile implicitly.
-        super::recovery_mode::set_paused(&self.paths, true)?;
         nexus_core::write_private_bytes_atomic(&self.paths.root, &source, &replacement)?;
         Ok(json!({"restored":true,"point_id":id,"active_profile":point["catalog"]["active_profile"],"backup_path":directory.join("original.bin"),"restart_required":true}))
     }
@@ -317,8 +314,7 @@ mod tests {
             fs::write(&store.paths.profiles_file,&original).unwrap();
             let result = store.prepare(restore_command(&store,&point)).unwrap();
             assert_eq!(result["restored"],true);
-            assert!(super::super::recovery_mode::paused(&store.paths).unwrap());
-            assert!(super::super::recovery_mode::ensure_start_allowed(&store.paths).is_err());
+            assert!(!store.paths.run_dir.join("harness-recovery.json").exists());
             assert_eq!(fs::read(result["backup_path"].as_str().unwrap()).unwrap(),original);
             let catalog = nexus_core::profile_history::validate(&fs::read(&store.paths.profiles_file).unwrap()).unwrap();
             assert_eq!(catalog.active_profile,"web");

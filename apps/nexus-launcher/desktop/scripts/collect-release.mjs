@@ -2,7 +2,7 @@ import { createHash } from 'node:crypto';
 import { copyFile, mkdir, readdir, readFile, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { bundleFormats, releaseBasename, selectPlatform } from './release-platform.mjs';
+import { bundleFormats, releaseBasename, selectPlatform, updateChannelFile } from './release-platform.mjs';
 
 const app = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
 const root = path.resolve(app, '../..');
@@ -29,7 +29,7 @@ for (const kind of spec.bundles) {
     await copyFile(path.join(directory, entry.name), path.join(destination, name));
   }
 }
-const channelName = `latest-${spec.arch}${spec.platform === 'darwin' ? '-mac' : ''}.yml`;
+const channelName = updateChannelFile(spec);
 const channelBytes = await readFile(path.join(source, channelName));
 files.push({ name: channelName, sha256: createHash('sha256').update(channelBytes).digest('hex') });
 await copyFile(path.join(source, channelName), path.join(destination, channelName));

@@ -14,11 +14,11 @@ pub(crate) fn latest_for_selection(
     paths: &NexusPaths, home: &Path, selected: &str, release: Option<&str>,
 ) -> Option<CompatibilityReport> {
     let report = latest(paths)?;
-    if !matches!(report.status.as_str(), "passed" | "isolated" | "needs_choice")
-        || (report.status != "needs_choice" && Some(report.release_id.as_str()) != release) {
+    if !matches!(report.status.as_str(), "passed" | "isolated" | "needs_choice" | "failed")
+        || (!matches!(report.status.as_str(), "needs_choice" | "failed") && Some(report.release_id.as_str()) != release) {
         return None;
     }
-    if report.status == "needs_choice" && report.trigger.as_deref() == Some("profile_switch") {
+    if matches!(report.status.as_str(), "needs_choice" | "failed") && report.trigger.as_deref() == Some("profile_switch") {
         return (Some(report.release_id.as_str()) == release).then_some(report);
     }
     let source = source_profile(&home, selected).ok()?;
@@ -193,28 +193,17 @@ pub(crate) async fn for_release(
     force: bool,
     cancellation: &CancellationToken,
 ) -> io::Result<()> {
-    let Some(spec) = state.config.load()?.harness else { return Ok(()); };
+    let Some(mut spec) = nexus_core::load_harness_launch_spec(&state.paths)? else { return Ok(()); };
     if spec.mode != HarnessLaunchMode::Node { return Ok(()); }
     let home = state.snapshots.configured_dsh_home()?;
     let profile = state.profiles.load()?.active_profile;
     let slot = state.releases.release_root(id)?;
-    prepare(&state.paths, &home, &profile, id, &slot, &spec.program, force, cancellation).await?;
-    Ok(())
-}
-
-pub(crate) async fn for_profile_selection(state: &crate::AppState, profile: &str) -> io::Result<()> {
-    let Some(mut spec)=nexus_core::load_harness_launch_spec(&state.paths)? else{return Ok(())};
-    if spec.mode!=HarnessLaunchMode::Node{return Ok(())}
-    let source=crate::source_context::resolve_async(&state.paths,&state.releases).await?;
-    let Some(slot)=source.root else{return Ok(())};
-    let release=crate::source_context::compatibility_id(&state.paths,&state.releases)?.ok_or_else(||io::Error::other("Select a Harness source"))?;
-    crate::supervisor::normalize_selected_launch(&mut spec,&state.paths,&state.releases)?;
-    let runtime=crate::runtime::runtime_for_launch(&mut spec,state.config.load()?.runtime.unwrap_or_default(),nexus_core::bundled_runtime_dir().as_deref());
-    let runtime_env=nexus_core::build_runtime_child_env(&runtime,std::env::var_os("PATH").as_deref())?;
-    let node=spec.render_path_for_context(&spec.program,profile,Some(&release),Some(&slot))?;
-    prepare_with_trigger(&state.paths, &state.snapshots.configured_dsh_home()?, profile,
-        &release, &slot, &node, true,
-        &CancellationToken::default(), "profile_switch", &runtime_env).await?;
+    crate::supervisor::normalize_selected_launch(&mut spec, &state.paths, &state.releases)?;
+    let runtime = crate::runtime::runtime_for_launch(&mut spec, state.config.load()?.runtime.unwrap_or_default(), nexus_core::bundled_runtime_dir().as_deref());
+    let runtime_env = nexus_core::build_runtime_child_env(&runtime, std::env::var_os("PATH").as_deref())?;
+    let node = spec.render_path_for_context(&spec.program, &profile, Some(id), Some(&slot))?;
+    prepare(&state.paths, &home, &profile, id, &slot, &node, force, cancellation,
+        "version_switch", &runtime_env).await?;
     Ok(())
 }
 
@@ -237,7 +226,7 @@ pub(crate) async fn check_selected(state: &crate::AppState, profile: &str) -> io
     if args.is_empty() || !managed_entry || !(args.len() == 3 && args[1] == "--profile" && args[2] == profile) {
         return Err(io::Error::other("Independent plugin verification requires the managed Harness entry and selected profile arguments; custom launch commands are not supported"));
     }
-    prepare_with_trigger(&state.paths, &state.snapshots.configured_dsh_home()?, profile,
+    prepare(&state.paths, &state.snapshots.configured_dsh_home()?, profile,
         &release, &slot, &node, true,
         &CancellationToken::default(), "manual_check", &runtime_env).await?
         .ok_or_else(|| io::Error::other("Selected profile has no native manifest to verify"))?;
@@ -245,14 +234,6 @@ pub(crate) async fn check_selected(state: &crate::AppState, profile: &str) -> io
 }
 
 pub(crate) async fn prepare(
-    paths: &NexusPaths, home: &Path, profile: &str, release: &str,
-    slot: &Path, node: &Path, force: bool, cancellation: &CancellationToken,
-) -> io::Result<Option<CompatibilityReport>> {
-    prepare_with_trigger(paths, home, profile, release, slot, node, force, cancellation,
-        if force { "version_switch" } else { "startup" }, &[]).await
-}
-
-async fn prepare_with_trigger(
     paths: &NexusPaths, home: &Path, profile: &str, release: &str,
     slot: &Path, node: &Path, force: bool, cancellation: &CancellationToken, trigger: &str,
     runtime_env: &[(std::ffi::OsString, std::ffi::OsString)],
@@ -358,8 +339,12 @@ async fn prepare_with_trigger(
     validate_profile_name(&report.source_profile)?;
     validate_profile_name(&report.effective_profile)?;
     if report.release_id != release || report.source_profile != source_profile(&home, profile)?
-        || !matches!(report.status.as_str(), "passed" | "isolated" | "needs_choice") {
+        || !matches!(report.status.as_str(), "passed" | "isolated" | "needs_choice" | "failed") {
         return Err(io::Error::other("Compatibility report does not match target release"));
+    }
+    if report.status == "failed" {
+        write_json_atomic(&root, &root.join("latest.json"), &report)?;
+        return Err(io::Error::other(report.error.as_deref().unwrap_or("Compatibility preparation failed")));
     }
     if report.status == "needs_choice" {
         if preferences.patches.as_ref().is_some_and(|patches| !patches.is_empty()) {
@@ -489,6 +474,7 @@ mod tests {
         fs::write(projection.join(".nexus-compatibility.json"),
             br#"{"source_profile":"original"}"#).unwrap();
         let report = CompatibilityReport {
+        diagnosis: None,        failure_stage: None,        dependency_origins: Vec::new(),
             declarations: Vec::new(), declarations_omitted: 0, checker_version: 1, status: "passed".to_owned(), source_profile: "original".to_owned(),
             effective_profile: "nexus-projection".to_owned(), release_id: "release-a".to_owned(),
             fingerprint: "fixture".to_owned(), checked_at_unix: 1, checked_disabled_plugins: None, disabled: Vec::new(), error: None, candidates: Vec::new(),
