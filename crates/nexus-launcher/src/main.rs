@@ -2607,7 +2607,8 @@ mod tests {
         let current = read_harness_ui_info_with_observer(&paths, &mut observer, Some(&session));
         assert_eq!(current.token.as_deref(), Some("current"));
 
-        fs::remove_file(&stdout).expect("old log removes");
+        // Keep the old inode allocated, as the real child does with its open FD.
+        fs::rename(&stdout, stdout.with_extension("previous.log")).expect("old log retained");
         fs::write(
             &stdout,
             format!(
@@ -2616,6 +2617,12 @@ mod tests {
             ),
         )
         .expect("longer replacement writes");
+        assert_ne!(
+            log_file_identity(&fs::File::open(&stdout).expect("replacement log opens"))
+                .expect("replacement identity reads"),
+            session.stdout_file_identity,
+            "the fixture must create a distinct file identity"
+        );
         let replacement = read_harness_ui_info_with_observer(&paths, &mut observer, Some(&session));
         assert!(
             !replacement.available,

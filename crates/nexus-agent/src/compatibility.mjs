@@ -7,7 +7,7 @@ import { spawn } from 'node:child_process';
 import { pathToFileURL } from 'node:url';
 import semver from './vendor/semver.cjs';
 
-export const checkerVersion = 12;
+export const checkerVersion = 13;
 
 // Signatures verified against app-boot/{index,profile}.ts, profile-resolution/
 // resolver.ts, loader/config/tree.ts and CLI args.ts in dsh-v0.1.6-alpha.2.
@@ -123,7 +123,8 @@ export function parseActivation(text) {
 export async function verificationIdentity(roots, environment = process.env, desktopBuild) {
   const hash = crypto.createHash('sha256');
   const visited = new Set(), deadline = performance.now() + 15000;
-  const excluded = desktopBuild && path.resolve(desktopBuild);
+  let excluded;
+  try { excluded = desktopBuild && resolveExistingParent(desktopBuild); } catch { return null; }
   const records = new Map();
   const pending = roots.map(file => ({ file }));
   let count = 0;
@@ -166,6 +167,22 @@ const marker = '.nexus-compatibility.json';
 // their namespace or weakening the containment checks below.
 const readJson = p => JSON.parse(fs.readFileSync(p, 'utf8'));
 const within = (root, p) => { const rel = path.relative(root, p); return rel === '' || (!rel.startsWith('..' + path.sep) && rel !== '..' && !path.isAbsolute(rel)); };
+// Windows temp roots may use an 8.3 alias while realpath returns the long name.
+// Dangling generated links need the same identity without requiring their final
+// target to exist. Resolve the nearest existing ancestor and retain the suffix.
+function resolveExistingParent(file) {
+  let current = path.resolve(file);
+  const suffix = [];
+  while (true) {
+    try { return path.join(fs.realpathSync.native(current), ...suffix); }
+    catch (error) {
+      if (error.code !== 'ENOENT') throw error;
+      const parent = path.dirname(current);
+      if (parent === current) throw error;
+      suffix.unshift(path.basename(current)); current = parent;
+    }
+  }
+}
 const validName = name => typeof name === 'string' && /^[a-zA-Z0-9][a-zA-Z0-9._-]{0,63}$/.test(name) && !name.endsWith('.');
 const validPackage = name => /^(?:@[\w.-]+\/)?[\w.-]+$/.test(name) && !name.split('/').some(p => p === '.' || p === '..');
 const profileFiles = ['package.json', 'pnpm-lock.yaml', 'cordis.patch.yml', 'pnpm-workspace.yaml'];
@@ -241,6 +258,7 @@ function profileFingerprint(home, dir) {
 }
 
 function officialPackages(slot) {
+  slot = fs.realpathSync.native(slot);
   const packages = new Map();
   for (const base of ['vendor', 'packages']) {
     const root = path.join(slot, base);
@@ -411,7 +429,7 @@ function moduleFilter(source, official, planning = false, missing = new Set()) {
     if (!fs.existsSync(p) && fs.lstatSync(p).isSymbolicLink()) {
       const target = path.resolve(path.dirname(p), fs.readlinkSync(p));
       const fallback = path.join(path.dirname(source), '.dsh-module-fallback', 'node_modules');
-      if (within(fallback, target)) return false;
+      if (within(resolveExistingParent(fallback), resolveExistingParent(target))) return false;
       if (validPackage(name)) missing.add(name);
       throw Error(`Installed dependency link is broken: ${p}. Repair the profile dependencies before retrying; the original link is preserved.`);
     }

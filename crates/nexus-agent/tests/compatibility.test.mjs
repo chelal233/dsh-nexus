@@ -56,6 +56,40 @@ function fixture() {
   return {root,home,slot,source,options,write,close:()=>fs.rmSync(root,{recursive:true,force:true})};
 }
 
+test('path aliases preserve generated-asset exclusion, fallback identity and official declaration containment', async t => {
+  const f = fixture(), alias = f.root + '-alias';
+  t.after(() => { fs.unlinkSync(alias); f.close(); });
+  fs.symlinkSync(f.root, alias, process.platform === 'win32' ? 'junction' : 'dir');
+  const aliased = file => path.join(alias, path.relative(f.root, file));
+  const desktop = path.join(f.slot, 'apps/desktop/.desktop-build');
+  fs.mkdirSync(desktop, {recursive:true});
+  const identity = () => verificationIdentity([aliased(f.slot)], {}, aliased(desktop));
+  const before = await identity(); assert.ok(before);
+  fs.writeFileSync(path.join(desktop, 'generated.py'), 'not a Web input');
+  assert.equal(await identity(), before);
+
+  f.write(['@deepseek-ai/settings', 'uploader']);
+  for (const [name, dir] of [['@deepseek-ai/settings',path.join(f.slot,'vendor/settings')],['uploader',path.join(f.source,'node_modules/uploader')]]) {
+    fs.mkdirSync(dir,{recursive:true});
+    fs.writeFileSync(path.join(dir,'package.json'),JSON.stringify({name,dsh:{bundle:{patch:'patch.yml'}}}));
+    fs.writeFileSync(path.join(dir,'patch.yml'), `- insert:\n    - id: upload\n      name: ${name}\n`);
+  }
+  const source = sourceInfo(f.home, 'original');
+  assert.equal(duplicateEntrySources(source, aliased(f.slot), 'duplicate loader entry id: upload').length, 2);
+  assert.equal(replacedOfficialEntries(source, aliased(f.slot)).length, 1);
+  const link = path.join(f.source, 'node_modules/missing');
+  fs.symlinkSync(aliased(path.join(f.source, '.dsh-module-fallback/node_modules/missing')), link, process.platform === 'win32' ? 'junction' : 'dir');
+  assert.equal((await check(f.options)).status, 'passed');
+  fs.unlinkSync(link);
+  fs.symlinkSync(aliased(path.join(f.source, 'outside-fallback/missing')), link, process.platform === 'win32' ? 'junction' : 'dir');
+  await assert.rejects(check({...f.options, force:true}), /Installed dependency link is broken/);
+  fs.unlinkSync(link);
+  const outside = path.join(f.root, 'outside'); fs.mkdirSync(outside);
+  fs.writeFileSync(path.join(outside, 'package.json'), JSON.stringify({name:'missing'}));
+  fs.symlinkSync(aliased(outside), link, process.platform === 'win32' ? 'junction' : 'dir');
+  await assert.rejects(check({...f.options, force:true}), /Dependency link escapes source node_modules/);
+});
+
 test('Windows canonical external slot works in compatibility and Canary', {skip:process.platform !== 'win32'}, async()=>{
   const f=fixture();
   try {
