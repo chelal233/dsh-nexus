@@ -16,7 +16,13 @@ Includes Chromium, Rust Agent, Node/npm/pnpm and the official Desktop offline ru
 
 ## 本次变化 / Changes in this release
 
-<!-- 填写实际产品变化、已知限制和修复版本。Fill in actual changes, known limitations and fixed versions. -->
+- 统一 Harness 工作台与托盘操作，直接运行官方 Desktop；启动失败提供有证据的修复建议。
+- 共享 Electron 并预组装离线依赖；完整离线包保留同系统、同架构运行所需的依赖。
+- 补齐 macOS 签名校验，新增 Linux ARM64 的 AppImage、DEB、RPM；Linux 使用 Web Harness，上游未支持的 Desktop 不显示入口。
+
+- Unify Harness controls and launch the official Desktop with evidence-based startup repair.
+- Share Electron and preassemble offline dependencies; full exports remain self-contained for the same OS and architecture.
+- Verify signed macOS resources and add Linux ARM64 AppImage, DEB and RPM packages. Linux uses Web Harness; unsupported upstream Desktop actions stay hidden.
 
 ## 验证 / Verification
 

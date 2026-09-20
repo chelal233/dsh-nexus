@@ -3,9 +3,11 @@
 [简体中文](CHANGELOG.md)
 
 
-## Unreleased
+## 0.1.8
 
-- Prepare official Desktop dependencies on clean CI from pinned, checksum-verified inputs. Ship the original Electron archive for offline extraction and verify it after installation. Keep Windows ARM64 Web-only where upstream lacks Desktop support. Group tray actions into Browser and Official Desktop submenus.
+- Share Nexus Electron 44.0.0 and preassemble Desktop dependencies to reduce package size and first-start preparation. Preserve signed macOS resources, Unix offline permissions and process-stop ownership. Add native Linux ARM64 AppImage, DEB and RPM build and startup gates. Support only the intersection of Harness and Electron targets.
+
+- Prepare official Desktop dependencies on clean CI from pinned, checksum-verified inputs. Ship preassembled runtime payloads for offline extraction and verify it after installation. Keep Windows ARM64 Web-only where upstream lacks Desktop support. Group tray actions into Browser and Official Desktop submenus.
 
 - Maintain tray controls with detected official Desktop support, separate Web/Desktop stop actions, profile and maintenance shortcuts, explicit keep-running versus stop-all exit options, and guards against conflicting launch operations.
 
@@ -20,7 +22,7 @@
 - Prevent stale refreshes from replacing newly saved settings; persist Agent log level.
 - Restructure Chinese and English user, developer and maintenance documentation with actual UI screenshots.
 
-These changes are in the working tree and are not included in the releases below.
+
 
 ## 0.1.7
 
