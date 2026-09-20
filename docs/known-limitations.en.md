@@ -5,14 +5,18 @@
 
 This page tracks user-visible boundaries rather than historical reviewer batches. Original records remain in the [archive](history/baselines/known-limitations.md).
 
-- v0.1.7 may retain old bundled paths after portable relocation and override saved runtime settings with an old launch path. Current local source fixes these; unrevised packages remain affected.
+- v0.1.7 may retain old bundled paths after portable relocation and override saved runtime settings with an old launch path. These are fixed in v0.1.8; upgrade affected packages and still check explicit external paths.
 - Declaration compatibility does not guarantee plugin behavior or data-format compatibility. Downgrading Harness may hide sessions using newer formats.
-- Unreleased source checks client plugins after host readiness by keeping a hidden page in the same instance while Launcher runs. Missing bridge reports, load failures and timeouts remain unverified. The real Electron path with a controlled plugin tree has passed locally; each Harness release still needs separate acceptance. Plugin activation does not verify all conversations, tools or UI interactions.
+- v0.1.8 Web mode checks client plugins after host readiness by keeping a hidden page in the same instance while Launcher runs. Missing bridge reports, load failures and timeouts remain unverified. The real Electron path with a controlled plugin tree has passed locally; each Harness release still needs separate acceptance. Plugin activation does not verify all conversations, tools or UI interactions.
 - Browsers cannot directly expose every Electron native interface. Full compatibility with third-party private Desktop APIs is not promised.
-- Bundled runtimes simplify setup but do not remove upstream native dependencies' compiler requirements.
+- Nexus bundles runtime dependencies for supported releases. Building external sources or adding third-party native dependencies may still require your own compiler tools.
 - Incomplete downloads are not installable updates. Portable packages require more than the EXE. End-to-end updates require build-specific acceptance.
-- Windows/macOS x64/ARM64 are build targets, not proof of real-device acceptance for every IME, terminal, or permission combination.
+- v0.1.8 passed CI and package checks on Windows x64/ARM64, macOS x64/ARM64, and Linux ARM64. This does not establish device acceptance for every distribution, IME, terminal, or permission combination.
 - OS code signing, Apple notarization, and checksum-manifest signatures are separate mechanisms; consult artifact metadata.
 - Harness/plugins are not a security sandbox. Snapshots are not complete backups of all user data.
 
 New entries should name affected versions, triggers, workarounds, fix versions, and validation level. Do not mark unverified conclusions resolved.
+
+## Platform and offline boundaries
+
+Official Desktop currently supports Windows x64 and macOS x64/ARM64 with a compatible managed Harness release. Windows ARM64 and Linux ARM64 offer Web only. Linux ARM64 has AppImage, DEB and RPM packages; package format is not a guarantee for every distribution. Full offline transfer requires matching OS/architecture; partial exports are insufficient. Desktop process startup is not proof of internal plugin or business readiness. See [Desktop](harness-desktop.en.md).

@@ -17,7 +17,11 @@ Record version, commit, build ID, platform/architecture, package type, and data 
 | Notifications | Completion/failure/approval/question, unfocused/always, foreground Launcher with background task, click-through |
 | Interruption recovery | Kill at authorized test points; restart does not replay uncertain actions, orphan owned processes, or delete business data |
 | Nexus update | Auto/manual checks, background download, interruption, superseding versions, clear Harness-stop warning before applying |
-| System integration | Windows/macOS pickers, terminal, clipboard, IME, zoom, tray, sleep/resume |
+| System integration | Windows/macOS/Linux pickers, terminal, clipboard, IME, zoom, tray, sleep/resume |
+| Official Desktop | Supported targets expose the option; unsupported targets hide it; stop before switching modes; preparation cancellation and failure recovery preserve data |
+| Full offline package | Export/import without network on matching OS/architecture; reject mismatches; retain Unix permissions/links and macOS signed app structure |
+| Tray | Web/Desktop controls, configuration and maintenance entries; exit-only retains services, stop-all exits only after stopping |
+| Client startup | Required service failures block success; optional warnings remain limited; absent reports stay unverified; provider evidence precedes disable suggestions |
 | Languages | Chinese/English actions, errors, confirmations, long text, and screenshots |
 | Uninstall | Respects selected scope; preserves external directories and unauthorized data |
 

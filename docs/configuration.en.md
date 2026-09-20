@@ -3,7 +3,7 @@
 [简体中文](configuration.md)
 
 
-This page describes the current source. Runtime-path and save fixes are unreleased; it does not imply v0.1.7 contains them. See the [changelog](../CHANGELOG.en.md).
+This page uses v0.1.8 as its baseline. Runtime-path and save fixes shipped in that version; v0.1.7 may still be affected. See the [changelog](../CHANGELOG.en.md).
 
 ## Saved settings, next launch, current instance
 
@@ -39,3 +39,7 @@ Configuration saves check revisions. If another operation changed the document, 
 ## Data and patches
 
 Changing data directories does not migrate files. Patches are composed through the selected Harness's supported mechanism; order and enablement affect the result. Launch input descriptions are not the entire upstream merged configuration. Do not publish secrets from diagnostic, patch, or configuration files.
+
+## Web and official Desktop
+
+Switch Web profiles from Workbench or Profiles and plugins. Official Desktop manages configuration in its own window. The modes share managed versions and data: stop the active mode before switching modes, changing a version, or exporting data. Desktop uses its pinned offline runtime; Web runtime settings are not an arbitrary Desktop runtime override. See [Desktop](harness-desktop.en.md).

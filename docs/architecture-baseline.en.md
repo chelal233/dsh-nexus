@@ -13,7 +13,9 @@ flowchart LR
   Bridge --> Agent[Authenticated local Agent API]
   CLI[nexusctl] --> Agent
   Agent --> Harness[Separate Node Harness process]
-  Browser[System browser / independent window] --> Harness
+  Browser[System browser] --> Harness
+  Main --> Desktop[Official Harness Desktop process]
+  Desktop --> Shared[Shared managed version and data]
   Agent --> State[Configuration / slots / transactions / snapshots]
 ```
 
@@ -40,6 +42,6 @@ Bundled runtimes resolve against the current installation; external pins remain 
 
 Renderers use sandboxing and context isolation with Node integration disabled. IPC validates senders and allowed commands. Loopback is not a substitute for authentication. Harness and third-party plugins retain normal local-process capabilities; Nexus is not a hostile-code sandbox.
 
-Built-ins deploy through the selected Harness extension mechanism. Local manifest checks establish declarations only. Browser and independent window entries share Harness, but native interfaces are not automatically equivalent. Cross-version support depends on actual APIs and data compatibility, not version strings alone.
+Built-ins deploy through the selected Harness extension mechanism. Local manifest checks establish declarations only. Web and official Desktop are mutually exclusive execution modes sharing managed versions and data, not two windows around the same Web page. Electron main prepares and supervises Desktop using upstream native capabilities, without injecting Nexus Web compatibility plugins. Cross-version support depends on actual APIs and data compatibility, not version strings alone.
 
 See [interruption recovery](interrupted-operation-recovery.en.md) and [acceptance](acceptance.en.md).

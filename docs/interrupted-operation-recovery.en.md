@@ -39,3 +39,7 @@ tests, live-materializer checkpoint rollback exclusion, and interrupted Electron
 preference writing. Windows runtime acceptance does not establish macOS runtime
 acceptance. Unix process groups cannot contain third-party programs deliberately
 escaping the group with a new session; this is not a sandbox for hostile plugins.
+
+## Official Desktop and Unix stopping
+
+A background worker owns Desktop preparation and execution; stop targets only its owned process tree. Stop failure preserves ownership and error state instead of starting a replacement. Cancellation also waits for the previous process to finish. Unix waits for the owned process group, then uses bounded forced termination if needed; an active group cannot be reported stopped. Shared-version/configuration changes and data exports require the corresponding Web and Desktop stop checks.

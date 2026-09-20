@@ -10,7 +10,7 @@ Record the Nexus version, build ID, OS, and architecture, and retain the origina
 | `Resolve the blocking startup checks…` | Inspect the actual `blocked` items; this is a summary, not the cause |
 | `configured_path_missing` or missing Node launch program | Compare next launch inputs with the current extracted location; inspect `resources/runtime` and stale pins |
 | `ENOENT … app-update.yml` | Use a complete release package with the file under `resources`, not a copied EXE. The inspected v0.1.7 Windows x64 ZIP and installer both contain it |
-| Saved runtime still launches an old path | Known in v0.1.7, fixed in current source but not yet in that package. A workaround must check both runtime settings and the advanced launch program |
+| Saved runtime still launches an old path | Known in v0.1.7 and fixed in v0.1.8; use a complete updated package. A workaround must check both runtime settings and the advanced launch program |
 | JSON configuration parse failure | Identify the file and line/column, preserve a backup, and use guided repair or restore a valid configuration; do not reset all directories |
 | Plugin Loader failure | Preserve the stack, run compatibility checks, and check plugin provenance/declarations and Nexus/Harness versions; do not assume every failure is a user plugin defect |
 | Interrupted operation awaiting recovery/cleanup | Retry recovery/cancellation through the interface; do not delete markers to bypass process ownership checks |
@@ -19,7 +19,7 @@ Record the Nexus version, build ID, OS, and architecture, and retain the origina
 
 ## Portable relocation
 
-v0.1.7 can retain an automatically selected bundled runtime as an old absolute path. The source fix re-resolves `bundled` selections against the current installation and updates the linked launch program. Explicit external paths remain untouched. If an old save marked the selection external, it requires an explicit correction rather than guessing from the directory name.
+v0.1.7 can retain an automatically selected bundled runtime as an old absolute path. v0.1.8 re-resolves `bundled` selections against the current installation and updates the linked launch program. Explicit external paths remain untouched. If an old save marked the selection external, it requires an explicit correction rather than guessing from the directory name.
 
 ## Diagnostics and recovery
 
@@ -37,3 +37,13 @@ Report a minimal reproduction, original error, version, build ID, and redacted s
 Signatures are grounded in deepseek-ai/deepseek-harness commit `ddefc45fbc7f8e46dd73185e68295696d1297887` (`dsh-v0.1.6-alpha.2`): app-boot `index.ts`, `profile.ts`, `profile-resolution/resolver.ts`, loader `config/tree.ts`, and CLI `args.ts`. Coverage includes configuration parsing, reserved profiles, missing bundles/modules, export incompatibility, module layout/resolution conflicts, restart requirements, patch targets, ports/permissions, required activation/services, and readiness timeouts. Older releases retain conservative loader checks. Unknown upstream or third-party exceptions retain their original text; coverage is not exhaustive.
 
 Repair suggestions never automatically overwrite configuration, install dependencies, remove files, terminate unrelated processes or disable plugins.
+
+## Desktop, preparation and blocked plugins
+
+- No Desktop option: confirm the selected managed Harness release and platform are supported. Windows ARM64 and Linux ARM64 currently show Web only.
+- Long preparation: inspect the stage and elapsed time; cancel if needed. Retry after checking local resources and disk space. Missing or mismatched offline resources require a matching complete Nexus/package, not an online dependency install.
+- Waiting services: locate the provider using declarations and original errors. A waiting consumer is not automatically the faulty plugin. Disable only a relevant plugin after reviewing the evidence, then recheck and retry.
+- Failed offline import: check OS/architecture, package completeness and integrity. Do not treat a configuration-only export as a full environment.
+- Desktop opens but a model/tool fails: use the official client error and logs; Nexus does not diagnose every runtime business error.
+
+See [startup coverage](startup-failure-coverage.en.md) and [Desktop](harness-desktop.en.md).

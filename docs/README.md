@@ -3,7 +3,7 @@
 [English](README.en.md)
 
 
-从安装、使用到维护，按任务查找说明。当前文档描述工作区实现；未发布修复均单独标注，下载包的行为以对应发行版本为准。
+从安装、使用到维护，按任务查找说明。当前使用说明以 v0.1.8 为基线；未来未发布改动须单独标注，历史材料保留当时结论。
 
 ## 开始使用
 
@@ -11,6 +11,9 @@
 - [配置与生效时机](configuration.md)
 - [常见问题](faq.md)
 - [故障排查](troubleshooting.md)
+
+- [Harness 官方 Desktop](harness-desktop.md)
+- [启动故障处理边界](startup-failure-coverage.md)
 
 ## 开发与维护
 

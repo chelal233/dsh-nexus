@@ -23,7 +23,7 @@ Harness selects project workspaces separately. Changing `DSH_HOME` changes the l
 
 Run startup checks and inspect each `blocked` item and repair link. Passing basic checks does not guarantee plugins will boot. Compatibility checks provide additional evidence, not a guarantee of every business workflow.
 
-Use Workbench to start or stop Harness and inspect the current instance. Browser and independent window entries are selectable; window-specific native interfaces may be unavailable in a browser. The DSH terminal uses the selected version and profile. A globally installed `dsh` command may point elsewhere.
+Use Workbench to start or stop Harness and inspect the current instance. Web uses the system browser; supported releases also offer official Harness Desktop. They share managed versions and data, so stop the active mode before starting the other. Switch Web profiles in Workbench; manage Desktop configuration in its official window. The DSH terminal uses the selected version and profile. A globally installed `dsh` command may point elsewhere.
 
 Closing the Launcher window normally hides it to the tray. Use an explicit stop or stop-services-and-exit action when needed; closing the interface does not itself stop tasks.
 
@@ -40,8 +40,12 @@ Choose notifications by event, including turn completion, failure, approval, que
 
 **Harness update**: prepare an upstream version on the Updates page, then switch explicitly. Stop Harness before switching and follow the current protection checks. Versions may use different data formats; Nexus does not promise automatic downgrade compatibility.
 
-Portable users may download and fully extract a new package. v0.1.7 has a known stale bundled-runtime path issue; the source fix is not in that published package. See [troubleshooting](troubleshooting.en.md).
+Portable users may download and fully extract a new package. The stale bundled-runtime path issue affecting v0.1.7 is fixed in v0.1.8. See [troubleshooting](troubleshooting.en.md).
 
 ## When something fails
 
 Keep the original error and build ID. Inspect the actual blocking item, then use its settings, recovery, or diagnostics entry. Do not delete transaction records to silence errors, or start by deleting `.dsh`. Checkpoints cover declared scope, not a complete backup of all projects, sessions, and secrets.
+
+## Full offline transfer
+
+Acquire and prepare a supported Harness version, then export a full package including Harness and its runtimes. Import on the same OS and architecture without downloading dependencies. Configuration/data-only exports are partial backups, not standalone offline environments. Desktop preparation uses local resources and shows progress, elapsed time, and cancellation. Remote models and network plugins still require their services to be reachable. See [Desktop and offline delivery](harness-desktop.en.md).

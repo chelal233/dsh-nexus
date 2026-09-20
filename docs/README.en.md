@@ -3,7 +3,7 @@
 [简体中文](README.md)
 
 
-Find instructions by task, from installation to maintenance. Current documentation describes the working tree; unreleased fixes are explicitly marked. Downloaded packages follow their release version.
+Find instructions by task, from installation to maintenance. Current usage documentation uses v0.1.8 as its baseline. Future unreleased changes must be marked separately; historical records retain their original conclusions.
 
 ## Getting started
 
@@ -11,6 +11,9 @@ Find instructions by task, from installation to maintenance. Current documentati
 - [Configuration and activation](configuration.en.md)
 - [FAQ](faq.en.md)
 - [Troubleshooting](troubleshooting.en.md)
+
+- [Official Harness Desktop](harness-desktop.en.md)
+- [Startup diagnostic scope](startup-failure-coverage.en.md)
 
 ## Development
 

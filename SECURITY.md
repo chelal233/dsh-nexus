@@ -15,7 +15,7 @@
 
 ## 验证发布下载
 
-发布附件包含聚合校验清单 `SHA256SUMS.txt`，以及它的 Sigstore keyless 签名 `SHA256SUMS.txt.sig` 与证书 `SHA256SUMS.txt.crt`。签名由本仓库的 `release.yml` 工作流在发布时生成，绑定该工作流在对应 tag 上的运行身份。安装包仍无传统代码签名；这份验签证明的是"产物清单来自本仓库 CI"，不是操作系统级信任。
+发布附件包含聚合校验清单 `SHA256SUMS.txt`，以及它的 Sigstore keyless 签名 `SHA256SUMS.txt.sig` 与证书 `SHA256SUMS.txt.crt`。签名由本仓库的 `release.yml` 工作流在发布时生成，绑定该工作流在对应 tag 上的运行身份。这与操作系统代码签名和 Apple 公证不同：macOS ad-hoc 签名也不等于 Developer ID 或公证。实际签名状态以具体产物记录为准；清单验签证明发布来源，不授予操作系统级信任。
 
 下载全部文件后执行：
 

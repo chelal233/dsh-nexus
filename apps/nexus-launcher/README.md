@@ -16,6 +16,7 @@ pnpm test
 pnpm test:electron
 pnpm prepare:agent
 pnpm prepare:runtime
+pnpm prepare:desktop
 pnpm prepare:notices
 pnpm prepare:release
 pnpm dev
@@ -32,3 +33,7 @@ pnpm dev
 设置 `NEXUS_DATA_DIR` 和 `DSH_HOME` 为独立测试目录，避免触碰真实数据。`NEXUS_SMOKE_EXECUTABLE` 可指定安装版或解压后的 Electron 可执行文件；冒烟通过不证明全部业务交互通过。
 
 源码入口：`src/App.tsx`、`electron/main.mjs`、`electron/preload.cjs`，构建与资源脚本位于 `desktop/scripts`。Rust 使用仓库根工作区及 Cargo.lock。测试 UI 导出放在 `tests/ui-test-entry.ts`，不扩张应用入口。
+
+## 平台资源
+
+在对应原生平台构建 Desktop 资源，顺序为 `prepare:runtime` → `prepare:desktop` → 发布清单。package.json 的 Electron 版本须与 `desktop/desktop-runtime-lock.json` 一致（当前 44.0.0）。不支持 Desktop 的目标生成明确标记并保留 Web，不得把下载推迟到用户首次启动。Linux ARM64 辅助程序采用 glibc 2.28 基线及静态 OpenSSL，按原生 CI 准备包括 Perl/make 的编译工具；这是构建环境要求，不是用户安装要求。

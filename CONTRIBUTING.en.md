@@ -29,3 +29,5 @@ Maintained guides pair Chinese `.md` and English `.en.md` with reciprocal links.
 Describe the trigger, resulting behavior, validation, and unverified scope. Do not commit installers, runtime logs, tokens, private diagnostics, or user-specific paths. Preserve historical evidence rather than rewriting it as a new conclusion.
 
 The root overview is the exception: `README.md` is English, `README.zh-CN.md` is Chinese, and `README.en.md` preserves the old link only.
+
+Keep Chinese and English changelogs and release bodies aligned, explaining user-visible changes, usage, and limits under the [release-note standard](docs/github-release.en.md). Runtime dependency or platform additions also require updates to the support matrix, third-party materials, and acceptance scope, not only the README.

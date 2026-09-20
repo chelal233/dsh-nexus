@@ -12,7 +12,7 @@ Each feature lives in `plugins/<plugin-name>/` with its own manifest, host/clien
 | Plugin | Responsibility |
 | --- | --- |
 | `nexus-notifications` | Task events and terminal alerts. |
-| `nexus-desktop-bridge` | Window health, native directory selection, notification session routing and read-only `desktopWindow`. Electron preload exposes real dropped-file paths through `__DSH_DESKTOP_FILE_PATH__`. |
+| `nexus-desktop-bridge` | Web client startup reports and health, with capability-checked directory selection, notification routing and `desktopWindow`. Ordinary browsers have no Electron preload; native interfaces and real dropped-file paths are not always available. |
 | `nexus-desktop-compat` | `desktopProfiles.current/list/select` and `desktopPnpm.run/runPlugin/runExternalMarketPluginInstall`. Agent owns profile switching; Harness subprocess services own package operations until the process tree exits. |
 
 ## Loading and compatibility
@@ -26,3 +26,5 @@ When `dshmarket` is selected, a temporary patch declares its `desktopProfiles` d
 ## Deployment
 
 Agent carries the plugins, deploys them to Nexus-managed runtime directories and mounts them with `--patch` when Harness starts. This is not npm installation and does not write to user profile dependency manifests or `node_modules`. Disabling the notification plugin takes effect at the next Harness start. Market selection is optional; Nexus does not operate its own package registry.
+
+These compatibility plugins serve Nexus-managed Web startup. Official Desktop uses its upstream plugins and native services; Nexus does not inject Web compatibility patches into it. Web interface inventories do not establish Desktop plugin support.

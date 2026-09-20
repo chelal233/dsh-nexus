@@ -7,17 +7,12 @@
 
 Electron and browser entry points, bundled runtimes, Harness installation/linking, release slots, authenticated readiness, configuration repair guidance, recovery checkpoints, bundled plugins/notifications, GitHub updates and portable packages exist in source. See [architecture](architecture-baseline.en.md) and [limitations](known-limitations.en.md). This does not replace per-release device acceptance.
 
-## Current working tree, not yet released
+## Shipped in v0.1.8
 
-- Rebind bundled runtimes after relocating a portable directory.
-- Apply saved runtime settings at the next Harness start without affecting the running instance.
-- Prevent stale refresh results from replacing newly saved settings; persist Agent log level.
-- Bilingual documentation and actual UI screenshots.
-
-Validate against the [acceptance checklist](acceptance.en.md), then record the actual release version in the changelog.
+Official Harness Desktop, a unified workbench and maintained tray, evidence-based startup repair, shared offline runtimes, portable path/save fixes, and Linux ARM64 AppImage/DEB/RPM are released. All five targets passed CI/package checks. Bilingual guides and screenshots now describe this release. See the [changelog](../CHANGELOG.en.md) for user-facing details and [acceptance](acceptance.en.md) for remaining device/workflow checks.
 
 ## Future decisions
 
-Extend bundled plugins and public interfaces for concrete needs. A standalone window remains optional; full upstream Desktop parity is not promised. Users choose their market; Nexus does not host a registry. Launcher version switching cannot guarantee compatibility between upstream data formats.
+Extend bundled plugins and public interfaces for concrete needs. Reuse official upstream Desktop within the Harness/Electron support intersection rather than maintaining a replacement client. Users choose their market; Nexus does not host a registry. Launcher version switching cannot guarantee compatibility between upstream data formats.
 
 The [original plan](history/baselines/implementation-roadmap.md) is historical evidence, not current completion status.

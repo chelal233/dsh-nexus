@@ -1,5 +1,7 @@
 # Harness 官方 Desktop
 
+[English](harness-desktop.en.md)
+
 Nexus 直接运行当前受管 Harness 版本中的官方 Electron 客户端，不再维护替代客户端。Web 的浏览器入口保留；CLI 对 `desktop` 专用配置的限制也保留。
 
 在工作台停止 Web 后，选择「启动官方 Desktop」。Nexus 校验自带运行时，调用该 Harness 版本的本地准备脚本，再启动官方原生窗口。不会使用开发调试端口，也不会为 Desktop 注入 Nexus 的 Web 兼容插件。旧 `--nexus-shell` 入口转到官方 Desktop。
@@ -30,11 +32,11 @@ Web 的兼容检查以并行文件清单校验缓存，排除官方 Desktop 的�
 
 「Desktop 进程已启动」只证明原生客户端进程存在，内部插件就绪情况和运行时业务错误由官方客户端呈现。Nexus 展示准备错误、进程退出和可重试状态；关闭启动器不会关闭 Desktop。修改版本、配置和导出数据前先关闭 Desktop，启动器会阻止并发写操作。
 
-当前本地交付适配 Windows x64、Harness `0.1.6-alpha.2`、Electron `44.0.0` 及该版本锁定的运行时。其他版本必须通过产物和锁文件兼容检查，不因版本号接近而猜测兼容。其他平台未在本次工作中真机验收。Windows 本地回归与 WSL x64 的 Unix 离线往返、进程组停止检查已执行；macOS 签名、离线宿主和 Linux ARM64 安装包启动必须通过对应原生 CI，当前尚未执行。
+当前锁定基线为 Harness `0.1.6-alpha.2`、Electron `44.0.0` 及该版本锁定的运行时。其他版本必须通过产物和锁文件兼容检查，不因版本号接近而猜测兼容。其他平台未在本次工作中真机验收。Windows 本地回归与 WSL x64 的 Unix 离线往返、进程组停止检查已执行；v0.1.8 的五个平台目标已通过 CI 与安装包检查，包括 macOS 签名应用结构／离线宿主检查及 Linux ARM64 安装包冒烟；这不等于所有平台上的完整 Harness 业务真机验收。
 
 平台范围取 Harness 与 Electron 的交集。Linux ARM64 仅构建 Nexus 图形启动器和 Web 入口，提供 AppImage、DEB、RPM 构建目标，不包含自制 Desktop。Linux Agent 在 glibc 2.28 环境构建并校验 ABI；安装包格式支持不代表任意发行版均可运行。
 
-macOS 签名会改写内嵌二进制。发布流程在内部签名完成后刷新资源摘要，再重新封装外层应用签名，最后由打包器公证；安装校验使用签名后的摘要。
+macOS 签名会改写内嵌二进制。发布流程在内部签名完成后刷新资源摘要，再重新封装外层应用签名，启用公证的构建再由打包器提交公证；安装校验使用签名后的摘要。ad-hoc 签名检查不代表已完成 Apple 公证。
 
 ## 托盘控制
 

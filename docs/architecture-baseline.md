@@ -13,7 +13,9 @@ flowchart LR
   Bridge --> Agent[认证本机 Agent API]
   CLI[nexusctl] --> Agent
   Agent --> Harness[独立 Node Harness 进程]
-  Browser[系统浏览器 / 独立窗口] --> Harness
+  Browser[系统浏览器] --> Harness
+  Main --> Desktop[Harness 官方 Desktop 独立进程]
+  Desktop --> Shared[共享受管版本和数据]
   Agent --> State[配置 / 版本槽 / 事务 / 快照]
 ```
 
@@ -40,6 +42,6 @@ Agent 拥有业务状态；页面不得用按钮点击成功推断后台事务�
 
 Electron renderer 使用 sandbox、context isolation，关闭 Node integration，IPC 检查来源和允许的命令。本机回环不是认证替代品。Harness 和第三方插件仍拥有普通本机进程能力，不是被 Nexus 沙箱隔离的恶意代码。
 
-内置插件使用所选 Harness 的扩展机制部署；本地 manifest 检查仅提供声明证据。浏览器入口和独立窗口共用 Harness，但原生接口不自动等价。跨版本支持依赖具体接口和数据兼容，而非版本号字符串本身。
+内置插件使用所选 Harness 的扩展机制部署；本地 manifest 检查仅提供声明证据。Web 和官方 Desktop 是互斥的运行模式，共享受管版本与数据，不是把同一个 Web 页面包进另一个窗口。Desktop 由 Electron 主进程准备和监管，并使用上游原生能力；不注入 Nexus 的 Web 兼容插件。跨版本支持依赖具体接口和数据兼容，而非版本号字符串本身。
 
 恢复机制见[中断恢复](interrupted-operation-recovery.md)，验证范围见[验收清单](acceptance.md)。

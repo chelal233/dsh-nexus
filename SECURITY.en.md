@@ -26,3 +26,5 @@ sha256sum -c SHA256SUMS.txt
 
 
 Install [cosign](https://github.com/sigstore/cosign); verification may query the Rekor transparency log. Per-architecture checksum manifests permit checking a selected package without downloading every platform. Checksums, provenance and operating-system trust are different checks.
+
+macOS ad-hoc signing is not Developer ID signing or Apple notarization. Refer to the individual artifact record; a verified checksum manifest does not grant operating-system trust.

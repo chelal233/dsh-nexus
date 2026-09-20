@@ -7,9 +7,9 @@
 
 Nexus manages local execution, versions, and recovery. Harness provides conversations, Agents, models, and business plugins. Updating Nexus does not upgrade Harness.
 
-## Must I use the independent window or a plugin market?
+## Must I use official Desktop or a plugin market?
 
-No. Browser and independent window entries are optional, and you may choose no market. Desktop-specific plugins require actual supported interfaces; Nexus does not promise all private APIs of other projects.
+No. Web uses your system browser; Desktop launches the official client included in a managed Harness release. You may choose no plugin market. Desktop appears only when supported by the selected Harness and platform; Nexus no longer maintains a replacement client.
 
 ## Can I copy only the portable EXE?
 
@@ -17,7 +17,7 @@ No. Keep the entire extracted directory, including `resources/app.asar`, update 
 
 ## Must I restart Nexus after saving settings?
 
-Normally no: the next Harness start should read new settings while the running instance remains unchanged. Current source fixes stale launch paths overriding runtime saves; published v0.1.7 may still be affected. Explicit next-process-start settings, such as Agent log level, are separate.
+Normally no: the next Harness start should read new settings while the running instance remains unchanged. v0.1.8 fixes stale launch paths overriding runtime saves; v0.1.7 may still be affected. Explicit next-process-start settings, such as Agent log level, are separate.
 
 ## Are missing sessions after a downgrade deleted?
 
@@ -33,7 +33,7 @@ Unfocused-only task notifications refer to the actual task page, not Launcher fo
 
 ## Can it run offline?
 
-Installing the desktop package does not require downloading Chromium separately. Initial Harness preparation normally uses the network. Prepared local services can start offline; models and plugins have their own network requirements.
+After acquiring a supported Harness release, Nexus supplies runtime dependencies and prepares Desktop without online supplementation. Full offline packages can be imported and started without a network on the same OS and architecture; configuration/data-only packages are insufficient. Remote models and network plugins still need connectivity.
 
 ## Why retain old version documents?
 
