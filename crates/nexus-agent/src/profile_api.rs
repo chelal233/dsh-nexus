@@ -585,6 +585,11 @@ async fn profile_open_terminal(
         profile.clone(),
     ];
     nexus_core::apply_harness_preferences(&mut terminal_spec, &preferences, &capabilities);
+    let terminal_context = format!(
+        "Nexus DSH 终端 / Terminal environment\n\n命令绑定配置 / dsh profile: {profile}\n初始工作目录 / Initial directory: {}\n数据目录 / DSH_HOME: {}\nHarness 来源 / Source: {}\n\nWeb：dsh 命令默认使用上方配置；这不表示 Web 正在运行。\nWeb: dsh defaults to the profile above; this is not a running-state indicator.\nDesktop：固定使用 desktop 配置，目录为 {}\nDesktop always uses its own desktop profile.\n\npnpm / npm 操作当前目录；cd 后目标会改变，dsh 绑定配置不会改变。\npnpm / npm follow the working directory; cd does not change the dsh profile.\n切换 Nexus 配置后请重新打开终端；此处仅为打开时的环境。\nReopen the terminal after switching profiles in Nexus; this is an opening-time snapshot.\n维护 Desktop 插件前先停止 Desktop；完成后从 Nexus 重新启动。\nStop Desktop before package maintenance, then start it from Nexus.\n",
+        profile_dir.display(), dsh_home.display(), release_root.display(),
+        dsh_home.join("profiles/desktop").display(),
+    );
     #[cfg(windows)]
     let terminal_args =
         serde_json::to_string(&terminal_spec.args[1..]).expect("terminal args serialization");
@@ -638,13 +643,14 @@ async fn profile_open_terminal(
             .args(["-NoLogo", "-NoProfile", "-NoExit", "-Command"])
             .arg(if notification_monitor {
                 format!("{DSH_TERMINAL_WAIT}& $env:NEXUS_TERMINAL_NODE $env:NEXUS_NOTIFICATION_MONITOR $env:NEXUS_NOTIFICATION_FILE $env:NEXUS_NOTIFICATION_SETTINGS")
-            } else { format!("{DSH_TERMINAL_WAIT}{DSH_TERMINAL_INIT}") })
+            } else { format!("{DSH_TERMINAL_WAIT}{DSH_TERMINAL_INIT}; Write-Host $env:NEXUS_TERMINAL_CONTEXT") })
             .current_dir(&profile_dir);
         for (key, value) in nexus_core::harness_preferences_environment(&preferences, &capabilities)
         {
             command.env(key, value);
         }
-        command.env("NEXUS_TERMINAL_ARGS", &terminal_args);
+        command.env("NEXUS_TERMINAL_ARGS", &terminal_args)
+            .env("NEXUS_TERMINAL_CONTEXT", &terminal_context);
         for (key, value) in &envs {
             command.env(key, value);
         }
@@ -717,6 +723,7 @@ async fn profile_open_terminal(
         let mut terminal_env = envs;
         terminal_env.extend(nexus_core::harness_preferences_environment(&preferences, &capabilities));
         terminal_env.push(("DSH_HOME".into(), dsh_home.as_os_str().to_owned()));
+        terminal_env.push(("NEXUS_TERMINAL_CONTEXT".into(), terminal_context.into()));
         let options = crate::macos_terminal::Options {
             node: &node, entry: &entry, args: &terminal_spec.args[1..],
             pnpm: pnpm_pin.as_deref(), pnpm_is_script, profile_dir: &profile_dir,

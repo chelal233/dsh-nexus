@@ -5,6 +5,9 @@
 
 ## Unreleased
 
+- **DSH terminal explains its scope**: The opening banner lists the bound profile, working directory, data home, Harness source and Desktop profile directory. It explains dsh versus npm/pnpm targeting and when to reopen the terminal; it is an environment snapshot, not live process status.
+
+
 - **Default marketplace installation updated to 1.52.0**: Includes official Desktop profile selection and package-operation fixes. Applies to first installation; existing profile installations are not automatically replaced.
 
 

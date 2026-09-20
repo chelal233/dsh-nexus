@@ -147,6 +147,9 @@ fn prepare(paths: &NexusPaths, options: &Options<'_>) -> io::Result<Prepared> {
     }
     script.push_str(&format!("export PATH={}:\"$PATH\"\ncd {} || exit 1\nprintf '%s\\n' 'Nexus DSH terminal: dsh / node / npm / pnpm'\n",
         quote(prepared.directory.as_os_str())?, quote(options.profile_dir.as_os_str())?));
+    if !options.notification_monitor {
+        script.push_str("printf '%s\\n' \"$NEXUS_TERMINAL_CONTEXT\"\n");
+    }
     if options.notification_monitor {
         let monitor = prepared.directory.join("monitor.mjs");
         nexus_core::write_private_bytes_atomic(
