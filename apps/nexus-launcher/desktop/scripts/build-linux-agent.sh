@@ -3,7 +3,7 @@
 set -euo pipefail
 test "$(uname -m)" = aarch64
 test "$CARGO_BUILD_TARGET" = aarch64-unknown-linux-gnu
-dnf install -y ca-certificates curl git
+dnf install -y ca-certificates curl git perl-core make
 curl --proto '=https' --tlsv1.2 -fsSL https://sh.rustup.rs -o /tmp/nexus-rustup.sh
 sh /tmp/nexus-rustup.sh -y --profile minimal --default-toolchain 1.98.0
 export PATH="$NEXUS_BUILD_NODE_BIN:$HOME/.cargo/bin:$PATH"
