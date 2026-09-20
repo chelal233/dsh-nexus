@@ -5,6 +5,11 @@
 
 ## Unreleased
 
+- **Desktop startup has a meaningful result**: checks observe the actual official client instead of treating a live process as success. Configuration and plugin startup errors are visible; unsupported checks or long waits remain unverified, with official recovery retained.
+- **Profile ownership is clear**: Web shows the selected profile; Desktop shows its independent desktop profile and explains that plugin settings do not synchronize automatically.
+- **Less repeated cold-start work**: Web avoids a second dependency scan after its probe and cleans stopped temporary instances in the background. Desktop avoids traversing every runtime file again after extraction while retaining integrity and link checks. First Web startup still requires an isolated check; instant startup is not promised.
+
+
 - **Less repeated work on first launch**: startup checks copy isolated dependencies with bounded parallel IO, preserving original profiles and path checks. Desktop runtime archives are no longer read twice for verification. A same-machine copy comparison improved from about 56 to 24 seconds; total startup time still depends on plugins and storage.
 - **Waiting is not reported as startup failure**: the desktop request budget now accommodates backend compatibility checks. If transport still times out, Nexus checks Harness status instead of opening plugin repair or repeating the start request.
 - **Clearer desktop controls and warnings**: the workbench provides Close and Restart for official Desktop. A failed stop never launches another instance. Ready with warnings now identifies the optional plugins and their reported reasons.

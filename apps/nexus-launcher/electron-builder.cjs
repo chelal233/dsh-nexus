@@ -17,7 +17,7 @@ module.exports = {
   directories: { output: 'electron-dist' },
   artifactName: `dsh-nexus_${version}_${platform}_\${arch}.\${ext}`,
   asar: true,
-  asarUnpack: ['electron/harness-desktop*.mjs', 'electron/prepare-harness-desktop.mjs', 'electron/desktop-runtime*.mjs', 'electron/desktop-paths.mjs', 'electron/desktop-process.mjs'],
+  asarUnpack: ['electron/harness-desktop*.mjs', 'electron/prepare-harness-desktop.mjs', 'electron/desktop-runtime*.mjs', 'electron/desktop-paths.mjs', 'electron/desktop-process.mjs', 'electron/desktop-startup-audit.mjs'],
   files: ['dist/**', 'electron/**', 'desktop/icons/**', 'package.json'],
   // Preserve the staged runtime tree. Its manifest omits only the metadata
   // files that electron-builder's copy walker always excludes.

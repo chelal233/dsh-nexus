@@ -49,3 +49,6 @@ Keep the original error and build ID. Inspect the actual blocking item, then use
 ## Full offline transfer
 
 Acquire and prepare a supported Harness version, then export a full package including Harness and its runtimes. Import on the same OS and architecture without downloading dependencies. Configuration/data-only exports are partial backups, not standalone offline environments. Desktop preparation uses local resources and shows progress, elapsed time, and cancellation. Remote models and network plugins still require their services to be reachable. See [Desktop and offline delivery](harness-desktop.en.md).
+
+
+Web uses the profile selected in Nexus. Official Desktop uses its separate `profiles/desktop`; Workbench displays desktop and omits the Web profile switch in Desktop mode. Plugin settings do not synchronize automatically. Desktop startup also checks actual client loading, displays failures and retains official recovery.

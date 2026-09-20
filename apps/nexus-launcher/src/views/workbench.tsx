@@ -126,16 +126,28 @@ export function OverviewView({
           <h1>{t("Workbench")}</h1>
         </div>
       </div>
-      <section className="workbench-profile-bar" aria-label={t("Browser profile")}>
+      <section
+        className="workbench-profile-bar"
+        aria-label={t(mode === "desktop" ? "Desktop profile" : "Browser profile")}
+      >
         <div>
-          <span>{t("Browser profile")}</span>
+          <span>{t(mode === "desktop" ? "Desktop profile" : "Browser profile")}</span>
           <strong>
-            {stringValue(snapshot.profiles, "active_profile") ||
-              stringValue(state, "profile") ||
-              t("None selected")}
+            {mode === "desktop"
+              ? "desktop"
+              : stringValue(snapshot.profiles, "active_profile") ||
+                stringValue(state, "profile") ||
+                t("None selected")}
           </strong>
         </div>
-        {openProfiles && (
+        {mode === "desktop" && (
+          <small>
+            {t(
+              "Official Desktop uses its own desktop profile. Manage its plugins in the official window; Web profile changes do not apply here.",
+            )}
+          </small>
+        )}
+        {mode === "web" && openProfiles && (
           <ActionButton
             disabled={
               desktop.active || desktop.starting || busyAction !== null || !!snapshot.lifecycleBusy
@@ -299,12 +311,6 @@ export function OverviewView({
           <p className="harness-switch-hint">{t("Stop Harness Web before launching Desktop.")}</p>
         )}
         <footer className="harness-context-row">
-          {mode === "desktop" && (
-            <div className="harness-profile">
-              <span>{t("Desktop settings")}</span>
-              <strong>{t("Managed in the official window")}</strong>
-            </div>
-          )}
           <details className="harness-source">
             <summary>{t("Version and source")}</summary>
             <p>{activeProgramSource(snapshot, t)}</p>

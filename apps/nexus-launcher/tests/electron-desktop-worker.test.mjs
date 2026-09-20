@@ -24,6 +24,7 @@ test('failed preparation stop retains ownership until retry and never starts Des
   // Keep the real worker state machine; replace only external preparation,
   // platform stop execution and runtime discovery with isolated fixtures.
   put('harness-desktop-worker.mjs', fs.readFileSync(new URL('../electron/harness-desktop-worker.mjs', import.meta.url)));
+  put('desktop-startup-audit.mjs', fs.readFileSync(new URL('../electron/desktop-startup-audit.mjs', import.meta.url)));
   put('harness-desktop.mjs', "export const desktopCapability = source => ({app: source});");
   put('desktop-runtime.mjs', "export const digest=()=> 'lock'; export const legacyElectronEntry=()=>''; export const portableHostEntry=()=>'';");
   put('desktop-paths.mjs', 'export const desktopSourceView = source => source;');
@@ -77,6 +78,7 @@ test('official Desktop worker opens a visible Windows window', { skip: process.p
     fs.mkdirSync(path.dirname(file), { recursive: true }); fs.writeFileSync(file, content); return file;
   };
   put('harness-desktop-worker.mjs', fs.readFileSync(new URL('../electron/harness-desktop-worker.mjs', import.meta.url)));
+  put('desktop-startup-audit.mjs', fs.readFileSync(new URL('../electron/desktop-startup-audit.mjs', import.meta.url)));
   put('harness-desktop.mjs', 'export const desktopCapability = source => ({app:source});');
   put('desktop-runtime.mjs', "export const digest=()=> 'lock'; export const legacyElectronEntry=()=>''; export const portableHostEntry=()=>'';");
   put('desktop-paths.mjs', 'export const desktopSourceView=source=>source;');

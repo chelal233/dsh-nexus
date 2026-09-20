@@ -249,6 +249,7 @@ pub(crate) async fn prepare(
     lease.try_lock().map_err(|_| io::Error::new(io::ErrorKind::ResourceBusy, "Compatibility check is still running"))?;
     recover_pending(&root, home)?;
     recover_orphan_work(&root.join("work"))?;
+    schedule_retired_cleanup(&root.join("work"));
     let source = source_profile(home, profile)?;
     if source != profile {
         return Err(io::Error::other(format!("Legacy generated profile {profile} is selected. Select source profile {source} explicitly before starting; all legacy files are retained for recovery.")));
@@ -325,8 +326,11 @@ pub(crate) async fn prepare(
     let bytes = fs::read(&output);
     let _ = fs::remove_file(&input);
     let _ = fs::remove_file(&output);
-    crate::cold::remove_owned_directory(&work_root, &work)?;
+    // The owned probe has exited. Retire its private copy atomically; deleting
+    // thousands of isolated dependency files need not delay the real launch.
+    retire_completed_work(&work_root, &work)?;
     fs::remove_file(&pending)?;
+    schedule_retired_cleanup(&work_root);
     if cancellation.is_cancelled() { return Err(io::Error::new(io::ErrorKind::Interrupted,"Harness startup was cancelled")); }
     let bytes = match bytes {
         Ok(bytes) => bytes,
@@ -365,6 +369,39 @@ pub(crate) async fn prepare(
     write_json_atomic(&root, &root.join("latest.json"), &report)?;
     tracing::info!(release, profile, isolated = report.disabled.len(), "plugin compatibility check passed");
     Ok(Some(report))
+}
+
+fn retire_completed_work(root: &Path, work: &Path) -> io::Result<()> {
+    ensure_work_directory(root)?;
+    ensure_work_directory(work)?;
+    if work.parent() != Some(root) { return Err(io::Error::other("Invalid completed compatibility work path")); }
+    let name = work.file_name().and_then(|name| name.to_str()).and_then(|name| name.strip_prefix("run-"))
+        .filter(|name| !name.is_empty() && name.bytes().all(|byte| byte.is_ascii_digit()))
+        .ok_or_else(|| io::Error::other("Invalid completed compatibility work name"))?;
+    crate::process_recovery::reconcile(&work.join("owned-processes"))?;
+    fs::rename(work, root.join(format!("retired-{name}")))
+}
+
+fn schedule_retired_cleanup(root: &Path) {
+    use std::sync::{Mutex, OnceLock};
+    static QUEUED: OnceLock<Mutex<std::collections::HashSet<std::path::PathBuf>>> = OnceLock::new();
+    let queued = QUEUED.get_or_init(Default::default);
+    let Ok(entries) = fs::read_dir(root) else { return; };
+    for entry in entries.flatten() {
+        let name = entry.file_name();
+        if !name.to_str().and_then(|name| name.strip_prefix("retired-"))
+            .is_some_and(|name| !name.is_empty() && name.bytes().all(|byte| byte.is_ascii_digit())) { continue; }
+        let target = entry.path();
+        if !queued.lock().unwrap().insert(target.clone()) { continue; }
+        let root = root.to_owned();
+        tokio::task::spawn_blocking(move || {
+            let result = ensure_work_directory(&root).and_then(|_| ensure_work_directory(&target))
+                .and_then(|_| crate::process_recovery::reconcile(&target.join("owned-processes")))
+                .and_then(|_| crate::cold::remove_owned_directory(&root, &target));
+            if let Err(error) = result { tracing::warn!(%error, "Completed startup check cleanup deferred until next launch"); }
+            queued.lock().unwrap().remove(&target);
+        });
+    }
 }
 
 fn recover_orphan_work(root: &Path) -> io::Result<()> {
@@ -417,6 +454,30 @@ fn recover_pending(root: &Path, home: &Path) -> io::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn completed_probe_is_retired_only_after_ownership_settles_and_reclaimed_in_background() {
+        let root = std::env::temp_dir().join(format!("nexus-retired-work-{}", nexus_core::unix_time_nanos_for_update()));
+        let work = root.join("run-123");
+        fs::create_dir_all(&work).unwrap();
+        fs::write(work.join("isolated-copy"), "fixture").unwrap();
+        let owner = crate::process_recovery::Owner::create(&work.join("owned-processes"), None).unwrap();
+        assert!(retire_completed_work(&root, &work).is_err());
+        assert!(work.exists());
+        drop(owner);
+        retire_completed_work(&root, &work).unwrap();
+        assert!(!work.exists());
+        assert!(root.join("retired-123/isolated-copy").exists());
+        // The normal orphan recovery must not block on retired copies.
+        recover_orphan_work(&root).unwrap();
+        assert!(root.join("retired-123").exists());
+        schedule_retired_cleanup(&root);
+        schedule_retired_cleanup(&root);
+        tokio::time::timeout(Duration::from_secs(5), async {
+            while root.join("retired-123").exists() { tokio::time::sleep(Duration::from_millis(20)).await; }
+        }).await.unwrap();
+        fs::remove_dir_all(root).unwrap();
+    }
 
     #[test]
     fn interrupted_check_recovers_each_cut_without_replaying_publication() {

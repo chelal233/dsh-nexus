@@ -2969,6 +2969,12 @@ body,
   flex-shrink: 0;
   min-height: 36px;
 }
+.workbench-profile-bar > small {
+  max-width: 560px;
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.6;
+}
 @media (max-width: 767px) {
   .workbench-profile-bar > div {
     flex-wrap: wrap;

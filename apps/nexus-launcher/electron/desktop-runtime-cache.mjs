@@ -45,13 +45,21 @@ function prepareArchive(archive, sha256, kind, entry, cache, verify) {
   const temporary = fs.mkdtempSync(path.join(cache, `.${kind}-${process.pid}-`));
   try {
     execFileSync(nativeTar(), ['-xf', archive, '-C', temporary], { windowsHide: true, timeout: 120000 });
-    runtimeInventory(temporary); // Validate links before making the tree available.
+    const files = runtimeInventory(temporary); // Validate links before publication.
     if (!fs.statSync(path.join(temporary, entry)).isFile()) throw Error('desktop_runtime_invalid');
     verify?.(temporary);
     // A junction is removed without traversing its target.
     if (fs.existsSync(destination)) fs.rmSync(destination, { recursive: true });
     fs.renameSync(temporary, destination);
-    fs.writeFileSync(stamp, JSON.stringify(runtimeInventory(destination)));
+    // Renaming the owned tree preserves file identity and timestamps. Recheck
+    // links at their final location; avoid restatting every extracted file.
+    for (const entry of files) if (entry[1] === 'link') {
+      const resolved = fs.realpathSync(path.join(destination, entry[0]));
+      const relative = path.relative(destination, resolved);
+      if (relative === '..' || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) throw Error('desktop_runtime_invalid');
+      entry[3] = resolved;
+    }
+    fs.writeFileSync(stamp, JSON.stringify(files));
     return destination;
   } finally { fs.rmSync(temporary, { recursive: true, force: true }); }
 }

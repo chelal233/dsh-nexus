@@ -6,6 +6,7 @@ import { desktopCapability } from './harness-desktop.mjs';
 import { digest, legacyElectronEntry, portableHostEntry } from './desktop-runtime.mjs';
 import { stopDesktopChild } from './desktop-process.mjs';
 import { desktopSourceView } from './desktop-paths.mjs';
+import { checkDesktopProfile } from './desktop-startup-audit.mjs';
 
 const recipe = JSON.parse(fs.readFileSync(process.argv[2], 'utf8'));
 let state = { phase: 'preparing', stage: 'verify', startedAt: Date.now(), pid: process.pid, release: recipe.release, version: recipe.version, operationId: recipe.operationId };
@@ -70,6 +71,7 @@ function run(program, args, options = {}) {
 }
 try {
   report({});
+  checkDesktopProfile(recipe.home);
   const { app } = desktopCapability(recipe.source);
   const kit = JSON.parse(fs.readFileSync(path.join(recipe.kit, 'manifest.json'), 'utf8'));
   const electronVersion = JSON.parse(fs.readFileSync(path.join(app, 'node_modules/electron/package.json'), 'utf8')).version;

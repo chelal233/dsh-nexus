@@ -29,6 +29,10 @@ if (!recipeFile) {
     process.env.DSH_HOME = recipe.home;
     delete process.env.DSH_DESKTOP_HOST_INSPECT_PORT;
     process.env.DSH_DESKTOP_OPEN_DEVTOOLS = '0';
+    const { installDesktopStartupAudit, startupEvidenceFile } = await import('./desktop-startup-audit.mjs');
+    const { ipcMain } = await import('electron');
+    process.env.DSH_DESKTOP_DIAGNOSTIC_FILE = `${startupEvidenceFile(recipe)}.error`;
+    installDesktopStartupAudit({ app, ipcMain, recipe });
     await import(pathToFileURL(path.join(officialApp, 'lib/main.js')).href);
   } catch (error) {
     console.error(error);

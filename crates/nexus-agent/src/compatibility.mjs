@@ -726,7 +726,11 @@ export async function check(options) {
       evidence: result.warning.split(/\r?\n/).filter(Boolean).slice(0, 12).map(line => line.slice(0, 200)),
       activation: parseActivation(result.warning),
     };
-    if (cache && identity && await verificationIdentity(identityRoots, process.env, desktopBuild) === identity) {
+    // Store only under the pre-probe input identity. Every reuse computes a new
+    // full identity before accepting this key; edits during/after the probe make
+    // it unreachable. A second full scan here only discarded such stale keys,
+    // and unnecessarily delayed the first real launch.
+    if (cache && identity) {
       atomicJson(cache, { key, report: passed, entries: previous.slice(0, 7) });
     }
     atomicJson(output, passed); return passed;

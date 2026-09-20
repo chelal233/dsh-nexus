@@ -34,7 +34,7 @@ Linux ARM64 provides the Nexus graphical launcher and Web through AppImage, DEB 
 
 ## Status, configuration and tray
 
-A started Desktop process proves only that the process exists. The official client reports internal plugin readiness and runtime business errors. Nexus presents preparation errors, process exits and retry actions. Closing Launcher does not close Desktop. Close Desktop before version/configuration changes or data export; conflicting writes are blocked.
+Nexus observes backend startup, client plugin activation and UI mounting in the actual official Desktop instance; it does not launch a second instance for verification. Status distinguishes checking, ready, failed and unverified. Configuration or activation failures retain the original error and official recovery UI. Unsupported observation or timeout remains unverified, without claiming success or killing the process. Observation stops after startup; runtime business errors remain the official client’s responsibility. Closing Launcher does not close Desktop. Close Desktop before version/configuration changes or data export; conflicting writes are blocked.
 
 The tray separates Browser and Official Desktop submenus with launch/open/stop actions, and groups configuration, maintenance and exit separately. Desktop appears only when the managed Harness and platform support it. Shared versions and data make Web/Desktop launch and configuration writes mutually exclusive. Preparing, running and stopping restrict conflicting actions. The profile shortcut opens the configuration page; it does not switch profiles immediately.
 
@@ -43,3 +43,7 @@ Exit launcher (keep Harness running) preserves Harness. Stop all services and ex
 On macOS, signing changes embedded binaries. The release flow refreshes resource digests after inner signing, then reseals the outer app; notarization runs only when enabled. Installed checks use post-signing digests. Ad-hoc verification is not Apple notarization.
 
 The Desktop stop action asks the worker that launched the instance to stop its owned process tree; preparation can also be cancelled. Instances launched by older Launchers may need their official window closed manually. A failed stop keeps Launcher open and displays the error.
+
+Web uses the profile selected in Nexus; official Desktop uses `profiles/desktop`. Switching modes does not copy or overwrite profiles, and editing Web plugins does not change Desktop. Workbench shows the actual profile for each mode.
+
+Initial Web checks avoid a duplicate full dependency scan and move stopped probe directories to background cleanup. Cache reuse still checks configuration, dependencies and links. Desktop reuses the inventory made during extraction, verifying final links without a second complete traversal.

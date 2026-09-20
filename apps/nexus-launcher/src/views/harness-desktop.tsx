@@ -12,6 +12,7 @@ type DesktopState = {
   error?: string;
   detail?: string;
   startedAt?: number;
+  audit?: { state: "checking" | "ready" | "failed" | "unverified"; error?: string };
 };
 
 export function useHarnessDesktop(snapshot: Snapshot) {
@@ -157,12 +158,14 @@ export function HarnessDesktopPanel({
   const { t } = useI18n();
   const { state, starting, stopping, error, active, launch, stop, restart } = controller;
   const preparing = starting || state.phase === "preparing";
+  const startupPending =
+    preparing || (state.phase === "launched" && (!state.audit || state.audit.state === "checking"));
   const [now, setNow] = useState(Date.now());
   useEffect(() => {
-    if (!preparing) return;
+    if (!startupPending) return;
     const timer = setInterval(() => setNow(Date.now()), 1000);
     return () => clearInterval(timer);
-  }, [preparing]);
+  }, [startupPending]);
   const webActive = ["running", "starting", "stopping"].includes(
     snapshot.harnessRuntime?.harness?.state ?? "",
   );
@@ -175,6 +178,7 @@ export function HarnessDesktopPanel({
     failed: "Desktop did not start. Check the error and try again.",
   };
   const failure = error || state.error;
+  const audit = state.phase === "launched" ? (state.audit?.state ?? "checking") : undefined;
   const stageLabel =
     state.stage === "cleanup"
       ? t("Removing unused runtime copies")
@@ -196,13 +200,35 @@ export function HarnessDesktopPanel({
             : starting || state.phase === "preparing"
               ? t("Preparing")
               : state.phase === "launched"
-                ? t("Desktop process started")
+                ? t(
+                    audit === "ready"
+                      ? "Ready"
+                      : audit === "failed"
+                        ? "Client startup failed"
+                        : audit === "unverified"
+                          ? "Startup not yet verified"
+                          : "Checking client",
+                  )
                 : state.phase === "failed"
                   ? t("Failed")
                   : t("Not running")}
         </strong>
-        <p>{preparing ? stageLabel : t(labels[state.phase])}</p>
-        {preparing && typeof state.startedAt === "number" && (
+        <p>
+          {preparing
+            ? stageLabel
+            : audit === "failed"
+              ? t(
+                  "Repair the desktop profile using the official recovery window, then restart Desktop. Web profile changes do not repair this profile.",
+                )
+              : audit === "checking"
+                ? t("Checking official Desktop startup and client activation.")
+                : audit === "unverified"
+                  ? t(
+                      "Desktop is running, but startup verification did not finish. Review the startup details before retrying.",
+                    )
+                  : t(labels[state.phase])}
+        </p>
+        {startupPending && typeof state.startedAt === "number" && (
           <small>
             {t("Elapsed time: {seconds}s", {
               seconds: Math.max(0, Math.floor((now - state.startedAt) / 1000)),
@@ -249,10 +275,10 @@ export function HarnessDesktopPanel({
         )}
         {webActive && <span>{t("Stop Harness Web before launching Desktop.")}</span>}
       </div>
-      {state.phase === "failed" && state.detail && (
+      {((state.phase === "failed" && state.detail) || state.audit?.error) && (
         <details>
           <summary>{t("Error details")}</summary>
-          <pre>{state.detail}</pre>
+          <pre>{state.audit?.error || state.detail}</pre>
         </details>
       )}
     </div>

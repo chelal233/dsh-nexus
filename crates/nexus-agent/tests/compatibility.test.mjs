@@ -670,3 +670,15 @@ test('parallel dependency copies stay isolated, skip official packages and rejec
   fs.symlinkSync(outside,path.join(source,'escape'),process.platform==='win32'?'junction':'dir');
   await assert.rejects(copyModules(source,path.join(root,'rejected'),new Map()),/escapes/);
 });
+
+test('dependency edits during a successful probe cannot make the original cache reusable', async () => {
+  const f=fixture();
+  try {
+    f.write(['good']);
+    const input=path.join(f.slot,'probe-input.txt');fs.writeFileSync(input,'before');
+    const cli=path.join(f.slot,'apps/cli/lib/bin.js');
+    fs.appendFileSync(cli,`\nrequire('node:fs').writeFileSync(${JSON.stringify(input)},'changed during probe');`);
+    const first=await check(f.options);assert.equal(first.cache_reused,false);
+    const second=await check(f.options);assert.equal(second.cache_reused,false);
+  } finally {f.close();}
+});

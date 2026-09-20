@@ -13,6 +13,15 @@ export type TranslationParams = Record<string, string | number>;
 export type Translator = (key: string, params?: TranslationParams) => string;
 
 const english: Record<string, string> = {
+  "Checking official Desktop startup and client activation.":
+    "Checking official Desktop startup and client activation.",
+  "Repair the desktop profile using the official recovery window, then restart Desktop. Web profile changes do not repair this profile.":
+    "Repair the desktop profile using the official recovery window, then restart Desktop. Web profile changes do not repair this profile.",
+  "Desktop is running, but startup verification did not finish. Review the startup details before retrying.":
+    "Desktop is running, but startup verification did not finish. Review the startup details before retrying.",
+  "Desktop profile": "Desktop profile",
+  "Official Desktop uses its own desktop profile. Manage its plugins in the official window; Web profile changes do not apply here.":
+    "Official Desktop uses its own desktop profile. Manage its plugins in the official window; Web profile changes do not apply here.",
   "Harness is running. The startup reply was delayed.":
     "Harness is running. The startup reply was delayed.",
   "Startup has not returned a result. Check its progress before retrying.":
@@ -1988,6 +1997,15 @@ const english: Record<string, string> = {
 };
 
 const chinese: Record<string, string> = {
+  "Checking official Desktop startup and client activation.":
+    "正在检查官方桌面端启动与客户端插件激活。",
+  "Repair the desktop profile using the official recovery window, then restart Desktop. Web profile changes do not repair this profile.":
+    "请在官方恢复窗口中处理 desktop 配置档的问题，再重启桌面端。修改 Web 配置档不会修复这里的问题。",
+  "Desktop is running, but startup verification did not finish. Review the startup details before retrying.":
+    "桌面进程仍在运行，但启动检查尚未完成。请查看启动详情后再决定是否重试。",
+  "Desktop profile": "桌面端配置档",
+  "Official Desktop uses its own desktop profile. Manage its plugins in the official window; Web profile changes do not apply here.":
+    "官方桌面端使用独立的 desktop 配置档。请在官方窗口中管理插件；Web 配置档的修改不会应用到这里。",
   "Harness is running. The startup reply was delayed.": "Harness 已在运行，启动响应返回较慢。",
   "Startup has not returned a result. Check its progress before retrying.":
     "启动尚未返回结果，请查看当前进度，勿重复启动。",

@@ -24,3 +24,6 @@ Official Desktop currently supports Windows x64 and macOS x64/ARM64 with a compa
 ## Pending fixes after v0.1.8
 
 The published Windows build can start official Desktop with a hidden window. Current source removes the GUI hide flag, aligns tray Web actions with the workbench, and requires update-download confirmation. These changes are not in the existing v0.1.8 GitHub assets; a local fixed build must be identified by its build ID.
+
+
+Unreleased changes add Desktop startup observation and accurate profile labels. Supported upstream interfaces can confirm client activation during startup; unsupported observation or timeout remains unverified. Runtime business correctness is outside this check. In single Windows local runs, Web without the Nexus check cache took about 67 seconds from click to client readiness; Desktop with an empty runtime cache and isolated profile took about 38.6 seconds. Profiles differed and OS file caches were not cleared, so this is not a controlled comparison. First Web startup still pays for an isolated probe followed by the real launch.

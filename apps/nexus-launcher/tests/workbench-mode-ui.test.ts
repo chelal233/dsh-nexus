@@ -29,8 +29,8 @@ test('one Harness switches mode while idle and locks to the running mode', async
     await act(async()=>document.querySelector('input[value="desktop"]').click());
     assert.equal(primary().length,1);
     assert.match(primary()[0].textContent,/Start Harness/);
-    assert.equal(profileButton().disabled,false);
-    await act(async()=>profileButton().click()); assert.equal(profileOpens,2);
+    assert.equal(profileButton(),null);
+    assert.match(document.querySelector('.workbench-profile-bar').textContent,/desktop profile/);
     snapshot.harnessRuntime.harness.state='running'; await render();
     assert.equal(document.querySelector('input[value="web"]').checked,true);
     assert.equal(document.querySelector('.harness-mode-picker').disabled,true);
@@ -49,7 +49,7 @@ test('one Harness switches mode while idle and locks to the running mode', async
     assert.match(document.querySelector('.harness-desktop-content').textContent,/Preparing offline dependencies/);
     assert.match(document.querySelector('.harness-desktop-content').textContent,/Elapsed time:/);
     assert.equal(document.body.textContent.includes('Close the official window'),false);
-    assert.equal(profileButton().disabled,true);
+    assert.equal(profileButton(),null);
     const cancel=[...document.querySelectorAll('.harness-desktop-content button')].find(button=>button.textContent==='Cancel startup');
     assert.ok(cancel); assert.equal(cancel.disabled,false);
     await act(async()=>cancel.click());

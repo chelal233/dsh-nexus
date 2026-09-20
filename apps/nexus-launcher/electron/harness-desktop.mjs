@@ -16,6 +16,22 @@ export function readDesktopState(file, isAlive = alive) {
   let state;
   try { state = JSON.parse(fs.readFileSync(file, 'utf8')); }
   catch (error) { if (error.code === 'ENOENT') return { phase: 'idle' }; throw error; }
+  if (state.phase === 'launched' && /^[a-f0-9-]{36}$/.test(state.operationId ?? '')) {
+    const evidence = path.join(path.dirname(file), `startup-${state.operationId}.json`);
+    state.audit = { state: 'checking' };
+    try {
+      const meta = fs.lstatSync(evidence);
+      if (meta.isFile() && meta.size <= 16384) {
+        const audit = JSON.parse(fs.readFileSync(evidence, 'utf8'));
+        if (audit.operationId === state.operationId && audit.pid === state.childPid && ['checking','ready','failed','unverified'].includes(audit.state)) state.audit = audit;
+      }
+      if (state.audit.state !== 'ready') {
+        const diagnostic = `${evidence}.error`, errorMeta = fs.lstatSync(diagnostic);
+        if (errorMeta.isFile() && errorMeta.size <= 65536) state.audit = {state:'failed', error:fs.readFileSync(diagnostic,'utf8').slice(-6000).replace(/([?&]token=)[^\s&]+/gi,'$1[redacted]')};
+      }
+    } catch { /* Missing evidence is not readiness. */ }
+    if (state.audit.state === 'checking' && Date.now() - state.stageStartedAt > 95000) state.audit = { state:'unverified' };
+  }
   if (desktopActive(state) && !isAlive(state.pid)) {
     if (isAlive(state.childPid)) return state; // Do not rebuild under an orphaned native process.
     return { ...state, phase: 'failed', error: 'desktop_interrupted' };
