@@ -856,6 +856,15 @@ impl HarnessSupervisor {
             .map_err(HarnessSupervisorError::Configuration)?;
         crate::preference_capabilities::resolve(release_root.as_deref(), &selected_home, profile, &preferences)
             .map_err(HarnessSupervisorError::Configuration)?;
+        let direct_startup = spec.mode == HarnessLaunchMode::Node && spec.readiness_url.is_none()
+            && release_root.as_deref().is_some_and(|root| {
+                let args = spec.render_args_for_context(profile, release_id, Some(root)).unwrap_or_default();
+                args.len() == 3 && args[1] == "--profile" && args[2] == profile
+                    && args.first().and_then(|entry| fs::canonicalize(entry).ok())
+                        .zip(fs::canonicalize(root.join("apps/cli/lib/bin.js")).ok()).is_some_and(|(entry, expected)| entry == expected)
+                    && crate::desktop_plugins::single_start_supported(root, &selected_home, profile)
+            });
+        let startup_trigger = if direct_startup { "startup_direct" } else { "startup" };
         // The lifecycle owner remains held while the isolated check runs, but
         // never hold `inner` across the child-process probe.
         let cancellation = self.startup_phase("compatibility").await?;
@@ -880,7 +889,7 @@ impl HarnessSupervisor {
                     }
                     let home = selected_home.clone();
                     verified_profile = crate::compatibility::prepare(&self.paths, &home, profile, id, root,
-                        &spec.program, false, &cancellation, "startup", &runtime_env).await
+                        &spec.program, false, &cancellation, startup_trigger, &runtime_env).await
                         .map_err(|e|if cancellation.is_cancelled()&&e.kind()==io::ErrorKind::Interrupted {HarnessSupervisorError::Cancelled}else{HarnessSupervisorError::Configuration(e)})?.map(|report| report.source_profile);
                 }
             }
@@ -892,7 +901,7 @@ impl HarnessSupervisor {
             let missing = || HarnessSupervisorError::Configuration(io::Error::other("external Harness identity is missing; confirm the external Harness source again"));
             let id=crate::source_context::compatibility_id(&self.paths,&self.releases).map_err(HarnessSupervisorError::Configuration)?.ok_or_else(missing)?;
             let root=release_root.as_deref().ok_or_else(missing)?;
-            verified_profile=crate::compatibility::prepare(&self.paths,&selected_home,profile,&id,root,&spec.program,false,&cancellation,"startup",&runtime_env).await.map_err(|e|if cancellation.is_cancelled()&&e.kind()==io::ErrorKind::Interrupted {HarnessSupervisorError::Cancelled}else{HarnessSupervisorError::Configuration(e)})?.map(|report|report.source_profile);
+            verified_profile=crate::compatibility::prepare(&self.paths,&selected_home,profile,&id,root,&spec.program,false,&cancellation,startup_trigger,&runtime_env).await.map_err(|e|if cancellation.is_cancelled()&&e.kind()==io::ErrorKind::Interrupted {HarnessSupervisorError::Cancelled}else{HarnessSupervisorError::Configuration(e)})?.map(|report|report.source_profile);
         }
         if let Some(prepared)=&prepared {prepared.recheck(&self.paths,profile).map_err(HarnessSupervisorError::Configuration)?;}
         let profile = verified_profile.as_deref().unwrap_or(profile);
@@ -921,9 +930,9 @@ impl HarnessSupervisor {
             })
             .transpose()
             .map_err(HarnessSupervisorError::Configuration)?;
-        if automatic_web_readiness_supported(&configured_spec, release_root.as_deref(), &selected_home, profile, &arguments) {
+        if direct_startup || automatic_web_readiness_supported(&configured_spec, release_root.as_deref(), &selected_home, profile, &arguments) {
             readiness = Some(ReadinessConfig {
-                target: ReadinessTarget { host: "127.0.0.1".into(), port: 0, path: "/".into(), tcp: true, token_required: true, owned_web: true },
+                target: ReadinessTarget { host: "127.0.0.1".into(), port: 0, path: "/".into(), tcp: true, token_required: true, owned_web: true, startup_commit: direct_startup },
                 timeout: Duration::from_secs(spec.readiness_timeout_secs.unwrap_or(DEFAULT_READINESS_TIMEOUT_SECS)),
             });
         }
@@ -1079,6 +1088,8 @@ impl HarnessSupervisor {
             command.envs(runtime_env.iter().map(|(key, value)| (key, value)));
             command.envs(nexus_core::harness_preferences_environment(&preferences, &capabilities));
             command.env("DSH_HOME", &selected_home);
+            if direct_startup { command.env("NEXUS_HOST_STARTUP_FILE", self.paths.run_dir.join("host-startup.json")); }
+            else { command.env_remove("NEXUS_HOST_STARTUP_FILE"); }
             command.env("NEXUS_BROWSER_HEALTH_FILE", self.paths.run_dir.join("browser-health.json"));
             command.env("NEXUS_BROWSER_HEALTH_RUN", &inner.log_session.run_id);
             if let Some(slot) = release_root.as_deref() {
@@ -2030,7 +2041,8 @@ impl HarnessSupervisor {
                     if inner.readiness_owner != Some(owner) || inner.child.is_none() { return Ok(None); }
                     inner.log_session.clone()
                 };
-                let Some(discovered) = observed_web_readiness(&self.paths, &session, &mut log_observer) else { sleep(MONITOR_INTERVAL).await; continue; };
+                let Some(mut discovered) = observed_web_readiness(&self.paths, &session, &mut log_observer) else { sleep(MONITOR_INTERVAL).await; continue; };
+                discovered.startup_commit = target.startup_commit;
                 target = discovered;
             }
             let ready = matches!(
@@ -2196,7 +2208,9 @@ impl HarnessSupervisor {
             if inner.readiness_owner != Some(owner) {
                 return false;
             }
-            if target.owned_web && !owned_web_listener(&inner, target).await { return false; }
+            if target.startup_commit {
+                if !committed_host_owned(&self.paths, &inner) { return false; }
+            } else if target.owned_web && !owned_web_listener(&inner, target).await { return false; }
             inner.log_session.clone()
         };
         if !matches!(self.log_sessions.read(), Ok(Some(ref durable)) if durable == &session) {
@@ -2215,7 +2229,9 @@ impl HarnessSupervisor {
         }
         let session = {
             let inner = self.inner.lock().await;
-            if target.owned_web && !owned_web_listener(&inner, target).await { return false; }
+            if target.startup_commit {
+                if !committed_host_owned(&self.paths, &inner) { return false; }
+            } else if target.owned_web && !owned_web_listener(&inner, target).await { return false; }
             inner.log_session.clone()
         };
         if !matches!(self.log_sessions.read(), Ok(Some(ref durable)) if durable == &session) {
@@ -2475,6 +2491,18 @@ fn automatic_web_readiness_supported(spec: &HarnessLaunchSpec, root: Option<&Pat
     let managed = arguments.first().and_then(|entry| fs::canonicalize(entry).ok())
         .zip(fs::canonicalize(root.join("apps/cli/lib/bin.js")).ok()).is_some_and(|(entry, expected)| entry == expected);
     managed && crate::preference_capabilities::inspect(root, home, profile).is_ok_and(|evidence| evidence.capabilities.web)
+}
+
+// The official CLI may delegate Host startup to a descendant. Accept only a
+// current-run commit from our actual child tree, not an arbitrary live PID.
+fn committed_host_owned(paths: &NexusPaths, inner: &SupervisorInner) -> bool {
+    let Some(pid) = crate::desktop_plugins::host_startup_pid(paths, &inner.log_session.run_id) else { return false; };
+    if inner.child.as_ref().and_then(Child::id) == Some(pid) { return true; }
+    #[cfg(windows)]
+    { inner.job.as_ref().is_some_and(|job| job.contains_pid(pid).unwrap_or(false)) }
+    #[cfg(unix)]
+    { inner.child.as_ref().and_then(Child::group).is_some_and(|group| i32::try_from(pid).ok()
+        .is_some_and(|pid| unsafe { libc::getpgid(pid) } == group)) }
 }
 
 async fn owned_web_listener(inner: &SupervisorInner, target: &ReadinessTarget) -> bool {
@@ -3137,6 +3165,7 @@ struct ReadinessTarget {
     tcp: bool,
     token_required: bool,
     owned_web: bool,
+    startup_commit: bool,
 }
 
 impl ReadinessTarget {
@@ -3255,6 +3284,7 @@ impl ReadinessTarget {
             tcp,
             token_required: false,
             owned_web: false,
+            startup_commit: false,
         })
     }
 }

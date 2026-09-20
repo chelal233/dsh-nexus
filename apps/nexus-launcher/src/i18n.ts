@@ -1322,6 +1322,7 @@ const english: Record<string, string> = {
 
   "During profile switch": "During profile switch",
   "Retry profile switch": "Retry profile switch",
+  "Diagnose plugin startup": "Diagnose plugin startup",
   "Retry Harness startup": "Retry Harness startup",
   "Checking plugin compatibility. You can close this dialog; the check continues in the background.":
     "Checking plugin compatibility. You can close this dialog; the check continues in the background.",
@@ -3241,6 +3242,7 @@ const chinese: Record<string, string> = {
 
   "During profile switch": "切换配置档时",
   "Retry profile switch": "重试切换配置档",
+  "Diagnose plugin startup": "诊断插件启动问题",
   "Retry Harness startup": "重试启动 Harness",
   "Checking plugin compatibility. You can close this dialog; the check continues in the background.":
     "正在检查插件兼容性。可以关闭弹窗，检查会在后台继续。",

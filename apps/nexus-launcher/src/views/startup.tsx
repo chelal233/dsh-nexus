@@ -1009,6 +1009,16 @@ export function CompatibilityDialog({
               </p>
               <RecoveryLogTail snapshot={snapshot} />
               <ActionButton
+                disabled={gate.disabled || snapshot.startup?.available !== true}
+                onClick={() =>
+                  void runAction(t("Diagnose plugin startup"), "/v1/profiles", {
+                    action: "compatibility_check",
+                  })
+                }
+              >
+                {t("Diagnose plugin startup")}
+              </ActionButton>
+              <ActionButton
                 disabled={busyAction !== null}
                 onClick={() =>
                   void runAction(t("Retry Harness startup"), "/v1/harness", { action: "start" })

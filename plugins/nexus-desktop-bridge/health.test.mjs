@@ -5,7 +5,8 @@ import path from 'node:path';
 import vm from 'node:vm';
 import { Readable } from 'node:stream';
 import { createRequire } from 'node:module';
-import { healthHandler } from './index.mjs';
+import os from 'node:os';
+import { healthHandler, observeHostStartup } from './index.mjs';
 
 let bridge;
 vm.runInNewContext(fs.readFileSync(new URL('./client.js', import.meta.url), 'utf8'), {
@@ -122,4 +123,13 @@ test('report route validates origin and bounded schema and drops extra fields', 
   assert.equal((await request(body, { origin: 'https://untrusted.example' })).status, 403);
   assert.equal((await request({ ...body, entries: [{}] })).status, 400);
   assert.equal((await request({ ...body, extra: 'x'.repeat(50000) })).status, 413);
+});
+
+test('host startup evidence waits for official commit and is cancelled on disposal',t=>{
+ const root=fs.mkdtempSync(path.join(os.tmpdir(),'nexus-host-commit-'));t.after(()=>fs.rmSync(root,{recursive:true,force:true}));
+ const file=path.join(root,'ready.json');let committed,dispose;
+ const ctx={inject:(names,apply)=>{assert.deepEqual(names,['appReady']);apply({effect:fn=>{dispose=fn();},appReady:{onReady:listener=>{committed=listener;return()=>{committed=undefined;};}}});}};
+ observeHostStartup(ctx,file,'current-run');assert.equal(fs.existsSync(file),false);committed();
+ assert.deepEqual(JSON.parse(fs.readFileSync(file,'utf8')),{run:'current-run',pid:process.pid,state:'ready'});
+ fs.unlinkSync(file);observeHostStartup(ctx,file,'next-run');dispose();assert.equal(committed,undefined);assert.equal(fs.existsSync(file),false);
 });

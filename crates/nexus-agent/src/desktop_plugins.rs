@@ -2,6 +2,43 @@
 use std::io;
 use nexus_core::{NexusPaths, HarnessLaunchSpec};
 
+// This is a startup protocol capability, not support for every optional setting.
+// Unknown/older artifacts retain the isolated compatibility check.
+pub(crate) fn single_start_supported(root: &std::path::Path, home: &std::path::Path, profile: &str) -> bool {
+    let supported = || -> io::Result<bool> {
+        let read = |file: &std::path::Path| nexus_core::read_regular_file_bounded(file, 2 * 1024 * 1024)
+            .and_then(|bytes| String::from_utf8(bytes.ok_or_else(|| io::Error::other("missing startup artifact"))?).map_err(io::Error::other));
+        let manifest: serde_json::Value = serde_json::from_str(&read(&root.join("package.json"))?)?;
+        if manifest["name"] != "@deepseek-ai/dsh-root" || manifest["version"] != "0.1.6-alpha.2" { return Ok(false); }
+        let profile_manifest = home.join("profiles").join(profile).join("package.json");
+        if profile_manifest.exists() {
+            let value: serde_json::Value = serde_json::from_str(&read(&profile_manifest)?)?;
+            if !value.pointer("/dsh/profile/bundles").and_then(|v| v.as_array())
+                .is_some_and(|bundles| bundles.iter().any(|v| v == "@deepseek-ai/dsh-web-app")) { return Ok(false); }
+        } else if profile != "web" { return Ok(false); }
+        let cli = root.join("apps/cli/lib");
+        let facade = read(&cli.join("profile-boot.js"))?;
+        // Inspect only the relative chunk referenced by the public facade.
+        let Some(chunk) = facade.split('"').find_map(|part| part.strip_prefix("./profile-boot-")
+            .filter(|name| name.ends_with(".js") && name.bytes().all(|b| b.is_ascii_alphanumeric() || b"-_.".contains(&b)))) else { return Ok(false); };
+        let boot = read(&cli.join(format!("profile-boot-{chunk}")))?;
+        Ok(boot.contains("appReady.commit()") && boot.contains("onReady(listener)") && boot.contains("await boot(")
+            && read(&root.join("packages/boot/app-boot/lib/index.js"))?.contains("startupDiagnostic")
+            && read(&cli.join("bin.js"))?.contains("reportStartupFailure"))
+    };
+    supported().unwrap_or(false)
+}
+
+pub(crate) fn host_startup_pid(paths: &NexusPaths, run: &str) -> Option<u32> {
+    let read = || -> io::Result<Option<u32>> {
+        let Some(bytes) = nexus_core::read_regular_file_bounded(&paths.run_dir.join("host-startup.json"), 4096)? else { return Ok(None); };
+        let value: serde_json::Value = serde_json::from_slice(&bytes)?;
+        Ok((value["run"].as_str() == Some(run) && value["state"] == "ready").then(|| value["pid"].as_u64()
+            .and_then(|pid| u32::try_from(pid).ok()).filter(|pid| *pid > 1)).flatten())
+    };
+    read().ok().flatten()
+}
+
 pub(crate) fn browser_health(paths: &NexusPaths, run: &str) -> serde_json::Value {
     use std::io::Read;
     let read = || -> io::Result<serde_json::Value> {
@@ -85,6 +122,39 @@ pub(crate) fn prepare(paths: &NexusPaths, home: &std::path::Path, profile: &str,
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn host_commit_requires_the_current_process_and_run() {
+        let paths = NexusPaths::from_root(std::env::temp_dir().join(format!("nexus-host-commit-{}", nexus_core::unix_time_nanos_for_update())));
+        paths.ensure_directories().unwrap();
+        assert_eq!(host_startup_pid(&paths, "current"), None);
+        let file = paths.run_dir.join("host-startup.json");
+        std::fs::write(&file, r#"{"run":"current","pid":42,"state":"ready"}"#).unwrap();
+        assert_eq!(host_startup_pid(&paths, "current"), Some(42));
+        assert_eq!(host_startup_pid(&paths, "old"), None);
+        std::fs::write(&file, "malformed").unwrap();
+        assert_eq!(host_startup_pid(&paths, "current"), None);
+        std::fs::remove_dir_all(paths.root).unwrap();
+    }
+    #[test]
+    fn single_start_requires_known_web_artifacts_and_falls_back_on_changes() {
+        let root = std::env::temp_dir().join(format!("nexus-single-start-{}", nexus_core::unix_time_nanos_for_update()));
+        let home = root.join("home");
+        for directory in ["apps/cli/lib", "packages/boot/app-boot/lib"] { std::fs::create_dir_all(root.join(directory)).unwrap(); }
+        std::fs::write(root.join("package.json"), r#"{"name":"@deepseek-ai/dsh-root","version":"0.1.6-alpha.2"}"#).unwrap();
+        std::fs::write(root.join("apps/cli/lib/profile-boot.js"), "export { runProfile } from \"./profile-boot-fixture.js\";").unwrap();
+        std::fs::write(root.join("apps/cli/lib/profile-boot-fixture.js"), "await boot(); onReady(listener); appReady.commit()").unwrap();
+        std::fs::write(root.join("apps/cli/lib/bin.js"), "reportStartupFailure").unwrap();
+        std::fs::write(root.join("packages/boot/app-boot/lib/index.js"), "startupDiagnostic").unwrap();
+        assert!(single_start_supported(&root, &home, "web"));
+        assert!(!single_start_supported(&root, &home, "headless"));
+        std::fs::create_dir_all(home.join("profiles/web")).unwrap();
+        std::fs::write(home.join("profiles/web/package.json"), r#"{"dsh":{"profile":{"bundles":["@deepseek-ai/dsh-headless"]}}}"#).unwrap();
+        assert!(!single_start_supported(&root, &home, "web"));
+        std::fs::remove_file(home.join("profiles/web/package.json")).unwrap();
+        std::fs::write(root.join("apps/cli/lib/profile-boot-fixture.js"), "unsupported API").unwrap();
+        assert!(!single_start_supported(&root, &home, "web"));
+        std::fs::remove_dir_all(root).unwrap();
+    }
     #[test]
     fn browser_health_requires_current_run_and_fresh_evidence() {
         let root = std::env::temp_dir().join(format!("nexus-browser-health-{}", nexus_core::unix_time_nanos_for_update()));

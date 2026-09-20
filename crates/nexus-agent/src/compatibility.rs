@@ -281,6 +281,10 @@ pub(crate) async fn prepare(
     if !slot.join("apps/cli/lib/bin.js").is_file() {
         return Err(io::Error::other("Target release does not support the Node profile compatibility check"));
     }
+    if trigger == "startup_direct" && !force && crate::desktop_plugins::single_start_supported(slot, home, profile) {
+        tracing::info!(release, profile, "Checking startup in the actual Harness instance");
+        return Ok(None);
+    }
     let work_root = root.join("work");
     ensure_work_directory(&work_root)?;
     let nonce = nexus_core::unix_time_nanos_for_update();

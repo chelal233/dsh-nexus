@@ -2,6 +2,18 @@ import fs from 'node:fs';
 import { randomUUID } from 'node:crypto';
 // Read-only browser evidence; never grants readiness for release promotion.
 export const name = 'nexus-desktop-bridge';
+export function observeHostStartup(ctx, file, run) {
+  if (!file || !run) return;
+  // The official CLI commits this only after boot() has checked required
+  // entries. Register synchronously: awaiting readiness here would deadlock boot.
+  ctx.inject(['appReady'], c => c.effect(() => c.appReady.onReady(() => {
+    const temporary = `${file}.${process.pid}.tmp`;
+    try {
+      fs.writeFileSync(temporary, JSON.stringify({ run, pid: process.pid, state: 'ready' }), { mode: 0o600 });
+      fs.renameSync(temporary, file);
+    } catch { try { fs.unlinkSync(temporary); } catch {} }
+  })));
+}
 export function healthHandler(publish) {
   const token = randomUUID();
   return async (req, res) => {
@@ -40,6 +52,7 @@ export function healthHandler(publish) {
   };
 }
 export function apply(ctx) {
+  observeHostStartup(ctx, process.env.NEXUS_HOST_STARTUP_FILE, process.env.NEXUS_BROWSER_HEALTH_RUN);
   const file = process.env.NEXUS_BROWSER_HEALTH_FILE, run = process.env.NEXUS_BROWSER_HEALTH_RUN;
   if (!file || !run) return;
   let disposed = false;

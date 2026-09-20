@@ -52,3 +52,5 @@ Acquire and prepare a supported Harness version, then export a full package incl
 
 
 Web uses the profile selected in Nexus. Official Desktop uses its separate `profiles/desktop`; Workbench displays desktop and omits the Web profile switch in Desktop mode. Plugin settings do not synchronize automatically. Desktop startup also checks actual client loading, displays failures and retains official recovery.
+
+Web versions supporting single-start checks do not run a temporary Harness first. Startup still waits for the real backend and client. After failure, use Diagnose plugin startup to obtain specific repair evidence. Manual Verify plugins still starts and stops an isolated probe and may take longer than normal startup.
