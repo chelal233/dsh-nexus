@@ -2000,6 +2000,7 @@ const english: Record<string, string> = {
 const chinese: Record<string, string> = {
   "Checking official Desktop startup and client activation.":
     "正在检查官方桌面端启动与客户端插件激活。",
+  "Desktop profile startup failed. Inspect the failed service providers below before disabling plugins. Web profile changes do not repair this profile.": "desktop 配置启动失败。请先查看下方加载失败的服务提供方，再决定是否停用插件；修改 Web 配置不能修复此问题。",
   "Repair the desktop profile using the official recovery window, then restart Desktop. Web profile changes do not repair this profile.":
     "请在官方恢复窗口中处理 desktop 配置档的问题，再重启桌面端。修改 Web 配置档不会修复这里的问题。",
   "Desktop is running, but startup verification did not finish. Review the startup details before retrying.":

@@ -8,6 +8,7 @@ import type { Snapshot } from "../app-types";
 type DesktopState = {
   phase: "idle" | "preparing" | "launched" | "stopping" | "stopped" | "failed";
   stage?: string;
+  operationId?: string;
   version?: string;
   error?: string;
   detail?: string;
@@ -177,7 +178,7 @@ export function HarnessDesktopPanel({
     launched: "Continue in the desktop window. Close it to switch modes.",
     failed: "Desktop did not start. Check the error and try again.",
   };
-  const failure = error || state.error;
+  const failure = error || state.error || (state.audit?.state === "failed" ? "Client startup failed" : "");
   const audit = state.phase === "launched" ? (state.audit?.state ?? "checking") : undefined;
   const stageLabel =
     state.stage === "cleanup"
@@ -218,7 +219,7 @@ export function HarnessDesktopPanel({
             ? stageLabel
             : audit === "failed"
               ? t(
-                  "Repair the desktop profile using the official recovery window, then restart Desktop. Web profile changes do not repair this profile.",
+                  "Desktop profile startup failed. Inspect the failed service providers below before disabling plugins. Web profile changes do not repair this profile.",
                 )
               : audit === "checking"
                 ? t("Checking official Desktop startup and client activation.")
@@ -276,7 +277,7 @@ export function HarnessDesktopPanel({
         {webActive && <span>{t("Stop Harness Web before launching Desktop.")}</span>}
       </div>
       {((state.phase === "failed" && state.detail) || state.audit?.error) && (
-        <details>
+        <details open={state.audit?.state === "failed" || state.phase === "failed"}>
           <summary>{t("Error details")}</summary>
           <pre>{state.audit?.error || state.detail}</pre>
         </details>

@@ -69,3 +69,16 @@ test('Unix stop waits for a TERM-resistant descendant after the leader exits', {
  await stopDesktopChild(child);
  assert.throws(()=>process.kill(descendant,0),{code:'ESRCH'});
 });
+
+
+test('Desktop startup failure remains readable after the worker drops its child PID', async t => {
+ const {readDesktopState}=await import('../electron/harness-desktop.mjs');
+ const root=temp(t),operationId=randomUUID(),file=path.join(root,'state.json');
+ fs.writeFileSync(path.join(root,`startup-${operationId}.json`),JSON.stringify({operationId,pid:123,state:'failed',error:'credentials failed to import'}));
+ fs.writeFileSync(file,JSON.stringify({phase:'launched',operationId,pid:process.pid,childPid:123}));
+ assert.equal(readDesktopState(file,()=>true).audit.error,'credentials failed to import');
+ fs.writeFileSync(file,JSON.stringify({phase:'failed',operationId,pid:process.pid}));
+ assert.equal(readDesktopState(file,()=>false).audit.state,'failed');
+ fs.writeFileSync(file,JSON.stringify({phase:'launched',operationId,pid:process.pid,childPid:456}));
+ assert.notEqual(readDesktopState(file,()=>true).audit.state,'failed');
+});

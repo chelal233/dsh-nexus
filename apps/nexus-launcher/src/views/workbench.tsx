@@ -97,6 +97,10 @@ export function OverviewView({
   );
   const desktop = useHarnessDesktop(snapshot);
   const [preferredMode, setPreferredMode] = useState<"web" | "desktop">("web");
+  const desktopFailed = desktop.state.phase === "failed" || desktop.state.audit?.state === "failed";
+  useEffect(() => {
+    if (desktopFailed) setPreferredMode("desktop");
+  }, [desktopFailed, desktop.state.operationId]);
   const webActive =
     ["running", "starting", "stopping"].includes(stringValue(harness, "state") || "") ||
     !!numberValue(harness, "pid");

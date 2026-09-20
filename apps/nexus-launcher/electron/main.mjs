@@ -162,9 +162,18 @@ async function run() {
     },
   });
   let auditBusy = false;
+  let reportedDesktopFailure;
   const pollAudit = async () => {
     if (auditBusy || quitting || updating) return;
     auditBusy = true;
+    try {
+      const desktop = nativeDesktop.status();
+      if (desktop.operationId && (desktop.audit?.state === 'failed' || desktop.phase === 'failed') && reportedDesktopFailure !== desktop.operationId) {
+        reportedDesktopFailure = desktop.operationId;
+        show();
+        error(new Error(text('Official Desktop startup failed (profile: desktop). Open the Workbench for error details; restart or close Desktop from Nexus.', '官方 Desktop 启动失败（配置：desktop）。请到工作台查看错误详情，通过 Nexus 重启或关闭 Desktop。')));
+      }
+    } catch { /* Web auditing must continue if Desktop state cannot be read. */ }
     try {
       clientAudit.observe(await bridge.request('proxy_request', { method: 'GET', path: '/v1/harness/ui' }));
     } catch { clientAudit.clear(); }

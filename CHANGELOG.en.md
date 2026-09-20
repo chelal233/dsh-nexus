@@ -5,6 +5,9 @@
 
 ## Unreleased
 
+- **Desktop startup failures surface in Nexus**: A failed operation brings the Launcher forward once and expands startup diagnostics in the Workbench. Failure details survive process exit so missing service providers can be investigated without blaming waiting plugins.
+
+
 - **DSH terminal explains its scope**: The opening banner lists the bound profile, working directory, data home, Harness source and Desktop profile directory. It explains dsh versus npm/pnpm targeting and when to reopen the terminal; it is an environment snapshot, not live process status.
 
 
