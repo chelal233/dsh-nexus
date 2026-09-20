@@ -79,7 +79,7 @@ async fn marketplace_install_uses_selected_cli_and_records_failure_for_retry() {
     let slot = state.releases.release_root("market-fixture").unwrap();
     write_profile_file(&slot.join("apps/cli/package.json"), r#"{"bin":{"dsh":"lib/bin.js"}}"#);
     let entry = slot.join("apps/cli/lib/bin.js");
-    write_profile_file(&entry, r#"const fs=require('node:fs'); const a=process.argv.slice(2); if(JSON.stringify(a)!==JSON.stringify(['plugin','--profile','demo','add','dshmarket@1.38.1'])) process.exit(42); const f='package.json'; const p=JSON.parse(fs.readFileSync(f)); p.dependencies.dshmarket='1.38.1'; p.dsh.profile.bundles.push('dshmarket'); fs.writeFileSync(f,JSON.stringify(p));"#);
+    write_profile_file(&entry, r#"const fs=require('node:fs'); const a=process.argv.slice(2); if(JSON.stringify(a)!==JSON.stringify(['plugin','--profile','demo','add','dshmarket@1.52.0'])) process.exit(42); const f='package.json'; const p=JSON.parse(fs.readFileSync(f)); p.dependencies.dshmarket='1.52.0'; p.dsh.profile.bundles.push('dshmarket'); fs.writeFileSync(f,JSON.stringify(p));"#);
     state.config.write(&NexusConfigFile { runtime: Some(RuntimeConfig {
         node: Some(RuntimePin {path: executable_on_path(if cfg!(windows) {"node.exe"} else {"node"}).unwrap(), ownership: RuntimeOwnership::System}),
         pnpm: None, git: None, source: RuntimeSource::Official, mode: RuntimeInstallMode::Portable,

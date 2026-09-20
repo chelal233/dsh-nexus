@@ -220,8 +220,8 @@ export function MarketplaceSettings({
                       )}
                       <p className="field-help">
                         {text(
-                          "Stop Harness before changing this plugin. First enable installs dsh-market 1.38.1 from npm only when absent. Existing versions are not reinstalled. Disabling keeps its files; changes apply on the next compatibility check and launch. After starting Harness, open Settings → Plugin Market.",
-                          "请先停止 Harness。仅未安装时，首次启用从 npm 安装 dsh-market 1.38.1；已有版本不会重装，禁用保留插件文件，在下次兼容性检查与启动时生效。启动 Harness 后，在其“设置 → 插件市场”中使用。",
+                          "Stop Harness before changing this plugin. First enable installs dsh-market 1.52.0 from npm only when absent. Existing versions are not reinstalled. Disabling keeps its files; changes apply on the next compatibility check and launch. After starting Harness, open Settings → Plugin Market.",
+                          "请先停止 Harness。仅未安装时，首次启用从 npm 安装 dsh-market 1.52.0；已有版本不会重装，禁用保留插件文件，在下次兼容性检查与启动时生效。启动 Harness 后，在其“设置 → 插件市场”中使用。",
                         )}
                       </p>
                     </span>

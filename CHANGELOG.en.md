@@ -5,6 +5,9 @@
 
 ## Unreleased
 
+- **Default marketplace installation updated to 1.52.0**: Includes official Desktop profile selection and package-operation fixes. Applies to first installation; existing profile installations are not automatically replaced.
+
+
 - **Open Web only after client verification**: Fast startup opens the browser after the actual client becomes usable. Blocking failures stay in the Launcher instead of opening a broken page first; plugins are never disabled automatically.
 - **Clearer profile contents**: Expanded profiles show plugin inventory, snapshot inventory, then saved checkpoints.
 

@@ -572,7 +572,7 @@ fn remove_profile_plugin_with_runner(
 
 pub(crate) fn install_market(paths: &NexusPaths, home: &Path, root: &Path, profile: &str)
     -> io::Result<(PluginCommandOutcome, NativeProfilePayload)> {
-    run_profile_plugin_command(paths, home, root, profile, "add", "dshmarket@1.38.1", &SystemPluginCommandRunner)
+    run_profile_plugin_command(paths, home, root, profile, "add", "dshmarket@1.52.0", &SystemPluginCommandRunner)
 }
 
 fn run_profile_plugin_command(paths: &NexusPaths, dsh_home: &Path, release_root: &Path,

@@ -54,4 +54,4 @@ Web 正常启动在已验证的 Harness 0.1.6-alpha.2 中直接观察正式实�
 
 ## 第三方插件市场的配置来源
 
-本地核对发现，dshmarket 1.39.0 识别的是另一套 Desktop 的 `desktopProfiles` 接口。Harness 官方 0.1.6-alpha.2 未提供该接口，且 Host 不携带 `--profile` 命令行参数，市场会回退读取 `web`，包括已安装列表和包操作。因此市场中的“已安装”不能证明该插件正在 Desktop 加载。官方 Desktop 仍读取 `profiles/desktop/package.json`；可在 Nexus 对应配置档的插件清单核对。在市场修正官方 Desktop 适配前，请通过明确指定 desktop 配置的管理入口维护插件。Nexus 不会据此修改用户插件或伪造第三方宿主接口。
+本地核对发现，dshmarket 1.39.0 识别的是另一套 Desktop 的 `desktopProfiles` 接口。Harness 官方 0.1.6-alpha.2 未提供该接口，且 Host 不携带 `--profile` 命令行参数，市场会回退读取 `web`，包括已安装列表和包操作。因此市场中的“已安装”不能证明该插件正在 Desktop 加载。官方 Desktop 仍读取 `profiles/desktop/package.json`；可在 Nexus 对应配置档的插件清单核对。上游已在 [dshmarket 1.52.0](https://github.com/dsh-market/dsh-market/releases/tag/v1.52.0) 修复配置识别及 Desktop 包操作；Nexus 首次安装市场时固定使用该版本。已有旧版不会自动升级，请通过明确指定 desktop 配置的管理入口更新，不要用读错配置的旧市场更新。Nexus 不会据此修改用户插件或伪造第三方宿主接口。
