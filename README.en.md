@@ -1,5 +1,5 @@
 # Nexus Launcher
 
-The English project overview is now the default [README](README.md).
+The complete English overview is maintained in [README.md](README.md), including platform downloads, Web and official Desktop support, offline use, and current screenshots.
 
 [简体中文](README.zh-CN.md)

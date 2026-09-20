@@ -5,44 +5,58 @@
 
 让 Harness 的版本、运行环境和数据由你掌控。
 
-Nexus 是本地 Harness 管理工具，支持 Windows、macOS，并新增 Linux ARM64 构建目标。它负责准备运行环境、安装或关联 Harness、启动检查、进程管理、版本切换和故障恢复。Web 使用系统浏览器；Desktop 直接启动当前受管 Harness 版本自带的原生客户端，不再维护 Nexus 自制客户端外壳。Desktop 依赖随 Nexus 提供，离线包携带完整运行时，导入和启动不补下载依赖。 当前固定的官方 Desktop 运行时支持 Windows x64、macOS x64／ARM64；Windows ARM64 和 Linux ARM64 当前提供 Web 模式。仅当所选 Harness 与系统支持时显示桌面入口。
+Nexus 是本地 Harness 管理工具，支持 Windows、macOS 和 Linux ARM64。在一个地方安装与切换 Harness 版本、选择配置档、启动 Web 或官方 Desktop，并处理启动问题。
 
+运行依赖随 Nexus 提供。完整离线包包含 Harness 和所需运行时，可在同系统、同架构的另一台电脑上导入并启动，无需联网补装组件。
 [下载安装](https://github.com/chelal233/dsh-nexus/releases) · [用户指南](docs/user-guide.md) · [常见问题](docs/faq.md) · [文档目录](docs/README.md)
 
-![Nexus 首次使用引导](docs/images/guide-zh.jpg)
+![Nexus 工作台](docs/images/workbench-zh.jpg)
 
-*真实 React 界面，隔离的首次使用环境，尚未安装 Harness。截图来源与限制见[截图说明](docs/images/README.md)。*
+*v0.1.8 工作台，使用尚未安装 Harness 的隔离首次使用环境。不支持的 Desktop 选项不会显示。查看[全部截图与采集说明](docs/images/README.md)。*
 
-## Nexus 提供什么
+## 你可以用 Nexus 做什么
 
-- **版本选择自由**：默认保留最多 8 个受管版本槽位，准备上游标签对应的受管版本，确认后再切换；也可以使用自己的已构建 Harness 目录。
-- **环境随包提供**：包含 Chromium、Rust Agent、Node/npm/pnpm；普通用户不必先安装 Nexus 开发工具链。
-- **插件选择自由**：提供市场选择入口，也允许不安装市场；内置功能插件按模块维护，不自建插件目录源。
-- **任务通知**：按事件分类控制系统通知和终端提醒，支持仅失焦或始终提醒；可用事件取决于 Harness 及监听插件。
-- **故障可诊断**：启动检查、兼容性检查、检查点和诊断导出帮助定位问题，不用删除全部用户数据重新开始。
-- **中文与 English**：界面和当前使用文档均提供两种语言。
+- **使用 Web 或官方桌面端**：通过系统浏览器打开 Web Harness，或启动受支持的受管 Harness 版本自带的原生 Desktop。Nexus 检查可用性后才显示桌面选项，不再维护替代客户端。
+- **自己决定版本和配置**：新版本先准备再切换，默认最多保留 8 个受管版本槽位；在工作台切换 Web 配置档。官方 Desktop 在自己的窗口中管理配置，也可以关联已有的已构建 Harness 目录。
+- **启动失败后有明确的下一步**：区分出错插件、缺失服务的提供方和仍在等待的插件。查看建议，在适用时暂时禁用已定位的相关插件，再检查并重试。插件包和数据保留，停用后可以重新启用。
+- **看清运行状态并直接操作**：工作台与托盘提供启动、打开、中止、配置和维护入口。退出时可选择仅关闭 Nexus，或先中止全部服务；准备过程显示阶段、耗时和取消入口。
+- **离线迁移完整环境**：将 Harness、匹配的运行时和选定数据一起导出，在同系统、同架构下导入完整包，无需联网安装依赖。仅配置或仅数据导出属于部分包。
+- **自主选择插件与通知**：选择插件市场，也可以不使用市场；按事件、通知方式和窗口焦点设置任务提醒。可用事件取决于 Harness 及其监听插件。
+- **使用中文或英文**：界面、使用文档和发布日志均提供内容对应的两种语言。
 
-Nexus 不替代 Harness 的 Agent、会话和模型能力，也不保证任意 Harness 与任意插件组合都兼容。更新 Nexus 与切换 Harness 是两个独立操作。
+启动检查不只判断进程运行或网页可访问，还检查客户端插件与核心服务，区分检查中、功能受限、失败和未验证状态。这不代表已验证每次会话、工具调用或运行中的业务。Nexus 不替代 Harness 的 Agent、会话和模型能力；更新 Nexus 与切换 Harness 是两个独立操作。
 
 ## 下载与安装
 
-| 平台 | 架构 | 下载文件 |
-| --- | --- | --- |
-| Windows | x64、ARM64 | EXE 安装包或 ZIP 免安装包 |
-| macOS | Intel x64、Apple Silicon ARM64 | DMG 或 ZIP 应用包 |
-| Linux | ARM64 | AppImage、DEB、RPM（待原生构建与验收） |
+| 平台 | 架构 | 下载文件 | Web Harness | 官方 Desktop |
+| --- | --- | --- | --- | --- |
+| Windows | x64 | EXE 安装包、ZIP 免安装包 | 支持 | 所选 Harness 版本支持时可用 |
+| Windows | ARM64 | EXE 安装包、ZIP 免安装包 | 支持 | 暂不支持 |
+| macOS | Intel x64 | DMG、ZIP 应用包 | 支持 | 所选 Harness 版本支持时可用 |
+| macOS | Apple Silicon ARM64 | DMG、ZIP 应用包 | 支持 | 所选 Harness 版本支持时可用 |
+| Linux | ARM64 | AppImage、DEB、RPM | 支持 | 暂不支持 |
 
-只覆盖 Harness 与 Electron 均支持的平台，不自行移植上游未支持的目标。不提供 x86 32 位版本。Linux ARM64 构建流程已加入；是否提供下载以通过原生 CI 后的实际附件为准，不代表已验证所有国产发行版。按 Release 的标签、附件和 `_build.json` 选择版本，预发布版不是稳定版承诺。签名状态以具体附件为准，参见[安全说明](SECURITY.md)。
+[v0.1.8](https://github.com/chelal233/dsh-nexus/releases/tag/v0.1.8) 的五个平台目标均已通过 CI 与安装包检查。支持范围遵循 Harness 上游与 Electron 的交集；本版本不提供 Linux x64 或 x86 32 位安装包。官方 Desktop 是否可用还取决于所选 Harness 版本。
+
+Linux ARM64 上，兼容的 Debian 系统可选择 DEB，兼容的 RPM 系统可选择 RPM，支持 AppImage 的环境也可使用 AppImage。包格式相同不代表已兼容所有 deepin、统信 UOS、麒麟等发行版及其版本，还需满足系统库和桌面环境要求。CI 与安装包检查不等于逐一验收所有发行版和 Harness 业务场景。
+
+按 Release 附件及其 `_build.json` 记录识别构建。签名状态以具体附件为准，参见[安全说明](SECURITY.md)。
 
 Windows ZIP 必须完整解压，再运行目录内的 `Nexus Launcher.exe`，不能单独复制 EXE。免安装不代表所有用户数据都存放在解压目录。macOS 将完整应用复制到合适位置后启动。
 
 ## 三步开始
 
-1. 打开 Nexus，确认 Agent 在线。
-2. 在引导中安装受管 Harness，或关联已经构建完成的外部目录。
-3. 确认数据目录与 profile，运行启动检查，处理阻断项后启动，再选择打开方式。
+1. 打开 Nexus，确认其后台 Agent 在线。
+2. 安装需要的 Harness 版本、导入完整离线包，或关联已经构建完成的外部目录。
+3. 使用 Web 时，确认数据目录与配置档，处理启动检查阻断项后启动并在浏览器打开；支持官方 Desktop 时，可选择桌面端并在其窗口中管理配置。
 
-首次准备 Harness 可能下载依赖并构建。完整安装好的 Harness 可以离线启动，但模型服务和联网插件仍可能需要网络。Nexus 不自动安装上游原生依赖所需的编译器。
+## 离线使用与启动准备
+
+对于受支持的受管版本，联网取得所选 Harness 后，匹配的运行依赖由 Nexus 提供。本地准备不联网补装 Desktop 依赖。Nexus 与官方 Desktop 复用兼容的 Electron 运行时，后续启动复用已校验的本地文件，减少重复占用和准备工作。
+
+需要断网迁移时，从准备完成的环境导出**完整离线包**，在同系统、同架构下导入。仅配置／数据的部分包不能代替完整包。使用外部源码目录时，须自行预先构建完成；Nexus 不代为编译或安装开发工具链。
+
+离线启动不意味着远程模型服务、插件下载或其他联网功能也能离线使用；除非所选服务本身在本地运行，这些功能仍需要网络。
 
 ## 程序与数据分开
 

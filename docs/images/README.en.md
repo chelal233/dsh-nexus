@@ -3,8 +3,9 @@
 [简体中文](README.md)
 
 
-Captured on 2026-09-18 from the actual React build in this working tree, based on `115f2a8` with unreleased changes. The preview uses an isolated Nexus Agent data directory, with no Harness installed and no real user sessions. Native desktop actions are unavailable in the browser preview. Screenshots do not establish installer, updater, notification-delivery or cross-platform acceptance.
+Recaptured on 2026-09-20 from the v0.1.8 UI (checkout `c00dc29`, with application source unchanged from the release tag), at 1280 × 900. These use real Electron, preload, and Rust Agent in an isolated first-use data directory, with no Harness installed and no real user sessions. The setup, workbench, and settings navigation entries were clicked and checked in both languages. Settings captures show the top of the page; more options are available by scrolling.
 
+The Desktop entry is hidden in the workbench because no supported Harness is installed; this does not mean the host platform lacks Desktop support. These images show the UI and first-use state, not acceptance of Harness startup, installers, updates, notification delivery, or other platforms.
 Chinese and English show the same pages in the light theme. These are actual captures, with no generated or composited features.
 
 | Page | Chinese | English |

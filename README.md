@@ -5,44 +5,58 @@
 
 Keep control of your Harness versions, runtime, and data.
 
-Nexus is a local Harness manager for Windows and macOS, with a new Linux ARM64 build target. It prepares runtimes, installs or connects Harness, checks startup readiness, manages processes and versions, and assists recovery. Use your system browser for Web, or launch the native Desktop included in the selected managed Harness release. Nexus no longer maintains a replacement client shell. Desktop dependencies ship with Nexus and travel with full offline packages; import and launch never download missing dependencies. The pinned official Desktop runtime supports Windows x64 and macOS x64/ARM64; Windows ARM64 and Linux ARM64 currently offer Web mode. Desktop actions appear only when supported by the selected Harness and platform.
+Nexus is a local Harness manager for Windows, macOS, and Linux ARM64. Install and switch Harness versions, choose a profile, start Web Harness or the official Desktop, and recover from startup problems in one place.
 
+Runtime dependencies ship with Nexus. Full offline packages include Harness and the required runtimes, so you can import and start on another machine with the same operating system and architecture without downloading missing components.
 [Downloads](https://github.com/chelal233/dsh-nexus/releases) · [User guide](docs/user-guide.en.md) · [FAQ](docs/faq.en.md) · [Documentation](docs/README.en.md)
 
-![Nexus first-use guide](docs/images/guide-en.jpg)
+![Nexus workbench](docs/images/workbench-en.jpg)
 
-*Real React UI in an isolated first-use environment, with no Harness installed. See [screenshot provenance](docs/images/README.en.md).*
+*The v0.1.8 workbench in an isolated first-use environment, before installing Harness. Unsupported Desktop options are hidden. See [all screenshots and capture details](docs/images/README.en.md).*
 
-## What Nexus provides
+## What you can do
 
-- **Version choice**: keep up to eight managed version slots by default; prepare versions from upstream tags and switch explicitly, or connect your own prebuilt Harness directory.
-- **Bundled environment**: Chromium, the Rust Agent, and Node/npm/pnpm are included. Users do not need the Nexus development toolchain.
-- **Plugin choice**: choose a plugin market or install none. Built-in extensions are modular; Nexus does not operate its own plugin catalog source.
-- **Task notifications**: choose event categories, desktop or terminal delivery, and unfocused-only or always conditions. Available events depend on Harness and its observer plugin.
-- **Recoverable failures**: startup checks, compatibility checks, checkpoints, and diagnostic export help investigate problems without resetting all user data.
-- **Chinese and English**: both are available in the interface and maintained usage documentation.
+- **Use Web or the official Desktop**: open Web Harness in your system browser, or launch the native Desktop included in a supported managed Harness release. Nexus checks availability before showing the Desktop option; it does not maintain a replacement client.
+- **Keep versions and profiles under your control**: prepare an upstream version before switching, keep up to eight managed version slots by default, and switch Web profiles from the workbench. Official Desktop manages its configuration in its own window. You can also connect an existing prebuilt Harness directory.
+- **Fix startup problems with a clear next step**: distinguish failed plugins, missing service providers, and plugins still waiting to load. Review suggested repairs, temporarily disable an identified plugin when appropriate, then check and retry. Plugin packages and data are retained, and disabled plugins can be re-enabled.
+- **Understand what is running**: the workbench and tray expose launch, open, stop, configuration, and maintenance actions. Choose between closing only Nexus and stopping all services before exiting. Preparation shows its stage and elapsed time, with a cancel action.
+- **Move a complete environment offline**: export Harness, matching runtimes, and selected data together. Import a full package on the same OS and architecture without online dependency installation. Configuration-only or data-only exports are partial packages.
+- **Choose plugins and notifications**: select a plugin market or use none; configure task notifications by event, delivery method, and window focus. Events depend on Harness and its observer plugin.
+- **Work in Chinese or English**: both languages are available in the interface, usage documentation, and release notes.
 
-Nexus does not replace the Harness Agent, sessions, or model features, and does not guarantee every Harness/plugin combination. Updating Nexus and switching Harness are separate operations.
+Startup checks go beyond a running process or reachable page: they inspect client plugins and core services, and distinguish checking, limited functionality, failure, and unverified states. They do not verify every conversation, tool, or runtime business operation. Nexus does not replace Harness's agent, sessions, or models. Updating Nexus and switching Harness are separate operations.
 
 ## Download and install
 
-| Platform | Architecture | Downloads |
-| --- | --- | --- |
-| Windows | x64, ARM64 | EXE installer or portable ZIP |
-| macOS | Intel x64, Apple Silicon ARM64 | DMG or application ZIP |
-| Linux | ARM64 | AppImage, DEB, RPM (native build and acceptance pending) |
+| Platform | Architecture | Downloads | Web Harness | Official Desktop |
+| --- | --- | --- | --- | --- |
+| Windows | x64 | EXE installer, portable ZIP | Yes | Supported Harness releases |
+| Windows | ARM64 | EXE installer, portable ZIP | Yes | Not currently available |
+| macOS | Intel x64 | DMG, application ZIP | Yes | Supported Harness releases |
+| macOS | Apple Silicon ARM64 | DMG, application ZIP | Yes | Supported Harness releases |
+| Linux | ARM64 | AppImage, DEB, RPM | Yes | Not currently available |
 
-Nexus covers only platforms supported by both Harness and Electron; it does not port unsupported upstream targets. There are no 32-bit x86 packages. Linux ARM64 build jobs are configured; downloads depend on successful native CI and actual release assets. This does not establish compatibility with every Linux distribution. Use the release tag, assets, and `_build.json` to identify a build. A prerelease is not a stability guarantee. Signing status is specific to each artifact; see [security](SECURITY.en.md).
+All five targets passed CI and package checks for [v0.1.8](https://github.com/chelal233/dsh-nexus/releases/tag/v0.1.8). Support follows the intersection of Harness upstream and Electron; there are no Linux x64 or 32-bit x86 packages in this release. Desktop availability also depends on the selected Harness release.
+
+On Linux ARM64, choose DEB for compatible Debian-family systems, RPM for compatible RPM-family systems, or AppImage where supported. Package format alone does not establish compatibility with every deepin, UOS, Kylin, or other distribution/version; system libraries and desktop environment still matter. CI/package checks are not acceptance tests of every distribution or Harness workflow.
+
+Use the release assets and their `_build.json` records to identify a build. Signing status is specific to each artifact; see [security](SECURITY.en.md).
 
 Extract the entire Windows ZIP, then run `Nexus Launcher.exe`. Do not copy only the executable. Portable means installation-free, not that all user data lives beside the executable. On macOS, copy the complete application to its intended location before opening it.
 
 ## Start in three steps
 
-1. Open Nexus and confirm the Agent is online.
-2. Install a managed Harness from the guide, or connect a prebuilt external directory.
-3. Confirm the data directory and profile, resolve blocking startup checks, start Harness, and choose how to open it.
+1. Open Nexus and confirm its background Agent is online.
+2. Install the Harness version you want, import a full offline package, or connect a prebuilt external directory.
+3. For Web, confirm the data directory and profile, resolve blocking startup checks, then start and open it in your browser. When supported, choose official Desktop to open its own window and manage its configuration there.
 
-Initial Harness preparation may download dependencies and build them. A fully prepared Harness can start offline, but model services and network plugins may still require connectivity. Nexus does not automatically install compilers required by upstream native dependencies.
+## Offline use and startup preparation
+
+For the supported managed path, acquire the chosen Harness version while online; Nexus supplies the matching runtime dependencies. Local preparation does not download missing Desktop dependencies. Nexus and official Desktop reuse a compatible Electron runtime, and subsequent starts reuse verified local files to reduce duplicate storage and preparation work.
+
+For transfer without a network, export a **full offline package** from a prepared environment and import it on the same OS and architecture. A partial configuration/data export cannot replace that package. An external source checkout must already be built; Nexus does not compile it or install a development toolchain for you.
+
+Offline startup does not make remote model services, plugin downloads, or other network features available offline. Those still need connectivity unless the chosen service itself runs locally.
 
 ## Programs and data are separate
 
