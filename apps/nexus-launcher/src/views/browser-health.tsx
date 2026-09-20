@@ -43,6 +43,31 @@ export function clientStartupLabel(snapshot: Snapshot, t: Translator, compact = 
   }
 }
 
+export function StartupWarning({
+  snapshot,
+  onDetails,
+}: {
+  snapshot: Snapshot;
+  onDetails: () => void;
+}) {
+  const { t } = useI18n();
+  if (clientStartupLabel(snapshot, t, true) !== t("Ready with warnings")) return null;
+  const diagnosis = asObject(asObject(asObject(snapshot.profiles).compatibility).diagnosis);
+  const entries = arrayValue(asObject(diagnosis.activation), "entries").map(asObject);
+  return (
+    <div className="startup-warning-summary" role="status">
+      <p>{t("Harness is ready; some optional plugins did not activate")}</p>
+      {entries.slice(0, 3).map((entry, index) => (
+        <p key={index}>
+          <strong>{stringValue(entry, "package") || stringValue(entry, "id")}</strong>:{" "}
+          {stringValue(entry, "reason")}
+        </p>
+      ))}
+      <ActionButton onClick={onDetails}>{t("Service and plugin details")}</ActionButton>
+    </div>
+  );
+}
+
 export function BrowserHealth({
   snapshot,
   busyAction,

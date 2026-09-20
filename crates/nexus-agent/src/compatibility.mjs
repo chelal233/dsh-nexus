@@ -437,9 +437,26 @@ function moduleFilter(source, official, planning = false, missing = new Set()) {
     return true;
   };
 }
-function copyModules(source, target, official, missing) {
+export async function copyModules(source, target, official, missing) {
   if (!fs.existsSync(source)) return;
-  fs.cpSync(source, target, { recursive: true, dereference: true, filter: moduleFilter(source, official, false, missing) });
+  const filter = moduleFilter(source, official, false, missing);
+  const pending = [{ source, target }];
+  // Isolated real copies, never hardlinks into user dependencies. Bound the IO
+  // fan-out while retaining the same containment and package exclusion checks.
+  while (pending.length) {
+    const results = await Promise.allSettled(pending.splice(-16).map(async ({ source, target }) => {
+      if (!filter(source)) return;
+      const stat = await fs.promises.stat(source);
+      if (stat.isDirectory()) {
+        await fs.promises.mkdir(target, { recursive: true, mode: stat.mode });
+        for (const name of await fs.promises.readdir(source)) pending.push({ source: path.join(source, name), target: path.join(target, name) });
+      } else if (stat.isFile()) await fs.promises.copyFile(source, target);
+      else throw Error('Unsupported dependency file');
+    }));
+    const failed = results.find(result => result.status === 'rejected');
+    // All writes have settled before callers clean up a failed check.
+    if (failed) throw failed.reason;
+  }
 }
 
 export function planCanary(options) {
@@ -663,7 +680,7 @@ export async function check(options) {
       throw Error(desktopProfileError);
     }
     const official = officialPackages(slot);
-    copyModules(path.join(source.dir, 'node_modules'), path.join(candidate, 'node_modules'), official, missing);
+    await copyModules(path.join(source.dir, 'node_modules'), path.join(candidate, 'node_modules'), official, missing);
     for (const [name, target] of official) {
       const link = path.join(candidate, 'node_modules', name);
       fs.mkdirSync(path.dirname(link), { recursive: true });
@@ -824,7 +841,7 @@ export async function checkCanary(options) {
     const began = Date.now();
     fs.mkdirSync(candidate, { recursive: true });
     try {
-      copyModules(path.join(source.dir, 'node_modules'), path.join(candidate, 'node_modules'), official);
+      await copyModules(path.join(source.dir, 'node_modules'), path.join(candidate, 'node_modules'), official);
       for (const [name, target] of official) {
         const link = path.join(candidate, 'node_modules', name); fs.mkdirSync(path.dirname(link), { recursive: true });
         fs.symlinkSync(target, link, process.platform === 'win32' ? 'junction' : 'dir');

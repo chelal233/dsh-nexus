@@ -8,8 +8,8 @@ test('one Harness switches mode while idle and locks to the running mode', async
   const bindings = { window: dom.window, document: dom.window.document, navigator: dom.window.navigator, IS_REACT_ACT_ENVIRONMENT: true };
   const previous = new Map(Object.keys(bindings).map(k => [k, Object.getOwnPropertyDescriptor(globalThis, k)]));
   for (const [k,v] of Object.entries(bindings)) Object.defineProperty(globalThis,k,{configurable:true,writable:true,value:v});
-  let phase = 'idle'; let supported = true; let profileOpens = 0; const calls = [];
-  dom.window.nexusDesktop = { async invoke(command) { calls.push(command); if(command === 'harness_desktop_capability') return {supported,release:supported?'fixture':'web-only'}; if(command === 'harness_desktop_start') phase='preparing'; if(command === 'harness_desktop_stop') phase='stopped'; return {phase,stage:'runtime',startedAt:Date.now()-5000}; }, listen() { return () => {}; } };
+  let phase = 'idle'; let launchPhase = 'preparing'; let stopFails = false; let supported = true; let profileOpens = 0; const calls = [];
+  dom.window.nexusDesktop = { async invoke(command) { calls.push(command); if(command === 'harness_desktop_capability') return {supported,release:supported?'fixture':'web-only'}; if(command === 'harness_desktop_start') phase=launchPhase; if(command === 'harness_desktop_stop') { if(stopFails) throw Error('stop failed'); phase='stopped'; } return {phase,stage:'runtime',startedAt:Date.now()-5000}; }, listen() { return () => {}; } };
   let root, loader, act;
   try {
     const React = await import('react'); act = React.act;
@@ -55,6 +55,21 @@ test('one Harness switches mode while idle and locks to the running mode', async
     await act(async()=>cancel.click());
     assert.ok(calls.includes('harness_desktop_stop'));
     assert.equal(document.querySelector('.harness-mode-picker').disabled,false);
+    launchPhase='launched';
+    await act(async()=>primary()[0].click());
+    const action=text=>[...document.querySelectorAll('.harness-desktop-content button')].find(button=>button.textContent===text);
+    assert.ok(action('Close')); assert.ok(action('Restart'));
+    const before=calls.length;
+    await act(async()=>action('Restart').click());
+    assert.deepEqual(calls.slice(before),['harness_desktop_stop','harness_desktop_start']);
+    stopFails=true;
+    const failedBefore=calls.length;
+    await act(async()=>action('Restart').click());
+    assert.deepEqual(calls.slice(failedBefore),['harness_desktop_stop']);
+    assert.match(document.body.textContent,/stop failed/);
+    stopFails=false;
+    await act(async()=>action('Close').click());
+    assert.match(document.querySelector('.desktop-phase').textContent,/Not running/);
   } finally {
     if(root) await act(async()=>root.unmount()); if(loader) await loader.close(); dom.window.close();
     for(const [k,d] of previous) { if(d) Object.defineProperty(globalThis,k,d); else delete globalThis[k]; }

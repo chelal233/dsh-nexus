@@ -1,6 +1,15 @@
 import { spawn } from 'node:child_process';
 import path from 'node:path';
 
+// Keep the outer transport alive beyond the Agent client's bounded operation.
+// Compatibility checks already have a 660 s budget in nexus-launcher-core.
+export function requestTimeout(command, args) {
+  const compatibility = command === 'proxy_request' && args.method === 'POST' &&
+    (['/v1/releases', '/v1/harness', '/v1/market'].includes(args.path) ||
+      (args.path === '/v1/profiles' && ['select', 'compatibility_check'].includes(args.body?.action)));
+  return compatibility ? 690000 : 120000;
+}
+
 export class RustBridge {
   #child;
   #pending = new Map();
@@ -51,7 +60,7 @@ export class RustBridge {
     if (this.#pending.size >= 64) return Promise.reject(new Error('Too many desktop requests'));
     return new Promise((resolve, reject) => {
       const id = ++this.#nextId;
-      const timer = setTimeout(() => { this.#pending.delete(id); reject(new Error('Desktop request timed out; check operation status before retrying')); }, 120000);
+      const timer = setTimeout(() => { this.#pending.delete(id); reject(new Error('Desktop request timed out; check operation status before retrying')); }, requestTimeout(command, args));
       this.#pending.set(id, { resolve, reject, timer });
       this.#child.stdin.write(`${JSON.stringify({ id, command, args })}\n`);
     });

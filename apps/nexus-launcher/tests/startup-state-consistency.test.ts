@@ -20,6 +20,11 @@ test("client verification follows the current run and uses bounded foreground po
     assert.equal(clientStartupLabel(snapshot, (key: string) => key, true), "Ready");
     snapshot.profiles.compatibility.release_id = "release-b";
     assert.equal(clientStartupLabel(snapshot, (key: string) => key, true), "Ready with warnings");
+    snapshot.profiles.compatibility.diagnosis.activation = {entries:[{package:'dsh-automation',reason:'webServer is unavailable'}]};
+    const warning = renderToStaticMarkup(createElement(OverviewView, {snapshot:{...snapshot,startup:{available:true},status:{},state:{}},busyAction:null,openProfiles:()=>{},runAction:async()=>true}));
+    assert.match(warning,/dsh-automation/);
+    assert.match(warning,/webServer is unavailable/);
+    assert.match(warning,/Service and plugin details/);
     snapshot.profiles.disabled_plugins.push("changed-policy");
     assert.equal(clientStartupLabel(snapshot, (key: string) => key, true), "Ready");
     assert.equal(launcherPollDelay("client_pending", 0, false), 1000);

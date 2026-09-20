@@ -652,3 +652,21 @@ test('grouped fatal startup reports retain failed package identity and pending c
     assert.deepEqual(report.diagnosis.repair_candidates.map(row=>row.package),['@example/archive']);
   } finally {f.close();}
 });
+
+test('parallel dependency copies stay isolated, skip official packages and reject escaped links', async t => {
+  const root=fs.mkdtempSync(path.join(os.tmpdir(),'nexus-copy-'));
+  t.after(()=>fs.rmSync(root,{recursive:true,force:true}));
+  const source=path.join(root,'source'), target=path.join(root,'target');
+  fs.mkdirSync(path.join(source,'plugin'),{recursive:true});
+  fs.mkdirSync(path.join(source,'official'),{recursive:true});
+  fs.writeFileSync(path.join(source,'plugin/index.js'),'original');
+  fs.writeFileSync(path.join(source,'official/index.js'),'skip');
+  const {copyModules}=await import('../src/compatibility.mjs');
+  await copyModules(source,target,new Map([['official',true]]));
+  assert.equal(fs.existsSync(path.join(target,'official')),false);
+  fs.writeFileSync(path.join(target,'plugin/index.js'),'probe write');
+  assert.equal(fs.readFileSync(path.join(source,'plugin/index.js'),'utf8'),'original');
+  const outside=path.join(root,'outside');fs.mkdirSync(outside);
+  fs.symlinkSync(outside,path.join(source,'escape'),process.platform==='win32'?'junction':'dir');
+  await assert.rejects(copyModules(source,path.join(root,'rejected'),new Map()),/escapes/);
+});

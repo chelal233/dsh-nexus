@@ -10,6 +10,7 @@ export function verifyDesktopKit(directory, { platform = process.platform, arch 
   if (![1,2,3].includes(manifest.schema) || manifest.platform !== platform || manifest.arch !== arch ||
       !['win32','darwin','linux'].includes(platform) || !Array.isArray(manifest.files) || !manifest.files.length) throw new Error('desktop_runtime_incompatible');
   const seen = new Set();
+  const hashes = new Map();
   for (const entry of manifest.files) {
     if (typeof entry.path !== 'string' || entry.path.includes('\\') || entry.path.includes(':') ||
         entry.path.split('/').some(part => !part || part === '.' || part === '..') || seen.has(entry.path)) throw new Error('desktop_runtime_invalid');
@@ -18,9 +19,12 @@ export function verifyDesktopKit(directory, { platform = process.platform, arch 
     for (let parent = path.dirname(file); parent !== path.resolve(directory); parent = path.dirname(parent)) {
       if (parent === path.dirname(parent) || fs.lstatSync(parent).isSymbolicLink()) throw new Error('desktop_runtime_invalid');
     }
-    if (!fs.lstatSync(file).isFile() || digest(file) !== entry.sha256) throw new Error('desktop_runtime_invalid');
+    if (!fs.lstatSync(file).isFile()) throw new Error('desktop_runtime_invalid');
+    const hash = digest(file);
+    if (hash !== entry.sha256) throw new Error('desktop_runtime_invalid');
+    hashes.set(entry.path, hash);
   }
-  if (!seen.has('lock.json') || digest(path.join(directory, 'lock.json')) !== manifest.lockSha256) throw new Error('desktop_runtime_invalid');
+  if (!seen.has('lock.json') || hashes.get('lock.json') !== manifest.lockSha256) throw new Error('desktop_runtime_invalid');
   const lock = JSON.parse(fs.readFileSync(path.join(directory, 'lock.json'), 'utf8'));
   const target = lock.targets[`${({ win32: 'win', darwin: 'mac', linux: 'linux' })[platform]}-${arch}`];
   if (manifest.schema >= 2 && manifest.supported === false) {
@@ -30,11 +34,11 @@ export function verifyDesktopKit(directory, { platform = process.platform, arch 
   if (!target) throw new Error('desktop_runtime_incompatible');
   if (manifest.schema === 3) {
     if (manifest.supported !== true || manifest.electronMode !== 'launcher' ||
-        !seen.has('primary.tar.gz') || digest(path.join(directory, 'primary.tar.gz')) !== manifest.primaryArchiveSha256 ||
+        !seen.has('primary.tar.gz') || hashes.get('primary.tar.gz') !== manifest.primaryArchiveSha256 ||
         !/^[0-9]+\.[0-9]+\.[0-9]+$/.test(manifest.electronVersion) ||
         !/^[0-9]+\.[0-9]+\.[0-9]+$/.test(manifest.electronNodeVersion) || manifest.primarySmokePassed !== true) throw new Error('desktop_runtime_invalid');
     if (manifest.hostArchiveSha256 !== undefined && (!['win32', 'darwin'].includes(platform) || !seen.has('host.tar.gz') ||
-        digest(path.join(directory, 'host.tar.gz')) !== manifest.hostArchiveSha256)) throw new Error('desktop_runtime_invalid');
+        hashes.get('host.tar.gz') !== manifest.hostArchiveSha256)) throw new Error('desktop_runtime_invalid');
     return { ...manifest, primaryArchive: path.join(directory, 'primary.tar.gz'),
       ...(manifest.hostArchiveSha256 ? { hostArchive: path.join(directory, 'host.tar.gz') } : {}) };
   }
@@ -42,7 +46,7 @@ export function verifyDesktopKit(directory, { platform = process.platform, arch 
     if (!/^[a-f0-9]{64}$/.test(hash) || !seen.has(`assets/${hash}`)) throw new Error('desktop_runtime_missing');
   }
   if (manifest.schema === 2) {
-    if (manifest.supported !== true || !seen.has('electron.zip') || digest(path.join(directory, 'electron.zip')) !== manifest.electronArchiveSha256) throw new Error('desktop_runtime_invalid');
+    if (manifest.supported !== true || !seen.has('electron.zip') || hashes.get('electron.zip') !== manifest.electronArchiveSha256) throw new Error('desktop_runtime_invalid');
     return { ...manifest, archive: path.join(directory, 'electron.zip') };
   }
   const electron = platform === 'win32' ? 'electron/electron.exe' : 'electron/Electron.app/Contents/MacOS/Electron';

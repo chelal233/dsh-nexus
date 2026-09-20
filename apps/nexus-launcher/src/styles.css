@@ -2774,6 +2774,17 @@ body,
   grid-column: 1 / -1;
   margin-top: 14px;
 }
+.startup-warning-summary {
+  grid-column: 1 / -1;
+  margin-top: 16px;
+  padding-top: 12px;
+  border-top: 1px solid var(--line);
+  font-size: 13px;
+  overflow-wrap: anywhere;
+}
+.startup-warning-summary p {
+  margin: 0 0 8px;
+}
 .harness-desktop-content {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;

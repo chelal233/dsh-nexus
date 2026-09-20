@@ -38,7 +38,7 @@ import { localizedRuntimeState, localizeBackendError, formatTimestamp } from "..
 import { RecoveryLogTail } from "./recovery";
 import { useState, useEffect } from "react";
 import { harnessUiMatchesRuntime } from "../harness-session";
-import { BrowserHealth, clientStartupLabel } from "./browser-health";
+import { BrowserHealth, clientStartupLabel, StartupWarning } from "./browser-health";
 import { isLoopbackUrl } from "../harness-config";
 import { HarnessDesktopPanel, useHarnessDesktop } from "./harness-desktop";
 
@@ -271,6 +271,7 @@ export function OverviewView({
                     </>
                   }
                 >
+                  {openProfiles && <StartupWarning snapshot={snapshot} onDetails={openProfiles} />}
                   {harnessState === "failed" && (
                     <div className="button-row">
                       <ActionButton onClick={() => setFailLogOpen(true)}>

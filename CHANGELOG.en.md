@@ -5,6 +5,10 @@
 
 ## Unreleased
 
+- **Less repeated work on first launch**: startup checks copy isolated dependencies with bounded parallel IO, preserving original profiles and path checks. Desktop runtime archives are no longer read twice for verification. A same-machine copy comparison improved from about 56 to 24 seconds; total startup time still depends on plugins and storage.
+- **Waiting is not reported as startup failure**: the desktop request budget now accommodates backend compatibility checks. If transport still times out, Nexus checks Harness status instead of opening plugin repair or repeating the start request.
+- **Clearer desktop controls and warnings**: the workbench provides Close and Restart for official Desktop. A failed stop never launches another instance. Ready with warnings now identifies the optional plugins and their reported reasons.
+
 - **Official Desktop opens visibly**: fix Windows launches where the official Desktop process started but its window remained hidden. Background preparation stays quiet while the actual desktop window opens normally.
 - **Consistent tray and workbench actions**: Web start, stop, open-page and terminal actions reuse the workbench flow, including checks, repair feedback and status refresh. Tray stop availability respects the same operation gates.
 

@@ -13,6 +13,10 @@ export type TranslationParams = Record<string, string | number>;
 export type Translator = (key: string, params?: TranslationParams) => string;
 
 const english: Record<string, string> = {
+  "Harness is running. The startup reply was delayed.":
+    "Harness is running. The startup reply was delayed.",
+  "Startup has not returned a result. Check its progress before retrying.":
+    "Startup has not returned a result. Check its progress before retrying.",
   "Update Nexus": "Update Nexus",
   "New version: {version}": "New version: {version}",
   "Download verified. Choose when to restart.": "Download verified. Choose when to restart.",
@@ -1984,6 +1988,9 @@ const english: Record<string, string> = {
 };
 
 const chinese: Record<string, string> = {
+  "Harness is running. The startup reply was delayed.": "Harness 已在运行，启动响应返回较慢。",
+  "Startup has not returned a result. Check its progress before retrying.":
+    "启动尚未返回结果，请查看当前进度，勿重复启动。",
   "Update Nexus": "更新 Nexus",
   "New version: {version}": "新版本：{version}",
   "Download verified. Choose when to restart.": "下载已完成并通过校验，请选择重启时间。",

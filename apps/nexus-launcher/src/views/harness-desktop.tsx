@@ -1,5 +1,5 @@
-import { useEffect, useState } from "react";
-import { ArrowRight } from "@phosphor-icons/react";
+import { useEffect, useRef, useState } from "react";
+import { ArrowRight, ArrowsClockwise, StopCircle } from "@phosphor-icons/react";
 import { invoke } from "../desktop";
 import { useI18n } from "../i18n";
 import { ActionButton } from "../ui-components";
@@ -60,6 +60,7 @@ export function useHarnessDesktop(snapshot: Snapshot) {
   const [error, setError] = useState("");
   const [pollError, setPollError] = useState("");
   const [stopping, setStopping] = useState(false);
+  const operation = useRef(0);
   useEffect(() => {
     let disposed = false;
     let polling = false;
@@ -104,6 +105,7 @@ export function useHarnessDesktop(snapshot: Snapshot) {
     }
   };
   const stop = async () => {
+    operation.current++;
     setStopping(true);
     setError("");
     try {
@@ -114,12 +116,28 @@ export function useHarnessDesktop(snapshot: Snapshot) {
       setStopping(false);
     }
   };
+  const restart = async () => {
+    const current = ++operation.current;
+    setStarting(true);
+    setError("");
+    try {
+      // Do not launch another instance unless the owned process tree stopped.
+      setState(await invoke<DesktopState>("harness_desktop_stop"));
+      if (operation.current !== current) return;
+      setState(await invoke<DesktopState>("harness_desktop_start"));
+    } catch (failure) {
+      setError((failure as Error).message);
+    } finally {
+      setStarting(false);
+    }
+  };
   return {
     state,
     starting,
     error: error || pollError,
     stopping,
     stop,
+    restart,
     active,
     launch,
     supported: capability?.key === probeKey && capability.supported,
@@ -137,7 +155,7 @@ export function HarnessDesktopPanel({
   controller: ReturnType<typeof useHarnessDesktop>;
 }) {
   const { t } = useI18n();
-  const { state, starting, stopping, error, active, launch, stop } = controller;
+  const { state, starting, stopping, error, active, launch, stop, restart } = controller;
   const preparing = starting || state.phase === "preparing";
   const [now, setNow] = useState(Date.now());
   useEffect(() => {
@@ -198,6 +216,18 @@ export function HarnessDesktopPanel({
         </p>
       )}
       <div className="button-row">
+        {state.phase === "launched" && !starting && (
+          <>
+            <ActionButton disabled={busy || stopping} onClick={() => void restart()}>
+              <ArrowsClockwise size={16} />
+              {t("Restart")}
+            </ActionButton>
+            <ActionButton tone="danger" disabled={stopping} onClick={() => void stop()}>
+              <StopCircle size={16} />
+              {t(stopping ? "Stopping" : "Close")}
+            </ActionButton>
+          </>
+        )}
         {preparing || state.phase === "stopping" ? (
           <ActionButton
             onClick={() => void stop()}

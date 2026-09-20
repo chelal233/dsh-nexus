@@ -691,6 +691,21 @@ function App() {
         } catch (cause) {
           const original = errorMessage(cause);
           const info = apiErrorInfo(cause);
+          if (startsHarness && original.includes("Desktop request timed out")) {
+            // Transport expiry is not a process failure. Do not replay the POST
+            // or open plugin repair based on an unconfirmed outcome.
+            const observed = await proxyRequest<JsonObject>("/v1/harness").catch(() => null);
+            const state = stringValue(harnessRuntimeValue(observed), "state");
+            setNotice(
+              t(
+                state === "running"
+                  ? "Harness is running. The startup reply was delayed."
+                  : "Startup has not returned a result. Check its progress before retrying.",
+              ),
+            );
+            actionSucceeded = state === "running";
+            return actionSucceeded;
+          }
           if (info.code === "harness_preflight_blocked") {
             const report = asObject(cause).preflight;
             if (validStartupCheck(report)) setBasicCheckResult(asObject(report));

@@ -119,3 +119,25 @@ test('client factory registers native geometry/chooser and routes a notification
   assert.equal(await services.uiWorkspace.pickDirectory(), '/native'); assert.equal(services.desktopWindow.safeAreaInsets.top, 0);
   for (const dispose of cleanups.reverse()) await dispose(); assert.equal(services.uiWorkspace.pickDirectory, previous);
 });
+
+test('bridge lets compatibility operations finish inside the Agent timeout budget', async () => {
+  const { requestTimeout } = await import('../electron/bridge.mjs');
+  assert.ok(requestTimeout('proxy_request',{method:'POST',path:'/v1/harness',body:{action:'start'}})>660000);
+  assert.ok(requestTimeout('proxy_request',{method:'POST',path:'/v1/profiles',body:{action:'compatibility_check'}})>660000);
+  assert.equal(requestTimeout('proxy_request',{method:'GET',path:'/v1/harness'}),120000);
+  assert.equal(requestTimeout('proxy_request',{method:'POST',path:'/v1/config'}),120000);
+});
+
+test('a startup response arriving after two minutes is still delivered without replay', async t => {
+  t.mock.timers.enable({apis:['setTimeout']});
+  const child=new EventEmitter();child.stdout=new PassThrough();child.stdin=new PassThrough();child.kill=()=>{};
+  const bridge=new RustBridge('fixture',()=>child);
+  let settled=false;
+  const pending=bridge.request('proxy_request',{method:'POST',path:'/v1/harness',body:{action:'start'}}).finally(()=>{settled=true;});
+  const request=JSON.parse(child.stdin.read().toString());
+  t.mock.timers.tick(126000);await Promise.resolve();
+  assert.equal(settled,false);
+  child.stdout.write(JSON.stringify({id:request.id,value:{harness:{state:'running'}}})+'\n');
+  assert.equal((await pending).harness.state,'running');
+  assert.equal(child.stdin.read(),null);bridge.close();
+});
