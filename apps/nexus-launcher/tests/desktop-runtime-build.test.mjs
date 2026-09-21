@@ -5,7 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { createHash } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
-import { preparePrimaryPayload, nativeTar } from '../electron/desktop-runtime-cache.mjs';
+import { preparePrimaryPayload, nativeTar, runtimeInventory } from '../electron/desktop-runtime-cache.mjs';
 import { cachedAsset, desktopAssets, pin } from '../desktop/scripts/prepare-desktop-runtime.mjs';
 import { verifyDesktopKit, digest } from '../electron/desktop-runtime.mjs';
 import { probeDesktopSupport } from '../electron/harness-desktop.mjs';
@@ -75,7 +75,27 @@ test('Linux ARM64 never inherits macOS ARM64 Desktop support', t => {
  assert.equal(verifyDesktopKit(root,{platform:'linux',arch:'arm64'}).supported,false);
 });
 
-test('shared runtime cache reuses unchanged files and repairs edits, missing entries, and redirected roots', t => {
+test('parallel inventory preserves order, bounds filesystem work and drains failures', async t => {
+ const root=temp(t);
+ for(let i=0;i<48;i++) fs.writeFileSync(path.join(root,`file-${i}`),'fixture');
+ const original=fs.promises.lstat; let active=0,peak=0;
+ fs.promises.lstat=async (...args)=>{
+   active++; peak=Math.max(peak,active);
+   try { await new Promise(resolve=>setTimeout(resolve,2)); return await original(...args); }
+   finally {active--;}
+ };
+ try {
+   const result=await runtimeInventory(root);
+   assert.deepEqual(result.map(entry=>entry[0]),['',...fs.readdirSync(root).sort()]);
+   assert.ok(peak>1&&peak<=16,`filesystem concurrency ${peak}`);
+   const outside=temp(t), link=path.join(root,'escape');
+   fs.symlinkSync(outside,link,process.platform==='win32'?'junction':'dir');
+   try { await assert.rejects(runtimeInventory(root),/desktop_runtime_invalid/); assert.equal(active,0); }
+   finally { fs.unlinkSync(link); }
+ } finally {fs.promises.lstat=original;}
+});
+
+test('shared runtime cache reuses unchanged files and repairs edits, missing entries, and redirected roots', async t => {
  const root=temp(t), payload=path.join(root,'payload'), cache=path.join(root,'cache');
  fs.mkdirSync(path.join(payload,'primary-runtime'),{recursive:true});
  fs.mkdirSync(path.join(payload,'office-skills'));
@@ -84,17 +104,17 @@ test('shared runtime cache reuses unchanged files and repairs edits, missing ent
  const archive=path.join(root,'primary.tar.gz');
  execFileSync(nativeTar(),['-czf',archive,'-C',payload,'primary-runtime','office-skills'],{windowsHide:true});
  const kit={primaryArchive:archive,primaryArchiveSha256:digest(archive)};
- const destination=preparePrimaryPayload(kit,cache), file=path.join(destination,'primary-runtime/test.txt');
+ const destination=await preparePrimaryPayload(kit,cache), file=path.join(destination,'primary-runtime/test.txt');
  const original=fs.statSync(file,{bigint:true});
- assert.equal(preparePrimaryPayload(kit,cache),destination);
+ assert.equal(await preparePrimaryPayload(kit,cache),destination);
  assert.equal(fs.statSync(file,{bigint:true}).ctimeNs,original.ctimeNs);
  fs.writeFileSync(file,'modified');
  fs.utimesSync(file,Number(original.atimeNs)/1e9,Number(original.mtimeNs)/1e9);
- preparePrimaryPayload(kit,cache); assert.equal(fs.readFileSync(file,'utf8'),'original');
- fs.unlinkSync(file); preparePrimaryPayload(kit,cache); assert.equal(fs.readFileSync(file,'utf8'),'original');
+ await preparePrimaryPayload(kit,cache); assert.equal(fs.readFileSync(file,'utf8'),'original');
+ fs.unlinkSync(file); await preparePrimaryPayload(kit,cache); assert.equal(fs.readFileSync(file,'utf8'),'original');
  fs.rmSync(destination,{recursive:true});
  fs.symlinkSync(payload,destination,process.platform==='win32'?'junction':'dir');
- preparePrimaryPayload(kit,cache);
+ await preparePrimaryPayload(kit,cache);
  assert.equal(fs.lstatSync(destination).isSymbolicLink(),false);
  assert.equal(fs.readFileSync(path.join(payload,'primary-runtime/test.txt'),'utf8'),'original');
 });

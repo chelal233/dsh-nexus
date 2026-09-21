@@ -9,6 +9,23 @@ import {once} from 'node:events';
 import {HarnessDesktop,desktopActive} from '../electron/harness-desktop.mjs';
 import {stopDesktopChild} from '../electron/desktop-process.mjs';
 const temp=t=>{const root=fs.mkdtempSync(path.join(os.tmpdir(),'nexus-stop-test-'));t.after(()=>fs.rmSync(root,{recursive:true,force:true}));return root;};
+
+test('shared Desktop restart waits for stop, cancels on a later stop, and never starts after stop failure',async t=>{
+ const root=temp(t), desktop=new HarnessDesktop({bridge:{},userData:root,resources:root});
+ let finish, starts=0;
+ desktop.stopOperation=()=>new Promise(resolve=>finish=resolve);
+ desktop.startOperation=async()=>{starts++;return {phase:'launched'};};
+ const first=desktop.restart();
+ assert.equal(starts,0);
+ await assert.rejects(desktop.restart(),/desktop_already_active/);
+ await assert.rejects(desktop.start(),/desktop_already_active/);
+ const cancel=desktop.stop();finish();await cancel;await first;
+ assert.equal(starts,0);
+ const second=desktop.restart();finish();assert.equal((await second).phase,'launched');assert.equal(starts,1);
+ desktop.stopOperation=async()=>{throw new Error('stop failed');};
+ await assert.rejects(desktop.restart(),/stop failed/);assert.equal(starts,1);
+ assert.equal(desktop.restarting,false);
+});
 test('Desktop start is protected before first await and can be cancelled before spawning',async t=>{
  const root=temp(t);let release;
  const bridge={request(command){if(command==='desktop_launch_context')return new Promise(resolve=>release=resolve);return Promise.resolve({});}};

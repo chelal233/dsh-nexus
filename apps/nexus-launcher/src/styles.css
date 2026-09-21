@@ -2988,5 +2988,20 @@ body,
   accent-color: var(--accent);
 }
 .update-version {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 12px;
   font-weight: 600;
+}
+.update-release-notes {
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--accent);
+  font: inherit;
+  font-weight: 400;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+  cursor: pointer;
 }

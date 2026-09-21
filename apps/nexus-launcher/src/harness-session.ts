@@ -59,3 +59,11 @@ export function clientCheckPending(snapshot: Snapshot): boolean {
   const health = asObject(asObject(snapshot.harnessUi).browser_health);
   return !stringValue(health, "state") || health.state === "checking";
 }
+
+/** A live host and URL are not proof that the browser client can be used. */
+export function harnessBrowserReady(snapshot: Snapshot, invalidating = false): boolean {
+  return (
+    harnessUiMatchesRuntime(snapshot.harnessRuntime, snapshot.harnessUi, invalidating) &&
+    asObject(asObject(snapshot.harnessUi).browser_health).state === "active"
+  );
+}

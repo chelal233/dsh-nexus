@@ -82,6 +82,8 @@ export function desktopCapability(root) {
 // until it exits and publishes process state, never an invented readiness signal.
 export class HarnessDesktop {
   busy = false;
+  restarting = false;
+  stopGeneration = 0;
   constructor({ bridge, userData, resources, executable = process.execPath, electronExecutable = process.execPath, electronApp }) {
     Object.assign(this, { bridge, userData, resources, executable, electronExecutable, electronApp });
     this.directory = path.join(userData, 'harness-desktop');
@@ -92,8 +94,21 @@ export class HarnessDesktop {
     return this.busy && !desktopActive(state) ? { ...state, phase: 'preparing', stage: 'context' } : state;
   }
   stop() {
+    this.stopGeneration++;
     if (!this.stopPromise) this.stopPromise = this.stopOperation().finally(() => { this.stopPromise = undefined; });
     return this.stopPromise;
+  }
+  async restart() {
+    if (this.restarting) throw new Error('desktop_already_active');
+    this.restarting = true;
+    try {
+      const stopped = this.stop();
+      const generation = this.stopGeneration;
+      await stopped;
+      // A later Stop cancels the pending restart, including while stop is shared.
+      if (generation !== this.stopGeneration) return this.status();
+      return await this.startOperation();
+    } finally { this.restarting = false; }
   }
   async stopOperation() {
     this.cancelRequested = true;
@@ -130,6 +145,10 @@ export class HarnessDesktop {
     return { ...probeDesktopSupport(managedDesktopRoot(startup.data_root, releases.current_release)), release: releases.current_release };
   }
   async start() {
+    if (this.restarting || this.stopPromise) throw new Error('desktop_already_active');
+    return this.startOperation();
+  }
+  async startOperation() {
     if (this.busy || desktopActive(this.status())) throw new Error('desktop_already_active');
     this.busy = true;
     this.cancelRequested = false;

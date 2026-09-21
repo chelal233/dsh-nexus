@@ -5,6 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
 import { once } from 'node:events';
+import { pathToFileURL } from 'node:url';
 
 test('failed preparation stop retains ownership until retry and never starts Desktop', { timeout: 15000 }, async t => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'nexus-worker-stop-'));
@@ -42,7 +43,14 @@ test('failed preparation stop retains ownership until retry and never starts Des
   const recipe = put('recipe.json', JSON.stringify({ source: root, kit: path.join(root, 'kit'), userData: path.join(root, 'user'), home: root,
     stateFile, stopFile, operationId: 'fixture', electronVersion: 'fixture', electronNodeVersion: process.versions.node,
     electronExecutable: process.execPath, electronApp: desktop }));
-  const child = spawn(process.execPath, [path.join(root, 'harness-desktop-worker.mjs'), recipe], { stdio: 'ignore', windowsHide: true });
+  const retryFixture = put('transient-state-lock.mjs', `import fs from 'node:fs';
+    const rename = fs.renameSync; let attempts = 0;
+    fs.renameSync = (...args) => {
+      if (process.platform === 'win32' && args[1].endsWith('state.json') && attempts++ < 2)
+        throw Object.assign(new Error('fixture sharing violation'), {code:'EPERM'});
+      return rename(...args);
+    };`);
+  const child = spawn(process.execPath, ['--import', pathToFileURL(retryFixture).href, path.join(root, 'harness-desktop-worker.mjs'), recipe], { stdio: 'ignore', windowsHide: true });
   const exited = once(child, 'exit');
   t.after(async () => {
     put('finish', '');
@@ -64,6 +72,7 @@ test('failed preparation stop retains ownership until retry and never starts Des
   put('stop.json', JSON.stringify({ requestId: 'retry' }));
   await exited;
   assert.equal(state().phase, 'stopped');
+  assert.ok(state().stageDurations.verify >= 0);
   assert.ok(!fs.existsSync(cache));
   assert.ok(!fs.existsSync(path.join(root, 'desktop-started')));
 });
@@ -121,4 +130,10 @@ test('official Desktop worker opens a visible Windows window', { skip: process.p
     await new Promise(resolve=>setTimeout(resolve,100));
   }
   assert.notEqual(handle,'0','the actual official Desktop child must have a visible top-level window');
+  const launched=JSON.parse(fs.readFileSync(stateFile));
+  assert.ok(launched.stageDurations.verify >= 0);
+  assert.ok(launched.stageDurations.launch >= 0);
+  const measured=JSON.stringify(launched.stageDurations);
+  await new Promise(resolve=>setTimeout(resolve,100));
+  assert.equal(JSON.stringify(JSON.parse(fs.readFileSync(stateFile)).stageDurations),measured,'runtime use must not inflate preparation timings');
 });

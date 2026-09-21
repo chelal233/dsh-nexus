@@ -294,6 +294,7 @@ pub(crate) async fn prepare(
     let output = work.join("result.json");
     let script = root.join("checker.mjs");
     fs::write(&script, include_bytes!("compatibility.mjs"))?;
+    fs::write(script.parent().unwrap().join("startup-diagnosis.mjs"), include_bytes!("startup-diagnosis.mjs"))?;
     let vendor = script.parent().unwrap().join("vendor");
     fs::create_dir_all(&vendor)?;
     fs::write(vendor.join("semver.cjs"), include_bytes!("vendor/semver.cjs"))?;

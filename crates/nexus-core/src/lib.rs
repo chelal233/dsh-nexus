@@ -2093,6 +2093,14 @@ fn ensure_module_directory(path: &Path) -> io::Result<()> {
     Ok(())
 }
 
+/// Create a missing module entry without replacing files or existing links.
+/// Callers must validate the destination's ancestors and hold the release gate.
+pub fn create_missing_module_link(link: &Path, target: &Path) -> io::Result<()> {
+    let target = fs::canonicalize(target)?;
+    if !target.is_dir() { return Err(invalid_data("Module target is not a directory")); }
+    Self::create_dir_junction(link, &target)
+}
+
 fn replace_module_link(link: &Path, target: &Path) -> io::Result<()> {
     // Prepare first, so a junction-creation failure leaves the old link intact.
     let nonce = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH)

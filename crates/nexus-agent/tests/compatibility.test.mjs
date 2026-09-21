@@ -473,9 +473,11 @@ test('upstream startup signatures map to explicit Nexus repair categories', () =
     ['profile "desktop" is managed exclusively by the Electron application','profile_restriction'],
     ['duplicate loader entry id: upload','duplicate_entry'],
     ['dsh: failed to parse config /profile/cordis.yml: bad token','configuration'],
+    ['Desktop profile JSON is invalid. Repair this file and retry: /profiles/desktop/package.json','configuration'],
     ['dsh: patches /profile/a.yml must be a top-level YAML array of loader patch entries','configuration'],
     ['dsh: cannot resolve profile bundle "third-party" from the dsh installation','missing_bundle'],
     ['does not provide an export named tools','module_api'],
+    ['Error: typert: @michengai/dsh-archive-manager#workspaceRegistry/unarchiveSession result strict codec has no create() factory','module_api'],
     ["Cannot find package 'missing' imported from /plugin/index.js",'missing_module'],
     ['profile resolution mismatch for "pkg" from /source: disk selected nothing','module_layout'],
     ['profile resolution: replacing "pkg" requires a process restart','restart_required'],
@@ -497,6 +499,10 @@ test('upstream startup signatures map to explicit Nexus repair categories', () =
     assert.ok(diagnosis.evidence.length);
   }
   assert.equal(diagnoseStartup('Something unexpected happened').certainty,'unconfirmed');
+  const missing = diagnoseStartup("Cannot find package 'resolve.exports' imported from C:/Nexus/releases/slot/packages/boot/app-boot/src/profile.ts");
+  assert.equal(missing.code, 'missing_module');
+  assert.ok(missing.evidence[0].includes('packages/boot/app-boot/src/profile.ts'));
+  assert.ok(missing.remedy.includes('Harness installation or profile'));
 });
 
 test('upstream optional activation warnings allow authenticated readiness and remain nonblocking', async () => {

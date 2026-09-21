@@ -32,6 +32,7 @@ import {
   credentialInvalidationCanSettle,
   harnessSessionKey,
   clientCheckPending,
+  harnessBrowserReady,
 } from "./harness-session";
 import {
   currentStartupFailure,
@@ -792,7 +793,8 @@ function App() {
             !gate.controlsDisabled &&
             ["stopped", "failed", "detached"].includes(state),
           stop: !gate.controlsDisabled && ["running", "starting", "failed"].includes(state),
-          web: available && state === "running",
+          restart: !gate.controlsDisabled && state === "running",
+          web: available && harnessBrowserReady(snapshot, credentialInvalidationPending),
           terminal:
             available &&
             installed &&
@@ -806,6 +808,10 @@ function App() {
   }, [snapshot, busyAction]);
   const trayActionHandler = useRef<(action: string) => void>(() => {});
   trayActionHandler.current = (action) => {
+    if (action === "workbench") {
+      setActiveModule("workbench");
+      return;
+    }
     if (action === "maintenance") {
       setActiveModule("maintenance");
       return;
@@ -815,7 +821,7 @@ function App() {
       return;
     }
     if (busyAction !== null) return;
-    if (action === "start" || action === "stop")
+    if (action === "start" || action === "stop" || action === "restart")
       void runAction(t(`Harness ${action}`), "/v1/harness", { action });
     else if (action === "web")
       void runAction(t("Open Harness"), "/v1/harness/ui", { action: "open" });

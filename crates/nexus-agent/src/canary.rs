@@ -167,6 +167,7 @@ async fn run(state: &AppState, profile: &str, id: &str, mode: &nexus_protocol::C
     let work = work(&state.paths, id); nexus_core::create_new_private_directory(&work)?;
     let script = work.join("checker.mjs");
     fs::write(&script, include_bytes!("compatibility.mjs"))?;
+    fs::write(script.parent().unwrap().join("startup-diagnosis.mjs"), include_bytes!("startup-diagnosis.mjs"))?;
     let vendor = script.parent().unwrap().join("vendor");
     fs::create_dir_all(&vendor)?;
     fs::write(vendor.join("semver.cjs"), include_bytes!("vendor/semver.cjs"))?;

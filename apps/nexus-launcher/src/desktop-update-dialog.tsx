@@ -38,7 +38,18 @@ export function DesktopUpdateDialog({
   return (
     <Modal title={t("Update Nexus")} locked={installing} onClose={onClose}>
       {state.version && (
-        <p className="update-version">{t("New version: {version}", { version: state.version })}</p>
+        <p className="update-version">
+          <span>{t("New version: {version}", { version: state.version })}</span>
+          <button
+            type="button"
+            className="update-release-notes"
+            onClick={() => {
+              void invoke("update_release_notes").catch((cause) => setError(String(cause)));
+            }}
+          >
+            {t("View release notes")}
+          </button>
+        </p>
       )}
       <p role="status" aria-live="polite">
         {ready

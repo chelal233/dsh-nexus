@@ -9,7 +9,7 @@ test('one Harness switches mode while idle and locks to the running mode', async
   const previous = new Map(Object.keys(bindings).map(k => [k, Object.getOwnPropertyDescriptor(globalThis, k)]));
   for (const [k,v] of Object.entries(bindings)) Object.defineProperty(globalThis,k,{configurable:true,writable:true,value:v});
   let phase = 'idle'; let launchPhase = 'preparing'; let stopFails = false; let supported = true; let profileOpens = 0; const calls = [];
-  dom.window.nexusDesktop = { async invoke(command) { calls.push(command); if(command === 'harness_desktop_capability') return {supported,release:supported?'fixture':'web-only'}; if(command === 'harness_desktop_start') phase=launchPhase; if(command === 'harness_desktop_stop') { if(stopFails) throw Error('stop failed'); phase='stopped'; } return {phase,stage:'runtime',startedAt:Date.now()-5000}; }, listen() { return () => {}; } };
+  dom.window.nexusDesktop = { async invoke(command) { calls.push(command); if(command === 'harness_desktop_capability') return {supported,release:supported?'fixture':'web-only'}; if(command === 'harness_desktop_restart') { if(stopFails) throw Error('stop failed'); phase=launchPhase; } if(command === 'harness_desktop_start') phase=launchPhase; if(command === 'harness_desktop_stop') { if(stopFails) throw Error('stop failed'); phase='stopped'; } return {phase,stage:'runtime',startedAt:Date.now()-5000}; }, listen() { return () => {}; } };
   let root, loader, act;
   try {
     const React = await import('react'); act = React.act;
@@ -34,7 +34,16 @@ test('one Harness switches mode while idle and locks to the running mode', async
     snapshot.harnessRuntime.harness.state='running'; await render();
     assert.equal(document.querySelector('input[value="web"]').checked,true);
     assert.equal(document.querySelector('.harness-mode-picker').disabled,true);
-    snapshot.harnessRuntime.harness.state='stopped'; await render();
+    snapshot.harnessRuntime={harness:{state:'running',pid:20},generation:1,log_session_run_id:'run'};
+    snapshot.harnessUi={available:true,url:'http://127.0.0.1:1234/',generation:1,run_id:'run',browser_health:{state:'checking'}};
+    for(const state of ['checking','unverified','blocked','limited','active']) {
+      snapshot.harnessUi.browser_health.state=state;await render();
+      const open=[...document.querySelectorAll('button')].find(b=>b.textContent==='Open in system browser');
+      assert.ok(open);assert.equal(open.disabled,state!=='active',state);
+    }
+    snapshot.harnessUi.run_id='old';await render();
+    assert.equal([...document.querySelectorAll('button')].some(b=>b.textContent==='Open in system browser'),false);
+    snapshot.harnessRuntime.harness.state='stopped';delete snapshot.harnessRuntime.harness.pid; await render();
     assert.equal(document.querySelector('input[value="desktop"]').checked,true);
     supported=false; snapshot.releases.current_release='web-only'; await render();
     assert.equal(document.querySelector('input[value="desktop"]'),null);
@@ -61,11 +70,11 @@ test('one Harness switches mode while idle and locks to the running mode', async
     assert.ok(action('Close')); assert.ok(action('Restart'));
     const before=calls.length;
     await act(async()=>action('Restart').click());
-    assert.deepEqual(calls.slice(before),['harness_desktop_stop','harness_desktop_start']);
+    assert.deepEqual(calls.slice(before),['harness_desktop_restart']);
     stopFails=true;
     const failedBefore=calls.length;
     await act(async()=>action('Restart').click());
-    assert.deepEqual(calls.slice(failedBefore),['harness_desktop_stop']);
+    assert.deepEqual(calls.slice(failedBefore),['harness_desktop_restart']);
     assert.match(document.body.textContent,/stop failed/);
     stopFails=false;
     await act(async()=>action('Close').click());

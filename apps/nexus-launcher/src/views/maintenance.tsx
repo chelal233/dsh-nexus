@@ -12,6 +12,7 @@ import {
 } from "../json-values";
 import { useI18n } from "../i18n";
 import { proxyRequest } from "../agent-bridge";
+import { confirmAction } from "../confirmation";
 import { errorMessage, localizedRuntimeState } from "../display-format";
 import { useState, useRef, useEffect, useCallback } from "react";
 import { createLatestRequest, hasHarnessSource } from "../control-state";
@@ -34,6 +35,7 @@ export function MaintenanceView(props: ViewProps & { activity?: React.ReactNode 
       />
       {props.activity}
       <DiagnosticsView {...props} embedded />
+      <DependencyRepairPanel {...props} />
       <CanaryPanel {...props} />
       <RecoveryRecordWizard
         disabled={props.busyAction !== null || props.snapshot.startup?.available !== true}
@@ -48,6 +50,169 @@ export function MaintenanceView(props: ViewProps & { activity?: React.ReactNode 
       />
       <SpaceMaintenancePanel {...props} />
     </>
+  );
+}
+
+export function DependencyRepairPanel({ snapshot, busyAction, openWorkbench }: ViewProps) {
+  const { t } = useI18n();
+  const [preview, setPreview] = useState<JsonObject | null>(null);
+  const [result, setResult] = useState<JsonObject | null>(null);
+  const [error, setError] = useState("");
+  const [pending, setPending] = useState(false);
+  const pendingRequest = useRef(false);
+  const request = useRef(createLatestRequest());
+  const release = stringValue(snapshot.releases, "current_release");
+  const external = !!snapshot.config?.external_harness;
+  const agentIdentity = `${stringValue(snapshot.health, "instance_id")}:${stringValue(snapshot.health, "data_root_id")}`;
+  useEffect(() => {
+    request.current.cancel();
+    pendingRequest.current = false;
+    setPreview(null);
+    setResult(null);
+    setError("");
+    setPending(false);
+    return () => request.current.cancel();
+  }, [release, external, agentIdentity]);
+  const inspect = async () => {
+    if (pendingRequest.current) return;
+    pendingRequest.current = true;
+    const token = request.current.begin();
+    setPending(true);
+    setError("");
+    setPreview(null);
+    setResult(null);
+    try {
+      const value = await proxyRequest("/v1/dependencies");
+      if (request.current.isCurrent(token)) setPreview(value);
+    } catch (cause) {
+      if (request.current.isCurrent(token)) setError(errorMessage(cause));
+    } finally {
+      if (request.current.isCurrent(token)) {
+        pendingRequest.current = false;
+        setPending(false);
+      }
+    }
+  };
+  const entries = arrayValue(preview, "entries").map(asObject);
+  const repair = async () => {
+    if (pendingRequest.current || !preview) return;
+    pendingRequest.current = true;
+    const token = request.current.begin();
+    const fingerprint = stringValue(preview, "fingerprint");
+    setPending(true);
+    setError("");
+    setResult(null);
+    try {
+      const confirmed = await confirmAction(
+        t(
+          "Restore verified missing links from local packages? Stop Web, Desktop and DSH terminals first. A repair record and metadata backup will be saved; existing entries will not be replaced.",
+        ),
+      );
+      if (!confirmed || !request.current.isCurrent(token)) return;
+      const value = await proxyRequest("/v1/dependencies", "POST", { fingerprint });
+      if (request.current.isCurrent(token)) {
+        setResult(value);
+        setPreview(isObject(value.preview) ? value.preview : null);
+      }
+    } catch (cause) {
+      if (request.current.isCurrent(token)) {
+        setError(errorMessage(cause));
+        setPreview(null);
+      }
+    } finally {
+      if (request.current.isCurrent(token)) {
+        pendingRequest.current = false;
+        setPending(false);
+      }
+    }
+  };
+  const reasons: Record<string, string> = {
+    existing_broken_link: t(
+      "An existing dependency link is broken. It was preserved and requires review before replacement.",
+    ),
+    missing_link: t("Exact local package found; dependency link is missing."),
+    lock_entry_missing: t("No exact version in the lockfile; automatic repair is unavailable."),
+    local_package_missing: t("Exact local package is unavailable; no download was attempted."),
+    local_package_identity_mismatch: t(
+      "Local package identity differs from the lockfile; preserved unchanged.",
+    ),
+  };
+  return (
+    <Panel title={t("Local Harness dependencies")} icon={<Package size={20} />}>
+      <p>
+        {t(
+          "Inspect the selected Harness installation using its lockfile. This check does not change files or download packages.",
+        )}
+      </p>
+      <ActionButton
+        disabled={
+          pending ||
+          busyAction !== null ||
+          !release ||
+          external ||
+          snapshot.startup?.available !== true
+        }
+        onClick={() => void inspect()}
+      >
+        {t(pending ? "Checking…" : "Inspect local dependencies")}
+      </ActionButton>
+      {entries.some((entry) => entry.reason === "missing_link") && (
+        <ActionButton
+          disabled={pending || busyAction !== null || !!snapshot.lifecycleBusy}
+          onClick={() => void repair()}
+        >
+          {t("Restore missing links")}
+        </ActionButton>
+      )}
+      {result && (
+        <div role="status">
+          <p>
+            {t(
+              result.phase === "repaired"
+                ? "Dependency links verified. Start the affected Harness mode from the workbench to verify startup."
+                : "Repair is incomplete. Review the record and inspect again before retrying.",
+            )}
+          </p>
+          <p>
+            {t("Repair record")}: <code>{stringValue(result, "record")}</code>
+          </p>
+          {!!(result.error || result.verification_error) && (
+            <p className="form-error">{String(result.error || result.verification_error)}</p>
+          )}
+          {openWorkbench && <ActionButton onClick={openWorkbench}>{t("Workbench")}</ActionButton>}
+        </div>
+      )}
+      {error && (
+        <p className="form-error" role="alert">
+          {error}
+        </p>
+      )}
+      {preview && (
+        <>
+          <p className="field-help">
+            {t("Inspected installation")}: <code>{stringValue(preview, "root")}</code>
+          </p>
+          {entries.length === 0 ? (
+            <p>
+              {t(
+                "No absent dependency entries found. Existing files and links were preserved; this is not a startup compatibility result.",
+              )}
+            </p>
+          ) : (
+            <ul>
+              {entries.map((entry) => (
+                <li key={stringValue(entry, "destination")}>
+                  <strong>{stringValue(entry, "package")}</strong> ·{" "}
+                  <code>{stringValue(entry, "importer")}</code>
+                  <p>{reasons[String(entry.reason)] ?? t("Unknown")}</p>
+                  <code>{stringValue(entry, "destination")}</code>
+                </li>
+              ))}
+            </ul>
+          )}
+        </>
+      )}
+    </Panel>
   );
 }
 

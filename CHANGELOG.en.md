@@ -3,6 +3,32 @@
 [简体中文](CHANGELOG.md)
 
 
+## 0.1.10
+
+### Problems fixed
+
+1. **A pending or failed check no longer opens a broken page.** Previously a running Harness process and URL could enable the workbench or tray browser action even while the client was unavailable. Workbench, tray, notification links and automatic opening now require a successful client check for the current run. Opening re-reads the latest status to reject stale enabled buttons. Stop, diagnosis and repair remain available while checking, unverified or blocked; a process alone is not readiness.
+2. **Tray launches report their outcome.** Native Windows balloons show starting, ready, failed or unverified states and open the workbench when clicked. Results are deduplicated per launch, and success from an old run cannot announce a new launch as ready. Stop and cancellation end the corresponding feedback. A user has accepted the balloons on a real Windows machine.
+3. **More consistent stop, cancel and restart.** Web tray restart uses the workbench flow. Startup checks can be cancelled, with cancellation bound to the displayed operation so stale menus cannot cancel new work. Desktop workbench and tray share restart behavior: a failed stop never starts another instance, and another Stop during restart cancels its pending launch.
+4. **Actionable Desktop startup errors.** Web and Desktop share classification for missing dependencies, damaged configuration, incompatible interfaces and waiting services. Official details remain available with dependency inspection, profile management and log entry points. Guidance names the independent `desktop` profile and does not blame a plugin merely because it is waiting for a service.
+
+5. **Brief Windows state-file locks no longer immediately fail startup.** Desktop state writes retry transient sharing conflicts for at most about 0.5 seconds while retaining atomic replacement. They never delete the prior state and still report persistent errors.
+
+### New and improved mechanisms
+
+1. **Preview and confirm offline dependency repairs.** Maintenance checks missing links against the selected Harness lockfile and local package identity, including pnpm 11 shortened directory names. It only restores missing links to verified packages, without downloading or replacing existing files or broken links. Before changes it records the lockfile, relevant manifests and plan; afterwards it journals and rechecks results. Stale previews require a new inspection. The affected mode still needs a startup check after repair.
+2. **Less cache waiting without skipping verification.** Desktop runtime cache checks use at most 16 concurrent filesystem requests while inspecting every entry and link boundary and rebuilding damaged caches. A read-only comparison of 8,909 entries on the same machine reduced this stage from about 1.5–1.8 seconds to 0.5–0.7 seconds, with identical inventory results. This is not a total cold-start measurement or a guarantee for every machine.
+3. **See where startup time is spent.** Web shows input checks, compatibility checks and process creation; Desktop shows preparation stages. Timings freeze on completion and reset for a new launch, excluding subsequent usage time.
+4. **Read changes before downloading an update.** The update confirmation dialog adds View release notes beside the version, opening that version's GitHub page. Download consent, progress, validation, deferred restart and explicit installation remain in place. An isolated Windows update test covered interrupted-download recovery and post-restart version and file-hash checks.
+
+### Known issues and compatibility boundaries
+
+- **Upstream Desktop marketplace package management remains unresolved.** Installing, updating or restarting through dshmarket inside official Desktop can still fail. This release does not spoof PATH, services or profile ownership, nor force a Web fallback; an upstream fix is still needed.
+- **Dependency repair has a defined scope.** It restores verified missing links within Nexus-managed Harness versions. External sources, existing broken links and missing package files can require other recovery. It does not reinstall every dependency or prove every plugin starts.
+- **Startup checks are not comprehensive runtime monitoring.** Unverified is not a confirmed failure; passing checks does not validate every conversation, tool or third-party plugin. First-run preparation still depends on storage, configuration and plugin count.
+- **The OS can suppress notifications.** Windows notification settings or Do Not Disturb may hide balloons. Workbench and tray retain the status. User acceptance on Windows does not establish real-device notification acceptance on macOS or Linux.
+- **Platform scope and offline behavior are unchanged.** Official Desktop remains available on Windows x64 and macOS Intel/Apple Silicon; Windows ARM64 and Linux ARM64 provide Web mode. Linux ARM64 offers AppImage, DEB and RPM without claiming real-device acceptance on every distribution. Nexus includes its runtimes; preparation after acquiring Harness or importing a full offline package on the same OS and architecture needs no network. Downloading third-party plugins still requires a connection.
+
 ## 0.1.9
 
 ### Problems fixed

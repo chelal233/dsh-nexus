@@ -45,7 +45,7 @@ export class ClientAudit {
       void window.loadURL(url.href).catch(fail);
     }
     const result = this.result(info);
-    if (result.open_browser_after_ready === true && ['active', 'limited'].includes(result.browser_health?.state)
+    if (result.open_browser_after_ready === true && browserReady(result)
         && this.openReady && this.openedRun !== result.run_id) {
       this.openedRun = result.run_id; // Never retry an uncertain external open.
       void Promise.resolve().then(() => this.openReady(url.href, result.run_id)).catch(() => {});
@@ -72,4 +72,17 @@ export class ClientAudit {
     if (window && !window.isDestroyed()) window.destroy();
   }
   stop() { this.stopped = true; this.clear(); }
+}
+
+export function browserReady(info) {
+  return info?.available === true && typeof info.run_id === 'string' && !!info.run_id
+    && Number.isFinite(info.generation) && info.browser_health?.state === 'active';
+}
+export async function openVerifiedBrowser(bridge, audit, open, session) {
+  const info = audit.result(await bridge.request('proxy_request', {method:'GET',path:'/v1/harness/ui'}));
+  if (!browserReady(info)) throw new Error('客户端尚未通过启动检查，请到工作台查看检查结果。 / Startup checks have not passed. Open the workbench for details.');
+  const url = harnessUrl(info.url);
+  if (session) url.searchParams.set('nexus-session', session);
+  await open(url.href);
+  return info;
 }

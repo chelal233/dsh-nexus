@@ -1,6 +1,21 @@
 import fs from 'node:fs';
 import path from 'node:path';
 
+// Windows readers or scanners can briefly deny replacement. Keep atomicity:
+// never delete the destination, and surface persistent or unrelated errors.
+export function renameDesktopState(temporary, file, {
+  rename = fs.renameSync, platform = process.platform,
+  wait = () => Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 50),
+} = {}) {
+  for (let attempt = 0; ; attempt++) {
+    try { rename(temporary, file); return; }
+    catch (error) {
+      if (platform !== 'win32' || !['EPERM','EACCES','EBUSY'].includes(error.code) || attempt >= 10) throw error;
+      wait();
+    }
+  }
+}
+
 export const startupEvidenceFile = recipe => path.join(path.dirname(recipe.stateFile), `startup-${recipe.operationId}.json`);
 const clean = value => String(value?.message ?? value).slice(-6000).replace(/([?&]token=)[^\s&]+/gi, '$1[redacted]');
 
@@ -38,7 +53,7 @@ export function installDesktopStartupAudit({ app, ipcMain, recipe, setTimer = se
     state = next;
     const temporary = `${file}.${process.pid}.tmp`;
     fs.writeFileSync(temporary, JSON.stringify({ operationId: recipe.operationId, pid: process.pid, state, elapsedMs: now() - began, error: error && clean(error) }), { mode: 0o600 });
-    fs.renameSync(temporary, file);
+    renameDesktopState(temporary, file);
     if (state !== 'checking') clearTimer(timer);
   };
   if (!desktopAuditSupported(recipe.source)) { publish('unverified', 'Desktop startup observation is unsupported by this Harness version.'); return; }

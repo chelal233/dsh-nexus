@@ -1,9 +1,10 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useState } from "react";
 import { ArrowRight, ArrowsClockwise, StopCircle } from "@phosphor-icons/react";
 import { invoke } from "../desktop";
 import { useI18n } from "../i18n";
 import { ActionButton } from "../ui-components";
 import type { Snapshot } from "../app-types";
+import { diagnoseStartup } from "../../../../crates/nexus-agent/src/startup-diagnosis.mjs";
 
 type DesktopState = {
   phase: "idle" | "preparing" | "launched" | "stopping" | "stopped" | "failed";
@@ -13,6 +14,9 @@ type DesktopState = {
   error?: string;
   detail?: string;
   startedAt?: number;
+  stageStartedAt?: number;
+  stageDurations?: Record<string, number>;
+  preparedMs?: number;
   audit?: { state: "checking" | "ready" | "failed" | "unverified"; error?: string };
 };
 
@@ -62,7 +66,6 @@ export function useHarnessDesktop(snapshot: Snapshot) {
   const [error, setError] = useState("");
   const [pollError, setPollError] = useState("");
   const [stopping, setStopping] = useState(false);
-  const operation = useRef(0);
   useEffect(() => {
     let disposed = false;
     let polling = false;
@@ -107,7 +110,6 @@ export function useHarnessDesktop(snapshot: Snapshot) {
     }
   };
   const stop = async () => {
-    operation.current++;
     setStopping(true);
     setError("");
     try {
@@ -119,14 +121,10 @@ export function useHarnessDesktop(snapshot: Snapshot) {
     }
   };
   const restart = async () => {
-    const current = ++operation.current;
     setStarting(true);
     setError("");
     try {
-      // Do not launch another instance unless the owned process tree stopped.
-      setState(await invoke<DesktopState>("harness_desktop_stop"));
-      if (operation.current !== current) return;
-      setState(await invoke<DesktopState>("harness_desktop_start"));
+      setState(await invoke<DesktopState>("harness_desktop_restart"));
     } catch (failure) {
       setError((failure as Error).message);
     } finally {
@@ -151,10 +149,12 @@ export function HarnessDesktopPanel({
   snapshot,
   busy,
   controller,
+  onRepair,
 }: {
   snapshot: Snapshot;
   busy: boolean;
   controller: ReturnType<typeof useHarnessDesktop>;
+  onRepair?: (id: string) => void;
 }) {
   const { t } = useI18n();
   const { state, starting, stopping, error, active, launch, stop, restart } = controller;
@@ -181,6 +181,10 @@ export function HarnessDesktopPanel({
   const failure =
     error || state.error || (state.audit?.state === "failed" ? "Client startup failed" : "");
   const audit = state.phase === "launched" ? (state.audit?.state ?? "checking") : undefined;
+  const diagnosis =
+    state.phase === "failed" || state.audit?.state === "failed"
+      ? diagnoseStartup(state.audit?.error || state.detail || state.error || "")
+      : undefined;
   const stageLabel =
     state.stage === "cleanup"
       ? t("Removing unused runtime copies")
@@ -193,6 +197,14 @@ export function HarnessDesktopPanel({
             : state.stage === "launch"
               ? t("Opening the official desktop app")
               : t("Checking local files");
+  const stageNames: Record<string, string> = {
+    verify: t("Checking local files"),
+    runtime: t("Preparing offline dependencies"),
+    project: t("Preparing the workspace"),
+    check: t("Checking offline dependencies"),
+    cleanup: t("Removing unused runtime copies"),
+    launch: t("Opening the official desktop app"),
+  };
   return (
     <div className="harness-mode-content harness-desktop-content">
       <div className="harness-status-copy">
@@ -238,10 +250,58 @@ export function HarnessDesktopPanel({
           </small>
         )}
       </div>
+      {state.stageDurations && Object.keys(state.stageDurations).length > 0 && (
+        <details className="startup-diagnostics">
+          <summary>{t("Preparation timings")}</summary>
+          <p className="field-help">
+            {t("Preparation timings exclude client verification and time spent using Desktop.")}
+          </p>
+          <dl>
+            {Object.entries(state.stageDurations)
+              .filter(([stage, ms]) => stageNames[stage] && Number.isFinite(ms) && ms >= 0)
+              .map(([stage, ms]) => (
+                <div key={stage}>
+                  <dt>{stageNames[stage]}</dt>
+                  <dd>{t("Elapsed time: {seconds}s", { seconds: (ms / 1000).toFixed(1) })}</dd>
+                </div>
+              ))}
+          </dl>
+        </details>
+      )}
       {failure && (
         <p className="error-text" role="alert">
           {t(failure)}
         </p>
+      )}
+      {diagnosis && (
+        <div className="notice">
+          <strong>{t(diagnosis.summary)}</strong>
+          <p>{t(diagnosis.remedy)}</p>
+          <p>{t("Desktop repairs apply to the desktop profile, not the selected Web profile.")}</p>
+          {onRepair && (
+            <div className="button-row">
+              {diagnosis.code === "missing_module" && (
+                <ActionButton disabled={busy} onClick={() => onRepair("installation")}>
+                  {t("Inspect local dependencies")}
+                </ActionButton>
+              )}
+              {(["plugins", "profiles"].includes(diagnosis.help) ||
+                ["configuration", "patch_target"].includes(diagnosis.code)) && (
+                <ActionButton disabled={busy} onClick={() => onRepair("profile")}>
+                  {t("Go to profile management")}
+                </ActionButton>
+              )}
+              {diagnosis.code === "runtime_arguments" && (
+                <ActionButton disabled={busy} onClick={() => onRepair("launch")}>
+                  {t("Open Harness settings")}
+                </ActionButton>
+              )}
+              <ActionButton disabled={busy} onClick={() => onRepair("recovery")}>
+                {t("Open the startup log")}
+              </ActionButton>
+            </div>
+          )}
+        </div>
       )}
       <div className="button-row">
         {state.phase === "launched" && !starting && (

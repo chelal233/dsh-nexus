@@ -73,6 +73,7 @@ const AGENT_ROUTES: &[&str] = &[
     "/v1/recovery",
     "/v1/recovery/records",
     "/v1/preflight",
+    "/v1/dependencies",
     "/v1/checkpoints",
     "/v1/releases",
     "/v1/releases/tags",
@@ -497,7 +498,7 @@ pub fn validate_agent_request(
         | "/v1/preflight" => *method == Method::GET,
         "/v1/runtime/plan" => *method == Method::POST,
         "/v1/harness/startup" | "/v1/canary" | "/v1/recovery" | "/v1/recovery/records" | "/v1/harness" | "/v1/profiles" | "/v1/checkpoints" | "/v1/releases" | "/v1/updates"
-        | "/v1/diagnostics" | "/v1/config" | "/v1/maintenance" | "/v1/notifications" | "/v1/market" | "/v1/desktop/profile" => {
+        | "/v1/diagnostics" | "/v1/config" | "/v1/maintenance" | "/v1/notifications" | "/v1/market" | "/v1/desktop/profile" | "/v1/dependencies" => {
             *method == Method::GET || *method == Method::POST
         }
         "/v1/lifecycle" | "/v1/shutdown" => *method == Method::POST,

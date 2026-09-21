@@ -252,6 +252,36 @@ struct StartupOperation {
     id: String,
     phase: &'static str,
     token: nexus_core::CancellationToken,
+    started: Instant,
+    phase_started: Instant,
+    durations: std::collections::BTreeMap<&'static str, u64>,
+    finished_ms: Option<u64>,
+}
+
+impl StartupOperation {
+    fn transition(&mut self, phase: &'static str, terminal: bool) {
+        if self.finished_ms.is_some() || self.phase == phase { return; }
+        let now = Instant::now();
+        *self.durations.entry(self.phase).or_default() += now.duration_since(self.phase_started).as_millis() as u64;
+        self.phase = phase;
+        self.phase_started = now;
+        if terminal { self.finished_ms = Some(now.duration_since(self.started).as_millis() as u64); }
+    }
+
+    fn status(&self) -> serde_json::Value {
+        let now = Instant::now();
+        let mut durations = self.durations.clone();
+        if self.finished_ms.is_none() {
+            *durations.entry(self.phase).or_default() += now.duration_since(self.phase_started).as_millis() as u64;
+        }
+        serde_json::json!({
+            "operation_id": self.id, "phase": self.phase,
+            "cancellable": matches!(self.phase, "checking" | "compatibility"),
+            "cancel_requested": self.token.is_cancelled(),
+            "elapsed_ms": self.finished_ms.unwrap_or_else(|| now.duration_since(self.started).as_millis() as u64),
+            "stage_durations_ms": durations,
+        })
+    }
 }
 
 #[derive(Clone)]
@@ -785,13 +815,14 @@ impl HarnessSupervisor {
 
     pub(crate) async fn begin_startup(&self) -> Result<(), HarnessSupervisorError> {
         let id=nexus_core::agent_auth::random_hex().map_err(HarnessSupervisorError::Persistence)?;
-        *self.startup_operation.lock().await=Some(StartupOperation{id,phase:"checking",token:Default::default()});
+        let now = Instant::now();
+        *self.startup_operation.lock().await=Some(StartupOperation{id,phase:"checking",token:Default::default(),started:now,phase_started:now,durations:Default::default(),finished_ms:None});
         Ok(())
     }
     pub(crate) async fn startup_status(&self) -> serde_json::Value {
         let operation=self.startup_operation.lock().await;
         match operation.as_ref() {
-            Some(op)=>serde_json::json!({"operation_id":op.id,"phase":op.phase,"cancellable":matches!(op.phase,"checking"|"compatibility"),"cancel_requested":op.token.is_cancelled()}),
+            Some(op)=>op.status(),
             None=>serde_json::json!({"phase":"idle","cancellable":false}),
         }
     }
@@ -803,13 +834,13 @@ impl HarnessSupervisor {
         let mut operation=self.startup_operation.lock().await;
         if let Some(op)=operation.as_mut().filter(|op|matches!(op.phase,"checking"|"compatibility")) {
             if op.token.is_cancelled(){return Err(HarnessSupervisorError::Cancelled);}
-            op.phase=phase;
+            op.transition(phase, false);
             return Ok(op.token.clone());
         }
         Ok(Default::default())
     }
     pub(crate) async fn finish_startup(&self,success:bool,cancelled:bool) {
-        if let Some(op)=self.startup_operation.lock().await.as_mut(){op.phase=if success{"submitted"}else if cancelled{"cancelled"}else{"failed"};}
+        if let Some(op)=self.startup_operation.lock().await.as_mut(){op.transition(if success{"submitted"}else if cancelled{"cancelled"}else{"failed"}, true);}
     }
     pub(crate) async fn start_prepared(&self,profile:&str,lifecycle:&HarnessLifecycleGuard,prepared:crate::preflight::PreparedStart,restart:bool)->Result<HarnessRuntimeInfo,HarnessSupervisorError>{
         prepared.recheck(&self.paths,profile).map_err(HarnessSupervisorError::Configuration)?;
@@ -7226,14 +7257,28 @@ mod startup_operation_tests {
         let runtime=state.supervisor.status().await;
         let session=state.supervisor.log_sessions.read().unwrap().unwrap();
         let pending=state.paths.root.join("compatibility/owner-pending.json").exists();
-        let work_empty=fs::read_dir(home.join("profiles/.nexus-compatibility-work")).map(|mut entries|entries.next().is_none()).unwrap_or(false);
+        let work_empty=match fs::read_dir(home.join("profiles/.nexus-compatibility-work")) {
+            Ok(mut entries) => entries.next().is_none(),
+            Err(error) => error.kind() == std::io::ErrorKind::NotFound,
+        };
         state.supervisor.finish_startup(false,matches!(result,Err(super::HarnessSupervisorError::Cancelled))).await;
-        fs::remove_dir_all(&state.paths.root).unwrap();
         assert!(accepted&&pid>0,"fake compatibility child must run before cancellation: {result:?}");
         assert!(exited,"owned compatibility child must exit before cancellation completes");
         assert!(matches!(result,Err(super::HarnessSupervisorError::Cancelled)),"{result:?}");
         assert!(runtime.pid.is_none()&&!session.launch_pending,"Harness must never spawn");
         assert!(!pending&&work_empty,"owned checker files must be cleaned after process exit");
+        // Cancellation settles the process before retiring its scratch tree.
+        // Wait for the normal background reclaimer before deleting the fixture;
+        // competing recursive removals can produce AccessDenied on Windows.
+        tokio::time::timeout(Duration::from_secs(5), async {
+            loop {
+                let pending = fs::read_dir(state.paths.root.join("compatibility/work")).unwrap()
+                    .any(|entry| entry.unwrap().file_name().to_string_lossy().starts_with("retired-"));
+                if !pending { break; }
+                tokio::time::sleep(Duration::from_millis(20)).await;
+            }
+        }).await.expect("background scratch reclamation must finish before fixture cleanup");
+        fs::remove_dir_all(&state.paths.root).unwrap();
     }
     #[tokio::test]
     async fn startup_cancel_is_bound_to_owner_and_closes_before_spawn() {
@@ -7255,6 +7300,36 @@ mod startup_operation_tests {
         assert!(!supervisor.cancel_startup(&second).await);
         supervisor.finish_startup(true,false).await;
         assert_eq!(supervisor.startup_status().await["phase"],"submitted");
+        std::fs::remove_dir_all(&state.paths.root).unwrap();
+    }
+
+    #[tokio::test]
+    async fn startup_timings_freeze_on_completion_and_reset_for_new_operation() {
+        let state=crate::switch_ownership_tests::switch_test_state("startup-timings");
+        let supervisor=&state.supervisor;
+        supervisor.begin_startup().await.unwrap();
+        {
+            let mut operation=supervisor.startup_operation.lock().await;
+            let op=operation.as_mut().unwrap();
+            op.started-=std::time::Duration::from_millis(100);
+            op.phase_started=op.started;
+        }
+        supervisor.startup_phase("compatibility").await.unwrap();
+        let checking=supervisor.startup_status().await["stage_durations_ms"]["checking"].as_u64().unwrap();
+        assert!(checking>=100);
+        supervisor.startup_phase("compatibility").await.unwrap();
+        supervisor.startup_phase("spawning").await.unwrap();
+        supervisor.finish_startup(true,false).await;
+        let finished=supervisor.startup_status().await;
+        assert_eq!(finished["stage_durations_ms"]["checking"],checking);
+        assert!(finished["stage_durations_ms"].get("spawning").is_some());
+        assert!(finished["stage_durations_ms"].get("submitted").is_none());
+        supervisor.finish_startup(false,false).await;
+        assert_eq!(finished,supervisor.startup_status().await,"terminal results must remain frozen");
+        supervisor.begin_startup().await.unwrap();
+        let next=supervisor.startup_status().await;
+        assert_ne!(finished["operation_id"],next["operation_id"]);
+        assert!(next["stage_durations_ms"].get("compatibility").is_none());
         std::fs::remove_dir_all(&state.paths.root).unwrap();
     }
 }

@@ -8,21 +8,34 @@ export const nativeTar = () => process.platform === 'win32'
 
 // Include every entry; link targets cannot escape the owned tree. Metadata
 // changes invalidate the cache, including same-size edits with restored mtime.
-export function runtimeInventory(directory) {
-  const root = fs.realpathSync(directory), entries = [];
-  function visit(relative) {
-    const file = path.join(root, relative), stat = fs.lstatSync(file, { bigint: true });
+export async function runtimeInventory(directory) {
+  const root = await fs.promises.realpath(directory);
+  let active = 0; const queue = [];
+  // Bound filesystem requests, not whole recursive visits: parents must not
+  // retain a slot while waiting for children. Every entry is still checked.
+  async function io(run) {
+    if (active >= 16) await new Promise(resolve => queue.push(resolve));
+    else active++;
+    try { return await run(); }
+    finally { if (queue.length) queue.shift()(); else active--; }
+  }
+  async function visit(relative) {
+    const file = path.join(root, relative), stat = await io(() => fs.promises.lstat(file, { bigint: true }));
     if (stat.isSymbolicLink()) {
-      const target = fs.realpathSync(file), within = path.relative(root, target);
+      const target = await io(() => fs.promises.realpath(file)), within = path.relative(root, target);
       if (within === '..' || within.startsWith(`..${path.sep}`) || path.isAbsolute(within)) throw Error('desktop_runtime_invalid');
-      entries.push([relative, 'link', fs.readlinkSync(file), target]);
+      return [[relative, 'link', await io(() => fs.promises.readlink(file)), target]];
     } else if (stat.isDirectory()) {
-      entries.push([relative, 'directory']);
-      for (const name of fs.readdirSync(file).sort()) visit(path.join(relative, name));
-    } else if (stat.isFile()) entries.push([relative, String(stat.size), String(stat.mtimeNs), String(stat.ctimeNs), String(stat.ino), String(stat.mode)]);
+      const names = (await io(() => fs.promises.readdir(file))).sort();
+      // Drain sibling reads before rejection so cache cleanup cannot race them.
+      const children = await Promise.allSettled(names.map(name => visit(path.join(relative, name))));
+      const failed = children.find(child => child.status === 'rejected');
+      if (failed) throw failed.reason;
+      return [[relative, 'directory'], ...children.flatMap(child => child.value)];
+    } else if (stat.isFile()) return [[relative, String(stat.size), String(stat.mtimeNs), String(stat.ctimeNs), String(stat.ino), String(stat.mode)]];
     else throw Error('desktop_runtime_invalid');
   }
-  visit(''); return entries;
+  return visit('');
 }
 
 export function preparePrimaryPayload(kit, cache) {
@@ -36,16 +49,16 @@ export function preparePortableHost(kit, cache) {
 
 const requireApp = root => path.join(root, 'Nexus Launcher.app');
 
-function prepareArchive(archive, sha256, kind, entry, cache, verify) {
+async function prepareArchive(archive, sha256, kind, entry, cache, verify) {
   fs.mkdirSync(cache, { recursive: true });
   const destination = path.join(cache, `${kind}-${sha256}`), stamp = `${destination}.json`;
   try {
-    if (!fs.lstatSync(destination).isSymbolicLink() && JSON.stringify(runtimeInventory(destination)) === fs.readFileSync(stamp, 'utf8')) return destination;
+    if (!fs.lstatSync(destination).isSymbolicLink() && JSON.stringify(await runtimeInventory(destination)) === fs.readFileSync(stamp, 'utf8')) return destination;
   } catch {}
   const temporary = fs.mkdtempSync(path.join(cache, `.${kind}-${process.pid}-`));
   try {
     execFileSync(nativeTar(), ['-xf', archive, '-C', temporary], { windowsHide: true, timeout: 120000 });
-    const files = runtimeInventory(temporary); // Validate links before publication.
+    const files = await runtimeInventory(temporary); // Validate links before publication.
     if (!fs.statSync(path.join(temporary, entry)).isFile()) throw Error('desktop_runtime_invalid');
     verify?.(temporary);
     // A junction is removed without traversing its target.

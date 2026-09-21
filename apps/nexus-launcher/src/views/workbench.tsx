@@ -37,7 +37,7 @@ import {
 import { localizedRuntimeState, localizeBackendError, formatTimestamp } from "../display-format";
 import { RecoveryLogTail } from "./recovery";
 import { useState, useEffect } from "react";
-import { harnessUiMatchesRuntime } from "../harness-session";
+import { harnessUiMatchesRuntime, harnessBrowserReady } from "../harness-session";
 import { BrowserHealth, clientStartupLabel, StartupWarning } from "./browser-health";
 import { isLoopbackUrl } from "../harness-config";
 import { HarnessDesktopPanel, useHarnessDesktop } from "./harness-desktop";
@@ -242,13 +242,22 @@ export function OverviewView({
                       ? clientStartupLabel(snapshot, t, true)
                       : localizedRuntimeState(harnessState, t)
                   }
-                  detail={t("Use Harness in your system browser.")}
+                  detail={t(
+                    harnessState === "running" && !harnessBrowserReady(snapshot)
+                      ? "The browser opens only after startup checks pass. See the check results below."
+                      : "Use Harness in your system browser.",
+                  )}
                   actions={
                     <>
                       {harnessState === "running" && webUrlAvailable && (
                         <ActionButton
                           tone="primary"
-                          disabled={busyAction !== null || !snapshot.startup?.available}
+                          disabled={
+                            busyAction !== null ||
+                            !!snapshot.lifecycleBusy ||
+                            !snapshot.startup?.available ||
+                            !harnessBrowserReady(snapshot, credentialInvalidationPending)
+                          }
                           onClick={() =>
                             void runAction(t("Open Harness"), "/v1/harness/ui", { action: "open" })
                           }
@@ -311,6 +320,7 @@ export function OverviewView({
             snapshot={snapshot}
             busy={busyAction !== null || !!snapshot.lifecycleBusy}
             controller={desktop}
+            onRepair={onRepair}
           />
         )}
         {webActive && (
@@ -479,7 +489,10 @@ export function HarnessWebPanel({
   const tokenMode = stringValue(info, "token") !== undefined;
   const safeUrl = isLoopbackUrl(uiUrl) ? uiUrl : undefined;
   const browserActionDisabled =
-    busyAction !== null || snapshot.startup?.available !== true || !currentUiAvailable;
+    busyAction !== null ||
+    snapshot.startup?.available !== true ||
+    !!snapshot.lifecycleBusy ||
+    !harnessBrowserReady(snapshot, credentialInvalidationPending);
   const openSystemBrowser = () =>
     void runAction(t("Open Harness"), "/v1/harness/ui", { action: "open" });
   return (

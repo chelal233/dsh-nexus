@@ -52,7 +52,7 @@ try {
   if (desktopKit.supported !== false) {
     const electron = desktopKit.schema === 3 ? (process.platform === 'win32' ? path.join(resources, '../Nexus Launcher.exe') : path.join(resources, '../MacOS/Nexus Launcher'))
       : prepareDesktopElectron(path.join(resources, 'runtime/desktop'), path.join(temporary, 'desktop')).electron;
-    if (desktopKit.schema === 3) preparePrimaryPayload(desktopKit, path.join(temporary, 'desktop'));
+    if (desktopKit.schema === 3) await preparePrimaryPayload(desktopKit, path.join(temporary, 'desktop'));
     const actual = execFileSync(electron, ['-p', 'process.versions.electron'], { env: { ...process.env, ELECTRON_RUN_AS_NODE: '1' }, encoding: 'utf8', timeout: 15000, windowsHide: true }).trim();
     assert.equal(actual, desktopKit.electronVersion);
     if (process.platform === 'darwin' && desktopKit.schema === 3) {
@@ -61,7 +61,7 @@ try {
       const host = await desktopHostForExport(path.join(resources, 'runtime/desktop'), { private_writer: agent });
       const archive = path.join(temporary, 'host.tar.gz');
       await modules(path.join(resources, 'runtime')).tar.c({ cwd: host.root, file: archive, gzip: { level: 1 }, portable: true, noMtime: true, strict: true }, host.names);
-      const hostRoot = preparePortableHost({ ...desktopKit, hostArchive: archive,
+      const hostRoot = await preparePortableHost({ ...desktopKit, hostArchive: archive,
         hostArchiveSha256: createHash('sha256').update(await readFile(archive)).digest('hex') }, path.join(temporary, 'portable'));
       const fallback = path.join(hostRoot, 'Nexus Launcher.app/Contents/MacOS/Nexus Launcher');
       assert.equal(execFileSync(fallback, ['-p', 'process.versions.electron'], { encoding: 'utf8', timeout: 15000,

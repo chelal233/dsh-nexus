@@ -8,8 +8,8 @@ import { harnessUrl, trustedFrame, validateRequest, nativeEditAction } from './p
 import { DesktopUpdater, saveUpdateSettings } from './updater.mjs';
 import { EventCursor, settings as notificationSettings, shouldNotify, notificationContent, taskFocused } from './notifications.mjs';
 import { HarnessDesktop, desktopActive, readDesktopState } from './harness-desktop.mjs';
-import { ClientAudit } from './client-audit.mjs';
-import { trayEntries } from './tray-menu.mjs';
+import { ClientAudit, browserReady, openVerifiedBrowser } from './client-audit.mjs';
+import { trayEntries, cancelTrayStartup, TrayStartupFeedback } from './tray-menu.mjs';
 import { NoticeCoordinator } from './notice-coordinator.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -41,11 +41,16 @@ async function run() {
   let window, tray, bridge, updater, nativeDesktop, noticeCoordinator;
   let quitting = false, updating = false, notifications = true, minimizedNotice = false, locale = 'en';
   let controls = {}, controlsAt = 0;
+  let trayStartup = {};
   let nativeMutationCount = 0, trayBusy = false, trayRefreshPending, traySupported = false, trayWeb = {}, trayMenu;
   const desktopLocked = () => nativeDesktop?.busy || desktopActive(nativeDesktop?.status());
   const startDesktop = () => {
     if (nativeMutationCount || updating) return Promise.reject(new Error(text('Wait for the current operation to finish.', '请等待当前操作完成。')));
     return nativeDesktop.start();
+  };
+  const restartDesktop = () => {
+    if (nativeMutationCount || updating) return Promise.reject(new Error(text('Wait for the current operation to finish.', '请等待当前操作完成。')));
+    return nativeDesktop.restart();
   };
   let noticeSettings = notificationSettings(), noticeReady = false, noticeBusy = false;
   const noticeCursor = new EventCursor();
@@ -58,12 +63,7 @@ async function run() {
     notice.on('click', () => {
       if (test) show();
       else if (['harness-failed', 'update-ready'].includes(kind)) show();
-      else void bridge.request('proxy_request', { method: 'GET', path: '/v1/harness/ui' })
-        .then(info => {
-          const url = harnessUrl(info.url);
-          if (validSession(task?.session)) url.searchParams.set('nexus-session', task.session);
-          return shell.openExternal(url.href);
-        }).catch(error);
+      else void openVerifiedBrowser(bridge, clientAudit, url => shell.openExternal(url), validSession(task?.session) ? task.session : undefined).catch(error);
     });
     notice.on('failed', (_event, failure) => emit('nexus-native-error', `Notification delivery failed: ${failure}`));
     notice.show();
@@ -72,6 +72,26 @@ async function run() {
   const text = (en, zh) => locale.startsWith('zh') ? zh : en;
   const show = () => { if (window?.isMinimized()) window.restore(); window?.show(); window?.focus(); };
   const emit = (name, value) => { if (window && !window.isDestroyed()) window.webContents.send(name, value); };
+  const trayFeedback = new TrayStartupFeedback((state, mode) => {
+    const label = mode === 'desktop' ? 'Desktop' : 'Web';
+    const messages = {
+      starting: text(`${label}: starting and checking. Please wait.`, `${label}：正在启动并检查，请稍候。`),
+      ready: text(`${label}: startup checks passed. Ready to use.`, `${label}：启动检查通过，已就绪。`),
+      failed: text(`${label}: startup failed. Click to open the workbench and repair.`, `${label}：启动失败，点击打开工作台处理。`),
+      unverified: text(`${label}: startup could not be verified. Click to view check results.`, `${label}：尚未确认启动成功，点击工作台查看检查结果。`),
+      cancelled: text(`${label}: startup cancelled.`, `${label}：启动已取消。`),
+    };
+    const body = messages[state];
+    if (tray) tray.setToolTip(`Nexus Launcher — ${body}`);
+    // Explicit tray command feedback uses native Windows balloons, not task notices.
+    if (process.platform === 'win32' && tray) {
+      tray.displayBalloon({title:'Nexus Launcher',content:body,iconType:state === 'failed' ? 'error' : state === 'unverified' ? 'warning' : 'info'});
+    } else if (Notification.isSupported()) {
+      const notice = new Notification({title:'Nexus Launcher',body});
+      notice.on('click', () => { show(); emit('nexus-tray-action','workbench'); });
+      notice.show();
+    }
+  });
   const error = e => { if (e.message === 'desktop_start_cancelled') return; show(); emit('nexus-native-error', e.message ?? String(e)); };
   const validSession = value => typeof value === 'string' && value.length > 0 && value.length <= 200 && !/[\u0000-\u001f]/.test(value);
   app.on('second-instance', (_event, argv, _cwd, data) => {
@@ -215,8 +235,13 @@ async function run() {
   function rebuildTray() {
     if (!tray) return;
     const fresh = Date.now() - controlsAt < 180000 ? controls : {};
+    const operationId = trayWeb.startup_id;
     trayMenu = Menu.buildFromTemplate(trayEntries({text, web: {...fresh, ...trayWeb}, desktop: nativeDesktop.status(), supported: traySupported,
-      busy: trayBusy || updating || nativeMutationCount > 0, show, act: id => void trayAction(id).catch(error)}));
+      busy: trayBusy || updating || nativeMutationCount > 0,
+      canCancelStartup: !updating && !trayBusy && !!operationId,
+      canStopDesktop: !updating && nativeMutationCount === 0,
+      show, act: id => void trayAction(id, operationId).catch(error)}));
+    tray.setToolTip(`Nexus Launcher — ${trayMenu.items[0]?.label || ''}`);
     if (process.platform !== 'win32') tray.setContextMenu(trayMenu);
   }
   function refreshTray() {
@@ -224,31 +249,52 @@ async function run() {
     if (quitting) return Promise.resolve();
     trayRefreshPending = (async () => {
     try {
-      const [runtime, capability] = await Promise.allSettled([
+      const [runtime, capability, startup, ui] = await Promise.allSettled([
         bridge.request('proxy_request', {method:'GET',path:'/v1/harness'}), nativeDesktop.capability(),
+        bridge.request('proxy_request', {method:'GET',path:'/v1/harness/startup'}),
+        bridge.request('proxy_request', {method:'GET',path:'/v1/harness/ui'}),
       ]);
       if (runtime.status === 'fulfilled') {
         const harness = runtime.value.harness ?? {};
         // Native polling refreshes facts, not the UI's operation/identity gate.
-        trayWeb = {state:harness.state, pid:harness.pid};
+        const info = ui.status === 'fulfilled' ? clientAudit.result(ui.value) : {};
+        const current = info.generation === runtime.value.generation && info.run_id === runtime.value.log_session_run_id;
+        trayWeb = {state:harness.state, pid:harness.pid, ready:current && browserReady(info), run_id:runtime.value.log_session_run_id, reason:current ? info.browser_health?.reason : undefined, health:current ? info.browser_health?.state : undefined};
       } else trayWeb = {state:undefined,stop:false,start:false,web:false,terminal:false};
+      if (startup.status === 'fulfilled' && startup.value.cancellable && !startup.value.cancel_requested)
+        trayWeb.startup_id = startup.value.operation_id;
+      trayStartup = startup.status === 'fulfilled' ? startup.value : {};
+      trayFeedback.observe({web:trayWeb,startup:trayStartup,desktop:nativeDesktop.status()});
       traySupported = capability.status === 'fulfilled' && capability.value.supported === true;
     } finally { trayRefreshPending = undefined; rebuildTray(); }
     })();
     return trayRefreshPending;
   }
-  async function trayAction(id) {
+  async function trayAction(id, operationId) {
     if (id === 'maintenance' || id === 'profiles') { show(); emit('nexus-tray-action',id); return; }
+    if (id === 'cancel-startup' && !updating && !trayBusy && !desktopLocked()) {
+      if (await cancelTrayStartup(bridge, operationId)) trayFeedback.finish('cancelled'); show(); await refreshTray(); return;
+    }
+    if (id === 'desktop-stop' && !updating && nativeMutationCount === 0) {
+      await nativeDesktop.stop(); trayFeedback.finish('cancelled'); await refreshTray(); return;
+    }
     if (trayBusy || updating || nativeMutationCount) throw new Error(text('Wait for the current operation to finish.', '请等待当前操作完成。'));
-    if (['start', 'stop', 'web', 'terminal'].includes(id)) {
+    if (['start', 'stop', 'restart', 'web', 'terminal'].includes(id)) {
       if (desktopLocked()) throw new Error(text('Close Harness Desktop first.', '请先关闭 Harness 桌面端。'));
       // Reuse Workbench's action flow, including readiness, receipts, repairs,
       // credential invalidation and refresh, instead of bypassing it with HTTP.
+      if (['start','restart'].includes(id)) {
+        await refreshTray();
+        trayFeedback.begin('web', {run_id:trayWeb.run_id,operation_id:trayStartup.operation_id});
+      }
+      if (id === 'stop') trayFeedback.finish('cancelled');
       show(); emit('nexus-tray-action', id); return;
     }
+    if (['desktop','desktop-restart'].includes(id)) trayFeedback.begin('desktop', {operationId:nativeDesktop.status().operationId});
     trayBusy = true; rebuildTray();
     try {
       if (id === 'desktop') await startDesktop();
+      else if (id === 'desktop-restart') await restartDesktop();
       else if (id === 'desktop-stop') await nativeDesktop.stop();
       else if (id === 'exit') { if(nativeDesktop.busy) throw new Error('Desktop preparation is still starting'); quitting=true; app.quit(); }
       else if (id === 'stop-exit') {
@@ -256,9 +302,10 @@ async function run() {
         await bridge.request('proxy_request',{path:'/v1/agent',method:'POST',body:{action:'stop'}});
         quitting=true; app.quit();
       }
-    } finally { trayBusy=false; if(!quitting) await refreshTray(); }
+    } catch (failure) { trayFeedback.finish('failed'); throw failure; } finally { trayBusy=false; if(!quitting) await refreshTray(); }
   }
   tray = new Tray(nativeImage.createFromPath(path.join(root, 'desktop/icons/32x32.png')));
+  tray.on('balloon-click', () => { show(); emit('nexus-tray-action','workbench'); });
   tray.setToolTip('Nexus Launcher'); tray.on('click',show);
   tray.on('right-click', () => { if (process.platform === 'win32') tray.popUpContextMenu(trayMenu); void refreshTray().catch(error); });
   rebuildTray(); void refreshTray();
@@ -280,6 +327,7 @@ async function run() {
         case 'harness_desktop_status': value = nativeDesktop.status(); break;
         case 'harness_desktop_start': if(trayBusy) throw new Error(text('Wait for the current operation to finish.', '请等待当前操作完成。')); value = await startDesktop(); break;
         case 'harness_desktop_stop': value = await nativeDesktop.stop(); break;
+        case 'harness_desktop_restart': if(trayBusy) throw new Error(text('Wait for the current operation to finish.', '请等待当前操作完成。')); value = await restartDesktop(); break;
         case 'build_identity': value = JSON.parse(readFileSync(path.join(resources, 'release-identity.json'), 'utf8')); break;
         case 'choose_local_path': {
           const filters = args.archive ? [{ name: 'Nexus offline package', extensions: ['tar.gz'] }] : [];
@@ -295,14 +343,19 @@ async function run() {
         case 'autostart_status': value = app.getLoginItemSettings().openAtLogin; break;
         case 'autostart_set': app.setLoginItemSettings({ openAtLogin: args.enabled === true }); break;
         case 'update_status': value = updater.state; break;
+        case 'update_release_notes': {
+          const version = updater.state.version;
+          if (!version || !/^[0-9]+\.[0-9]+\.[0-9]+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/.test(version)) throw new Error('No update version available');
+          await shell.openExternal(`https://github.com/chelal233/dsh-nexus/releases/tag/v${encodeURIComponent(version)}`);
+          break;
+        }
         case 'update_check': value = await updater.check({ manual: true }); break;
         case 'update_download': value = await updater.download(args.version); break;
         case 'update_settings': value = updater.setEnabled(args.enabled); break;
         case 'update_install': await updater.install(); break;
         case 'proxy_request':
           if (args.path === '/v1/harness/ui' && args.method === 'POST' && args.body?.action === 'open') {
-            value = await bridge.request(command, { method: 'GET', path: '/v1/harness/ui' });
-            await shell.openExternal(harnessUrl(value.url).href); break;
+            value = await openVerifiedBrowser(bridge, clientAudit, url => shell.openExternal(url)); break;
           }
           value = await bridge.request(command, args);
           if (args.path === '/v1/harness/ui' && args.method === 'GET') value = clientAudit.result(value);

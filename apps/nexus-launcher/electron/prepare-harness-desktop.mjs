@@ -21,7 +21,7 @@ const kitRoot = fs.realpathSync.native(process.argv[3]);
 const cache = process.argv[4] || path.join(desktopSourceView(root), 'apps/desktop/.desktop-build/nexus-runtime');
 stage('verify');
 const kit = verifyDesktopKit(kitRoot);
-if (process.argv[6] === 'portable-host') preparePortableHost(kit, cache);
+if (process.argv[6] === 'portable-host') await preparePortableHost(kit, cache);
 const pnpm = JSON.parse(fs.readFileSync(path.join(app, 'node_modules/pnpm/package.json'), 'utf8'));
 if (kit.lockSha256 !== digest(path.join(app, 'scripts/primary-runtime-lock.json')) ||
     kit.electronVersion !== require('electron/package.json').version || kit.pnpmVersion !== pnpm.version) throw Error('desktop_runtime_incompatible');
@@ -30,7 +30,7 @@ const paths = resolveDesktopTargetBuildPaths();
 fs.mkdirSync(paths.runtime, { recursive: true });
 stage('runtime');
 if (kit.schema === 3) {
-  const payload = preparePrimaryPayload(kit, cache);
+  const payload = await preparePrimaryPayload(kit, cache);
   const primary = JSON.parse(fs.readFileSync(path.join(payload, 'primary-runtime/runtime.json')));
   const lock = JSON.parse(fs.readFileSync(path.join(kitRoot, 'lock.json')));
   if (primary.platform !== process.platform || primary.arch !== process.arch || primary.desktopVersion !== metadata.version ||
@@ -52,14 +52,14 @@ if (kit.schema === 3) {
   const stamp = path.join(paths.runtime, 'nexus-legacy-primary.json');
   const identity = digest(path.join(kitRoot, 'manifest.json')) + digest(path.join(app, 'scripts/prepare-primary-runtime.ts'));
   let valid = false;
-  try { const saved = JSON.parse(fs.readFileSync(stamp)); valid = saved.identity === identity && JSON.stringify(saved.files) === JSON.stringify(runtimeInventory(primary)); } catch {}
+  try { const saved = JSON.parse(fs.readFileSync(stamp)); valid = saved.identity === identity && JSON.stringify(saved.files) === JSON.stringify(await runtimeInventory(primary)); } catch {}
   if (!valid) {
     fs.mkdirSync(paths.downloads, { recursive: true });
     for (const entry of kit.files.filter(file => file.path.startsWith('assets/'))) fs.copyFileSync(path.join(kitRoot, entry.path), path.join(paths.downloads, path.basename(entry.path)));
     const { preparePrimaryRuntime, smokePrimaryRuntime } = await load('scripts/prepare-primary-runtime.ts');
     await preparePrimaryRuntime({ deferSmoke: true });
     stage('check'); smokePrimaryRuntime(primary);
-    fs.writeFileSync(stamp, JSON.stringify({ identity, files: runtimeInventory(primary) }));
+    fs.writeFileSync(stamp, JSON.stringify({ identity, files: await runtimeInventory(primary) }));
   }
 }
 stage('project');

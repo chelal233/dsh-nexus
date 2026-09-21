@@ -24,6 +24,7 @@ use checkpoint_api::{
 };
 
 mod profile_api;
+mod dependency_repair;
 #[cfg(any(target_os = "macos", test))]
 #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
 mod macos_terminal;
@@ -539,6 +540,7 @@ fn build_router(state: AppState, credential: nexus_core::agent_auth::AgentCreden
         .route("/v1/canary", get(canary::status).post(canary::control))
         .route("/v1/recovery", get(recovery_status))
         .route("/v1/preflight", get(preflight::check))
+        .route("/v1/dependencies", get(dependency_repair::status).post(dependency_repair::repair))
         .route(
             "/v1/checkpoints",
             get(checkpoint_list).post(checkpoint_control),

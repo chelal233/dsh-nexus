@@ -6,16 +6,21 @@ import { desktopCapability } from './harness-desktop.mjs';
 import { digest, legacyElectronEntry, portableHostEntry } from './desktop-runtime.mjs';
 import { stopDesktopChild } from './desktop-process.mjs';
 import { desktopSourceView } from './desktop-paths.mjs';
-import { checkDesktopProfile } from './desktop-startup-audit.mjs';
+import { checkDesktopProfile, renameDesktopState } from './desktop-startup-audit.mjs';
 
 const recipe = JSON.parse(fs.readFileSync(process.argv[2], 'utf8'));
-let state = { phase: 'preparing', stage: 'verify', startedAt: Date.now(), pid: process.pid, release: recipe.release, version: recipe.version, operationId: recipe.operationId };
+const startedAt = Date.now();
+let state = { phase: 'preparing', stage: 'verify', startedAt, stageStartedAt: startedAt, stageDurations: {}, pid: process.pid, release: recipe.release, version: recipe.version, operationId: recipe.operationId };
 function report(update) {
-  if (update.stage && update.stage !== state.stage) update.stageStartedAt = Date.now();
+  const now = Date.now();
+  if (state.phase === 'preparing' && ((update.stage && update.stage !== state.stage) || (update.phase && update.phase !== 'preparing'))) {
+    update.stageDurations = { ...state.stageDurations, [state.stage]: (state.stageDurations[state.stage] ?? 0) + Math.max(0, now - state.stageStartedAt) };
+    update.stageStartedAt = now;
+  } else if (update.phase === 'preparing' && state.phase !== 'preparing') update.stageStartedAt = now;
   state = { ...state, ...update };
   const temporary = `${recipe.stateFile}.${process.pid}.tmp`;
   fs.writeFileSync(temporary, JSON.stringify(state), { mode: 0o600 });
-  fs.renameSync(temporary, recipe.stateFile);
+  renameDesktopState(temporary, recipe.stateFile);
 }
 let tail = '';
 let preparationPid;

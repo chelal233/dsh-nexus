@@ -3,7 +3,7 @@ export const commands = new Set([
   'choose_local_path', 'set_native_locale', 'set_native_notifications',
   'update_tray', 'export_startup_diagnostics', 'autostart_status', 'autostart_set',
   'agent_log_set', 'notify', 'update_status', 'update_check', 'update_download', 'update_settings', 'update_install',
-  'notification_test',
+  'notification_test', 'update_release_notes', 'harness_desktop_restart',
 ]);
 export const events = new Set(['nexus-native-error', 'nexus-tray-action', 'nexus-update']);
 

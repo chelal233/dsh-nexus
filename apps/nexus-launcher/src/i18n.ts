@@ -13,6 +13,38 @@ export type TranslationParams = Record<string, string | number>;
 export type Translator = (key: string, params?: TranslationParams) => string;
 
 const english: Record<string, string> = {
+  "Preparation timings": "Preparation timings",
+  "Desktop repairs apply to the desktop profile, not the selected Web profile.":
+    "Desktop repairs apply to the desktop profile, not the selected Web profile.",
+  "These timings cover launch preparation, not client readiness.":
+    "These timings cover launch preparation, not client readiness.",
+  "Preparation timings exclude client verification and time spent using Desktop.":
+    "Preparation timings exclude client verification and time spent using Desktop.",
+  "An existing dependency link is broken. It was preserved and requires review before replacement.":
+    "An existing dependency link is broken. It was preserved and requires review before replacement.",
+  "Restore verified missing links from local packages? Stop Web, Desktop and DSH terminals first. A repair record and metadata backup will be saved; existing entries will not be replaced.":
+    "Restore verified missing links from local packages? Stop Web, Desktop and DSH terminals first. A repair record and metadata backup will be saved; existing entries will not be replaced.",
+  "Restore missing links": "Restore missing links",
+  "Dependency links verified. Start the affected Harness mode from the workbench to verify startup.":
+    "Dependency links verified. Start the affected Harness mode from the workbench to verify startup.",
+  "Repair is incomplete. Review the record and inspect again before retrying.":
+    "Repair is incomplete. Review the record and inspect again before retrying.",
+  "Repair record": "Repair record",
+  "Local Harness dependencies": "Local Harness dependencies",
+  "Inspect the selected Harness installation using its lockfile. This check does not change files or download packages.":
+    "Inspect the selected Harness installation using its lockfile. This check does not change files or download packages.",
+  "Inspect local dependencies": "Inspect local dependencies",
+  "Inspected installation": "Inspected installation",
+  "Exact local package found; dependency link is missing.":
+    "Exact local package found; dependency link is missing.",
+  "No exact version in the lockfile; automatic repair is unavailable.":
+    "No exact version in the lockfile; automatic repair is unavailable.",
+  "Exact local package is unavailable; no download was attempted.":
+    "Exact local package is unavailable; no download was attempted.",
+  "Local package identity differs from the lockfile; preserved unchanged.":
+    "Local package identity differs from the lockfile; preserved unchanged.",
+  "No absent dependency entries found. Existing files and links were preserved; this is not a startup compatibility result.":
+    "No absent dependency entries found. Existing files and links were preserved; this is not a startup compatibility result.",
   "Desktop profile startup failed. Inspect the failed service providers below before disabling plugins. Web profile changes do not repair this profile.":
     "Desktop profile startup failed. Inspect the failed service providers below before disabling plugins. Web profile changes do not repair this profile.",
   "Checking official Desktop startup and client activation.":
@@ -30,6 +62,7 @@ const english: Record<string, string> = {
     "Startup has not returned a result. Check its progress before retrying.",
   "Update Nexus": "Update Nexus",
   "New version: {version}": "New version: {version}",
+  "View release notes": "View release notes",
   "Download verified. Choose when to restart.": "Download verified. Choose when to restart.",
   "Update failed. Check again to retry.": "Update failed. Check again to retry.",
   "No update available": "No update available",
@@ -94,6 +127,8 @@ const english: Record<string, string> = {
 
   "Choose how to open Harness. Manage startup and recovery here.":
     "Choose how to open Harness. Manage startup and recovery here.",
+  "The browser opens only after startup checks pass. See the check results below.":
+    "启动检查通过后才能打开浏览器，请查看下方检查结果。",
   "Use Harness in your system browser.": "Use Harness in your system browser.",
   "Web connection details": "Web connection details",
   "Agent maintenance": "Agent maintenance",
@@ -215,6 +250,8 @@ const english: Record<string, string> = {
   "Use compatible plugin, Harness and Node versions; reinstalling the same incompatible version may not help.":
     "Use compatible plugin, Harness and Node versions; reinstalling the same incompatible version may not help.",
   "Required module is missing": "Required module is missing",
+  "Use the importer path to locate the missing dependency in the Harness installation or profile. Check local package files and links before reinstalling; do not disable waiting plugins.":
+    "Use the importer path to locate the missing dependency in the Harness installation or profile. Check local package files and links before reinstalling; do not disable waiting plugins.",
   "Repair the named package in the selected profile and inspect its dependency chain.":
     "Repair the named package in the selected profile and inspect its dependency chain.",
   "Installed module layout conflicts with Harness":
@@ -2000,6 +2037,38 @@ const english: Record<string, string> = {
 };
 
 const chinese: Record<string, string> = {
+  "Preparation timings": "准备阶段耗时",
+  "Desktop repairs apply to the desktop profile, not the selected Web profile.":
+    "请检查 desktop 配置档；当前选择的 Web 配置档不控制官方桌面端。",
+  "These timings cover launch preparation, not client readiness.":
+    "此处记录启动准备耗时，客户端是否可用仍以启动检查结果为准。",
+  "Preparation timings exclude client verification and time spent using Desktop.":
+    "此处仅记录准备阶段，不含客户端验证和桌面端使用时长。",
+  "An existing dependency link is broken. It was preserved and requires review before replacement.":
+    "现有依赖链接已断开。已保留原状，替换前需要检查确认。",
+  "Restore verified missing links from local packages? Stop Web, Desktop and DSH terminals first. A repair record and metadata backup will be saved; existing entries will not be replaced.":
+    "是否使用本地包恢复已确认缺失的链接？请先停止 Web、Desktop 并关闭 DSH 终端。将保存修复记录和元数据备份，不替换现有文件或链接。",
+  "Restore missing links": "恢复缺失链接",
+  "Dependency links verified. Start the affected Harness mode from the workbench to verify startup.":
+    "依赖链接复检通过。请回到工作台启动受影响的 Harness 模式，继续验证启动结果。",
+  "Repair is incomplete. Review the record and inspect again before retrying.":
+    "修复未完成。请查看记录，重新检查后再重试。",
+  "Repair record": "修复记录",
+  "Local Harness dependencies": "Harness 本地依赖",
+  "Inspect the selected Harness installation using its lockfile. This check does not change files or download packages.":
+    "根据锁文件检查当前 Harness 安装目录。本次检查不会修改文件或下载依赖包。",
+  "Inspect local dependencies": "检查本地依赖",
+  "Inspected installation": "本次检查的安装目录",
+  "Exact local package found; dependency link is missing.":
+    "已找到版本匹配的本地包，但依赖链接缺失。",
+  "No exact version in the lockfile; automatic repair is unavailable.":
+    "锁文件没有精确版本记录，无法自动修复。",
+  "Exact local package is unavailable; no download was attempted.":
+    "本地没有找到版本匹配的包；未尝试联网下载。",
+  "Local package identity differs from the lockfile; preserved unchanged.":
+    "本地包的名称或版本与锁文件不符，已保留原状。",
+  "No absent dependency entries found. Existing files and links were preserved; this is not a startup compatibility result.":
+    "未发现缺失的依赖项。现有文件和链接均未改动；此结果不代表启动兼容性检查通过。",
   "Checking official Desktop startup and client activation.":
     "正在检查官方桌面端启动与客户端插件激活。",
   "Desktop profile startup failed. Inspect the failed service providers below before disabling plugins. Web profile changes do not repair this profile.":
@@ -2016,6 +2085,7 @@ const chinese: Record<string, string> = {
     "启动尚未返回结果，请查看当前进度，勿重复启动。",
   "Update Nexus": "更新 Nexus",
   "New version: {version}": "新版本：{version}",
+  "View release notes": "查看更新内容",
   "Download verified. Choose when to restart.": "下载已完成并通过校验，请选择重启时间。",
   "Update failed. Check again to retry.": "更新失败，请重新检查后重试。",
   "No update available": "暂无可用更新",
@@ -2073,6 +2143,8 @@ const chinese: Record<string, string> = {
 
   "Choose how to open Harness. Manage startup and recovery here.":
     "选择打开 Harness 的方式，在这里管理启动与恢复。",
+  "The browser opens only after startup checks pass. See the check results below.":
+    "启动检查通过后才能打开浏览器，请查看下方检查结果。",
   "Use Harness in your system browser.": "在系统浏览器中使用 Harness。",
   "Web connection details": "Web 连接详情",
   "Agent maintenance": "Agent 维护",
@@ -2214,6 +2286,8 @@ const chinese: Record<string, string> = {
   "Use compatible plugin, Harness and Node versions; reinstalling the same incompatible version may not help.":
     "选择互相兼容的插件、Harness 和 Node 版本；重装同一个不兼容版本不一定有效。",
   "Required module is missing": "所需模块缺失",
+  "Use the importer path to locate the missing dependency in the Harness installation or profile. Check local package files and links before reinstalling; do not disable waiting plugins.":
+    "根据报错中的导入路径，定位缺失依赖属于 Harness 安装目录还是配置档。重装前先检查本地包文件和链接；不要停用等待服务的插件。",
   "Repair the named package in the selected profile and inspect its dependency chain.":
     "修复当前配置中报错指定的依赖包，并检查其依赖链。",
   "Installed module layout conflicts with Harness": "已安装模块布局与 Harness 冲突",

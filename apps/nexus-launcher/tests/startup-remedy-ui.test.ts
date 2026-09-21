@@ -66,6 +66,8 @@ test("a blocking startup failure offers a repair entry for its diagnosis domain"
     assert.match(render("logs"), /Open the startup log/);
     // Without a candidate list there is nothing to tick, so repair is the entry.
     assert.match(render("plugins"), /Repair profile dependencies/);
+    assert.match(render("plugins", "failed", "missing_module"), /Inspect local dependencies/);
+    assert.doesNotMatch(render("plugins", "failed", "module_api"), /Inspect local dependencies/);
     assert.match(render("plugins", "needs_choice", "duplicate_entry"), /No individual plugin was identified/);
 
     // A remedy must never be offered for a domain that did not fail.

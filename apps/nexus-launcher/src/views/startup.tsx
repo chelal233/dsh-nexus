@@ -584,6 +584,11 @@ export function CompatibilitySummary({
             )}
             {!repairPlan.length && (
               <div className="button-row">
+                {diagnosis.code === "missing_module" && !!onRepair && (
+                  <ActionButton disabled={blocked} onClick={() => onRepair("installation")}>
+                    {t("Inspect local dependencies")}
+                  </ActionButton>
+                )}
                 {stringValue(diagnosis, "help") === "settings" &&
                   ["configuration", "patch_target"].includes(String(diagnosis.code)) && (
                     <>
@@ -927,6 +932,25 @@ export function StartupOperationPanel({
   return (
     <section className={`notice${error ? " action-error" : ""}`} aria-live="polite">
       <span>{label}</span>
+      <details>
+        <summary>{t("Preparation timings")}</summary>
+        <p>{t("These timings cover launch preparation, not client readiness.")}</p>
+        <dl>
+          {[
+            ["checking", t("Checking startup inputs")],
+            ["compatibility", t("Checking startup compatibility")],
+            ["spawning", t("Creating Harness process; use Stop after startup")],
+          ].map(([key, title]) => {
+            const ms = numberValue(asObject(operation?.stage_durations_ms), key);
+            return ms !== undefined && Number.isFinite(ms) && ms >= 0 ? (
+              <div key={key}>
+                <dt>{title}</dt>
+                <dd>{t("{seconds} seconds", { seconds: (ms / 1000).toFixed(1) })}</dd>
+              </div>
+            ) : null;
+          })}
+        </dl>
+      </details>
       {error && <span role="alert">{error}</span>}
       {operation?.cancel_requested === true && (
         <span>{t("Cancellation requested; waiting for checks to stop safely")}</span>

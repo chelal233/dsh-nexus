@@ -1,4 +1,5 @@
 // Test entry for the real components; keeps test imports independent of page layout.
+export { HarnessDesktopPanel } from "../src/views/harness-desktop";
 export { credentialInvalidationCanSettle } from "../src/harness-session";
 export { explainBackendError } from "../src/display-format";
 export { isRecoverableNoopError } from "../src/display-format";
@@ -26,6 +27,8 @@ export { RecoveryRecordWizard } from "../src/views/recovery";
 export { GuideView } from "../src/views/startup";
 export { activeProgramSource } from "../src/views/workbench";
 export { MaintenanceView } from "../src/views/maintenance";
+export { DependencyRepairPanel } from "../src/views/maintenance";
+export { DesktopUpdateDialog } from "../src/desktop-update-dialog";
 export { CanaryPanel } from "../src/views/maintenance";
 export { CanaryProgress } from "../src/views/maintenance";
 export { CanaryReport } from "../src/views/maintenance";

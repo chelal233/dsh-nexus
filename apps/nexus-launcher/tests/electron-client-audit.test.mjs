@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { EventEmitter } from 'node:events';
-import { ClientAudit } from '../electron/client-audit.mjs';
+import { ClientAudit, openVerifiedBrowser } from '../electron/client-audit.mjs';
 
 function fixture() {
   let now = 0;
@@ -76,12 +76,29 @@ test('crashed pages fail visibly without a reload loop and untrusted navigation 
 
 test('deferred browser open waits for verified client, honors opt-out and happens once per run',async()=>{
  const f=fixture(), opened=[];f.audit.openReady=async(url,run)=>opened.push(run);
- for(const state of ['unverified','checking','blocked']) f.audit.observe({...f.info,open_browser_after_ready:true,browser_health:{state}});
+ for(const state of ['unverified','checking','blocked','limited']) f.audit.observe({...f.info,open_browser_after_ready:true,browser_health:{state}});
  await Promise.resolve();assert.deepEqual(opened,[]);
  f.audit.observe({...f.info,open_browser_after_ready:false,browser_health:{state:'active'}});await Promise.resolve();assert.deepEqual(opened,[]);
  const ready={...f.info,open_browser_after_ready:true,browser_health:{state:'active'}};
  f.audit.observe(ready);f.audit.observe(ready);await Promise.resolve();assert.deepEqual(opened,['one']);
  f.audit.clear();f.audit.observe(ready);await Promise.resolve();assert.deepEqual(opened,['one']);
  const restarted=fixture();restarted.audit.openReady=async()=>opened.push('duplicate');restarted.audit.openedRun='one';restarted.audit.observe(ready);await Promise.resolve();assert.deepEqual(opened,['one']);
- f.audit.observe({...ready,run_id:'two',generation:2,browser_health:{state:'limited'}});await Promise.resolve();assert.deepEqual(opened,['one','two']);
+ f.audit.observe({...ready,run_id:'two',generation:2,browser_health:{state:'limited'}});await Promise.resolve();assert.deepEqual(opened,['one']);
+ f.audit.observe({...ready,run_id:'two',generation:2});await Promise.resolve();assert.deepEqual(opened,['one','two']);
+});
+
+test('manual browser open rechecks health', async()=>{
+ const f=fixture(),opened=[];let current=f.info;
+ const bridge={request:async()=>current};
+ for(const state of [undefined,'unverified','checking','limited','blocked']) {
+  current={...f.info,browser_health:{state}};
+  await assert.rejects(openVerifiedBrowser(bridge,f.audit,url=>opened.push(url)));
+ }
+ assert.equal(opened.length,0);
+ current={...f.info,browser_health:{state:'active'}};
+ await openVerifiedBrowser(bridge,f.audit,url=>opened.push(url));
+ assert.equal(opened.length,1);
+ current={...current,available:false};
+ await assert.rejects(openVerifiedBrowser(bridge,f.audit,url=>opened.push(url)));
+ assert.equal(opened.length,1);
 });

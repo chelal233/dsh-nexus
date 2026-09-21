@@ -7,6 +7,12 @@ export const dynamicTranslationKeys: Record<string, { keys?: string[]; reason: s
   'views/startup.tsx:stringValue(diagnosis, "summary") || ""': {
     reason: "Startup diagnosis summaries produced by the checker signature table",
   },
+  'views/harness-desktop.tsx:diagnosis.summary': {
+    reason: "Desktop uses the shared startup diagnosis signature table",
+  },
+  'views/harness-desktop.tsx:diagnosis.remedy': {
+    reason: "Desktop uses the shared startup diagnosis remedies",
+  },
   'views/startup.tsx:stringValue(diagnosis, "remedy") || ""': {
     reason: "Startup diagnosis remedies produced by the checker signature table",
   },
