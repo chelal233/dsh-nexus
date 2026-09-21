@@ -104,7 +104,9 @@ test('official Desktop worker opens a visible Windows window', { skip: process.p
       if(state.childPid) execFileSync('taskkill.exe',['/PID',String(state.childPid),'/T','/F'],{windowsHide:true,stdio:'ignore'});
       worker.kill();await exited;
     }
-    fs.rmSync(root,{recursive:true,force:true});
+    // Windows can retain Chromium directory handles briefly after process exit.
+    // Retry transient cleanup errors, but still fail if the directory stays locked.
+    await fs.promises.rm(root,{recursive:true,force:true,maxRetries:10,retryDelay:100});
   });
   const deadline=Date.now()+15000;
   let handle='0';
