@@ -42,6 +42,8 @@ import { BrowserHealth, clientStartupLabel, StartupWarning } from "./browser-hea
 import { isLoopbackUrl } from "../harness-config";
 import { HarnessDesktopPanel, useHarnessDesktop } from "./harness-desktop";
 
+const DESKTOP_PROFILE_NAME = "desktop";
+
 export function HarnessTerminalButton({ snapshot, busyAction, runAction }: HarnessPanelProps) {
   const { t } = useI18n();
   const disabled =
@@ -138,7 +140,7 @@ export function OverviewView({
           <span>{t(mode === "desktop" ? "Desktop profile" : "Browser profile")}</span>
           <strong>
             {mode === "desktop"
-              ? "desktop"
+              ? DESKTOP_PROFILE_NAME
               : stringValue(snapshot.profiles, "active_profile") ||
                 stringValue(state, "profile") ||
                 t("None selected")}
@@ -147,7 +149,7 @@ export function OverviewView({
         {mode === "desktop" && (
           <small>
             {t(
-              "Official Desktop uses its own desktop profile. Manage its plugins in the official window; Web profile changes do not apply here.",
+              "Official Desktop uses its own desktop profile. Web profile changes do not apply here.",
             )}
           </small>
         )}

@@ -178,7 +178,8 @@ export function HarnessDesktopPanel({
     launched: "Continue in the desktop window. Close it to switch modes.",
     failed: "Desktop did not start. Check the error and try again.",
   };
-  const failure = error || state.error || (state.audit?.state === "failed" ? "Client startup failed" : "");
+  const failure =
+    error || state.error || (state.audit?.state === "failed" ? "Client startup failed" : "");
   const audit = state.phase === "launched" ? (state.audit?.state ?? "checking") : undefined;
   const stageLabel =
     state.stage === "cleanup"

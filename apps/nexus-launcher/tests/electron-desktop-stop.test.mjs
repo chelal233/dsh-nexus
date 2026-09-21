@@ -82,3 +82,20 @@ test('Desktop startup failure remains readable after the worker drops its child 
  fs.writeFileSync(file,JSON.stringify({phase:'launched',operationId,pid:process.pid,childPid:456}));
  assert.notEqual(readDesktopState(file,()=>true).audit.state,'failed');
 });
+
+
+test('official failure file is captured without structured audit and preserves the first cause', async t => {
+ const {readDesktopState}=await import('../electron/harness-desktop.mjs');
+ const root=temp(t),operationId=randomUUID(),file=path.join(root,'state.json');
+ fs.writeFileSync(file,JSON.stringify({phase:'launched',operationId,pid:process.pid,childPid:123}));
+ const evidence=path.join(root,`startup-${operationId}.json`);
+ fs.writeFileSync(`${evidence}.error`,'credentials import failed ?token=secret\n'+'waiting consumer\n'.repeat(500));
+ for(const corrupt of [false,true]) {
+   if(corrupt)fs.writeFileSync(evidence,'invalid json');
+   const result=readDesktopState(file,()=>true);
+   assert.equal(result.audit.state,'failed');
+   assert.ok(result.audit.error.startsWith('credentials import failed'));
+   assert.ok(!result.audit.error.includes('secret'));
+   assert.ok(result.audit.error.length<=6010);
+ }
+});

@@ -25,11 +25,13 @@ export function readDesktopState(file, isAlive = alive) {
         const audit = JSON.parse(fs.readFileSync(evidence, 'utf8'));
         if (audit.operationId === state.operationId && (audit.pid === state.childPid || (state.phase !== 'launched' && !state.childPid)) && ['checking','ready','failed','unverified'].includes(audit.state)) state.audit = audit;
       }
-      if (state.audit.state !== 'ready') {
+    } catch { /* Missing structured evidence must not hide the official diagnostic. */ }
+    if (state.audit.state !== 'ready') {
+      try {
         const diagnostic = `${evidence}.error`, errorMeta = fs.lstatSync(diagnostic);
-        if (errorMeta.isFile() && errorMeta.size <= 65536) state.audit = {state:'failed', error:fs.readFileSync(diagnostic,'utf8').slice(-6000).replace(/([?&]token=)[^\s&]+/gi,'$1[redacted]')};
-      }
-    } catch { /* Missing evidence is not readiness. */ }
+        if (errorMeta.isFile() && errorMeta.size <= 65536) state.audit = {state:'failed', error:fs.readFileSync(diagnostic,'utf8').slice(0,6000).replace(/([?&]token=)[^\s&]+/gi,'$1[redacted]')};
+      } catch { /* No official diagnostic is available yet. */ }
+    }
     if (state.phase === 'launched' && state.audit.state === 'checking' && Date.now() - state.stageStartedAt > 95000) state.audit = { state:'unverified' };
   }
   if (desktopActive(state) && !isAlive(state.pid)) {
