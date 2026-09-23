@@ -1,3 +1,4 @@
+import { diagnoseStartup } from "../../../../crates/nexus-agent/src/startup-diagnosis.mjs";
 import { confirmAction } from "../confirmation";
 import { releasePromotionCommand } from "../settings-state";
 import { type ViewProps, type Snapshot, type JsonObject } from "../app-types";
@@ -849,10 +850,30 @@ export function CompatibilitySummary({
 export function currentStartupFailure(snapshot: Snapshot): boolean {
   const runtime = harnessRuntimeValue(snapshot.harnessRuntime);
   if (stringValue(runtime, "state") !== "failed") return false;
-  const report = asObject(asObject(snapshot.profiles).compatibility);
-  const failedAt = numberValue(runtime, "updated_at_unix");
-  const checkedAt = numberValue(report, "last_used_at_unix");
-  return failedAt === undefined || checkedAt === undefined || failedAt >= checkedAt;
+  // A later preflight check does not restart the failed process.
+  return true;
+}
+
+export function currentFailureDiagnosis(snapshot: Snapshot) {
+  if (!currentStartupFailure(snapshot) || snapshot.lifecycleBusy) return null;
+  const runtime = harnessRuntimeValue(snapshot.harnessRuntime);
+  const recovery = asObject(snapshot.recovery);
+  const observed = asObject(recovery.harness);
+  // Recovery logs belong to a separately polled response. Reject stale generations.
+  if (
+    observed.state !== "failed" ||
+    typeof runtime.started_at_unix !== "number" ||
+    typeof runtime.updated_at_unix !== "number" ||
+    observed.started_at_unix !== runtime.started_at_unix ||
+    observed.updated_at_unix !== runtime.updated_at_unix ||
+    observed.exit_code !== runtime.exit_code
+  )
+    return null;
+  const text = arrayValue(recovery, "log_tail")
+    .map(asObject)
+    .map((row) => stringValue(row, "content") || "")
+    .join("\n");
+  return text ? diagnoseStartup(text) : null;
 }
 
 export function StartupOperationPanel({
@@ -985,6 +1006,7 @@ export function CompatibilityDialog({
 }) {
   const { t } = useI18n();
   const failed = currentStartupFailure(snapshot);
+  const actualDiagnosis = currentFailureDiagnosis(snapshot);
   const recovery = asObject(snapshot.recovery);
   const gate = recoveryMutationGate(
     booleanValue(recovery, "harness_stop_required"),
@@ -1024,34 +1046,78 @@ export function CompatibilityDialog({
         </p>
       ) : (
         <>
-          {failed && !["failed", "needs_choice"].includes(String(report.status)) && (
-            <div role="alert">
-              <p className="form-error">
-                {t(
-                  "Harness startup failed. The preflight result below does not mean this startup succeeded.",
+          {failed &&
+            (actualDiagnosis || !["failed", "needs_choice"].includes(String(report.status))) && (
+              <div role="alert">
+                <p className="form-error">
+                  {t(
+                    "Harness startup failed. The preflight result below does not mean this startup succeeded.",
+                  )}
+                </p>
+                {actualDiagnosis && actualDiagnosis.code !== "unknown" && (
+                  <section role="status">
+                    <strong>{t(actualDiagnosis.summary)}</strong>
+                    <p>{t(actualDiagnosis.remedy)}</p>
+                    {actualDiagnosis.evidence.map((line, index) => (
+                      <pre key={index}>{line}</pre>
+                    ))}
+                    {onRepair && (
+                      <ActionButton
+                        disabled={busyAction !== null}
+                        onClick={() =>
+                          onRepair(
+                            actualDiagnosis.help === "settings"
+                              ? actualDiagnosis.code === "port_conflict"
+                                ? "port"
+                                : "launch"
+                              : actualDiagnosis.help === "plugins"
+                                ? "profile"
+                                : "recovery",
+                          )
+                        }
+                      >
+                        {t(
+                          actualDiagnosis.help === "settings"
+                            ? "Open Harness settings"
+                            : actualDiagnosis.help === "plugins"
+                              ? "Go to profile management"
+                              : "Open the startup log",
+                        )}
+                      </ActionButton>
+                    )}
+                  </section>
                 )}
-              </p>
-              <RecoveryLogTail snapshot={snapshot} />
-              <ActionButton
-                disabled={gate.disabled || snapshot.startup?.available !== true}
-                onClick={() =>
-                  void runAction(t("Diagnose plugin startup"), "/v1/profiles", {
-                    action: "compatibility_check",
-                  })
-                }
-              >
-                {t("Diagnose plugin startup")}
-              </ActionButton>
-              <ActionButton
-                disabled={busyAction !== null}
-                onClick={() =>
-                  void runAction(t("Retry Harness startup"), "/v1/harness", { action: "start" })
-                }
-              >
-                {t("Retry Harness startup")}
-              </ActionButton>
-            </div>
-          )}
+                <RecoveryLogTail snapshot={snapshot} />
+                {(!actualDiagnosis ||
+                  [
+                    "unknown",
+                    "plugin_activation",
+                    "required_services",
+                    "module_api",
+                    "missing_bundle",
+                    "duplicate_entry",
+                  ].includes(actualDiagnosis.code)) && (
+                  <ActionButton
+                    disabled={gate.disabled || snapshot.startup?.available !== true}
+                    onClick={() =>
+                      void runAction(t("Diagnose plugin startup"), "/v1/profiles", {
+                        action: "compatibility_check",
+                      })
+                    }
+                  >
+                    {t("Diagnose plugin startup")}
+                  </ActionButton>
+                )}
+                <ActionButton
+                  disabled={busyAction !== null}
+                  onClick={() =>
+                    void runAction(t("Retry Harness startup"), "/v1/harness", { action: "start" })
+                  }
+                >
+                  {t("Retry Harness startup")}
+                </ActionButton>
+              </div>
+            )}
           <CompatibilitySummary
             snapshot={snapshot}
             busyAction={busyAction}

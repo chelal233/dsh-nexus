@@ -68,3 +68,11 @@ export { startupRepairPlan, executeStartupRepair, StartupRepair } from "../src/v
 export { clientCheckPending } from "../src/harness-session";
 export { launcherPollDelay } from "../src/control-state";
 export { clientStartupLabel } from "../src/views/browser-health";
+
+export { currentFailureDiagnosis } from "../src/views/startup";
+
+export { readableSnapshotFields } from "../src/snapshot-content";
+
+export { OfficialPlugins } from "../src/official-plugins";
+
+export { OfflineProfileRepair } from "../src/profile-repair";

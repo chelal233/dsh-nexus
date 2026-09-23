@@ -36,13 +36,14 @@ test('native offline roundtrip preserves executable modes, relocates links and r
     const work = path.join(root, action === 'finalize' ? 'import' : action);
     fs.mkdirSync(work, { recursive: true });
     const jobFile = path.join(work, 'job.json');
-    fs.writeFileSync(jobFile, JSON.stringify({ id: action, action, work, archive, slot, runtime, tools, private_writer: writer, version: 'fixture', nexus: {}, contents: selected, ...extra }));
+    fs.writeFileSync(jobFile, JSON.stringify({ id: action, action, work, archive, slot, runtime, tools, git_runtime: path.join(tools, 'git'), private_writer: writer, version: 'fixture', nexus: {}, contents: selected, ...extra }));
     const code = `import http from 'node:http';import https from 'node:https';const deny=()=>{throw Error('network forbidden')};http.request=http.get=https.request=https.get=globalThis.fetch=deny;process.umask(0o077);process.argv=[process.execPath,${JSON.stringify(helper)},${JSON.stringify(jobFile)}];await import(${JSON.stringify(pathToFileURL(helper).href)});`;
     return execFileSync(process.execPath, ['--input-type=module', '-e', code], { encoding: 'utf8', timeout: 90000, stdio: ['ignore', 'pipe', 'pipe'] });
   }
   run('export'); run('import');
   const imported = path.join(root, 'import/payload');
   run('finalize', { slot: path.join(imported, 'slot'), runtime: path.join(imported, 'runtime') });
+  assert.ok(fs.existsSync(path.join(imported, 'runtime/git/bin/git')));
   const executable = path.join(imported, 'runtime/node/node');
   assert.equal(fs.statSync(executable).mode & 0o777, 0o755);
   const bin = path.join(imported, 'slot/node_modules/.bin/fixture');

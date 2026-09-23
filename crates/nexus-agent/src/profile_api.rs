@@ -46,6 +46,8 @@ pub(super) fn profile_list_response(
         .as_ref()
         .map(|report| report.source_profile.as_str())
         .unwrap_or(&response.active_profile);
+    response.official_plugin_management = source_context::resolve(&state.paths, &state.releases)?.root
+        .as_deref().is_some_and(dsh::has_official_plugin_management);
     response.disabled_plugins =
         compatibility::disabled_plugins(&state.snapshots.configured_dsh_home()?, policy_profile)?;
     Ok(response)
@@ -82,6 +84,7 @@ pub(super) async fn profile_control(
             | ProfileAction::CompatibilityCheck
             | ProfileAction::Delete
             | ProfileAction::RestoreDeleted
+            | ProfileAction::PurgeDeleted
     ) {
         // Selecting a profile now owns a long startup probe. Keep its lifecycle
         // and update gates until it finishes even if the caller disconnects.
@@ -114,7 +117,8 @@ async fn profile_control_inner(
                 Err(error) => data_error_response(error, "profile_archive_unavailable"),
             }
         }
-        ProfileAction::Delete | ProfileAction::RestoreDeleted => {
+        ProfileAction::Delete | ProfileAction::RestoreDeleted | ProfileAction::PurgeDeleted => {
+            let purge = command.action == ProfileAction::PurgeDeleted;
             let restore = command.action == ProfileAction::RestoreDeleted;
             let Some(target) = command.profile else {
                 return data_error_response(
@@ -157,7 +161,7 @@ async fn profile_control_inner(
             let result = tokio::task::spawn_blocking(move || {
                 let _guards = (lifecycle, update, snapshots, cold);
                 profile_archive::recover_if_present(&state.paths, &state.profiles)?;
-                profile_archive::change(&state.paths, &state.profiles, &home, &target, restore)
+                if purge { profile_archive::purge(&state.paths, &home, &target) } else { profile_archive::change(&state.paths, &state.profiles, &home, &target, restore) }
             })
             .await;
             match result {
@@ -408,12 +412,16 @@ async fn profile_plugin_isolation(
                 "plugin isolation must belong to the selected profile",
             ));
         }
-        compatibility::set_plugin_disabled(
-            &home,
-            profile,
-            package,
-            command.action == ProfileAction::PluginDisable,
-        )?;
+        let root=source_context::resolve(&state.paths,&state.releases)?.root;
+        if let Some(root)=root.filter(|root|dsh::has_official_plugin_management(root)) {
+            let result=dsh::official_plugins(&state.paths,&home,&root,profile,
+                if command.action==ProfileAction::PluginDisable {"disable"} else {"enable"},Some(package))?;
+            if result["result"]["application"] == "failed" {
+                return Err(io::Error::other(result["result"]["error"].to_string()));
+            }
+        } else {
+            compatibility::set_plugin_disabled(&home,profile,package,command.action==ProfileAction::PluginDisable)?;
+        }
         profile_list_response(&state, catalog)
     })();
     match result {
@@ -605,7 +613,7 @@ async fn profile_open_terminal(
             })
     });
     let envs =
-        match nexus_core::build_runtime_child_env(&runtime, std::env::var_os("PATH").as_deref()) {
+        match nexus_core::checked_runtime_child_env(&runtime, std::env::var_os("PATH").as_deref()) {
             Ok(envs) => envs,
             Err(error) => return data_error_response(error, "runtime_env_unavailable"),
         };
@@ -1066,5 +1074,46 @@ async fn profile_plugin_remove(
             io::Error::other(format!("plugin removal owner failed: {error}")),
             "plugin_remove_failed",
         ),
+    }
+}
+
+#[derive(serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(super) struct OfficialPluginCommand { profile:String, action:String, package:Option<String> }
+
+pub(super) async fn official_plugins(State(state):State<AppState>, Json(command):Json<OfficialPluginCommand>) -> axum::response::Response {
+    if !matches!(command.action.as_str(),"list"|"enable"|"disable"|"remove"|"inspect"|"install")
+        || (command.action != "list" && command.package.as_ref().is_none_or(|v|v.trim().is_empty() || v.len()>2048 || v.chars().any(char::is_control))) {
+        return data_error_response(io::Error::new(io::ErrorKind::InvalidInput,"Invalid plugin operation"),"plugin_invalid");
+    }
+    let lifecycle=state.supervisor.acquire_lifecycle().await;
+    if let Err(response)=ensure_checkpoint_mutation_ready(&state).await { return response; }
+    let update_gate=match state.updater.try_acquire_gate() { Ok(gate)=>gate,Err(e)=>return update_error_response(e) };
+    if let Err(response)=ensure_harness_selection_quiescent(&state,&lifecycle,"plugin_conflict","Stop Harness before managing plugins").await { return response; }
+    let snapshots=match state.snapshots.try_acquire_configuration() {Ok(gate)=>gate,Err(e)=>return data_error_response(e,"plugin_conflict")};
+    if let Err(response)=ensure_update_idle(&state) { return response; }
+    let cold=match state.cold.try_acquire_maintenance() {Ok(gate)=>gate,Err(e)=>return data_error_response(e,"plugin_conflict")};
+    let prepared=(|| -> io::Result<_> {
+        let home=state.snapshots.configured_dsh_home()?;
+        // Offline management targets an explicit existing profile without changing selection.
+        dsh::profile_directory(&home, &command.profile)?;
+        let root=source_context::resolve(&state.paths,&state.releases)?.root.ok_or_else(||io::Error::other("No Harness version selected"))?;
+        Ok((home,root))
+    })();
+    let (home,root)=match prepared {Ok(v)=>v,Err(e)=>return data_error_response(e,"plugin_unavailable")};
+    // Ownership survives a disconnected HTTP caller until the child process settles.
+    let owner=tokio::spawn(async move {
+        let _lifecycle=lifecycle; let _update_gate=update_gate; let _snapshots=snapshots; let _cold=cold;
+        tokio::task::spawn_blocking(move || {
+            nexus_core::terminal_lease::ensure_all_idle(&state.paths)?;
+            let source = source_context::resolve(&state.paths, &state.releases)?;
+            if !source.external { super::dependency_repair::ensure_startup(&root, &state.paths.root)?; }
+            dsh::official_plugins(&state.paths,&home,&root,&command.profile,&command.action,command.package.as_deref())
+        }).await
+    });
+    match owner.await {
+        Ok(Ok(Ok(value)))=>(StatusCode::OK,Json(value)).into_response(),
+        Ok(Ok(Err(e)))=>data_error_response(e,"official_plugin_failed"),
+        other=>data_error_response(io::Error::other(format!("Plugin operation interrupted: {other:?}")),"official_plugin_failed"),
     }
 }

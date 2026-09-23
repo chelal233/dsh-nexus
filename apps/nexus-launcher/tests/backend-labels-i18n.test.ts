@@ -57,7 +57,9 @@ test("Chinese startup, snapshot and launch input text preserves paths, profiles,
       { path: "raw.json", state: "present", stored_size: 3, content: "RAW-UPSTREAM-CONTENT", content_truncated: true, content_note: "content is truncated by the 123 byte per-file and 456 byte response limits" },
       { path: "unknown.json", state: "new_state", omitted_reason: "RAW-UNKNOWN-REASON", content_truncated: true, content_note: "RAW-UNKNOWN-NOTE" },
     ] } });
-    for (const value of ["未收录", "已收录", "profiles/Ready/settings.yaml", "YAML 无效", "每个文件上限 123 字节", "每次响应上限 456 字节", "RAW-UPSTREAM-CONTENT", "new_state", "RAW-UNKNOWN-REASON", "RAW-UNKNOWN-NOTE"]) assert.ok(snapshot.includes(value), value);
+    for (const value of ["未收录", "已收录", "profiles/Ready/settings.yaml", "YAML 无效", "每个文件上限 123 字节", "每次响应上限 456 字节", "new_state", "RAW-UNKNOWN-REASON", "RAW-UNKNOWN-NOTE"]) assert.ok(snapshot.includes(value), value);
+    assert.ok(!snapshot.includes("RAW-UPSTREAM-CONTENT"), "Raw content is deferred to the Source view");
+    assert.ok(snapshot.includes("源码"));
     const inputs = zh(LaunchInputsPanel, { snapshot: { config: { launch_inputs: { next_launch: { fields: [
       { name: "Profile", value: "Ready", source: "Selected or compatibility profile" },
       { name: "Program", value: "System", source: "Resolved launch configuration" },

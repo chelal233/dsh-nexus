@@ -123,7 +123,10 @@ pub(crate) fn disabled_plugins(home: &Path, profile: &str) -> io::Result<Vec<Str
     if let Some(records) = manifest.pointer("/dsh/profile/nexusDisabledBundles") {
         for record in records.as_array().ok_or_else(|| io::Error::other("Invalid disabled bundle metadata"))? {
             let package = record["package"].as_str().ok_or_else(|| io::Error::other("Invalid disabled bundle metadata"))?;
-            if !legacy.iter().any(|value| value == package) { legacy.push(package.to_owned()); }
+            // An explicit upstream enable wins over stale Nexus restoration metadata.
+            let enabled = manifest.pointer("/dsh/profile/bundles").and_then(|value| value.as_array())
+                .is_some_and(|bundles| bundles.iter().any(|value| value.as_str() == Some(package)));
+            if !enabled && !legacy.iter().any(|value| value == package) { legacy.push(package.to_owned()); }
         }
     }
     Ok(legacy)
@@ -200,7 +203,17 @@ pub(crate) async fn for_release(
     let slot = state.releases.release_root(id)?;
     crate::supervisor::normalize_selected_launch(&mut spec, &state.paths, &state.releases)?;
     let runtime = crate::runtime::runtime_for_launch(&mut spec, state.config.load()?.runtime.unwrap_or_default(), nexus_core::bundled_runtime_dir().as_deref());
-    let runtime_env = nexus_core::build_runtime_child_env(&runtime, std::env::var_os("PATH").as_deref())?;
+    let runtime_env = match nexus_core::checked_runtime_child_env(&runtime, std::env::var_os("PATH").as_deref()) {
+        Ok(environment) => environment,
+        Err(error) => {
+            match fs::remove_file(state.paths.root.join("compatibility/latest.json")) {
+                Ok(()) => {},
+                Err(cleanup) if cleanup.kind() == io::ErrorKind::NotFound => {},
+                Err(cleanup) => return Err(cleanup),
+            }
+            return Err(error);
+        }
+    };
     let node = spec.render_path_for_context(&spec.program, &profile, Some(id), Some(&slot))?;
     prepare(&state.paths, &home, &profile, id, &slot, &node, force, cancellation,
         "version_switch", &runtime_env).await?;
@@ -215,7 +228,17 @@ pub(crate) async fn check_selected(state: &crate::AppState, profile: &str) -> io
     let slot=source.root.ok_or_else(||io::Error::other("Select a Harness source before verifying plugins"))?;
     crate::supervisor::normalize_selected_launch(&mut spec, &state.paths, &state.releases)?;
     let runtime = crate::runtime::runtime_for_launch(&mut spec, state.config.load()?.runtime.unwrap_or_default(), nexus_core::bundled_runtime_dir().as_deref());
-    let runtime_env = nexus_core::build_runtime_child_env(&runtime, std::env::var_os("PATH").as_deref())?;
+    let runtime_env = match nexus_core::checked_runtime_child_env(&runtime, std::env::var_os("PATH").as_deref()) {
+        Ok(environment) => environment,
+        Err(error) => {
+            match fs::remove_file(state.paths.root.join("compatibility/latest.json")) {
+                Ok(()) => {},
+                Err(cleanup) if cleanup.kind() == io::ErrorKind::NotFound => {},
+                Err(cleanup) => return Err(cleanup),
+            }
+            return Err(error);
+        }
+    };
     let node = spec.render_path_for_context(&spec.program, profile, Some(&release), Some(&slot))?;
     if node.is_relative() && node.components().count() > 1 {
         return Err(io::Error::other("Independent plugin verification requires an absolute Node path or a runtime selected in settings"));
@@ -281,7 +304,7 @@ pub(crate) async fn prepare(
     if !slot.join("apps/cli/lib/bin.js").is_file() {
         return Err(io::Error::other("Target release does not support the Node profile compatibility check"));
     }
-    if trigger == "startup_direct" && !force && crate::desktop_plugins::single_start_supported(slot, home, profile) {
+    if matches!(trigger, "startup_direct" | "startup") && !force {
         tracing::info!(release, profile, "Checking startup in the actual Harness instance");
         return Ok(None);
     }
@@ -305,7 +328,7 @@ pub(crate) async fn prepare(
         "home":home,"selected":profile,"release_id":release,"slot":slot,"cache":root.join("verified.json"),
         "node":node,"work":work,"output":output,"force":force,
         "trigger": trigger, "owned_round": true,
-        "preference_capabilities": { "adapter_version": crate::preference_capabilities::VERIFIED_VERSION, "capabilities": capabilities },
+        "preference_capabilities": { "adapter_version": crate::preference_capabilities::ADAPTER_VERSION, "capabilities": capabilities },
         "patches": preferences.patches.as_deref().unwrap_or(&[]),
         "builtin_patches": [desktop_patch],
         "builtin_fingerprint": format!("{:x}", sha2::Sha256::digest(include_bytes!("../../../plugins/nexus-desktop-compat/index.mjs"))),

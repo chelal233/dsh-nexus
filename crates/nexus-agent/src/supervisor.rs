@@ -832,6 +832,7 @@ impl HarnessSupervisor {
     }
     async fn startup_phase(&self,phase:&'static str)->Result<nexus_core::CancellationToken,HarnessSupervisorError> {
         let mut operation=self.startup_operation.lock().await;
+        if operation.as_ref().is_some_and(|op| op.phase == "cancelled") { return Err(HarnessSupervisorError::Cancelled); }
         if let Some(op)=operation.as_mut().filter(|op|matches!(op.phase,"checking"|"compatibility")) {
             if op.token.is_cancelled(){return Err(HarnessSupervisorError::Cancelled);}
             op.transition(phase, false);
@@ -871,7 +872,7 @@ impl HarnessSupervisor {
             .map_err(HarnessSupervisorError::Configuration)?.runtime.unwrap_or_default();
         let effective_runtime = crate::runtime::runtime_for_launch(&mut spec, configured_runtime,
             nexus_core::bundled_runtime_dir().as_deref());
-        let runtime_env = nexus_core::build_runtime_child_env(&effective_runtime, std::env::var_os("PATH").as_deref())
+        let runtime_env = nexus_core::checked_runtime_child_env(&effective_runtime, std::env::var_os("PATH").as_deref())
             .map_err(HarnessSupervisorError::Configuration)?;
         let selected_home = crate::dsh::resolve_dsh_home_for_paths(&self.paths)
             .map_err(HarnessSupervisorError::Configuration)?;
@@ -881,6 +882,7 @@ impl HarnessSupervisor {
         }else{crate::source_context::resolve_async(&self.paths,&self.releases).await.map_err(HarnessSupervisorError::Configuration)?};
         let release_id=source.release_id.as_deref();
         let release_root=source.root;
+
         crate::runtime_patches::validate_for_paths(&self.paths, &preferences)
             .map_err(HarnessSupervisorError::Configuration)?;
         crate::preference_capabilities::validate_launch(&spec, &preferences, release_root.as_deref())
@@ -890,15 +892,15 @@ impl HarnessSupervisor {
         let direct_startup = spec.mode == HarnessLaunchMode::Node && spec.readiness_url.is_none()
             && release_root.as_deref().is_some_and(|root| {
                 let args = spec.render_args_for_context(profile, release_id, Some(root)).unwrap_or_default();
-                args.len() == 3 && args[1] == "--profile" && args[2] == profile
+                crate::desktop_plugins::single_start_arguments_supported(&args, profile)
                     && args.first().and_then(|entry| fs::canonicalize(entry).ok())
                         .zip(fs::canonicalize(root.join("apps/cli/lib/bin.js")).ok()).is_some_and(|(entry, expected)| entry == expected)
                     && crate::desktop_plugins::single_start_supported(root, &selected_home, profile)
             });
-        let startup_trigger = if direct_startup { "startup_direct" } else { "startup" };
+        let startup_trigger = "startup_direct";
         // The lifecycle owner remains held while the isolated check runs, but
         // never hold `inner` across the child-process probe.
-        let cancellation = self.startup_phase("compatibility").await?;
+        let cancellation = self.startup_phase("checking").await?;
         let mut verified_profile = None;
         if spec.mode == HarnessLaunchMode::Node {
             if let (Some(id), Some(root)) = (release_id, release_root.as_deref()) {
@@ -1025,22 +1027,16 @@ impl HarnessSupervisor {
             // check. Do not mutate a live instance's shared module fallback.
             #[cfg(windows)]
             finish_owned_job(&mut inner).await.map_err(HarnessSupervisorError::Process)?;
-            let managed_entry = if spec.mode == HarnessLaunchMode::Node {
-                arguments.first().map(Path::new)
-            } else {
-                Some(program.as_path())
-            };
+
+            // Bind official package resolution to the selected version. This
+            // only reconciles links/shadows; it does not execute or copy a diagnostic profile.
+            let managed_entry = if spec.mode == HarnessLaunchMode::Node { arguments.first().map(Path::new) } else { Some(program.as_path()) };
             if let (Some(root), Some(entry)) = (release_root.as_deref(), managed_entry) {
                 let managed = fs::canonicalize(entry).ok().zip(fs::canonicalize(root).ok())
                     .is_some_and(|(entry, root)| entry.starts_with(root));
                 if managed {
-                    let home = selected_home.clone();
-                    let repaired = ReleaseStore::heal_module_farm(&home, root)
-                        .map_err(HarnessSupervisorError::Configuration)?;
-                    tracing::info!(repaired, release = ?release_id, "prepared Harness module farm");
-                    let archived = ReleaseStore::heal_profile_modules(&home, profile, root)
-                        .map_err(HarnessSupervisorError::Configuration)?;
-                    tracing::info!(archived, "reconciled profile module shadows");
+                    ReleaseStore::heal_module_farm(&selected_home, root).map_err(HarnessSupervisorError::Configuration)?;
+                    ReleaseStore::heal_profile_modules(&selected_home, profile, root).map_err(HarnessSupervisorError::Configuration)?;
                 }
             }
             let generation = inner.generation.wrapping_add(1).max(1);
@@ -3432,6 +3428,7 @@ mod tests {
         let slot = root.join("slot"); fs::create_dir_all(slot.join("apps/cli/lib")).unwrap();
         let entry = slot.join("apps/cli/lib/bin.js"); fs::write(&entry,"fixture").unwrap();
         fs::write(slot.join("package.json"),r#"{"name":"@deepseek-ai/dsh-root","version":"0.1.2-rc.1"}"#).unwrap();
+        crate::preference_capabilities::write_web_contract_fixture(&slot);
         let home = root.join("home");
         let mut spec = nexus_core::HarnessLaunchSpec { mode:nexus_protocol::HarnessLaunchMode::Node,program:"node.exe".into(),args:vec![entry.to_string_lossy().into_owned()],working_dir:Some(slot.clone()),readiness_url:None,readiness_timeout_secs:None,readiness_token_required:false };
         assert!(super::automatic_web_readiness_supported(&spec,Some(&slot),&home,"web",&spec.args));
@@ -3447,6 +3444,8 @@ mod tests {
         spec.readiness_url=None;
         assert!(!super::automatic_web_readiness_supported(&spec,Some(&slot),&home,"web",&[root.join("custom.js").to_string_lossy().into_owned()]));
         fs::write(slot.join("package.json"),r#"{"name":"@deepseek-ai/dsh-root","version":"unknown"}"#).unwrap();
+        assert!(super::automatic_web_readiness_supported(&spec,Some(&slot),&home,"web",&spec.args));
+        fs::remove_file(slot.join("packages/bundle/web-app/src/startup.ts")).unwrap();
         assert!(!super::automatic_web_readiness_supported(&spec,Some(&slot),&home,"web",&spec.args));
 
         let listener=std::net::TcpListener::bind("127.0.0.1:0").unwrap(); let port=listener.local_addr().unwrap().port();
@@ -7166,6 +7165,16 @@ mod tests {
 #[cfg(test)]
 mod startup_operation_tests {
     #[cfg(windows)]
+    fn pin_test_runtime(state: &crate::AppState) {
+        let runtime = std::path::PathBuf::from(std::env::var_os("NEXUS_TEST_RUNTIME").expect("explicit bundled test runtime"));
+        state.config.transaction(|d| { d.runtime = Some(nexus_core::RuntimeConfig {
+            node: Some(nexus_core::RuntimePin { path: runtime.join("node/node.exe"), ownership: nexus_protocol::RuntimeOwnership::System }),
+            pnpm: Some(nexus_core::RuntimePin { path: runtime.join("pnpm/bin/pnpm.cjs"), ownership: nexus_protocol::RuntimeOwnership::System }),
+            git: Some(nexus_core::RuntimePin { path: runtime.join("git/cmd/git.exe"), ownership: nexus_protocol::RuntimeOwnership::System }),
+            ..Default::default()
+        }); Ok(()) }).unwrap();
+    }
+    #[cfg(windows)]
     #[tokio::test]
     #[ignore = "requires local Node and an owned child process"]
     async fn canonical_node_entry_starts_and_preserves_user_arguments() {
@@ -7183,6 +7192,7 @@ mod startup_operation_tests {
         spec.mode = nexus_protocol::HarnessLaunchMode::Node;
         spec.args = vec![canonical.to_string_lossy().into_owned(), literal.into()];
         state.config.transaction(|config| { config.harness = Some(spec); Ok(()) }).unwrap();
+        pin_test_runtime(&state);
         let start = state.supervisor.start().await;
         let observed = tokio::time::timeout(Duration::from_secs(10), async {
             loop {
@@ -7209,9 +7219,8 @@ mod startup_operation_tests {
     #[cfg(windows)]
     #[tokio::test]
     #[ignore = "requires local Node and permission to create/terminate an owned test process tree"]
-    async fn startup_cancel_reaps_slow_fake_compatibility_probe_without_harness_spawn() {
+    async fn startup_runs_harness_once_without_compatibility_copy() {
         use std::{fs,path::PathBuf,time::Duration};
-        use windows_sys::Win32::{Foundation::CloseHandle,System::Threading::{OpenProcess,WaitForSingleObject}};
         let node=std::process::Command::new("node").args(["-p","process.execPath"]).output().expect("explicit integration test requires Node");
         assert!(node.status.success(),"explicit integration test requires usable Node");
         let node=PathBuf::from(String::from_utf8(node.stdout).unwrap().trim());
@@ -7220,6 +7229,8 @@ mod startup_operation_tests {
         state.releases.promote("fake-slot").unwrap();
         let slot=state.releases.release_root("fake-slot").unwrap();
         let home=state.paths.root.join("fixture-home");
+        fs::create_dir_all(slot.join("packages/util/home-paths/src")).unwrap();
+        fs::write(slot.join("packages/util/home-paths/src/index.ts"), "env[DSH_HOME_ENV]").unwrap();
         fs::create_dir_all(slot.join("apps/cli/lib")).unwrap();
         fs::create_dir_all(slot.join("vendor/fixture")).unwrap();
         fs::write(slot.join("vendor/fixture/package.json"),br#"{"name":"@deepseek-ai/fixture","version":"0.0.0"}"#).unwrap();
@@ -7234,50 +7245,95 @@ mod startup_operation_tests {
         spec.args=vec![entry.to_string_lossy().into_owned(),"--profile".into(),"{profile}".into()];
         spec.working_dir=Some(slot.clone());
         state.config.transaction(|d|{d.harness=Some(spec);d.harness_preferences=Some(nexus_protocol::HarnessPreferencesPayload{home:Some(home.to_string_lossy().into_owned()),..Default::default()});Ok(())}).unwrap();
+        pin_test_runtime(&state);
         let lifecycle=state.supervisor.acquire_lifecycle().await;
         state.supervisor.begin_startup().await.unwrap();
-        let id=state.supervisor.startup_status().await["operation_id"].as_str().unwrap().to_owned();
-        let supervisor=state.supervisor.clone();
-        let mut task=tokio::spawn(async move{supervisor.start_with_profile_locked("web",&lifecycle).await});
-        let observed=tokio::time::timeout(Duration::from_secs(15),async {
-            loop {if let Ok(bytes)=fs::read(&marker){if let Ok(value)=serde_json::from_slice::<serde_json::Value>(&bytes){break value;}}if task.is_finished(){break serde_json::Value::Null;}tokio::time::sleep(Duration::from_millis(25)).await;}
-        }).await.ok();
-        let pid=observed.as_ref().and_then(|v|v["pid"].as_u64()).unwrap_or(0) as u32;
-        let process=if pid>0{unsafe{OpenProcess(0x00100000,0,pid)}}else{std::ptr::null_mut()};
-        // Always request cleanup, including a failed marker wait, before assertions.
-        let accepted=state.supervisor.cancel_startup(&id).await;
-        let result=tokio::time::timeout(Duration::from_secs(30),&mut task).await;
-        if result.is_err() {
-            // Leave the owned task running its cancellation cleanup; aborting it
-            // would discard precisely the ownership guarantee under test.
-            panic!("owned cancellation did not settle; fixture retained at {}",state.paths.root.display());
-        }
-        let result=result.unwrap().unwrap();
-        let exited=if !process.is_null(){let value=unsafe{WaitForSingleObject(process,5000)};unsafe{CloseHandle(process)};value==0}else{false};
-        let runtime=state.supervisor.status().await;
-        let session=state.supervisor.log_sessions.read().unwrap().unwrap();
-        let pending=state.paths.root.join("compatibility/owner-pending.json").exists();
-        let work_empty=match fs::read_dir(home.join("profiles/.nexus-compatibility-work")) {
-            Ok(mut entries) => entries.next().is_none(),
-            Err(error) => error.kind() == std::io::ErrorKind::NotFound,
-        };
-        state.supervisor.finish_startup(false,matches!(result,Err(super::HarnessSupervisorError::Cancelled))).await;
-        assert!(accepted&&pid>0,"fake compatibility child must run before cancellation: {result:?}");
-        assert!(exited,"owned compatibility child must exit before cancellation completes");
-        assert!(matches!(result,Err(super::HarnessSupervisorError::Cancelled)),"{result:?}");
-        assert!(runtime.pid.is_none()&&!session.launch_pending,"Harness must never spawn");
-        assert!(!pending&&work_empty,"owned checker files must be cleaned after process exit");
-        // Cancellation settles the process before retiring its scratch tree.
-        // Wait for the normal background reclaimer before deleting the fixture;
-        // competing recursive removals can produce AccessDenied on Windows.
-        tokio::time::timeout(Duration::from_secs(5), async {
+
+        let result=state.supervisor.start_with_profile_locked("web",&lifecycle).await;
+        drop(lifecycle);
+        let observed=tokio::time::timeout(Duration::from_secs(10),async {
             loop {
-                let pending = fs::read_dir(state.paths.root.join("compatibility/work")).unwrap()
-                    .any(|entry| entry.unwrap().file_name().to_string_lossy().starts_with("retired-"));
-                if !pending { break; }
-                tokio::time::sleep(Duration::from_millis(20)).await;
+                if let Ok(bytes)=fs::read(&marker) { if let Ok(value)=serde_json::from_slice::<serde_json::Value>(&bytes) { break value; } }
+                tokio::time::sleep(Duration::from_millis(25)).await;
             }
-        }).await.expect("background scratch reclamation must finish before fixture cleanup");
+        }).await;
+        let operation = state.supervisor.startup_status().await;
+        crate::observe_startup_failure_until(state.clone(), "web".into(), operation, Duration::ZERO).await;
+        assert!(state.timeout_capture_run.lock().await.completed, "timeout must leave diagnostics");
+        assert!(!state.crash_capture_run.lock().await.completed, "timeout must not consume failure evidence");
+        let (generation, mut runtime, log_session) = state.supervisor.status_observation().await;
+        runtime.state = nexus_protocol::HarnessState::Failed;
+        crate::schedule_crash_capture(&state, &crate::HarnessSnapshot { generation, runtime, log_session }).await;
+        assert!(state.crash_capture_run.lock().await.completed, "later failure must capture its own diagnostics");
+        assert_eq!(state.supervisor.status().await.state, nexus_protocol::HarnessState::Running, "timeout must not stop or restart a live process");
+        state.supervisor.stop().await.unwrap();
+        assert!(result.is_ok(), "{result:?}");
+        let observed=observed.expect("actual Harness must launch");
+        assert!(observed["pid"].as_u64().unwrap()>0);
+        assert!(!state.paths.root.join("compatibility/work").exists());
+        assert!(!home.join("profiles/.nexus-compatibility-work").exists());
+        assert!(!state.paths.root.join("dependency-repair-history").exists());
+        fs::remove_dir_all(&state.paths.root).unwrap();
+    }
+    #[cfg(windows)]
+    #[tokio::test]
+    #[ignore = "requires local Node and permission to create/terminate an owned test process tree"]
+    async fn failed_start_repairs_missing_dependency_and_retries_once() {
+        use std::{fs,path::PathBuf,time::Duration};
+        let node=std::process::Command::new("node").args(["-p","process.execPath"]).output().expect("explicit integration test requires Node");
+        assert!(node.status.success(),"explicit integration test requires usable Node");
+        let node=PathBuf::from(String::from_utf8(node.stdout).unwrap().trim());
+        let state=crate::switch_ownership_tests::switch_test_state("startup-failure-retry");
+        state.releases.register("fake-slot","0.1.2-rc.1",None,None).unwrap();
+        state.releases.promote("fake-slot").unwrap();
+        let slot=state.releases.release_root("fake-slot").unwrap();
+        let home=state.paths.root.join("fixture-home");
+        fs::create_dir_all(slot.join("packages/util/home-paths/src")).unwrap();
+        fs::write(slot.join("packages/util/home-paths/src/index.ts"), "env[DSH_HOME_ENV]").unwrap();
+        fs::create_dir_all(slot.join("apps/cli/lib")).unwrap();
+        fs::create_dir_all(slot.join("vendor/fixture")).unwrap();
+        fs::write(slot.join("vendor/fixture/package.json"),br#"{"name":"@deepseek-ai/fixture","version":"0.0.0"}"#).unwrap();
+        fs::create_dir_all(home.join("profiles/web")).unwrap();
+        fs::write(slot.join("package.json"),br#"{"name":"@deepseek-ai/dsh-root","version":"0.1.2-rc.1"}"#).unwrap();
+        fs::write(home.join("profiles/web/package.json"),br#"{"name":"web","private":true,"dsh":{"profile":{"bundles":[]}}}"#).unwrap();
+        let marker=state.paths.root.join("probe-pid.json");
+        let entry=slot.join("apps/cli/lib/bin.js");
+
+        fs::create_dir_all(slot.join("packages/boot/app-boot")).unwrap();
+        fs::write(slot.join("packages/boot/app-boot/package.json"), "{}").unwrap();
+        fs::write(slot.join("apps/cli/package.json"), r#"{"name":"fixture-cli","dependencies":{"@deepseek-ai/fixture":"workspace:*"}}"#).unwrap();
+        fs::write(slot.join("vendor/fixture/index.js"), "module.exports=42;").unwrap();
+        fs::write(slot.join("pnpm-lock.yaml"), "importers:\n  packages/boot/app-boot: {}\n  apps/cli:\n    dependencies:\n      '@deepseek-ai/fixture':\n        version: link:../../vendor/fixture\n").unwrap();
+        fs::write(&entry,format!("const fs=require('node:fs');fs.appendFileSync({},'attempt\\n');try{{require('@deepseek-ai/fixture')}}catch(e){{console.error('ERR_MODULE_NOT_FOUND',e.message);process.exit(1)}};setInterval(()=>{{}},1000);",serde_json::to_string(&marker).unwrap())).unwrap();
+        let mut spec=nexus_core::HarnessLaunchSpec::new(node);
+        spec.mode=nexus_protocol::HarnessLaunchMode::Node;
+        spec.args=vec![entry.to_string_lossy().into_owned(),"--profile".into(),"{profile}".into()];
+        spec.working_dir=Some(slot.clone());
+        spec.readiness_url=Some("http://127.0.0.1:9/".into());
+        spec.readiness_timeout_secs=Some(2);
+        state.config.transaction(|d|{d.harness=Some(spec);d.harness_preferences=Some(nexus_protocol::HarnessPreferencesPayload{home:Some(home.to_string_lossy().into_owned()),..Default::default()});Ok(())}).unwrap();
+        pin_test_runtime(&state);
+        let lifecycle=state.supervisor.acquire_lifecycle().await;
+        state.supervisor.begin_startup().await.unwrap();
+
+        let result=state.supervisor.start_with_profile_locked("web",&lifecycle).await;
+        drop(lifecycle);
+
+        assert!(result.is_ok(), "{result:?}");
+        let operation=state.supervisor.startup_status().await;
+        let recovery=tokio::spawn(crate::observe_startup_failure(state.clone(),"web".into(),operation));
+        let observed=tokio::time::timeout(Duration::from_secs(45),async {
+            loop {if fs::read_to_string(&marker).unwrap_or_default().lines().count()==2 {break;}
+
+                tokio::time::sleep(Duration::from_millis(50)).await;}
+        }).await;
+        state.supervisor.finish_startup(false,true).await;
+        state.supervisor.stop().await.unwrap();
+        recovery.await.unwrap();
+        assert!(observed.is_ok(), "retry timeout");
+        assert_eq!(fs::read_to_string(&marker).unwrap().lines().count(),2,"one initial launch plus one repair retry");
+        assert!(slot.join("apps/cli/node_modules/@deepseek-ai/fixture").exists());
+        assert!(!state.paths.root.join("compatibility/work").exists());
         fs::remove_dir_all(&state.paths.root).unwrap();
     }
     #[tokio::test]

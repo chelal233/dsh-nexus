@@ -82,7 +82,8 @@ async fn marketplace_install_uses_selected_cli_and_records_failure_for_retry() {
     write_profile_file(&entry, r#"const fs=require('node:fs'); const a=process.argv.slice(2); if(JSON.stringify(a)!==JSON.stringify(['plugin','--profile','demo','add','dshmarket@1.52.0'])) process.exit(42); const f='package.json'; const p=JSON.parse(fs.readFileSync(f)); p.dependencies.dshmarket='1.52.0'; p.dsh.profile.bundles.push('dshmarket'); fs.writeFileSync(f,JSON.stringify(p));"#);
     state.config.write(&NexusConfigFile { runtime: Some(RuntimeConfig {
         node: Some(RuntimePin {path: executable_on_path(if cfg!(windows) {"node.exe"} else {"node"}).unwrap(), ownership: RuntimeOwnership::System}),
-        pnpm: None, git: None, source: RuntimeSource::Official, mode: RuntimeInstallMode::Portable,
+        pnpm: Some(RuntimePin {path: entry.clone(), ownership: RuntimeOwnership::System}),
+        git: Some(RuntimePin {path: entry.clone(), ownership: RuntimeOwnership::System}), source: RuntimeSource::Official, mode: RuntimeInstallMode::Portable,
     }), ..Default::default() }).unwrap();
     let scope = super::dsh::profile_directory(&home, "demo").unwrap().to_string_lossy().into_owned();
     let command = || Json(serde_json::from_value(serde_json::json!({"profile":"demo","provider":"dsh-market","scope":scope})).unwrap());
@@ -413,10 +414,11 @@ async fn harness_preferences_reach_child_without_changing_launch_directory() {
         &slot.join("package.json"),
         r#"{"name":"@deepseek-ai/dsh-root","version":"0.1.2-rc.1"}"#,
     );
+    crate::preference_capabilities::write_web_contract_fixture(&slot);
     let entry = slot.join("apps/cli/lib/bin.js");
     let capture = root.join("child-observed.json");
     write_profile_file(&entry, &format!(
-        "require('node:fs').writeFileSync({}, JSON.stringify({{home:process.env.DSH_HOME, telemetry:process.env.DSH_TELEMETRY_DISABLED, args:process.argv.slice(2), cwd:process.cwd()}})); setInterval(()=>{{}},1000);",
+        "const args=process.argv.slice(2); const server=require('node:net').createServer(); server.listen(Number(args[args.indexOf('--port')+1]),'127.0.0.1',()=>require('node:fs').writeFileSync({}, JSON.stringify({{home:process.env.DSH_HOME, telemetry:process.env.DSH_TELEMETRY_DISABLED, args, cwd:process.cwd(), port:server.address().port}})));",
         serde_json::to_string(&capture).unwrap()));
     let mut launch = HarnessLaunchSpec::new(
         executable_on_path(if cfg!(windows) { "node.exe" } else { "node" })
@@ -434,6 +436,12 @@ async fn harness_preferences_reach_child_without_changing_launch_directory() {
         .write(&NexusConfigFile {
             external_harness: None,
             harness: Some(launch.clone()),
+            runtime: Some(RuntimeConfig {
+                node: Some(RuntimePin { path: launch.program.clone(), ownership: RuntimeOwnership::System }),
+                pnpm: Some(RuntimePin { path: entry.clone(), ownership: RuntimeOwnership::System }),
+                git: Some(RuntimePin { path: entry.clone(), ownership: RuntimeOwnership::System }),
+                ..RuntimeConfig::default()
+            }),
             harness_preferences: Some(nexus_protocol::HarnessPreferencesPayload {
                 home: Some(selected.to_string_lossy().into_owned()),
                 port: Some(0),
@@ -460,6 +468,7 @@ async fn harness_preferences_reach_child_without_changing_launch_directory() {
     let observed = observed.unwrap();
     assert_eq!(observed["home"], selected.to_string_lossy().as_ref());
     assert_eq!(observed["telemetry"], "");
+    assert!(observed["port"].as_u64().is_some_and(|port| port > 0 && port <= 65535), "port zero reaches the child and binds a real OS-assigned port");
     assert_eq!(observed["cwd"], root.to_string_lossy().as_ref());
     assert_eq!(
         observed["args"],
@@ -704,6 +713,7 @@ fn content_test_state(label: &str) -> (AppState, PathBuf) {
             data_root_id: data_root_identity(&paths).expect("data root identity reads"),
             instance_id: format!("content-{label}"),
             crash_capture_run: Arc::new(Mutex::new(super::CrashCapture::default())),
+        timeout_capture_run: Arc::new(Mutex::new(super::CrashCapture::default())),
             canary: Arc::new(Mutex::new(None)),
             harness_logs: Arc::new(Mutex::new(
                 nexus_launcher_core::HarnessLogObserver::default(),
@@ -1367,14 +1377,14 @@ async fn retry_reuses_prepared_ticket_and_finishes_after_transient_pnpm_failure(
     let mut config = state.config.load().expect("config loads");
     config.runtime = Some(RuntimeConfig {
         node: Some(RuntimePin {
-            path: node,
+            path: node.clone(),
             ownership: RuntimeOwnership::System,
         }),
         pnpm: Some(RuntimePin {
             path: fake_pnpm.clone(),
             ownership: RuntimeOwnership::System,
         }),
-        git: None,
+        git: Some(RuntimePin {path: node.clone(), ownership: RuntimeOwnership::System}),
         source: RuntimeSource::Official,
         mode: RuntimeInstallMode::Portable,
     });
@@ -2197,6 +2207,7 @@ async fn checkpoint_restore_survives_cancellation_serializes_start_and_rolls_bac
         data_root_id: data_root_identity(&paths).expect("data-root identity reads"),
         instance_id: "checkpoint-test-agent".to_owned(),
         crash_capture_run: Arc::new(Mutex::new(super::CrashCapture::default())),
+        timeout_capture_run: Arc::new(Mutex::new(super::CrashCapture::default())),
         canary: Arc::new(Mutex::new(None)),
         harness_logs: Arc::new(Mutex::new(
             nexus_launcher_core::HarnessLogObserver::default(),

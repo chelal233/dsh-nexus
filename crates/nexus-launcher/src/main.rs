@@ -947,6 +947,7 @@ fn build_api_router(controller: ConsoleController) -> Router {
         )
         .route("/launcher/logs", get(console_logs))
         .route("/launcher/agent-api/v1/health", get(proxy_agent_request))
+        .route("/launcher/agent-api/v1/plugin-manager", axum::routing::post(proxy_agent_request))
         .route("/launcher/agent-api/v1/state", get(proxy_agent_request))
         .route(
             "/launcher/agent-api/v1/harness",
@@ -1185,6 +1186,7 @@ fn agent_proxy_target_path(path: &str) -> Option<&'static str> {
         "/launcher/agent-api/v1/state" => Some("/v1/state"),
         "/launcher/agent-api/v1/harness" => Some("/v1/harness"),
         "/launcher/agent-api/v1/profiles" => Some("/v1/profiles"),
+        "/launcher/agent-api/v1/plugin-manager" => Some("/v1/plugin-manager"),
         "/launcher/agent-api/v1/checkpoints" => Some("/v1/checkpoints"),
         "/launcher/agent-api/v1/releases" => Some("/v1/releases"),
         "/launcher/agent-api/v1/updates" => Some("/v1/updates"),

@@ -4,6 +4,7 @@ import path from 'node:path';
 // Keep the outer transport alive beyond the Agent client's bounded operation.
 // Compatibility checks already have a 660 s budget in nexus-launcher-core.
 export function requestTimeout(command, args) {
+  if (command === 'proxy_request' && args.method === 'POST' && args.path === '/v1/plugin-manager') return 960000;
   const compatibility = command === 'proxy_request' && args.method === 'POST' &&
     (['/v1/releases', '/v1/harness', '/v1/market'].includes(args.path) ||
       (args.path === '/v1/profiles' && ['select', 'compatibility_check'].includes(args.body?.action)));

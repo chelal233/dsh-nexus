@@ -350,6 +350,7 @@ pub enum ProfileAction {
     Delete,
     DeletedList,
     RestoreDeleted,
+    PurgeDeleted,
     /// Open a profile-related file or directory with the system handler.
     /// Bounded targets only: `settings` (home settings.yaml), `profile_dir`,
     /// `profile_patch` (the profile's cordis.patch.yml), and
@@ -438,6 +439,9 @@ pub struct CompatibilityReport {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ProfileListResponse {
+    /// The selected installation ships the official plugin manager and its UI.
+    #[serde(default)]
+    pub official_plugin_management: bool,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub warnings: Vec<String>,
     pub api_version: String,
@@ -460,6 +464,7 @@ pub type ProfileStatusResponse = ProfileListResponse;
 impl ProfileListResponse {
     pub fn new(active_profile: impl Into<String>, profiles: Vec<String>) -> Self {
           Self {
+              official_plugin_management: false,
               warnings: Vec::new(),
             api_version: API_VERSION.to_owned(),
             active_profile: active_profile.into(),

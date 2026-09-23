@@ -79,3 +79,7 @@ Nexus is independent and is not an official upstream Harness release. Nexus code
 ## Community
 
 - Thanks to the [LINUX DO](https://linux.do/) community for providing an open and welcoming platform for technical discussion.
+
+### Linux ARM64 runtime requirement (next local build)
+
+The full bundled Git runtime requires **glibc 2.34 or newer**, plus libcurl and zlib, in addition to Electron's desktop libraries. DEB/RPM dependency declarations enforce this floor; AppImage users must check their distribution. Distribution names alone (UOS, Kylin, deepin) do not establish compatibility. Older systems are not covered by this bundled-Git build. Rust binaries retain their independent glibc 2.28 build ceiling.

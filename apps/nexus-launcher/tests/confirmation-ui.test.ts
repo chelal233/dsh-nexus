@@ -19,7 +19,7 @@ test("custom confirmation cancels on Escape, confirms explicitly and blocks the 
     },
   };
   const loader = await createUiTestLoader();
-  const { ConfirmationHost, confirmAction, BusyOverlay, StartupOperationPanel, CompatibilitySummary } = await loader.loadModule("/src/App.tsx");
+  const { ConfirmationHost, confirmAction, BusyOverlay, StartupOperationPanel, CompatibilitySummary, UpdatesView } = await loader.loadModule("/src/App.tsx");
   const container = document.getElementById("root")!;
   const root = createRoot(container);
   try {
@@ -77,6 +77,38 @@ test("custom confirmation cancels on Escape, confirms explicitly and blocks the 
     assert.match(document.querySelector('[role="dialog"]')!.textContent!, /no verified rollback/);
     await React.act(async () => { ([...document.querySelectorAll('button')].find(b => b.textContent === 'Confirm') as HTMLButtonElement).click(); });
     assert.deepEqual(promotions, [{ action: "promote", id: "target", rollback_confirmation: "fresh-confirmation" }]);
+
+    const installed = {
+      startup: { available: true }, config: {}, endpointErrors: {},
+      harnessRuntime: { harness: { state: "stopped" } },
+      releases: { current_release: "old", releases: [{ id: "target" }] },
+      updates: { operation: { operation_id: "installed", phase: "prepared", release_id: "target" } },
+    };
+    const renderInstalled = async (snapshot = installed) => React.act(async () => root.render(
+      React.createElement(React.Fragment, null, React.createElement(ConfirmationHost),
+        React.createElement(UpdatesView, { snapshot, embedded: true, busyAction: null,
+          refresh: async () => {},
+          runAction: async (_label: string, path: string, command: unknown) => {
+            assert.equal(path, "/v1/releases"); promotions.push(command); return true;
+          } })),
+    ));
+    const switchButton = () => [...document.querySelectorAll('button')].find(b => b.textContent === 'Switch to this version') as HTMLButtonElement | undefined;
+    await renderInstalled();
+    assert.ok(switchButton());
+    assert.doesNotMatch(document.body.textContent!, /Retry installation/);
+    await React.act(async () => switchButton()!.click());
+    assert.equal(promotions.length, 1);
+    await React.act(async () => { ([...document.querySelectorAll('button')].find(b => b.textContent === 'Confirm') as HTMLButtonElement).click(); });
+    assert.deepEqual(promotions[1], { action: "promote", id: "target", rollback_confirmation: "fresh-confirmation" });
+    await renderInstalled({ ...installed, harnessRuntime: { harness: { state: "running" } } });
+    assert.equal(switchButton()?.disabled, true);
+    assert.match(document.body.textContent!, /Before switching, stop Harness/);
+    await renderInstalled({ ...installed, releases: { ...installed.releases, current_release: "target" } });
+    assert.equal(switchButton(), undefined);
+    await renderInstalled({ ...installed, releases: { ...installed.releases, releases: [] } });
+    assert.equal(switchButton(), undefined);
+    await renderInstalled({ ...installed, updates: { operation: { ...installed.updates.operation, phase: "failed" } } });
+    assert.equal(switchButton(), undefined);
 
   } finally {
     await React.act(async () => root.unmount());

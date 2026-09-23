@@ -60,3 +60,19 @@ test("the startup check dialog includes the current client failure and repair en
     assert.match(markup, /Open the startup log/);
   } finally { await loader.close(); }
 });
+
+test("current host startup warnings remain visible with an active browser and never reuse old logs", async () => {
+ const loader = await createUiTestLoader();
+ try {
+  const { BrowserHealth } = await loader.loadModule("/src/App.tsx");
+  const runtime = {state:"running",pid:42,started_at_unix:100};
+  const snapshot = {harnessRuntime:{harness:runtime,generation:1,log_session_run_id:"a"},
+   harnessUi:{available:true,generation:1,run_id:"a",browser_health:{state:"active",entries:[],missing_core:[]}},
+   recovery:{harness:runtime,log_tail:[{content:"dsh: warning: 1 entry did not activate\nui-task-board (addon): Error: task-board ledger is already owned by process 29864"}]}};
+  const render=()=>renderToStaticMarkup(createElement(BrowserHealth,{snapshot}));
+  assert.match(render(),/Startup checks found limited functionality/);
+  assert.doesNotMatch(render(),/Client startup failed|Recommended recovery/);
+  snapshot.recovery.harness={...runtime,pid:41};
+  assert.match(render(),/Startup checks passed/);
+ } finally {await loader.close();}
+});

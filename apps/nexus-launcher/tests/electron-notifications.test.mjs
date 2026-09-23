@@ -44,3 +44,13 @@ test('events produced after launcher startup survive the first poll', () => {
   assert.deepEqual(cursor.consume(snapshot).map(e => e.kind), ['question']);
   assert.deepEqual(cursor.consume(snapshot), []);
 });
+
+test('all nine category switches and channel modes obey the notification policy', () => {
+ const kinds=['completed','failed','approval','question','blocked','job-completed','job-failed','harness-failed','update-ready'];
+ for(const kind of kinds)for(const channel of ['desktop','terminal'])for(const enabled of [false,true]) {
+  for(const [mode,focus,expected] of [['off',false,false],['off',true,false],['always',false,true],['always',true,true],['always',undefined,true],['unfocused',false,true],['unfocused',true,false],['unfocused',undefined,false]]) {
+   const config=settings({[channel]:mode,categories:{[kind]:enabled}});
+   assert.equal(shouldNotify(config,kind,focus,channel),enabled&&expected,`${kind}/${channel}/${mode}/${focus}/${enabled}`);
+  }
+ }
+});

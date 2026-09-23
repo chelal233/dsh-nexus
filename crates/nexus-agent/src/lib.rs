@@ -118,6 +118,7 @@ mod log_retention;
 mod preference_capabilities;
 mod preflight;
 mod profile_archive;
+mod profile_repair;
 mod request_receipts;
 mod runtime;
 mod runtime_plan;
@@ -158,6 +159,7 @@ struct AppState {
     harness_sync: Arc<Mutex<()>>,
     maintenance_preview: Arc<std::sync::Mutex<MaintenancePreviewScan>>,
     crash_capture_run: Arc<Mutex<CrashCapture>>,
+    timeout_capture_run: Arc<Mutex<CrashCapture>>,
     canary: canary::Owner,
     harness_logs: Arc<Mutex<HarnessLogObserver>>,
     #[cfg(test)]
@@ -361,6 +363,7 @@ pub async fn run_with_instance_id(
             crate::MaintenancePreviewScan::default(),
         )),
         crash_capture_run: Arc::new(Mutex::new(CrashCapture::default())),
+        timeout_capture_run: Arc::new(Mutex::new(CrashCapture::default())),
         canary: Arc::new(Mutex::new(None)),
         harness_logs: Arc::new(Mutex::new(
             nexus_launcher_core::HarnessLogObserver::default(),
@@ -537,6 +540,8 @@ fn build_router(state: AppState, credential: nexus_core::agent_auth::AgentCreden
         .route("/v1/market", get(market::status).post(market::select))
         .route("/v1/desktop/profile", get(desktop_profile::status).post(desktop_profile::select))
         .route("/v1/profiles", get(profile_list).post(profile_control))
+        .route("/v1/plugin-manager", post(profile_api::official_plugins))
+        .route("/v1/profile-repair", post(profile_repair::handle))
         .route("/v1/canary", get(canary::status).post(canary::control))
         .route("/v1/recovery", get(recovery_status))
         .route("/v1/preflight", get(preflight::check))
@@ -1513,6 +1518,7 @@ async fn execute_harness_action(
     state: &AppState,
     action: HarnessAction,
 ) -> Result<HarnessRuntimeInfo, HarnessSupervisorError> {
+    if action == HarnessAction::Stop { state.supervisor.finish_startup(false, true).await; }
     let lifecycle = if matches!(action, HarnessAction::Start | HarnessAction::Restart) {
         state
             .supervisor
@@ -1568,6 +1574,10 @@ async fn execute_harness_action(
                 matches!(result, Err(HarnessSupervisorError::Cancelled)),
             )
             .await;
+        if result.is_ok() {
+            let operation = state.supervisor.startup_status().await;
+            tokio::spawn(observe_startup_failure(state.clone(), profile.clone(), operation));
+        }
         return result;
     }
     match action {
@@ -1577,7 +1587,10 @@ async fn execute_harness_action(
                 .start_with_profile_locked(&profile, &lifecycle)
                 .await
         }
-        HarnessAction::Stop => state.supervisor.stop_locked(&lifecycle).await,
+        HarnessAction::Stop => {
+            state.supervisor.finish_startup(false, true).await;
+            state.supervisor.stop_locked(&lifecycle).await
+        },
         HarnessAction::Restart => {
             state
                 .supervisor
@@ -1585,6 +1598,91 @@ async fn execute_harness_action(
                 .await
         }
         HarnessAction::Status => Ok(state.supervisor.status().await),
+    }
+}
+
+async fn observe_startup_failure(state: AppState, profile: String, operation: serde_json::Value) {
+    observe_startup_failure_until(state, profile, operation, std::time::Duration::from_secs(660)).await;
+}
+
+async fn observe_startup_failure_until(state: AppState, profile: String, operation: serde_json::Value, timeout: std::time::Duration) {
+    use nexus_protocol::HarnessState;
+    let (_, _, initial_logs) = state.supervisor.status_observation().await;
+    let revision = state.config.snapshot().ok().map(|snapshot| snapshot.revision);
+    let initial_source = source_context::resolve(&state.paths, &state.releases).ok();
+    let deadline = tokio::time::Instant::now() + timeout;
+    let (generation, failed_run) = loop {
+        let current_operation = state.supervisor.startup_status().await;
+        if current_operation["operation_id"] != operation["operation_id"]
+            || current_operation["phase"] == "cancelled" { return; }
+        let (current, runtime, logs) = state.supervisor.status_observation().await;
+        if logs.stderr_log_name != initial_logs.stderr_log_name || logs.stdout_log_name != initial_logs.stdout_log_name
+            || logs.stderr_file_identity != initial_logs.stderr_file_identity { return; }
+        if runtime.state == HarnessState::Stopped { return; }
+        if runtime.state == HarnessState::Running {
+            let health = desktop_plugins::browser_health(&state.paths, &logs.run_id);
+            if health["state"] == "active" { return; }
+            if health["state"] == "blocked" {
+                // Keep the live process available for inspection; do not repair beneath it.
+                schedule_crash_capture(&state, &HarnessSnapshot { generation: current, runtime, log_session: logs }).await;
+                return;
+            }
+        }
+        if runtime.state == HarnessState::Failed {
+            let evidence = recovery_log_tail(&state.paths, &logs.stderr_log_name).ok().map(|value| value.0).unwrap_or_default();
+            // A generic timeout or plugin exception is not authority to change dependencies.
+            if !evidence.contains("ERR_MODULE_NOT_FOUND") && !evidence.contains("MODULE_NOT_FOUND") { return; }
+            let failed_run = logs.run_id.clone();
+            schedule_crash_capture(&state, &HarnessSnapshot { generation: current, runtime, log_session: logs }).await;
+            break (current, failed_run);
+        }
+        if tokio::time::Instant::now() >= deadline {
+            schedule_startup_capture(&state, &HarnessSnapshot { generation: current, runtime, log_session: logs },
+                "startup verification timed out; readiness remains unverified", &state.timeout_capture_run).await;
+            return;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(250)).await;
+    };
+    let Some(lifecycle) = state.supervisor.try_acquire_lifecycle() else { return; };
+    if state.supervisor.startup_status().await["phase"] == "cancelled"
+        || state.supervisor.startup_status().await["operation_id"] != operation["operation_id"]
+        || state.config.snapshot().ok().map(|snapshot| snapshot.revision) != revision { return; }
+    let (current, runtime, logs) = state.supervisor.status_observation().await;
+    if current != generation || logs.run_id != failed_run || runtime.state != HarnessState::Failed { return; }
+    if ensure_checkpoint_mutation_ready(&state).await.is_err()
+        || ensure_harness_stopped(&state, &lifecycle).await.is_err() { return; }
+    let Ok(update) = state.updater.try_acquire_gate() else { return; };
+    if ensure_update_idle(&state).is_err() { return; }
+    let Ok(snapshot) = state.snapshots.try_acquire_configuration() else { return; };
+    let Ok(cold) = state.cold.try_acquire_maintenance() else { return; };
+    let repair = (|| -> io::Result<serde_json::Value> {
+        nexus_core::terminal_lease::ensure_all_idle(&state.paths)?;
+        let source = source_context::resolve(&state.paths, &state.releases)?;
+        if source.external { return Err(io::Error::other("External source is not automatically repaired")); }
+        if !initial_source.as_ref().is_some_and(|initial| initial.release_id == source.release_id && initial.root == source.root) {
+            return Err(io::Error::other("Selected release changed before startup recovery"));
+        }
+        let root = source.root.ok_or_else(|| io::Error::other("No selected release"))?;
+        dependency_repair::ensure_startup(&root, &state.paths.root)
+    })();
+    drop((cold, snapshot, update));
+    match repair {
+        Ok(value) if value["phase"] == "repaired" => {
+            tracing::info!(record = ?value["record"], "Startup failed; repaired local dependency links, retrying once");
+            let (report, prepared) = preflight::evaluate(state.clone()).await;
+            if report["ready"] != true || report["paused"] == true { return; }
+            if state.supervisor.startup_status().await["phase"] == "cancelled"
+                || state.supervisor.startup_status().await["operation_id"] != operation["operation_id"]
+                || state.config.snapshot().ok().map(|snapshot| snapshot.revision) != revision
+                || state.runtime.read().await.profile.as_deref().unwrap_or(DEFAULT_PROFILE) != profile { return; }
+            if let Some(prepared) = prepared {
+                // Deliberately do not schedule another recovery observer for the retry.
+                let result = state.supervisor.start_prepared(&profile, &lifecycle, prepared, false).await;
+                if let Err(error) = result { tracing::warn!(%error, "One-time startup retry failed"); }
+            }
+        }
+        Ok(_) => {}
+        Err(error) => tracing::warn!(%error, "Failed startup requires manual dependency repair"),
     }
 }
 
@@ -1651,13 +1749,20 @@ fn start_crash_observer(
 /// run with a five-second cooldown. Only a successful bundle is completed.
 async fn schedule_crash_capture(state: &AppState, observation: &HarnessSnapshot) {
     if observation.runtime.state != nexus_protocol::HarnessState::Failed
+        && !(observation.runtime.state == nexus_protocol::HarnessState::Running
+            && desktop_plugins::browser_health(&state.paths, &observation.log_session.run_id)["state"] == "blocked")
         || observation.log_session.run_id.is_empty()
     {
         return;
     }
+    schedule_startup_capture(state, observation, "startup failure", &state.crash_capture_run).await;
+}
+
+async fn schedule_startup_capture(state: &AppState, observation: &HarnessSnapshot, reason: &str, capture: &Arc<Mutex<CrashCapture>>) {
+    if observation.log_session.run_id.is_empty() { return; }
     let run_id = observation.log_session.run_id.clone();
     {
-        let mut captured = state.crash_capture_run.lock().await;
+        let mut captured = capture.lock().await;
         if captured.run_id != run_id {
             *captured = CrashCapture {
                 run_id: run_id.clone(),
@@ -1678,8 +1783,9 @@ async fn schedule_crash_capture(state: &AppState, observation: &HarnessSnapshot)
         captured.next_attempt = Some(std::time::Instant::now() + std::time::Duration::from_secs(5));
     }
     let owned = state.clone();
-    let attempt = CrashAttempt(state.crash_capture_run.lock().await.in_flight.clone());
-    let note = format!("auto: crash evidence for run {run_id}");
+    let attempt = CrashAttempt(capture.lock().await.in_flight.clone());
+    let capture = capture.clone();
+    let note = format!("auto: {reason}; evidence for run {run_id}");
     let result = runtime::RuntimeRequestContext::production()
         .run_blocking_io(
             runtime::BlockingStage::Diagnostics,
@@ -1687,7 +1793,7 @@ async fn schedule_crash_capture(state: &AppState, observation: &HarnessSnapshot)
             move || {
                 let _attempt = attempt; // Also releases admission if queued work is dropped before execution.
                 let result = collect_current_diagnostics(&owned, Some(note));
-                let mut captured = owned.crash_capture_run.blocking_lock();
+                let mut captured = capture.blocking_lock();
                 if captured.run_id == run_id {
                     captured.completed = result.is_ok();
                     captured.next_attempt =
@@ -1963,12 +2069,10 @@ async fn release_tags(State(state): State<AppState>) -> axum::response::Response
         Ok(runtime) => runtime,
         Err(error) => return data_error_response(error, "runtime_selection_failed"),
     };
-    let external = git_worker::selected_external(&runtime).or_else(|| {
-        Some(git_worker::ExternalGit {
-            program: spec.git_program.clone(),
-            prefix: Vec::new(),
-        })
-    });
+    let external = match git_worker::selected_external(&runtime) {
+        Ok(external) => external,
+        Err(error) => return data_error_response(error, "runtime_selection_failed"),
+    };
     match git_worker::list_tags(
         &spec.source,
         &state.paths.run_dir,

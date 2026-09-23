@@ -5,7 +5,7 @@ import { createHash } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
 import { createRequire } from 'node:module';
 import { pathToFileURL } from 'node:url';
-import { verifyDesktopKit, prepareDesktopElectron, digest } from './desktop-runtime.mjs';
+import { verifyDesktopKit, prepareDesktopElectron, digest, desktopKitMatchesSource } from './desktop-runtime.mjs';
 import { preparePrimaryPayload, preparePortableHost, runtimeInventory } from './desktop-runtime-cache.mjs';
 import { desktopSourceView } from './desktop-paths.mjs';
 
@@ -23,7 +23,7 @@ stage('verify');
 const kit = verifyDesktopKit(kitRoot);
 if (process.argv[6] === 'portable-host') await preparePortableHost(kit, cache);
 const pnpm = JSON.parse(fs.readFileSync(path.join(app, 'node_modules/pnpm/package.json'), 'utf8'));
-if (kit.lockSha256 !== digest(path.join(app, 'scripts/primary-runtime-lock.json')) ||
+if (!desktopKitMatchesSource(root, kitRoot) ||
     kit.electronVersion !== require('electron/package.json').version || kit.pnpmVersion !== pnpm.version) throw Error('desktop_runtime_incompatible');
 const { resolveDesktopTargetBuildPaths } = await load('scripts/desktop-build-paths.mjs');
 const paths = resolveDesktopTargetBuildPaths();
@@ -33,8 +33,9 @@ if (kit.schema === 3) {
   const payload = await preparePrimaryPayload(kit, cache);
   const primary = JSON.parse(fs.readFileSync(path.join(payload, 'primary-runtime/runtime.json')));
   const lock = JSON.parse(fs.readFileSync(path.join(kitRoot, 'lock.json')));
-  if (primary.platform !== process.platform || primary.arch !== process.arch || primary.desktopVersion !== metadata.version ||
-      primary.components?.node !== lock.nodeVersion || primary.components?.python !== lock.pythonVersion || primary.components?.pnpm !== pnpm.version) throw Error('desktop_runtime_incompatible');
+  const versions = primary.components ?? primary;
+  if (primary.platform !== process.platform || primary.arch !== process.arch ||
+      versions.node !== lock.nodeVersion || versions.python !== lock.pythonVersion || versions.pnpm !== pnpm.version) throw Error('desktop_runtime_incompatible');
   for (const name of ['primary-runtime', 'office-skills']) {
     const target = path.join(payload, name), destination = path.join(paths.runtime, name);
     let correct = false;

@@ -1,6 +1,11 @@
 // Exact call expressions are an explicit review boundary: new dynamic call
 // sites must declare their key domain or why runtime text is passed through.
 export const dynamicTranslationKeys: Record<string, { keys?: string[]; reason: string }> = {
+  'snapshot-content.tsx:labels[key]': { reason: "Known configuration labels are translated; unknown keys retain their original identity", keys: ["Name", "Version", "Description", "Dependencies", "Development dependencies", "Optional dependencies", "Harness", "Profile", "Enabled plugins", "Disabled", "Plugins", "Configuration", "Settings", "ID", "Enabled", "Port", "Models", "Providers"] },
+  "views/browser-health.tsx:hostWarning.summary": { reason: "Shared startup diagnosis signature table" },
+  "views/browser-health.tsx:hostWarning.remedy": { reason: "Shared startup diagnosis signature table" },
+  "views/startup.tsx:actualDiagnosis.summary": { reason: "Shared startup diagnosis signature table" },
+  "views/startup.tsx:actualDiagnosis.remedy": { reason: "Shared startup diagnosis signature table" },
   "App.tsx:event.payload": { reason: "Native operation errors use localized Desktop error codes; unknown details pass through" },
   "views/harness-desktop.tsx:labels[state.phase]": { reason: "Fixed Desktop process states defined locally" },
   "views/harness-desktop.tsx:failure": { reason: "Desktop preparation errors and fixed localized error codes" },
@@ -99,7 +104,7 @@ export const dynamicTranslationKeys: Record<string, { keys?: string[]; reason: s
   "operation-notices.tsx:line": {
     reason: "Operation errors can include unregistered upstream messages and paths",
   },
-  'views/profiles.tsx:stringValue(item, "omitted_reason") || ""': {
+  'snapshot-content.tsx:stringValue(item, "omitted_reason") || ""': {
     reason: "Package component omission reason from Agent",
   },
   'views/updates.tsx:stages[stage || ""] || "Preparing package"': {

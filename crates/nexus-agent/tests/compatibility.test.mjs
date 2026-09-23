@@ -77,6 +77,11 @@ test('path aliases preserve generated-asset exclusion, fallback identity and off
   const source = sourceInfo(f.home, 'original');
   assert.equal(duplicateEntrySources(source, aliased(f.slot), 'duplicate loader entry id: upload').length, 2);
   assert.equal(replacedOfficialEntries(source, aliased(f.slot)).length, 1);
+  const uploader = path.join(f.source, 'node_modules/uploader');
+  fs.writeFileSync(path.join(uploader, 'package.json'), JSON.stringify({ name: 'uploader', dsh: { bundle: { patch: ['empty.yml', 'patch.yml'] } } }));
+  fs.writeFileSync(path.join(uploader, 'empty.yml'), '# empty first patch');
+  assert.equal(duplicateEntrySources(source, aliased(f.slot), 'duplicate loader entry id: upload').length, 2);
+  assert.equal(replacedOfficialEntries(source, aliased(f.slot)).length, 1);
   const link = path.join(f.source, 'node_modules/missing');
   fs.symlinkSync(aliased(path.join(f.source, '.dsh-module-fallback/node_modules/missing')), link, process.platform === 'win32' ? 'junction' : 'dir');
   assert.equal((await check(f.options)).status, 'passed');
@@ -601,6 +606,9 @@ test('startup infrastructure causes are not plugin-isolation decisions', () => {
     ['Probe process cleanup timed out', 'cleanup_timeout'],
     ['Source profile changed during compatibility check', 'inputs_changed'],
     ['Harness process exited before readiness (exit code: 7)', 'process_exit'],
+    ['Error: listen EADDRINUSE: address already in use 127.0.0.1:3852\nPlugins waiting for services (15):', 'port_conflict'],
+    ['Error: task-board ledger is already owned by process 29864', 'process_lock'],
+    ['Error: cannot get property "webServer" without inject', 'module_api'],
     ['Optional provider request timed out', 'unknown'],
   ]) assert.equal(diagnoseStartup(text).code, code);
   const activation = parseActivation('dsh: warning: 2 entries did not activate\nprovider (addon): EPERM: permission denied\nconsumer (@deepseek-ai/core): pending (waiting for service: store)');
@@ -687,4 +695,18 @@ test('dependency edits during a successful probe cannot make the original cache 
     const first=await check(f.options);assert.equal(first.cache_reused,false);
     const second=await check(f.options);assert.equal(second.cache_reused,false);
   } finally {f.close();}
+});
+
+test('upstream re-enable overrides stale Nexus isolation metadata', () => {
+  const f=fixture();
+  try {
+    f.write(['good']);
+    const file=path.join(f.source,'package.json');
+    const manifest=JSON.parse(fs.readFileSync(file,'utf8'));
+    manifest.dsh.profile.nexusIsolationPolicyVersion=1;
+    manifest.dsh.profile.nexusDisabledBundles=[{package:'good',index:0},{package:'bad',index:1}];
+    fs.writeFileSync(file,JSON.stringify(manifest));
+    assert.deepEqual(sourceInfo(f.home,'original').manualDisabled,['bad']);
+    assert.deepEqual(JSON.parse(fs.readFileSync(file,'utf8')),manifest);
+  } finally { f.close(); }
 });

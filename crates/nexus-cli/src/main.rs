@@ -624,6 +624,7 @@ async fn run(options: Options) -> Result<(), String> {
             | ProfileAction::Delete
             | ProfileAction::DeletedList
             | ProfileAction::RestoreDeleted
+            | ProfileAction::PurgeDeleted
             | ProfileAction::Create,
             _,
         ) => {

@@ -968,6 +968,12 @@ export function UpdatesView({
     operationPhase === "succeeded" && !offlineExport && catalogCurrent && !slotVisible;
   const finished = !!operationId && coldOperationIsTerminal(operationPhase);
   const canDismiss = finished && !cleanupPending;
+  const installedTargetAvailable =
+    canDismiss &&
+    ["prepared", "succeeded"].includes(operationPhase || "") &&
+    catalogCurrent &&
+    slotVisible &&
+    publishedId !== stringValue(snapshot.releases, "current_release");
   const attemptDetails = (
     <>
       {stringValue(operation, "output_tail") && (
@@ -1357,29 +1363,49 @@ export function UpdatesView({
                           {cleanupPending ? t("Retry cleanup") : t("Cancel")}
                         </ActionButton>
                       )}
-                    {canDismiss && operationPhase !== "succeeded" && retryCommand && (
+                    {installedTargetAvailable && (
                       <ActionButton
                         tone="primary"
-                        disabled={busyAction !== null || snapshot.startup?.available !== true}
-                        onClick={() =>
-                          void runAction(
-                            t(
-                              offlineExport || offlineImport
-                                ? "Retry offline operation"
-                                : "Retry installation",
-                            ),
-                            "/v1/updates",
-                            retryCommand,
-                          )
+                        disabled={
+                          busyAction !== null ||
+                          switchBlocked ||
+                          snapshot.startup?.available !== true
                         }
+                        onClick={() => void promoteRelease(publishedId!)}
                       >
                         {t(
-                          offlineExport || offlineImport
-                            ? "Retry offline operation"
-                            : "Retry installation",
+                          externalHarnessRoot(snapshot.config)
+                            ? "Prepare this version slot"
+                            : "Switch to this version",
                         )}
                       </ActionButton>
                     )}
+                    {canDismiss &&
+                      operationPhase !== "succeeded" &&
+                      operationPhase !== "prepared" &&
+                      retryCommand && (
+                        <ActionButton
+                          tone="primary"
+                          disabled={busyAction !== null || snapshot.startup?.available !== true}
+                          onClick={() =>
+                            void runAction(
+                              t(
+                                offlineExport || offlineImport
+                                  ? "Retry offline operation"
+                                  : "Retry installation",
+                              ),
+                              "/v1/updates",
+                              retryCommand,
+                            )
+                          }
+                        >
+                          {t(
+                            offlineExport || offlineImport
+                              ? "Retry offline operation"
+                              : "Retry installation",
+                          )}
+                        </ActionButton>
+                      )}
                     {canDismiss && (
                       <ActionButton
                         disabled={busyAction !== null}
@@ -1394,6 +1420,13 @@ export function UpdatesView({
                       </ActionButton>
                     )}
                   </div>
+                  {installedTargetAvailable && (switchBlocked || switchNeedsStop) && (
+                    <p className="field-help" role="status">
+                      {t(
+                        "Preparing a version does not interrupt Harness. Before switching, stop Harness yourself; running tasks will be interrupted.",
+                      )}
+                    </p>
+                  )}
                   {canDismiss && (
                     <span className="field-help">
                       {t("Clearing this record keeps installed versions and Harness data.")}

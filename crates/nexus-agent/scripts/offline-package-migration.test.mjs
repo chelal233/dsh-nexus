@@ -112,7 +112,7 @@ test('selected profiles and transitive plugin dependencies survive offline reloc
     const archive = path.join(work, 'environment.tar.gz');
     async function run(action, extra = {}, runId = action) {
       const directory = path.join(work, runId); await fs.mkdir(directory, { recursive: true });
-      const job = { action, id: action, work: directory, tools: runtime, archive, slot, runtime, home, version: 'fixture', active_profile: 'web', nexus: {}, private_writer: path.join(process.env.CARGO_TARGET_DIR || path.join(root, 'target'), 'debug/nexus-agent.exe'), ...extra };
+      const job = { action, id: action, work: directory, tools: runtime, git_runtime: path.join(runtime, "git"), archive, slot, runtime, home, version: 'fixture', active_profile: 'web', nexus: {}, private_writer: path.join(process.env.CARGO_TARGET_DIR || path.join(root, 'target'), 'debug/nexus-agent.exe'), ...extra };
       const file = path.join(directory, 'job.json'); await fs.writeFile(file, JSON.stringify(job));
       await exec(process.execPath, [helper, file], { windowsHide: true, timeout: 120000 });
       return directory;
@@ -253,6 +253,8 @@ test('selected profiles and transitive plugin dependencies survive offline reloc
     const importedSlot = path.join(imported, 'payload/slot'), importedRuntime = path.join(imported, 'payload/runtime');
     await fs.rename(path.join(imported, 'payload/environment'), path.join(importedRuntime, 'environment'));
     await run('finalize', { work: imported, slot: importedSlot, runtime: importedRuntime });
+    const importedGit=await exec(path.join(importedRuntime,'git/cmd/git.exe'),['--version'],{windowsHide:true,env:{...process.env,PATH:''}});
+    assert.match(importedGit.stdout,/git version/);
     const importedHome = path.join(importedRuntime, 'environment');
     const config = JSON.parse(await fs.readFile(path.join(importedHome, 'settings.yaml')));
     assert.equal(config.apiKey, undefined); assert.equal(config.model, 'fixture-model');

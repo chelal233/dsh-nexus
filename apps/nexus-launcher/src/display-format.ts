@@ -4,7 +4,13 @@ import { type JsonObject, type RuntimeToolSource } from "./app-types";
 import { stringValue } from "./json-values";
 
 export function formatTimestamp(value: unknown, unavailable: string, locale: Locale): string {
-  if (typeof value !== "number" || value <= 0) return unavailable;
+  if (
+    typeof value !== "number" ||
+    !Number.isFinite(value) ||
+    value <= 0 ||
+    !Number.isFinite(new Date(value * 1000).getTime())
+  )
+    return unavailable;
   return new Date(value * 1000).toLocaleString(locale === "zh" ? "zh-CN" : "en-US");
 }
 

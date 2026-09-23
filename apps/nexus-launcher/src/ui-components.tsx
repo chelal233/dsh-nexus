@@ -258,11 +258,13 @@ export function Modal({
   onClose,
   children,
   locked = false,
+  variant = "modal",
 }: {
   title: string;
   onClose: () => void;
   children: React.ReactNode;
   locked?: boolean;
+  variant?: "modal" | "drawer";
 }) {
   const { t } = useI18n();
   const dialog = useRef<HTMLDivElement>(null);
@@ -270,6 +272,8 @@ export function Modal({
     const previous = document.activeElement as HTMLElement | null;
     const overlay = dialog.current?.parentElement;
     if (!overlay) return;
+    const previousOverflow = document.body.style.overflow;
+    if (variant === "drawer") document.body.style.overflow = "hidden";
     modalStack.push(overlay);
     updateModalInert();
     dialog.current?.focus();
@@ -277,12 +281,13 @@ export function Modal({
       const index = modalStack.indexOf(overlay);
       if (index >= 0) modalStack.splice(index, 1);
       updateModalInert();
+      if (variant === "drawer") document.body.style.overflow = previousOverflow;
       if (previous?.isConnected && !previous.closest("[inert]")) previous.focus();
     };
   }, []);
   const content = (
     <div
-      className="modal-overlay"
+      className={`modal-overlay${variant === "drawer" ? " drawer-overlay" : ""}`}
       role="dialog"
       aria-modal="true"
       aria-label={title}
@@ -291,7 +296,7 @@ export function Modal({
       }}
     >
       <div
-        className="modal-card"
+        className={`modal-card${variant === "drawer" ? " drawer-card" : ""}`}
         ref={dialog}
         tabIndex={-1}
         onClick={(event) => event.stopPropagation()}

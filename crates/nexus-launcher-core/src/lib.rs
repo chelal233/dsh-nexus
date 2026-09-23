@@ -70,6 +70,8 @@ const AGENT_ROUTES: &[&str] = &[
     "/v1/desktop/profile",
     "/v1/harness/discover",
     "/v1/profiles",
+    "/v1/plugin-manager",
+    "/v1/profile-repair",
     "/v1/recovery",
     "/v1/recovery/records",
     "/v1/preflight",
@@ -392,6 +394,7 @@ impl AgentClient {
             } else { None }
         } else { None };
         if method == Method::GET && path == "/v1/preflight" { request=request.timeout(Duration::from_secs(45)); }
+        if method == Method::POST && path == "/v1/plugin-manager" { request=request.timeout(Duration::from_secs(930)); }
         if compatibility_mutation { request = request.timeout(Duration::from_secs(660)); }
         if offline_preview { request = request.timeout(OFFLINE_PREVIEW_TIMEOUT); }
         if patch_download {
@@ -498,10 +501,10 @@ pub fn validate_agent_request(
         | "/v1/preflight" => *method == Method::GET,
         "/v1/runtime/plan" => *method == Method::POST,
         "/v1/harness/startup" | "/v1/canary" | "/v1/recovery" | "/v1/recovery/records" | "/v1/harness" | "/v1/profiles" | "/v1/checkpoints" | "/v1/releases" | "/v1/updates"
-        | "/v1/diagnostics" | "/v1/config" | "/v1/maintenance" | "/v1/notifications" | "/v1/market" | "/v1/desktop/profile" | "/v1/dependencies" => {
+        | "/v1/diagnostics" | "/v1/config" | "/v1/maintenance" | "/v1/notifications" | "/v1/market" | "/v1/desktop/profile" | "/v1/dependencies" | "/v1/profile-repair" => {
             *method == Method::GET || *method == Method::POST
         }
-        "/v1/lifecycle" | "/v1/shutdown" => *method == Method::POST,
+        "/v1/plugin-manager" | "/v1/lifecycle" | "/v1/shutdown" => *method == Method::POST,
         _ => false,
     };
     if !method_allowed {

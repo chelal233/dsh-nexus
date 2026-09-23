@@ -18,7 +18,7 @@ use std::{
 use std::process::Child;
 
 use nexus_core::{
-    build_pnpm_args, build_runtime_child_env, resolve_runtime_command, validate_profile_name,
+    build_pnpm_args, checked_runtime_child_env, resolve_runtime_command, validate_profile_name,
     ConfigStore, NexusPaths,
 };
 use nexus_protocol::{NativeProfilePayload, ProfilePluginPayload};
@@ -376,6 +376,20 @@ pub(crate) fn native_profile(dsh_home: &Path, profile: &str) -> io::Result<Nativ
     })
 }
 
+/// Discover actual shipped capabilities, never a release-number allowlist.
+pub(crate) fn has_official_plugin_management(root: &Path) -> bool {
+    [("packages/boot/plugin-manager", "@deepseek-ai/dsh-plugin-manager"),
+     ("packages/client/ui-plugin-manager", "@deepseek-ai/dsh-client-ui-plugin-manager")]
+        .iter().all(|(relative, name)| {
+            let directory = root.join(relative);
+            let manifest = nexus_core::read_regular_file_bounded(&directory.join("package.json"), MAX_PROFILE_MANIFEST_BYTES)
+                .ok().flatten().and_then(|bytes| serde_json::from_slice::<serde_json::Value>(&bytes).ok());
+            manifest.is_some_and(|value| value["name"].as_str() == Some(name)
+                && (directory.join("src/index.ts").is_file() || directory.join("src/client/index.ts").is_file()
+                    || directory.join("lib/index.js").is_file() || directory.join("lib/client/index.js").is_file()))
+        })
+}
+
 const FIXED_BUNDLES: [&str; 2] = ["@deepseek-ai/dsh-base", "@deepseek-ai/dsh-web-app"];
 
 fn fixed_bundle(package: &str) -> bool { FIXED_BUNDLES.contains(&package) }
@@ -538,6 +552,11 @@ pub(crate) fn remove_profile_plugin(
     profile: &str,
     package: &str,
 ) -> io::Result<(PluginCommandOutcome, NativeProfilePayload)> {
+    if has_official_plugin_management(release_root) {
+        let value=official_plugins(paths,dsh_home,release_root,profile,"remove",Some(package))?;
+        let failed=value["result"]["application"]=="failed";
+        return Ok((PluginCommandOutcome{exit_code:Some(if failed {1} else {0}),stdout:value["result"].to_string(),stderr:String::new()},native_profile(dsh_home,profile)?));
+    }
     remove_profile_plugin_with_runner(
         paths,
         dsh_home,
@@ -575,14 +594,45 @@ pub(crate) fn install_market(paths: &NexusPaths, home: &Path, root: &Path, profi
     run_profile_plugin_command(paths, home, root, profile, "add", "dshmarket@1.52.0", &SystemPluginCommandRunner)
 }
 
+fn profile_operation_runtime(paths: &NexusPaths, bundled_root: Option<&Path>) -> io::Result<nexus_core::RuntimeConfig> {
+    let configured = ConfigStore::new(paths.clone()).load()?.runtime.unwrap_or_default();
+    Ok(crate::runtime::prefer_bundled_runtime(configured, bundled_root))
+}
+
+pub(crate) fn official_plugins(paths: &NexusPaths, home: &Path, root: &Path, profile: &str,
+    action: &str, package: Option<&str>) -> io::Result<serde_json::Value> {
+    let directory = profile_directory(home, profile)?;
+    if !has_official_plugin_management(root) { return Err(io::Error::other("Selected Harness does not provide official plugin management")); }
+    let runtime = profile_operation_runtime(paths, nexus_core::bundled_runtime_dir().as_deref())?;
+    let node = resolve_runtime_command(&runtime, "node")?.ok_or_else(|| io::Error::other("Node runtime is unavailable"))?;
+    let pnpm = resolve_runtime_command(&runtime, "pnpm")?.ok_or_else(|| io::Error::other("pnpm runtime is unavailable"))?;
+    let child_env: BTreeMap<OsString,OsString> = checked_runtime_child_env(&runtime, env::var_os("PATH").as_deref())?.into_iter().collect();
+    let package_env: BTreeMap<String,String> = child_env.iter().map(|(k,v)|(k.to_string_lossy().into_owned(),v.to_string_lossy().into_owned())).collect();
+    let work = paths.run_dir.join("official-plugin-manager");
+    let script = paths.run_dir.join("official-plugins.mjs");
+    nexus_core::write_private_bytes_atomic(&paths.root,&script,include_bytes!("official-plugins.mjs"))?;
+    let output_path=paths.run_dir.join(format!("official-plugin-result-{}.json",format!("{}-{}",std::process::id(),PLUGIN_RUN_SEQUENCE.fetch_add(1,Ordering::Relaxed))));
+    let input = serde_json::json!({"output":output_path,"root":root,"home":home,"profile":profile,"action":action,"package":package,"work":work,
+        "packageManager":{"command":pnpm.program,"args":pnpm.prefix_args.iter().map(|v|v.to_string_lossy().into_owned()).collect::<Vec<_>>(),"env":package_env}});
+    let mut args=node.prefix_args;
+    args.extend([nexus_core::node_script_argument(&script),OsString::from(input.to_string())]);
+    let mut child_env=child_env;
+    child_env.insert(OsString::from(DSH_HOME_ENV),home.as_os_str().to_owned());
+    if matches!(action, "enable" | "disable" | "remove" | "install") {
+        super::profile_repair::backup_configuration(paths, home, profile)?;
+    }
+    let output=SystemPluginCommandRunner.run(paths,&PluginCommandSpec{program:node.program,args,current_dir:directory,env:child_env})?;
+    if output.exit_code != Some(0) { return Err(io::Error::other(format!("Official plugin manager failed: {}",output.stderr))); }
+    let bytes=nexus_core::read_regular_file_bounded(&output_path,16 * 1024 * 1024);
+    let _=fs::remove_file(&output_path);
+    serde_json::from_slice(&bytes?.ok_or_else(||io::Error::other("Official plugin manager returned no result"))?).map_err(io::Error::other)
+}
+
 fn run_profile_plugin_command(paths: &NexusPaths, dsh_home: &Path, release_root: &Path,
     profile: &str, action: &str, package: &str, runner: &dyn PluginCommandRunner)
     -> io::Result<(PluginCommandOutcome, NativeProfilePayload)> {
     let profile_dir = profile_directory(dsh_home, profile)?;
-    let config = ConfigStore::new(paths.clone()).load()?;
-    let runtime = config
-        .runtime
-        .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "runtime is not configured"))?;
+    let runtime = profile_operation_runtime(paths, nexus_core::bundled_runtime_dir().as_deref())?;
     let node = resolve_runtime_command(&runtime, "node")?.ok_or_else(|| {
         io::Error::new(
             io::ErrorKind::NotFound,
@@ -600,7 +650,7 @@ fn run_profile_plugin_command(paths: &NexusPaths, dsh_home: &Path, release_root:
         OsString::from(package),
     ]);
     let mut child_env: BTreeMap<OsString, OsString> =
-        build_runtime_child_env(&runtime, env::var_os("PATH").as_deref())?
+        checked_runtime_child_env(&runtime, env::var_os("PATH").as_deref())?
             .into_iter()
             .collect();
     let preferences = nexus_core::load_harness_preferences(paths)?;
@@ -704,13 +754,7 @@ fn materialize_profile_with_timeout(
     timeout: Duration,
 ) -> io::Result<()> {
     let profile_dir = profile_directory(dsh_home, profile)?;
-    let config = ConfigStore::new(paths.clone()).load()?;
-    let runtime = config.runtime.ok_or_else(|| {
-        io::Error::new(
-            io::ErrorKind::NotFound,
-            "runtime is not configured; dependency materialization remains pending",
-        )
-    })?;
+    let runtime = profile_operation_runtime(paths, nexus_core::bundled_runtime_dir().as_deref())?;
     let command = resolve_runtime_command(&runtime, "pnpm")?.ok_or_else(|| {
         io::Error::new(
             io::ErrorKind::NotFound,
@@ -722,7 +766,7 @@ fn materialize_profile_with_timeout(
         &runtime,
         ["install".into(), "--frozen-lockfile".into()],
     ));
-    let child_env = build_runtime_child_env(&runtime, env::var_os("PATH").as_deref())?;
+    let child_env = checked_runtime_child_env(&runtime, env::var_os("PATH").as_deref())?;
     let mut process = Command::new(command.program);
     process
         .args(args)
@@ -1415,11 +1459,11 @@ mod tests {
             .write(&NexusConfigFile { external_harness: None,
                 runtime: Some(RuntimeConfig {
                     node: Some(RuntimePin {
-                        path: node,
+                        path: node.clone(),
                         ownership: RuntimeOwnership::System,
                     }),
-                    pnpm: None,
-                    git: None,
+                    pnpm: Some(RuntimePin { path: node.clone(), ownership: RuntimeOwnership::System }),
+                    git: Some(RuntimePin { path: node.clone(), ownership: RuntimeOwnership::System }),
                     source: RuntimeSource::Official,
                     mode: RuntimeInstallMode::Portable,
                 }),
@@ -1427,6 +1471,25 @@ mod tests {
             })
             .expect("runtime config writes");
         (root, paths, home, release)
+    }
+
+    #[test]
+    fn official_plugin_management_detects_artifacts_not_versions() {
+        let root = test_dir("official-plugin-manager");
+        assert!(!has_official_plugin_management(&root));
+        for (relative, name, entry) in [
+            ("packages/boot/plugin-manager", "@deepseek-ai/dsh-plugin-manager", "src/index.ts"),
+            ("packages/client/ui-plugin-manager", "@deepseek-ai/dsh-client-ui-plugin-manager", "src/client/index.ts")
+        ] {
+            let dir = root.join(relative);
+            fs::create_dir_all(dir.join(entry).parent().unwrap()).unwrap();
+            fs::write(dir.join("package.json"), serde_json::to_vec(&serde_json::json!({"name":name,"version":"future-version"})).unwrap()).unwrap();
+            fs::write(dir.join(entry), "// fixture").unwrap();
+        }
+        assert!(has_official_plugin_management(&root));
+        fs::write(root.join("packages/boot/plugin-manager/package.json"), r#"{"name":"unrelated"}"#).unwrap();
+        assert!(!has_official_plugin_management(&root));
+        fs::remove_dir_all(root).unwrap();
     }
 
     #[test]
@@ -1597,6 +1660,34 @@ mod tests {
     }
 
     #[test]
+    fn stopped_profile_operations_resolve_unpinned_bundled_node_and_pnpm() {
+        let (root, paths, _, _) = plugin_fixture();
+        let bundle = root.join("shipped/runtime");
+        let node = bundle.join(if cfg!(windows) { "node/node.exe" } else { "node/node" });
+        let pnpm = bundle.join("pnpm/bin/pnpm.cjs");
+        fs::create_dir_all(node.parent().unwrap()).unwrap();
+        fs::create_dir_all(pnpm.parent().unwrap()).unwrap();
+        fs::write(&node, "fixture").unwrap();
+        fs::write(&pnpm, "fixture").unwrap();
+        let store = ConfigStore::new(paths.clone());
+        let mut config = store.load().unwrap();
+        config.runtime = Some(RuntimeConfig::default());
+        store.write(&config).unwrap();
+        // Reproduces the original failure: default bundled configuration has no explicit Node pin.
+        assert!(resolve_runtime_command(config.runtime.as_ref().unwrap(), "node").unwrap().is_none());
+        let effective = profile_operation_runtime(&paths, Some(&bundle)).unwrap();
+        assert_eq!(resolve_runtime_command(&effective,"node").unwrap().unwrap().program,node);
+        assert_eq!(resolve_runtime_command(&effective,"pnpm").unwrap().unwrap().program,node);
+        assert_eq!(effective.pnpm.unwrap().path,pnpm);
+        config.runtime.as_mut().unwrap().node = Some(RuntimePin {path:root.join("missing-user-node"),ownership:RuntimeOwnership::System});
+        store.write(&config).unwrap();
+        let explicit = profile_operation_runtime(&paths,Some(&bundle)).unwrap();
+        assert_eq!(explicit.node.as_ref().unwrap().path,root.join("missing-user-node"));
+        assert_eq!(resolve_runtime_command(&explicit,"node").unwrap().unwrap().program,root.join("missing-user-node"));
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
     fn plugin_remove_runner_receives_fixed_argv_bound_env_and_preserves_failure() {
         let (root, paths, home, release) = plugin_fixture();
         let runner = FakePluginRunner {
@@ -1679,14 +1770,14 @@ fs.writeFileSync(path.join(process.cwd(), 'materialized.json'), JSON.stringify({
             .write(&NexusConfigFile { external_harness: None,
                 runtime: Some(RuntimeConfig {
                     node: Some(RuntimePin {
-                        path: node,
+                        path: node.clone(),
                         ownership: RuntimeOwnership::System,
                     }),
                     pnpm: Some(RuntimePin {
                         path: fake_pnpm,
                         ownership: RuntimeOwnership::System,
                     }),
-                    git: None,
+                    git: Some(RuntimePin { path: node.clone(), ownership: RuntimeOwnership::System }),
                     source: RuntimeSource::Official,
                     mode: RuntimeInstallMode::Portable,
                 }),

@@ -17,9 +17,9 @@ struct Request { operation: Operation, output: PathBuf }
 
 #[derive(Clone)]
 pub(crate) struct ExternalGit { pub program: PathBuf, pub prefix: Vec<OsString> }
-pub(crate) fn selected_external(runtime: &nexus_core::RuntimeConfig) -> Option<ExternalGit> {
-    nexus_core::resolve_runtime_command(runtime, "git").ok().flatten()
-        .map(|command| ExternalGit { program: command.program, prefix: command.prefix_args })
+pub(crate) fn selected_external(runtime: &nexus_core::RuntimeConfig) -> io::Result<Option<ExternalGit>> {
+    Ok(nexus_core::resolve_runtime_command(runtime, "git")?
+        .map(|command| ExternalGit { program: command.program, prefix: command.prefix_args }))
 }
 
 async fn external_run(operation: &Operation, external: &ExternalGit, directory: &Path, duration: Duration, cancellation: &CancellationToken) -> io::Result<serde_json::Value> {

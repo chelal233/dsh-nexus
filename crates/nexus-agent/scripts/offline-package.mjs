@@ -602,18 +602,29 @@ async function environmentShims(environment, slot, tools) {
 }
 
 export async function desktopRuntimeForExport(slot, runtime, fallback) {
-  const lock = path.join(slot, 'apps/desktop/scripts/primary-runtime-lock.json');
-  if (!fs.existsSync(lock)) return null; // Older Web-only releases remain portable.
+  const lock = ['scripts/primary-runtime/lock.json', 'apps/desktop/scripts/primary-runtime-lock.json']
+    .map(file => path.join(slot, file)).find(file => fs.existsSync(file));
+  if (!lock) return null; // Older Web-only releases remain portable.
+  const targetName = `${({ win32: 'win', darwin: 'mac', linux: 'linux' })[process.platform]}-${process.arch}`;
+  const buildPaths = path.join(slot, 'apps/desktop/scripts/desktop-build-paths.mjs');
+  if (fs.existsSync(buildPaths)) {
+    const declaration = /SUPPORTED_TARGETS\s*=\s*new Set\(\[([^\]]+)\]\)/.exec(await fsp.readFile(buildPaths, 'utf8'))?.[1];
+    if (!declaration || ![...declaration.matchAll(/['"]([^'"]+)['"]/g)].some(match => match[1] === targetName)) return null;
+  } else if (process.platform === 'linux') return null;
   const spec = await json(lock), target = spec.targets[`${({ win32: 'win', darwin: 'mac', linux: 'linux' })[process.platform]}-${process.arch}`];
   if (!target) return null; // Upstream has no Desktop for this platform; preserve Web portability.
-  const expected = await hash(lock);
   const app = path.join(slot, 'apps/desktop');
   const electron = await json(path.join(app, 'node_modules/electron/package.json'));
   const pnpm = await json(path.join(app, 'node_modules/pnpm/package.json'));
   for (const directory of [path.join(runtime, 'desktop'), fallback].filter(Boolean)) {
     if (!fs.existsSync(path.join(directory, 'manifest.json'))) continue;
     const manifest = await json(path.join(directory, 'manifest.json'));
-    if (manifest.lockSha256 !== expected || manifest.electronVersion !== electron.version || manifest.pnpmVersion !== pnpm.version) continue;
+    const bundledLock = path.join(directory, 'lock.json');
+    const { targets: sourceTargets, ...sourceCommon } = spec;
+    const { targets: bundledTargets, ...bundledCommon } = await json(bundledLock);
+    if (!isDeepStrictEqual(sourceCommon, bundledCommon) || !isDeepStrictEqual(sourceTargets[targetName], bundledTargets?.[targetName]) ||
+        manifest.electronVersion !== electron.version || manifest.pnpmVersion !== pnpm.version) continue;
+    const expected = manifest.lockSha256;
     if (![1, 2, 3].includes(manifest.schema) || manifest.platform !== process.platform || manifest.arch !== process.arch || !Array.isArray(manifest.files)) fail('Invalid Desktop offline runtime');
     const names = new Set();
     for (const entry of manifest.files) {
@@ -690,10 +701,16 @@ async function pack(job, tools) {
   job.contents = { profiles: [], configuration: false, plugins: false, credentials: false, ...job.contents, runtime: base, environment: job.contents?.environment ?? job.contents?.configuration ?? false, sessions: job.contents?.sessions ?? false };
   const sourceSlot = base ? await measureSource(job.slot, 'slot') : { bytes: 0, entries: 0 }, sourceRuntime = base ? await measureSource(job.runtime, 'runtime') : { bytes: 0, entries: 0 };
   const desktopSize = extraDesktop ? await measureSource(extraDesktop, 'runtime') : { bytes: 0, entries: 0 };
-  const sourceEntries = sourceSlot.entries + sourceRuntime.entries + desktopSize.entries;
+  // Always carry the distributable Git toolchain, including when exporting
+  // an older imported runtime that predates bundled Git. Explicit host paths
+  // are machine-local and are not copied into a portable archive.
+  const gitSource = base ? job.git_runtime : null;
+  if (base && (!gitSource || !fs.existsSync(path.join(gitSource, windows ? 'cmd/git.exe' : 'bin/git')))) fail('Complete bundled Git is required for offline export');
+  const gitSize = gitSource ? await measureSource(gitSource, 'runtime') : { bytes: 0, entries: 0 };
+  const sourceEntries = sourceSlot.entries + sourceRuntime.entries + desktopSize.entries + gitSize.entries;
   // Reserve bounded manifest plus shim/path normalization growth. The archive
   // budget allows tar headers, long paths and incompressible gzip overhead.
-  const stageBytes = sourceSlot.bytes + sourceRuntime.bytes + desktopSize.bytes + (host ? archiveBudget(host.bytes, host.entries) : 0) + sourceEntries * 8192 + MANIFEST_LIMIT;
+  const stageBytes = sourceSlot.bytes + sourceRuntime.bytes + desktopSize.bytes + gitSize.bytes + (host ? archiveBudget(host.bytes, host.entries) : 0) + sourceEntries * 8192 + MANIFEST_LIMIT;
   await ensureSpaceBudget([
     { path: job.work, bytes: stageBytes, entries: sourceEntries + 1 },
     { path: path.dirname(job.archive), bytes: archiveBudget(stageBytes, sourceEntries), entries: 1 },
@@ -702,6 +719,11 @@ async function pack(job, tools) {
   const slot = path.join(stage, 'slot'), runtime = path.join(stage, 'runtime'), links = [];
   process.stderr.write('Offline: copying slot and runtime\n');
   if (base) { await walkCopy(job.slot, slot, 'slot', links); await walkCopy(job.runtime, runtime, 'runtime', links); }
+  if (gitSource) {
+    const target = path.join(runtime, 'git');
+    await fsp.rm(target, { recursive: true, force: true });
+    await walkCopy(gitSource, target, 'runtime/git', links);
+  }
   if (extraDesktop) {
     const target = path.resolve(runtime, 'desktop');
     if (!within(stage, target)) fail('Invalid Desktop staging directory');

@@ -246,3 +246,9 @@ test("recovery entry clears Harness credentials but leaving never starts it", ()
   assert.equal(invalidatesHarnessCredentials("/v1/recovery", "enter"), true);
   assert.equal(invalidatesHarnessCredentials("/v1/recovery", "leave"), false);
 });
+
+test("official plugin state follows bundles, not stale Nexus isolation records",()=>{
+ const profiles={api_version:"v1",official_plugin_management:true,active_profile:"web",disabled_plugins:[],manifests:[{name:"web",bundles:[],plugins:[{package:"dshmarket"}]}]};
+ assert.equal(pluginIsolationChoice(profiles,"web","dshmarket",false).command?.action,"plugin_enable");
+ assert.equal(pluginIsolationChoice({...profiles,disabled_plugins:["dshmarket"],manifests:[{name:"web",bundles:["dshmarket"],plugins:[{package:"dshmarket"}]}]},"web","dshmarket",false).command?.action,"plugin_disable");
+});

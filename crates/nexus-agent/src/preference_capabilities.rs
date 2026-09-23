@@ -3,7 +3,9 @@ use std::{fs, io::{self, Read}, path::Path};
 use nexus_core::{HarnessProfileCapabilities, HarnessLaunchSpec};
 use nexus_protocol::HarnessPreferencesPayload;
 
-pub(crate) const VERIFIED_VERSION: &str = "0.1.2-rc.1";
+pub(crate) const ADAPTER_VERSION: &str = "artifact-settings-v2";
+#[cfg(test)]
+const VERIFIED_VERSION: &str = "0.1.2-rc.1";
 
 #[derive(Debug, Clone, serde::Serialize)]
 pub(crate) struct PreferenceCapabilityEvidence {
@@ -24,8 +26,42 @@ pub(crate) fn resolve(root: Option<&Path>, home: &Path, profile: &str, preferenc
     if preferences == HarnessPreferencesPayload::default() { return Ok(HarnessProfileCapabilities::default()); }
     let root = root.ok_or_else(|| unsupported("Harness settings are unverified without an installed release. Clear explicit overrides to use the original configuration."))?;
     let evidence = inspect(root, home, profile)?;
+    {
+        for (enabled, file, token, name) in [
+            (preferences.home.is_some(), "packages/util/home-paths/src/index.ts", "env[DSH_HOME_ENV]", "home"),
+            (preferences.deepseek_base_url.is_some(), "packages/llm/llm-deepseek/src/config.ts", "DEEPSEEK_BASE_URL", "deepseek_base_url"),
+            (preferences.search_base_url.is_some(), "packages/web/web-search-deepseek/src/index.ts", "DEEPSEEK_SEARCH_BASE_URL", "search_base_url"),
+            (preferences.search_provider.is_some(), "packages/web/web/src/index.ts", "process.env.DSH_WEB_SEARCH_PROVIDER", "search_provider"),
+            (preferences.fetch_provider.is_some(), "packages/web/web/src/index.ts", "process.env.DSH_WEB_FETCH_PROVIDER", "fetch_provider"),
+            (preferences.agents_home.is_some(), "packages/skill/skill-filesystem/src/index.ts", "process.env.DSH_AGENTS_HOME", "agents_home"),
+            (preferences.bundled_skill_dir.is_some(), "packages/skill/skill-filesystem/src/index.ts", "process.env.DSH_BUNDLED_SKILL_DIR", "bundled_skill_dir"),
+            (preferences.permission_mode.is_some(), "packages/bundle/base/cordis.patch.yml", "process.env.DSH_PERMISSION_MODE", "permission_mode"),
+            (preferences.telemetry_disabled.is_some(), "packages/boot/app-boot/src/profile-context.ts", "resolveTelemetryPatch", "telemetry_disabled"),
+        ] {
+            if enabled && !artifact_contains(root, file, token) {
+                return Err(unsupported(format!("Harness setting {name} is unverified in this artifact; clear it to inherit upstream behavior.")));
+            }
+        }
+    }
     evidence.capabilities.validate_preferences(&preferences)?;
     Ok(evidence.capabilities)
+}
+
+fn artifact_contains(root: &Path, relative: &str, token: &str) -> bool {
+    nexus_core::read_regular_file_bounded(&root.join(relative), 512 * 1024)
+        .ok().flatten().and_then(|bytes| String::from_utf8(bytes).ok())
+        .is_some_and(|text| text.contains(token))
+}
+
+// Verify the CLI-to-service contract rather than extending a release allowlist.
+fn web_cli_capability(root: &Path) -> bool {
+    let read = |relative: &str| nexus_core::read_regular_file_bounded(&root.join(relative), 512 * 1024)
+        .ok().flatten().and_then(|bytes| String::from_utf8(bytes).ok()).unwrap_or_default();
+    let startup = read("packages/bundle/web-app/src/startup.ts");
+    let patch = read("packages/bundle/web-app/cordis.patch.yml");
+    startup.contains(".option('--port <port>'") && startup.contains("port: Number(options.port)")
+        && startup.contains("options.port !== undefined") && startup.contains("parseCmdline(ctx, program)")
+        && startup.contains(".option('--no-open'") && patch.contains("ctx.webStartup.port ?? 3080")
 }
 
 /// Exposes verified version and original profile identity for configuration explanations.
@@ -39,16 +75,18 @@ pub(crate) fn inspect(root: &Path, home: &Path, profile: &str) -> io::Result<Pre
     fs::File::open(&manifest_path)?.take(1024 * 1024 + 1).read_to_end(&mut bytes)?;
     if bytes.len() > 1024 * 1024 { return Err(unsupported("Harness version manifest is too large")); }
     let manifest: serde_json::Value = serde_json::from_slice(&bytes).map_err(io::Error::other)?;
+    let version = manifest.get("version").and_then(|v| v.as_str()).unwrap_or("");
+    let web_cli_supported = web_cli_capability(root);
     if manifest.get("name").and_then(|v| v.as_str()) != Some("@deepseek-ai/dsh-root")
-        || manifest.get("version").and_then(|v| v.as_str()) != Some(VERIFIED_VERSION) {
-        return Err(unsupported("Explicit Harness settings are unverified for this version. Clear overrides to inherit the original configuration; Nexus currently verifies 0.1.2-rc.1."));
+        || version.is_empty() {
+        return Err(unsupported("Harness settings require a valid managed Harness artifact identity."));
     }
     let bundles = match crate::dsh::native_profile(home, profile) {
         Ok(inventory) => {
             for plugin in &inventory.plugins {
                 if inventory.bundles.contains(&plugin.package) && matches!(plugin.package.as_str(),
                     "@deepseek-ai/dsh-web-app" | "@deepseek-ai/dsh-headless" | "@deepseek-ai/dsh-sdk-app" | "@deepseek-ai/dsh-sdk-minimal")
-                    && plugin.version.as_deref().is_some_and(|version| version != VERIFIED_VERSION) {
+                    && plugin.version.as_deref().is_some_and(|version| version != manifest["version"].as_str().unwrap_or("")) {
                     return Err(unsupported(format!("Explicit settings are unverified for the installed {} bundle version", plugin.package)));
                 }
             }
@@ -65,8 +103,22 @@ pub(crate) fn inspect(root: &Path, home: &Path, profile: &str) -> io::Result<Pre
         },
         Err(error) => return Err(error),
     };
-    let capabilities = HarnessProfileCapabilities::from_bundles(&bundles);
-    Ok(PreferenceCapabilityEvidence { version: VERIFIED_VERSION.to_owned(), profile: profile.to_owned(), bundles, capabilities })
+    let mut capabilities = HarnessProfileCapabilities::from_bundles(&bundles);
+    {
+        capabilities.tools_mode &= bundles.iter().any(|bundle| {
+            let file = match bundle.as_str() {
+                "@deepseek-ai/dsh-web-app" => "packages/bundle/web-app/cordis.patch.yml",
+                "@deepseek-ai/dsh-headless" => "packages/bundle/headless/cordis.patch.yml",
+                _ => return false,
+            };
+            artifact_contains(root, file, "process.env.DSH_TOOLS_MODE")
+        });
+        capabilities.sdk_minimal &= artifact_contains(root, "packages/bundle/sdk-minimal/cordis.patch.yml", "process.env.DSH_CONTEXT_WINDOW")
+            && artifact_contains(root, "packages/bundle/sdk-minimal/cordis.patch.yml", "process.env.DSH_SYSTEM_PROMPT");
+        capabilities.sdk_app &= artifact_contains(root, "packages/bundle/sdk-app/cordis.patch.yml", "process.env.DSH_MAX_TOKENS_AS_SUCCESS");
+        capabilities.web &= web_cli_supported;
+    }
+    Ok(PreferenceCapabilityEvidence { version: version.to_owned(), profile: profile.to_owned(), bundles, capabilities })
 }
 
 pub(crate) fn validate_launch(spec: &HarnessLaunchSpec, p: &HarnessPreferencesPayload, root: Option<&Path>) -> io::Result<()> {
@@ -93,6 +145,18 @@ pub(crate) fn validate_launch(spec: &HarnessLaunchSpec, p: &HarnessPreferencesPa
 }
 
 #[cfg(test)]
+pub(crate) fn write_web_contract_fixture(root: &Path) {
+    for (file, text) in [
+        ("packages/bundle/web-app/src/startup.ts", ".option('--port <port>' .option('--no-open' options.port !== undefined port: Number(options.port) parseCmdline(ctx, program)"),
+        ("packages/bundle/web-app/cordis.patch.yml", "ctx.webStartup.port ?? 3080 process.env.DSH_TOOLS_MODE"),
+        ("packages/util/home-paths/src/index.ts", "env[DSH_HOME_ENV]"),
+        ("packages/boot/app-boot/src/profile-context.ts", "resolveTelemetryPatch"),
+    ] {
+        let path = root.join(file); fs::create_dir_all(path.parent().unwrap()).unwrap(); fs::write(path, text).unwrap();
+    }
+}
+
+#[cfg(test)]
 mod tests {
     use super::*;
     struct Fixture(std::path::PathBuf);
@@ -101,6 +165,16 @@ mod tests {
             let root = std::env::temp_dir().join(format!("nexus-capabilities-{}-{}", std::process::id(), nexus_core::unix_time_nanos_for_update()));
             fs::create_dir_all(root.join("slot")).unwrap();
             fs::write(root.join("slot/package.json"), r#"{"name":"@deepseek-ai/dsh-root","version":"0.1.2-rc.1"}"#).unwrap();
+            for (file, text) in [
+                ("packages/bundle/web-app/src/startup.ts", ".option('--port <port>' .option('--no-open' options.port !== undefined port: Number(options.port) parseCmdline(ctx, program)"),
+                ("packages/bundle/web-app/cordis.patch.yml", "ctx.webStartup.port ?? 3080 process.env.DSH_TOOLS_MODE"),
+                ("packages/bundle/headless/cordis.patch.yml", "process.env.DSH_TOOLS_MODE"),
+                ("packages/bundle/sdk-minimal/cordis.patch.yml", "process.env.DSH_CONTEXT_WINDOW process.env.DSH_SYSTEM_PROMPT"),
+                ("packages/bundle/sdk-app/cordis.patch.yml", "process.env.DSH_MAX_TOKENS_AS_SUCCESS"),
+            ] {
+                let file = root.join("slot").join(file);
+                fs::create_dir_all(file.parent().unwrap()).unwrap(); fs::write(file, text).unwrap();
+            }
             Self(root)
         }
         fn profile(&self, name: &str, bundle: &str) {
@@ -149,6 +223,30 @@ mod tests {
         assert!(f.resolve("web", &HarnessPreferencesPayload::default()).is_ok());
         assert!(f.resolve("web", &HarnessPreferencesPayload { home: Some(" ".into()), ..Default::default() }).is_ok());
         assert!(f.resolve("web", &HarnessPreferencesPayload { telemetry_disabled: Some(false), ..Default::default() }).unwrap_err().to_string().contains("unverified"));
+        fs::remove_file(f.0.join("slot/packages/bundle/web-app/src/startup.ts")).unwrap();
+        assert!(f.resolve("web", &HarnessPreferencesPayload { port: Some(0), ..Default::default() }).is_err());
+    }
+
+    #[test]
+    fn web_port_zero_uses_artifact_capabilities_on_new_releases() {
+        let f = Fixture::new();
+        let bundle = f.0.join("slot/packages/bundle/web-app");
+        fs::create_dir_all(bundle.join("src")).unwrap();
+        fs::write(bundle.join("src/startup.ts"), ".option('--port <port>' .option('--no-open' options.port !== undefined port: Number(options.port) parseCmdline(ctx, program)").unwrap();
+        fs::write(bundle.join("cordis.patch.yml"), "port: !!js ctx.webStartup.port ?? 3080").unwrap();
+        for version in ["0.1.6-alpha.2", "0.1.7-alpha.1", "9.0.0"] {
+            fs::write(f.0.join("slot/package.json"), format!(r#"{{"name":"@deepseek-ai/dsh-root","version":"{version}"}}"#)).unwrap();
+            let preferences = HarnessPreferencesPayload { port: Some(0), open_browser: Some(false), ..Default::default() };
+            let capabilities = f.resolve("web", &preferences).unwrap();
+            let mut spec = HarnessLaunchSpec::new("node".into());
+            spec.mode = nexus_protocol::HarnessLaunchMode::Node;
+            spec.args = vec!["{release_root}/apps/cli/lib/bin.js", "--profile", "web", "--port", "3851"].into_iter().map(str::to_owned).collect();
+            nexus_core::apply_harness_preferences(&mut spec, &preferences, &capabilities);
+            assert!(spec.args.windows(2).any(|args| args == ["--port", "0"]));
+            assert!(!spec.args.contains(&"3851".to_owned()));
+            assert!(spec.readiness_url.is_none());
+        }
+        fs::write(bundle.join("cordis.patch.yml"), "port: 3080").unwrap();
         assert!(f.resolve("web", &HarnessPreferencesPayload { port: Some(0), ..Default::default() }).is_err());
     }
 
@@ -162,6 +260,36 @@ mod tests {
         assert!(f.resolve("sdk-work", &p).is_err());
         let p = HarnessPreferencesPayload { max_tokens_as_success: Some(false), ..Default::default() };
         assert_eq!(nexus_core::harness_preferences_environment(&p, &f.resolve("sdk-work", &p).unwrap()), vec![("DSH_MAX_TOKENS_AS_SUCCESS".into(), "false".into())]);
+    }
+
+    #[test]
+    #[ignore = "requires NEXUS_SETTINGS_AUDIT_ROOT pointing to an unpacked official artifact"]
+    fn official_artifact_settings_contract() {
+        let root = std::path::PathBuf::from(std::env::var_os("NEXUS_SETTINGS_AUDIT_ROOT").expect("artifact root"));
+        let f = Fixture::new();
+        let common = HarnessPreferencesPayload {
+            home: Some(f.0.join("home").display().to_string()),
+            deepseek_base_url: Some("https://model.example".into()), search_base_url: Some("https://search.example".into()),
+            search_provider: Some("test-search".into()), fetch_provider: Some("test-fetch".into()),
+            agents_home: Some(f.0.join("agents").display().to_string()), bundled_skill_dir: Some(f.0.join("skills").display().to_string()),
+            permission_mode: Some("read-only".into()), telemetry_disabled: Some(false), ..Default::default()
+        };
+        for profile in ["web", "headless", "sdk", "sdk-minimal"] {
+            let mut p = common.clone();
+            match profile {
+                "web" => { p.port = Some(0); p.open_browser = Some(false); p.tools_mode = Some("ptc".into()); },
+                "headless" => p.tools_mode = Some("native".into()),
+                "sdk" => p.max_tokens_as_success = Some(false),
+                _ => { p.context_window = Some(12345); p.system_prompt = Some("audit".into()); },
+            }
+            let caps = resolve(Some(&root), &f.0.join("home"), profile, &p).unwrap();
+            let env = nexus_core::harness_preferences_environment(&p, &caps);
+            assert!(env.iter().any(|(key, value)| key == "DSH_TELEMETRY_DISABLED" && value.is_empty()));
+            assert!(env.iter().any(|(key, value)| key == "DSH_PERMISSION_MODE" && value == "read-only"));
+        }
+        assert!(resolve(Some(&root), &f.0.join("home"), "web", &HarnessPreferencesPayload {
+            context_window: Some(12345), ..Default::default()
+        }).is_err(), "SDK-only settings must not be silently accepted for Web");
     }
 
     #[test]

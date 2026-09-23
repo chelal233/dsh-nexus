@@ -2,6 +2,28 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { createHash } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
+import { isDeepStrictEqual } from 'node:util';
+
+export function desktopRuntimeLock(root) {
+  return ['scripts/primary-runtime/lock.json', 'apps/desktop/scripts/primary-runtime-lock.json']
+    .map(file => path.join(root, file)).find(file => fs.existsSync(file));
+}
+
+// Other platform additions and release labels do not change this target's payload.
+// Keep every non-target field and the selected target exact, including asset hashes.
+export function desktopLocksCompatible(expected, bundled, platform = process.platform, arch = process.arch) {
+  const target = `${({ win32: 'win', darwin: 'mac', linux: 'linux' })[platform]}-${arch}`;
+  const { targets: expectedTargets, ...expectedCommon } = expected;
+  const { targets: bundledTargets, ...bundledCommon } = bundled;
+  return !!expectedTargets?.[target] && !!bundledTargets?.[target] &&
+    isDeepStrictEqual(expectedCommon, bundledCommon) && isDeepStrictEqual(expectedTargets[target], bundledTargets[target]);
+}
+
+export function desktopKitMatchesSource(root, directory) {
+  const lock = desktopRuntimeLock(root);
+  return !!lock && desktopLocksCompatible(JSON.parse(fs.readFileSync(lock, 'utf8')),
+    JSON.parse(fs.readFileSync(path.join(directory, 'lock.json'), 'utf8')));
+}
 
 export const digest = file => createHash('sha256').update(fs.readFileSync(file)).digest('hex');
 export function verifyDesktopKit(directory, { platform = process.platform, arch = process.arch } = {}) {

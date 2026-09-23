@@ -40,3 +40,11 @@ Windows x64、macOS x64/ARM64 携带受支持的官方 Desktop 资源；Windows 
 `prepare:notices` 当前扫描根 Cargo 元数据、pnpm 生产依赖、可找到的许可文件、vendored libgit2 顶层声明，以及内嵌 semver 许可；它**不会独立展开并审查**每个 Python wheel、CPython 发行包、office-skills 资源、OpenSSL 嵌套源码声明或 Electron 宿主备份。`reviewRequired: false` 仅描述已扫描条目，不代表整个安装包已完成核对。
 
 增加运行时时，应结合 `lock.json`、实际运行时归档和组件原文逐项检查，记录缺失材料，必要时修正打包。此次文档更新说明实际范围，不代表完成法律审查，也不改变已经发布的 v0.1.8 二进制。
+
+## 完整 Git 命令行（开发中）
+
+新增 `runtime/git` 使用 GitHub Desktop 的 dugite-native v2.53.0-4 便携发行，固定每个平台归档的 SHA-256。完整保留 Git、辅助程序、证书与归档内许可文件；Windows Git 原文在 `runtime/git/LICENSE.txt`，其他组件材料保留在原目录。Git 的 GPLv2 许可独立于 Nexus MIT。上游构建脚本与来源位于 https://github.com/desktop/dugite-native/tree/v2.53.0-4 。
+
+发布前仍需逐平台核对对应源码提供与嵌套组件分发义务，自动清单标为 `reviewRequired`。当前 Windows 本地运行测试不代表其余平台安装验收完成。
+
+公开分发核查已于 2026-09-23 完成，结论为材料不足、暂不放行；具体证据与整改条件见 [Git 分发核查](docs/audits/git-redistribution-2026-09-23/README.md)。`reviewRequired` 保留，不代表 CI 已自动阻断发布。

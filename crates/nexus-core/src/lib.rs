@@ -392,6 +392,38 @@ impl RuntimePin {
     }
 }
 
+/// Explicit pins win; otherwise select the complete bundled toolchain.
+pub fn select_runtime(mut runtime: RuntimeConfig, root: Option<&Path>) -> RuntimeConfig {
+    if let Some(root) = root {
+        for (pin, relative) in [
+            (&mut runtime.node, if cfg!(windows) { "node/node.exe" } else { "node/node" }),
+            (&mut runtime.pnpm, "pnpm/bin/pnpm.cjs"),
+            (&mut runtime.git, if cfg!(windows) { "git/cmd/git.exe" } else { "git/bin/git" }),
+        ] {
+            if let Some(pin) = pin.as_mut().filter(|pin| pin.ownership == RuntimeOwnership::Bundled) {
+                // Rebind even when the bundle is damaged: report the missing
+                // current file instead of using an old install or PATH fallback.
+                pin.path = root.join(relative);
+            }
+        }
+    }
+    if let Some(root) = root {
+        runtime.node.get_or_insert_with(|| RuntimePin {
+            path: root.join("node").join(if cfg!(windows) { "node.exe" } else { "node" }),
+            ownership: RuntimeOwnership::Bundled,
+        });
+        runtime.pnpm.get_or_insert_with(|| RuntimePin {
+            path: root.join("pnpm/bin/pnpm.cjs"),
+            ownership: RuntimeOwnership::Bundled,
+        });
+        runtime.git.get_or_insert_with(|| RuntimePin {
+            path: root.join(if cfg!(windows) { "git/cmd/git.exe" } else { "git/bin/git" }),
+            ownership: RuntimeOwnership::Bundled,
+        });
+    }
+    runtime
+}
+
 /// Build the PATH value for a Nexus child without changing process or system
 /// environment. Consumers execute pinned programs directly and use this PATH
 /// only for their child processes and transitive executable lookup.
@@ -415,6 +447,38 @@ pub fn build_runtime_child_env(
             directories.push(directory.to_owned());
         }
     }
+    let mut extra = Vec::new();
+    if let Some(node) = &config.node {
+        extra.push((OsString::from("NEXUS_RUNTIME_NODE"), node.path.as_os_str().to_owned()));
+    }
+    if let Some(pin) = config.git.as_ref().filter(|pin| pin.ownership != RuntimeOwnership::System) {
+        // The portable distribution needs its own helpers even when a host Git
+        // has populated GIT_EXEC_PATH. Explicit external pins remain untouched.
+        if let Some(root) = pin.path.parent().and_then(Path::parent).filter(|root| root.file_name().is_some_and(|name| name == "git")) {
+            #[cfg(windows)]
+            let platform_root = root.join(if cfg!(target_arch = "aarch64") { "clangarm64" } else { "mingw64" });
+            #[cfg(not(windows))]
+            let platform_root = root.to_path_buf();
+            extra.push((OsString::from("GIT_EXEC_PATH"), platform_root.join("libexec/git-core").into_os_string()));
+            #[cfg(windows)]
+            {
+                directories.push(platform_root.join("bin"));
+                directories.push(root.join("usr/bin"));
+            }
+            #[cfg(not(windows))]
+            {
+                extra.push((OsString::from("GIT_CONFIG_SYSTEM"), root.join("etc/gitconfig").into_os_string()));
+                extra.push((OsString::from("GIT_TEMPLATE_DIR"), root.join("share/git-core/templates").into_os_string()));
+            }
+            #[cfg(target_os = "linux")]
+            {
+                extra.push((OsString::from("PREFIX"), root.as_os_str().to_owned()));
+                if env::var_os("GIT_SSL_CAINFO").is_none() {
+                    extra.push((OsString::from("GIT_SSL_CAINFO"), root.join("ssl/cacert.pem").into_os_string()));
+                }
+            }
+        }
+    }
     if let Some(ambient_path) = ambient_path {
         for directory in env::split_paths(ambient_path) {
             if !directories.iter().any(|existing| existing == &directory) {
@@ -431,7 +495,21 @@ pub fn build_runtime_child_env(
             format!("runtime child PATH cannot be encoded: {error}"),
         )
     })?;
-    Ok(vec![(OsString::from("PATH"), path)])
+    extra.insert(0, (OsString::from("PATH"), path));
+    Ok(extra)
+}
+
+/// Refuse a damaged selection before children can discover another tool on PATH.
+/// Observation uses build_runtime_child_env so it can report each missing tool separately.
+pub fn checked_runtime_child_env(config: &RuntimeConfig, ambient_path: Option<&OsStr>) -> io::Result<Vec<(OsString, OsString)>> {
+    for name in ["node", "pnpm", "git"] {
+        if let Some(pin) = config.pin(name) {
+            if !pin.path.is_file() {
+                return Err(io::Error::new(io::ErrorKind::NotFound, format!("Selected {name} runtime is unavailable: {}", pin.path.display())));
+            }
+        }
+    }
+    build_runtime_child_env(config, ambient_path)
 }
 
 /// Process description derived from the single configured runtime pin set.
@@ -5185,6 +5263,19 @@ mod tests {
             ..RuntimeConfig::default()
         };
         assert!(invalid.validate().is_err());
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn damaged_selected_tool_does_not_fall_through_to_ambient_path() {
+        let root = unique_test_root("runtime-no-fallback");
+        let configured = RuntimeConfig {
+            git: Some(RuntimePin { path: root.join("missing/git.exe"), ownership: RuntimeOwnership::System }),
+            ..RuntimeConfig::default()
+        };
+        let error = super::checked_runtime_child_env(&configured, std::env::var_os("PATH").as_deref()).unwrap_err();
+        assert_eq!(error.kind(), std::io::ErrorKind::NotFound);
+        assert!(error.to_string().contains("Selected git runtime"));
         let _ = fs::remove_dir_all(root);
     }
 

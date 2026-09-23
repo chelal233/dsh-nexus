@@ -98,6 +98,7 @@ pub(crate) fn switch_test_state(label: &str) -> AppState {
         data_root_id: data_root_identity(&paths).expect("data-root identity reads"),
         instance_id: "switch-test-agent".to_owned(),
         crash_capture_run: Arc::new(Mutex::new(super::CrashCapture::default())),
+        timeout_capture_run: Arc::new(Mutex::new(super::CrashCapture::default())),
         canary: Arc::new(Mutex::new(None)),
         harness_logs: Arc::new(Mutex::new(
             nexus_launcher_core::HarnessLogObserver::default(),

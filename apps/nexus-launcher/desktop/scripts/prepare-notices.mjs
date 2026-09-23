@@ -54,6 +54,12 @@ for (const [id, pkg] of [...packages].sort(([a], [b]) => a.localeCompare(b))) {
 }
 await copyFile(path.join(root, 'crates/nexus-agent/src/vendor/semver.LICENSE'), path.join(output, 'checker-semver-LICENSE.txt'));
 inventory.push({ name: 'checker/node-semver', version: '7.7.4', license: 'ISC', source: 'https://github.com/npm/node-semver', text: 'checker-semver-LICENSE.txt', reviewRequired: false });
+const gitRuntime = path.join(app, 'desktop/resources/runtime/git');
+const runtimeManifest = JSON.parse(await readFile(path.join(app, 'desktop/resources/runtime/manifest.json'), 'utf8'));
+await copyFile(path.join(gitRuntime, 'NEXUS-Git-COPYING.txt'), path.join(output, 'bundled-git-LICENSE.txt'));
+inventory.push({ name: 'Git (dugite-native)', version: runtimeManifest.git.version, license: 'GPL-2.0-only',
+  source: `https://github.com/desktop/dugite-native/releases/tag/${runtimeManifest.git.release}`,
+  text: 'bundled-git-LICENSE.txt', reviewRequired: true });
 await copyFile(path.join(root, 'LICENSE'), path.join(output, 'Nexus-LICENSE.txt'));
 await copyFile(path.join(root, 'THIRD_PARTY_NOTICES.md'), path.join(output, 'README.md'));
 await writeFile(path.join(output, 'components.json'), JSON.stringify(inventory, null, 2) + '\n');

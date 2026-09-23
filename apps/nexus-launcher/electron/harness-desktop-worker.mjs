@@ -3,7 +3,7 @@ import path from 'node:path';
 import { spawn } from 'node:child_process';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { desktopCapability } from './harness-desktop.mjs';
-import { digest, legacyElectronEntry, portableHostEntry } from './desktop-runtime.mjs';
+import { desktopKitMatchesSource, legacyElectronEntry, portableHostEntry } from './desktop-runtime.mjs';
 import { stopDesktopChild } from './desktop-process.mjs';
 import { desktopSourceView } from './desktop-paths.mjs';
 import { checkDesktopProfile, renameDesktopState } from './desktop-startup-audit.mjs';
@@ -82,7 +82,7 @@ try {
   const electronVersion = JSON.parse(fs.readFileSync(path.join(app, 'node_modules/electron/package.json'), 'utf8')).version;
   const shared = recipe.electronVersion === electronVersion;
   const portable = !shared && kit.schema === 3 && /^[a-f0-9]{64}$/.test(kit.hostArchiveSha256 ?? '');
-  if (kit.electronVersion !== electronVersion || (!shared && kit.schema === 3 && !portable) || kit.lockSha256 !== digest(path.join(app, 'scripts/primary-runtime-lock.json'))) throw new Error('desktop_runtime_incompatible');
+  if (kit.electronVersion !== electronVersion || (!shared && kit.schema === 3 && !portable) || !desktopKitMatchesSource(recipe.source, recipe.kit)) throw new Error('desktop_runtime_incompatible');
   report({ detail: '' }); tail = '';
   await run(process.execPath, ['--import', pathToFileURL(path.join(recipe.source, 'node_modules/tsx/dist/loader.mjs')).href,
     fileURLToPath(new URL('./prepare-harness-desktop.mjs', import.meta.url)), recipe.source, recipe.kit, path.join(recipe.userData, 'runtime'), ...(shared ? [recipe.electronNodeVersion] : portable ? [kit.electronNodeVersion, 'portable-host'] : [])]);

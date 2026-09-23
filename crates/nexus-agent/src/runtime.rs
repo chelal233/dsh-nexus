@@ -386,30 +386,8 @@ async fn observe_runtimes_with_selection_budget(
 /// External pins are authoritative. Bundled pins follow the current installation.
 /// An installed bundle is the default set,
 /// including when a damaged bundle must be reported instead of hidden by PATH.
-fn prefer_bundled_runtime(mut runtime: RuntimeConfig, root: Option<&Path>) -> RuntimeConfig {
-    if let Some(root) = root {
-        for (pin, relative) in [
-            (&mut runtime.node, if cfg!(windows) { "node/node.exe" } else { "node/node" }),
-            (&mut runtime.pnpm, "pnpm/bin/pnpm.cjs"),
-        ] {
-            if let Some(pin) = pin.as_mut().filter(|pin| pin.ownership == RuntimeOwnership::Bundled) {
-                // Rebind even when the bundle is damaged: report the missing
-                // current file instead of using an old install or PATH fallback.
-                pin.path = root.join(relative);
-            }
-        }
-    }
-    if let Some(root) = root.filter(|root| root.is_dir()) {
-        runtime.node.get_or_insert_with(|| nexus_core::RuntimePin {
-            path: root.join("node").join(if cfg!(windows) { "node.exe" } else { "node" }),
-            ownership: RuntimeOwnership::Bundled,
-        });
-        runtime.pnpm.get_or_insert_with(|| nexus_core::RuntimePin {
-            path: root.join("pnpm/bin/pnpm.cjs"),
-            ownership: RuntimeOwnership::Bundled,
-        });
-    }
-    runtime
+pub(crate) fn prefer_bundled_runtime(runtime: RuntimeConfig, root: Option<&Path>) -> RuntimeConfig {
+    nexus_core::select_runtime(runtime, root)
 }
 
 /// Use the same effective Node and transitive PATH for observation and spawn.
@@ -547,6 +525,9 @@ async fn observe_selected_tool_until(
     if runtime.as_ref().and_then(|runtime| runtime.pin(name)).is_some() {
         observe_configured_pin_until(name, runtime.expect("pin implies config"), config, deadline, budget)
             .await
+    } else if runtime.is_some() {
+        // A configured selection never implicitly searches the host PATH.
+        unavailable_status(name, None)
     } else {
         observe_tool_until(name, config, deadline, budget).await
     }
@@ -1880,6 +1861,7 @@ mod tests {
         let selected = prefer_bundled_runtime(RuntimeConfig::default(), Some(&root));
         assert_eq!(selected.node.as_ref().unwrap().ownership, RuntimeOwnership::Bundled);
         assert_eq!(selected.pnpm.as_ref().unwrap().ownership, RuntimeOwnership::Bundled);
+        assert_eq!(selected.git.as_ref().unwrap().ownership, RuntimeOwnership::Bundled);
         let custom = nexus_core::RuntimePin {
             path: root.join("custom/node.exe"),
             ownership: RuntimeOwnership::System,
@@ -1890,7 +1872,7 @@ mod tests {
         assert_eq!(selected.node, Some(custom));
         assert_eq!(selected.pnpm.unwrap().path, root.join("pnpm/bin/pnpm.cjs"));
         assert_eq!(prefer_bundled_runtime(RuntimeConfig::default(), None), RuntimeConfig::default());
-        assert_eq!(prefer_bundled_runtime(RuntimeConfig::default(), Some(&root.join("absent"))), RuntimeConfig::default());
+        assert_eq!(prefer_bundled_runtime(RuntimeConfig::default(), Some(&root.join("absent"))).node.unwrap().path, root.join("absent").join(if cfg!(windows) {"node/node.exe"} else {"node/node"}));
         let _ = fs::remove_dir_all(root);
     }
 
@@ -1948,6 +1930,7 @@ mod tests {
             let mut pinned = configured.clone();
             pinned.node.as_mut().unwrap().ownership = ownership;
             pinned.pnpm.as_mut().unwrap().ownership = ownership;
+            pinned.git = Some(nexus_core::RuntimePin { path: root.join("custom/git"), ownership });
             assert_eq!(prefer_bundled_runtime(pinned.clone(), Some(&current)), pinned);
         }
         let _ = fs::remove_dir_all(root);

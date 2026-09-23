@@ -36,6 +36,32 @@ export function pluginIsolationChoice(
     profiles.compatibility && typeof profiles.compatibility === "object"
       ? (profiles.compatibility as Record<string, unknown>)
       : {};
+  if (profiles.official_plugin_management === true) {
+    const bundles = displayed?.bundles;
+    const plugins = Array.isArray(displayed?.plugins)
+      ? (displayed.plugins as Record<string, unknown>[])
+      : [];
+    const eligible =
+      !!packageName &&
+      !packageName.startsWith("@deepseek-ai/") &&
+      Array.isArray(bundles) &&
+      (bundles.includes(packageName) || plugins.some((item) => item.package === packageName));
+    const known =
+      profiles.api_version === "v1" &&
+      eligible &&
+      profile === profiles.active_profile &&
+      !displayed?.source_profile;
+    const disabled = known ? !(bundles as unknown[]).includes(packageName) : null;
+    return {
+      eligible,
+      known,
+      disabled,
+      command:
+        known && !blocked
+          ? { action: disabled ? "plugin_enable" : "plugin_disable", profile, package: packageName }
+          : null,
+    };
+  }
   const selectedSource = selected?.source_profile || profiles.active_profile;
   const policySource = report.source_profile || profiles.active_profile;
   // v1 omits this field when the saved policy is empty. Explicit malformed

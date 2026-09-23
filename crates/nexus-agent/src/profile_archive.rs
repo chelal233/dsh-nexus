@@ -1,5 +1,5 @@
-//! Reversible profile removal. Rename the complete directory; never walk or
-//! delete its contents (which may contain shared dependency junctions).
+//! Archive profiles by rename; explicit purge unlinks dependency reparse points
+//! without traversing their shared targets.
 use nexus_core::{NexusPaths, ProfileStore};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -121,7 +121,7 @@ fn read(paths: &NexusPaths, home: &Path, id: &str) -> io::Result<(PathBuf, Recor
     validate_archivable_name(&record.profile)?;
     if !matches!(
         record.phase.as_str(),
-        "archiving" | "archived" | "restoring" | "restored" | "rolled_back"
+        "archiving" | "archived" | "restoring" | "restored" | "rolled_back" | "purging"
     ) {
         return Err(invalid("Unsupported deleted profile phase"));
     }
@@ -150,6 +150,40 @@ fn discard_finished(directory: &Path) -> io::Result<()> {
     fs::remove_file(directory.join("record.json"))?;
     fs::remove_dir(directory)
 }
+// Delete only an owned archived payload. Never traverse junctions/symlinks:
+// dependency targets may be shared with installed versions or other profiles.
+fn remove_payload(path: &Path) -> io::Result<()> {
+    let meta = match fs::symlink_metadata(path) {
+        Ok(meta) => meta,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(()),
+        Err(error) => return Err(error),
+    };
+    if nexus_core::path_is_reparse(&meta) {
+        #[cfg(windows)] {
+            use std::os::windows::fs::FileTypeExt;
+            if meta.is_dir() || meta.file_type().is_symlink_dir() { return fs::remove_dir(path); }
+        }
+        return fs::remove_file(path);
+    }
+    if meta.is_dir() {
+        ordinary(path)?;
+        for entry in fs::read_dir(path)? { remove_payload(&entry?.path())?; }
+        fs::remove_dir(path)
+    } else { fs::remove_file(path) }
+}
+pub(crate) fn purge(paths: &NexusPaths, home: &Path, id: &str) -> io::Result<Value> {
+    nexus_core::terminal_lease::ensure_all_idle(paths)?;
+    let (directory, mut record) = read(paths, home, id)?;
+    if !matches!(record.phase.as_str(), "archived" | "purging") {
+        return Err(invalid("Only an archived profile can be permanently deleted"));
+    }
+    record.phase = "purging".into();
+    save(&directory, &record)?;
+    remove_payload(&directory.join("profile"))?;
+    discard_finished(&directory)?;
+    Ok(json!({"purged":id}))
+}
+
 pub(crate) fn recover_if_present(paths: &NexusPaths, store: &ProfileStore) -> io::Result<()> {
     let home = super::dsh::resolve_dsh_home_for_paths(paths)?;
     if !exists(&home.join(".nexus-deleted-profiles"))? {
@@ -179,7 +213,7 @@ pub(crate) fn recover_if_present(paths: &NexusPaths, store: &ProfileStore) -> io
             discard_finished(&directory)?;
             continue;
         }
-        if record.phase == "archived" {
+        if matches!(record.phase.as_str(), "archived" | "purging") {
             continue;
         }
         let original = home.join("profiles").join(&record.profile);
@@ -240,10 +274,10 @@ pub(crate) fn list(paths: &NexusPaths, home: &Path) -> io::Result<Value> {
         }
         match read(paths, home, &id) {
             Ok((directory, record)) => {
-                if exists(&directory.join("profile"))? {
-                    ordinary(&directory.join("profile"))?;
+                if exists(&directory.join("profile"))? || record.phase == "purging" {
+                    if exists(&directory.join("profile"))? { ordinary(&directory.join("profile"))?; }
                     let occupied = exists(&home.join("profiles").join(&record.profile))?;
-                    items.push(json!({"id":id,"profile":record.profile,"created_at_unix":record.created_at_unix,"can_restore":!occupied,"phase":record.phase}));
+                    items.push(json!({"id":id,"profile":record.profile,"created_at_unix":record.created_at_unix,"can_restore":!occupied && record.phase == "archived","phase":record.phase}));
                 }
             }
             Err(error) => warnings.push(error.to_string()),
@@ -307,6 +341,7 @@ pub(crate) fn change(
     let mut catalog = store.load()?;
     let (directory, mut record, source, target) = if restore {
         let (directory, record) = read(paths, &home, name_or_id)?;
+        if record.phase != "archived" { return Err(invalid("A partially deleted profile cannot be restored")); }
         let source = directory.join("profile");
         ordinary(&source)?;
         let target = home.join("profiles").join(&record.profile);
@@ -443,6 +478,22 @@ mod tests {
             let _ = fs::remove_dir_all(&self.paths.root);
         }
     }
+    #[test]
+    fn permanent_delete_preserves_shared_link_targets_and_same_name_profile() {
+        let f = Fixture::new();
+        let shared = f.home.join("profiles/node_modules");
+        nexus_core::ReleaseStore::create_missing_module_link(&f.home.join("profiles/old/deps"), &shared).unwrap();
+        let archived = f.change("old", false).unwrap();
+        let id = archived["archive_id"].as_str().unwrap();
+        fs::create_dir(f.home.join("profiles/old")).unwrap();
+        fs::write(f.home.join("profiles/old/new.txt"), "keep").unwrap();
+        assert!(purge(&f.paths, &f.home, "../outside").is_err());
+        purge(&f.paths, &f.home, id).unwrap();
+        assert_eq!(fs::read(shared.join("shared.bin")).unwrap(), b"shared");
+        assert_eq!(fs::read_to_string(f.home.join("profiles/old/new.txt")).unwrap(), "keep");
+        assert_eq!(list(&f.paths, &f.home).unwrap()["deleted"], json!([]));
+    }
+
     #[test]
     fn round_trip_preserves_full_profile_and_shared_files() {
         let f = Fixture::new();

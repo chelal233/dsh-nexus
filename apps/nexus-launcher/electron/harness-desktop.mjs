@@ -4,7 +4,26 @@ import os from 'node:os';
 import { randomUUID } from 'node:crypto';
 import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
-import { selectDesktopKit } from './desktop-runtime.mjs';
+import { selectDesktopKit, desktopRuntimeLock } from './desktop-runtime.mjs';
+
+// Common upstream environment settings apply to both launch surfaces. Web CLI
+// flags and SDK-only settings are intentionally not sent to the desktop profile.
+export function desktopPreferenceEnvironment(preferences = {}) {
+  preferences ??= {};
+  const result = {};
+  for (const [field, key] of Object.entries({
+    deepseek_base_url: 'DEEPSEEK_BASE_URL', search_base_url: 'DEEPSEEK_SEARCH_BASE_URL',
+    search_provider: 'DSH_WEB_SEARCH_PROVIDER', fetch_provider: 'DSH_WEB_FETCH_PROVIDER',
+    agents_home: 'DSH_AGENTS_HOME', bundled_skill_dir: 'DSH_BUNDLED_SKILL_DIR',
+    permission_mode: 'DSH_PERMISSION_MODE',
+  })) {
+    const value = preferences[field];
+    if (typeof value === 'string' && value.trim()) result[key] = value.trim();
+  }
+  if (typeof preferences.telemetry_disabled === 'boolean')
+    result.DSH_TELEMETRY_DISABLED = preferences.telemetry_disabled ? '1' : '';
+  return result;
+}
 
 export const desktopActive = state => ['preparing', 'launched', 'stopping'].includes(state?.phase);
 const alive = pid => {
@@ -58,10 +77,17 @@ export function probeDesktopSupport(root, { platform = process.platform, arch = 
   const file = path.join(root, 'apps/desktop/package.json');
   if (!fs.existsSync(file)) return { supported: false };
   const metadata = JSON.parse(fs.readFileSync(file, 'utf8'));
-  const lockFile = path.join(root, 'apps/desktop/scripts/primary-runtime-lock.json');
-  if (!fs.existsSync(lockFile)) return { supported: false };
+  const lockFile = desktopRuntimeLock(root);
+  if (!lockFile) return { supported: false };
   const lock = JSON.parse(fs.readFileSync(lockFile, 'utf8'));
-  if (!lock.targets?.[`${({ win32: 'win', darwin: 'mac', linux: 'linux' })[platform]}-${arch}`]) return { supported: false };
+  const target = `${({ win32: 'win', darwin: 'mac', linux: 'linux' })[platform]}-${arch}`;
+  if (!lock.targets?.[target]) return { supported: false };
+  // A shared interpreter lock may include targets the Desktop shell cannot build.
+  const buildPaths = path.join(root, 'apps/desktop/scripts/desktop-build-paths.mjs');
+  if (fs.existsSync(buildPaths)) {
+    const declaration = /SUPPORTED_TARGETS\s*=\s*new Set\(\[([^\]]+)\]\)/.exec(fs.readFileSync(buildPaths, 'utf8'))?.[1];
+    if (!declaration || ![...declaration.matchAll(/['"]([^'"]+)['"]/g)].some(match => match[1] === target)) return { supported: false };
+  } else if (platform === 'linux') return { supported: false };
   return { supported: metadata.name === '@deepseek-ai/dsh-desktop' && metadata.main === 'lib/main.js', version: metadata.version };
 }
 
@@ -148,9 +174,45 @@ export class HarnessDesktop {
     if (this.restarting || this.stopPromise) throw new Error('desktop_already_active');
     return this.startOperation();
   }
-  async startOperation() {
+
+  async observeStartupFailure(operationId, release, config, generation) {
+    const deadline = Date.now() + 660000;
+    while (Date.now() < deadline && generation === this.stopGeneration) {
+      const state = this.status();
+      if (state.operationId !== operationId || state.audit?.state === 'ready' || state.phase === 'stopped') return;
+      if (state.phase === 'failed' || state.audit?.state === 'failed') {
+        const evidence = [state.error, state.detail, state.audit?.error].filter(Boolean).join('\n');
+        if (!/ERR_MODULE_NOT_FOUND|MODULE_NOT_FOUND|Cannot find (?:package|module)/.test(evidence)) return;
+        if (!/^[a-zA-Z0-9-]{1,80}$/.test(operationId)) return;
+        fs.mkdirSync(this.directory, {recursive:true});
+        fs.writeFileSync(path.join(this.directory, 'startup-failure-'+operationId+'.json'), JSON.stringify({operationId, release, error:evidence.slice(-12000)}), {mode:0o600});
+        // Close only this failed startup before the guarded Agent repair. Stop
+        // or another launch cancels the continuation; successful sessions never enter it.
+        if (desktopActive(state)) await this.stopOperation();
+        if (generation !== this.stopGeneration || this.status().operationId !== operationId) return;
+        const [current, selected] = await Promise.all([
+          this.bridge.request('proxy_request', { method:'GET', path:'/v1/config' }),
+          this.bridge.request('proxy_request', { method:'GET', path:'/v1/releases' }),
+        ]);
+        if (generation !== this.stopGeneration || JSON.stringify(current) !== JSON.stringify(config) || selected.current_release !== release) return;
+        const result = await this.bridge.request('proxy_request', { method:'POST', path:'/v1/dependencies', body:{startup:true, release_id:release} });
+        if (result.phase !== 'repaired' || generation !== this.stopGeneration || this.status().operationId !== operationId) return;
+        const [afterConfig, afterRelease] = await Promise.all([
+          this.bridge.request('proxy_request', {method:'GET', path:'/v1/config'}),
+          this.bridge.request('proxy_request', {method:'GET', path:'/v1/releases'}),
+        ]);
+        if (generation !== this.stopGeneration || this.status().operationId !== operationId || JSON.stringify(afterConfig) !== JSON.stringify(config) || afterRelease.current_release !== release) return;
+        await this.startOperation(true, { release, config });
+        return;
+      }
+      await new Promise(resolve => { const timer = setTimeout(resolve, 250); timer.unref?.(); });
+    }
+  }
+
+  async startOperation(retry = false, expected) {
     if (this.busy || desktopActive(this.status())) throw new Error('desktop_already_active');
     this.busy = true;
+    const generation = ++this.stopGeneration;
     this.cancelRequested = false;
     try {
       const startup = await this.bridge.request('desktop_launch_context');
@@ -160,14 +222,28 @@ export class HarnessDesktop {
         this.bridge.request('proxy_request', { method: 'GET', path: '/v1/harness' }),
       ]);
       if (this.cancelRequested) throw new Error('desktop_start_cancelled');
+      if (retry && (!expected || releases.current_release !== expected.release || JSON.stringify(config) !== JSON.stringify(expected.config))) {
+        throw new Error('desktop_start_cancelled');
+      }
       if (!startup.available || config.external_harness) throw new Error('desktop_no_release');
       if (['running', 'starting', 'stopping'].includes(runtime.harness?.state) || runtime.harness?.pid) throw new Error('desktop_stop_web');
       const release = releases.current_release;
       const source = managedDesktopRoot(startup.data_root, release);
+
+      if (this.cancelRequested) throw new Error('desktop_start_cancelled');
       const { version } = desktopCapability(source);
       const kit = selectDesktopKit(this.resources, config);
       const home = config.harness_preferences?.home || process.env.DSH_HOME || path.join(os.homedir(), '.dsh');
       if (!path.isAbsolute(home)) throw new Error('desktop_invalid_home');
+      // As for Web, bind official packages to this slot without running a probe
+      // or scanning dependency trees. Preserve shadowing packages as backups.
+      await this.bridge.request('proxy_request', {method:'POST', path:'/v1/dependencies', body:{release_id:release, bind_desktop_home:home}});
+      if (this.cancelRequested || generation !== this.stopGeneration) throw new Error('desktop_start_cancelled');
+      const [boundConfig, boundRelease] = await Promise.all([
+        this.bridge.request('proxy_request', {method:'GET',path:'/v1/config'}),
+        this.bridge.request('proxy_request', {method:'GET',path:'/v1/releases'}),
+      ]);
+      if (this.cancelRequested || generation !== this.stopGeneration || boundRelease.current_release !== release || JSON.stringify(boundConfig) !== JSON.stringify(config)) throw new Error('desktop_start_cancelled');
       fs.mkdirSync(this.directory, { recursive: true });
       const operationId = randomUUID();
       const stopFile = path.join(this.directory, `stop-${operationId}.json`);
@@ -179,10 +255,13 @@ export class HarnessDesktop {
       const worker = fileURLToPath(new URL('./harness-desktop-worker.mjs', import.meta.url)).replace(/app\.asar([\\/])/, 'app.asar.unpacked$1');
       const child = spawn(this.executable, [worker, recipe], {
         detached: true, stdio: 'ignore', windowsHide: true,
-        env: { ...process.env, ELECTRON_RUN_AS_NODE: '1' },
+        env: { ...process.env, ...startup.runtime_environment, ...desktopPreferenceEnvironment(config.harness_preferences), ELECTRON_RUN_AS_NODE: '1' },
       });
       await new Promise((resolve, reject) => { child.once('spawn', resolve); child.once('error', reject); });
       child.unref();
+      if (!retry) void this.observeStartupFailure(operationId, release, config, generation).catch(error => {
+        console.warn("Desktop startup recovery requires attention:", error.message);
+      });
       return this.status();
     } catch (error) {
       if (fs.existsSync(this.file) && this.status().pid === process.pid) {

@@ -24,7 +24,7 @@ Next launch inputs describes resolved configuration. Current instance inputs rec
 
 ## Bundled and external runtimes
 
-Node/npm/pnpm are bundled by default. npm belongs to the Node runtime combination; these are not arbitrary interchangeable tools. Embedded Git capability does not imply a complete external Git CLI.
+The development version bundles Node/npm/pnpm and a complete Git command line. Explicitly configured tool paths take priority. npm belongs to the selected Node distribution. Missing selected tools cause an error instead of silently using host PATH tools. Full Git travels with offline exports; older archives without Git use the current Nexus bundle. This change is not yet released and does not describe the existing 0.1.10 installers.
 
 Current source resolves `bundled` runtimes relative to the current installation and preserves explicit external selections. Earlier versions may retain automatically generated absolute paths. Directory names alone cannot establish whether a user deliberately pinned a path.
 
@@ -43,3 +43,23 @@ Changing data directories does not migrate files. Patches are composed through t
 ## Web and official Desktop
 
 Switch Web profiles from Workbench or Profiles and plugins. Official Desktop manages configuration in its own window. The modes share managed versions and data: stop the active mode before switching modes, changing a version, or exporting data. Desktop uses its pinned offline runtime; Web runtime settings are not an arbitrary Desktop runtime override. See [Desktop](harness-desktop.en.md).
+
+## Plugin management while Harness is stopped
+
+When the selected Harness includes its official plugin manager, Nexus uses that version's `listBundles`, `setBundleEnabled`, `inspect`, `installBundle`, and `removeBundle` implementation. The selected profile must be stopped before changes. Management-required components retain upstream protection. Disabling retains installed dependencies; new installations remain disabled until explicitly enabled. No user plugin is loaded for these operations. Unsupported older Harness versions retain the legacy interface; a failed official manager does not silently fall back to legacy mutations. Package-script approval remains in Harness; Nexus does not auto-approve scripts.
+
+Snapshots and checkpoints show local-time titles. Details open in a side drawer with readable fields by default and a Source code switch.
+
+## Offline profile repair
+
+Choose a target under Maintenance → Offline profile repair without selecting it as active or starting its plugins. Damaged profiles remain visible. Stop Web, Desktop and DSH terminals first.
+
+Inspect/edit `package.json` and `cordis.patch.yml` (32 KiB per file; oversized files are rejected, never truncated). Saving validates JSON/YAML and basic structure, then reads the file back. Every save/restore preserves the exact previous file; official plugin enable/disable/remove/install also backs up both configuration files first. Recovery points restore configuration only, not removed plugin dependencies. A restored original may still be invalid; diagnostics remain visible.
+
+Concurrent file changes reject stale writes. Use local dependency repair for missing packages and official plugin controls for plugin errors; do not infer the culprit from missing service names alone. Format checks are not compatibility or startup acceptance. Verify the relevant mode from the Workbench. No automatic Harness restart or safety-mode profile is created.
+
+## Start first, diagnose on failure
+
+Normal Web and Desktop launches do not pre-run isolated plugin diagnostics, copy profiles for diagnostics, or scan the dependency tree. Essential runtime, configuration and process ownership checks remain, as does the official Desktop artifact preparation required for its first launch. Browser access still waits for client readiness.
+
+Failed launches retain their current evidence. Only explicit missing-module or import failures trigger a local dependency check. Missing links are restored only when the lockfile and local package identity agree, with a repair record and at most one retry. This does not download packages, replace existing links, disable plugins or alter configuration. Stop, release changes and configuration changes cancel recovery. Other plugin errors and timeouts remain available for user-directed diagnostics. Full compatibility checks remain available manually.

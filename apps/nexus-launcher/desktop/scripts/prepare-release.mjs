@@ -79,6 +79,10 @@ export function verifyRuntimeVersions(resources, runtime) {
     npm: run([path.join(resources, "runtime/node/node_modules/npm/bin/npm-cli.js"), "--version"]),
     pnpm: run([path.join(resources, "runtime/pnpm/bin/pnpm.cjs"), "--version"]),
   };
+  const gitEntry = process.platform === "win32" ? "git/cmd/git.exe" : "git/bin/git";
+  if (runtime.git?.entry !== gitEntry) throw new Error("Bundled Git manifest is missing or has an invalid entry");
+  actual.git = execFileSync(path.join(resources, "runtime", gitEntry), ["--version"], { cwd: resources, encoding: "utf8", windowsHide: true, timeout: 15000 }).trim();
+  if (actual.git !== runtime.git.version) throw new Error("Bundled Git version disagrees with the manifest");
   if (actual.node !== runtime.node.version || actual.npm !== runtime.node.npmVersion || actual.pnpm !== runtime.pnpm.version) {
     throw new Error(`Bundled runtime versions disagree with the manifest: ${JSON.stringify(actual)}`);
   }

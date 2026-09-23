@@ -13,6 +13,47 @@ export type TranslationParams = Record<string, string | number>;
 export type Translator = (key: string, params?: TranslationParams) => string;
 
 const english: Record<string, string> = {
+  "Delete permanently": "Delete permanently",
+  "Deletion incomplete. Retry permanent deletion.":
+    "Deletion incomplete. Retry permanent deletion.",
+  "GitHub repository": "GitHub repository",
+  "Legacy entries restore selection metadata only.":
+    "Legacy entries restore selection metadata only.",
+  "Port": "Port",
+  "Visual": "Visual",
+  "Source code": "Source code",
+  "Display mode": "Display mode",
+  "Local time": "Local time",
+  "Created": "Created",
+  "Time unavailable": "Time unavailable",
+  "Integrity check passed": "Integrity check passed",
+  "Integrity check failed": "Integrity check failed",
+  "Record metadata": "Record metadata",
+  "Plugins and dependencies": "Plugins and dependencies",
+  "Configuration": "Configuration",
+  "Saved file": "Saved file",
+  "Nested content; view source": "Nested content; view source",
+  "Empty": "Empty",
+  "Not set": "Not set",
+  "Showing the first 200 fields. View source for the full returned content.":
+    "Showing the first 200 fields. View source for the full returned content.",
+  "A structured preview is unavailable. Switch to Source to view the returned content.":
+    "A structured preview is unavailable. Switch to Source to view the returned content.",
+  "Development dependencies": "Development dependencies",
+  "Optional dependencies": "Optional dependencies",
+  "Enabled plugins": "Enabled plugins",
+  "Dependencies": "Dependencies",
+  "Name": "Name",
+  "ID": "ID",
+  "Models": "Models",
+  "Providers": "Providers",
+  "Go to workbench": "Go to workbench",
+  "Use Harness plugin management": "Use Harness plugin management",
+  "This version provides an official Plugins page. Enable, disable, configure and remove plugins there; Harness owns its protection and reload rules. This list only shows saved package selections.":
+    "This version provides an official Plugins page. Enable, disable, configure and remove plugins there; Harness owns its protection and reload rules. This list only shows saved package selections.",
+  "Open the matching profile in Harness, then choose Plugins. Startup failures can still be diagnosed and recovered in Nexus.":
+    "Open the matching profile in Harness, then choose Plugins. Startup failures can still be diagnosed and recovered in Nexus.",
+
   "Preparation timings": "Preparation timings",
   "Desktop repairs apply to the desktop profile, not the selected Web profile.":
     "Desktop repairs apply to the desktop profile, not the selected Web profile.",
@@ -1180,6 +1221,8 @@ const english: Record<string, string> = {
   "Inherit upstream default": "Inherit upstream default",
   "Save Harness preferences": "Save Harness preferences",
   "Harness preferences": "Harness preferences",
+  "Common settings apply to Web and Desktop. Port and browser opening apply only to Web; tool mode applies to Web and headless; SDK settings apply only to their named SDK profile. Runtime patches here apply to Web CLI launches; edit the Desktop profile in the official app.":
+    "Common settings apply to Web and Desktop. Port and browser opening apply only to Web; tool mode applies to Web and headless; SDK settings apply only to their named SDK profile. Runtime patches here apply to Web CLI launches; edit the Desktop profile in the official app.",
   "Blank fields inherit upstream behavior. Changes apply on the next launch.":
     "Blank fields inherit upstream behavior. Changes apply on the next launch.",
   "Harness data directory": "Harness data directory",
@@ -1652,6 +1695,9 @@ const english: Record<string, string> = {
   "Startup log tail": "Startup log tail",
   "Fetch this tag": "Fetch this tag",
   "Switch to this version": "Switch to this version",
+  "Another process owns this resource": "Another process owns this resource",
+  "Confirm whether the owning Harness process is still running. Stop that instance normally before retrying; do not delete lock files or disable unrelated plugins.":
+    "Confirm whether the owning Harness process is still running. Stop that instance normally before retrying; do not delete lock files or disable unrelated plugins.",
   "Force restart Agent": "Force restart Agent",
   "Upstream tags & cold switch": "Upstream tags & cold switch",
   "View": "View",
@@ -1966,6 +2012,8 @@ const english: Record<string, string> = {
   "System install": "System install",
   "pin": "pin",
   "Not pinned": "Not pinned",
+  "Official Desktop uses its matched bundled runtime; these overrides apply to Web/CLI and dependency tools.":
+    "Official Desktop uses its matched bundled runtime; these overrides apply to Web/CLI and dependency tools.",
   "Save runtime settings": "Save runtime settings",
   "Harness must be positively stopped before saving runtime settings.":
     "Harness must be positively stopped before saving runtime settings.",
@@ -2037,6 +2085,46 @@ const english: Record<string, string> = {
 };
 
 const chinese: Record<string, string> = {
+  "Delete permanently": "彻底删除",
+  "Deletion incomplete. Retry permanent deletion.": "删除未完成，请重试彻底删除。",
+  "GitHub repository": "GitHub 仓库",
+  "Legacy entries restore selection metadata only.":
+    "旧检查点仅能恢复配置档和版本选择，不包含配置文件内容。",
+  "Port": "端口",
+  "Visual": "可视化",
+  "Source code": "源码",
+  "Display mode": "显示方式",
+  "Local time": "本机时间",
+  "Created": "创建时间",
+  "Time unavailable": "时间不可用",
+  "Integrity check passed": "完整性检查通过",
+  "Integrity check failed": "完整性检查未通过",
+  "Record metadata": "记录元数据",
+  "Plugins and dependencies": "插件与依赖",
+  "Configuration": "配置",
+  "Saved file": "已保存文件",
+  "Nested content; view source": "嵌套内容，请查看源码",
+  "Empty": "空",
+  "Not set": "未设置",
+  "Showing the first 200 fields. View source for the full returned content.":
+    "已显示前 200 个字段，完整返回内容请查看源码。",
+  "A structured preview is unavailable. Switch to Source to view the returned content.":
+    "无法生成结构化预览，请切换到源码查看返回内容。",
+  "Development dependencies": "开发依赖",
+  "Optional dependencies": "可选依赖",
+  "Enabled plugins": "已启用插件",
+  "Dependencies": "依赖",
+  "Name": "名称",
+  "ID": "标识",
+  "Models": "模型",
+  "Providers": "提供方",
+  "Go to workbench": "前往工作台",
+  "Use Harness plugin management": "使用 Harness 官方插件管理",
+  "This version provides an official Plugins page. Enable, disable, configure and remove plugins there; Harness owns its protection and reload rules. This list only shows saved package selections.":
+    "此版本已提供官方“插件”页面。请在那里启用、停用、配置和移除插件，保护规则及重新加载由 Harness 处理。此处仅展示已保存的包加载清单。",
+  "Open the matching profile in Harness, then choose Plugins. Startup failures can still be diagnosed and recovered in Nexus.":
+    "请在 Harness 中打开对应配置档，再进入“插件”。启动失败时仍可在 Nexus 中诊断和恢复。",
+
   "Preparation timings": "准备阶段耗时",
   "Desktop repairs apply to the desktop profile, not the selected Web profile.":
     "请检查 desktop 配置档；当前选择的 Web 配置档不控制官方桌面端。",
@@ -3143,6 +3231,8 @@ const chinese: Record<string, string> = {
   "Inherit upstream default": "沿用上游默认行为",
   "Save Harness preferences": "保存 Harness 偏好",
   "Harness preferences": "Harness 偏好设置",
+  "Common settings apply to Web and Desktop. Port and browser opening apply only to Web; tool mode applies to Web and headless; SDK settings apply only to their named SDK profile. Runtime patches here apply to Web CLI launches; edit the Desktop profile in the official app.":
+    "通用设置用于 Web 和桌面端。端口与打开浏览器仅用于 Web；工具模式用于 Web 和无界面配置档；SDK 设置仅用于对应 SDK 配置档。此处运行补丁用于 Web 命令行启动，桌面端配置请在官方应用内修改。",
   "Blank fields inherit upstream behavior. Changes apply on the next launch.":
     "留空表示沿用上游行为；修改在下次启动时生效。",
   "Harness data directory": "Harness 数据目录",
@@ -3615,7 +3705,10 @@ const chinese: Record<string, string> = {
   "Show startup log": "查看启动日志",
   "Startup log tail": "启动日志尾随",
   "Fetch this tag": "拉取此标签",
-  "Switch to this version": "切换到此版本",
+  "Switch to this version": "切换至该版本",
+  "Another process owns this resource": "资源被另一个进程占用",
+  "Confirm whether the owning Harness process is still running. Stop that instance normally before retrying; do not delete lock files or disable unrelated plugins.":
+    "先确认占用资源的 Harness 进程是否仍在运行，正常停止该实例后重试；不要删除锁文件或停用无关插件。",
   "Force restart Agent": "强制重启 Agent",
   "Upstream tags & cold switch": "上游标签与冷切换",
   "View": "查看",
@@ -3915,6 +4008,8 @@ const chinese: Record<string, string> = {
   "System install": "系统安装",
   "pin": "固定路径",
   "Not pinned": "未固定",
+  "Official Desktop uses its matched bundled runtime; these overrides apply to Web/CLI and dependency tools.":
+    "官方桌面端使用版本匹配的内置运行环境；此处路径覆盖用于 Web／命令行启动及依赖工具。",
   "Save runtime settings": "保存运行时设置",
   "Harness must be positively stopped before saving runtime settings.":
     "必须确认 Harness 已停止后才能保存运行时设置。",

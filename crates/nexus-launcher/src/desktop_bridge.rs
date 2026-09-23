@@ -347,7 +347,12 @@ async fn dispatch(state: &AppState, request: &Request) -> Result<Value, BridgeEr
         "desktop_launch_context" => {
             state.runtime.ensure_started(START_WAIT_SECS).await.map_err(|error| error.to_string())?;
             state.startup_attempted.store(true, Ordering::Release);
-            Ok(serde_json::to_value(startup_response(state, state.runtime.status().await)).unwrap())
+            let configured = nexus_core::ConfigStore::new(state.runtime.paths().clone()).load().map_err(|e| e.to_string())?.runtime.unwrap_or_default();
+            let selected = nexus_core::select_runtime(configured, nexus_core::bundled_runtime_dir().as_deref());
+            let environment = nexus_core::checked_runtime_child_env(&selected, std::env::var_os("PATH").as_deref()).map_err(|e| e.to_string())?;
+            let mut response = serde_json::to_value(startup_response(state, state.runtime.status().await)).unwrap();
+            response["runtime_environment"] = serde_json::to_value(environment.into_iter().map(|(key, value)| (key.to_string_lossy().into_owned(), value.to_string_lossy().into_owned())).collect::<std::collections::BTreeMap<_, _>>()).unwrap();
+            Ok(response)
         },
         "retry_startup" => Ok(serde_json::to_value(retry_startup(state).await?).unwrap()),
         "proxy_request" => proxy_request(state,

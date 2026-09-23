@@ -1,3 +1,4 @@
+import { diagnoseStartup } from "../../../../crates/nexus-agent/src/startup-diagnosis.mjs";
 import { type Snapshot, type HarnessPanelProps } from "../app-types";
 import {
   asObject,
@@ -18,11 +19,46 @@ function currentHealth(snapshot: Snapshot) {
     : {};
 }
 
+function currentHostWarning(snapshot: Snapshot) {
+  const runtime = harnessRuntimeValue(snapshot.harnessRuntime);
+  const recovery = asObject(snapshot.recovery);
+  const observed = asObject(recovery.harness);
+  if (
+    runtime.state !== "running" ||
+    observed.state !== "running" ||
+    typeof runtime.pid !== "number" ||
+    runtime.pid !== observed.pid ||
+    typeof runtime.started_at_unix !== "number" ||
+    runtime.started_at_unix !== observed.started_at_unix
+  )
+    return null;
+  const text = arrayValue(recovery, "log_tail")
+    .map(asObject)
+    .map((row) => stringValue(row, "content") || "")
+    .join("\n");
+  // Only an explicit upstream startup warning is eligible. Background errors
+  // are outside the startup contract and must not change client readiness.
+  const marker = /dsh: warning: \d+ entr(?:y|ies) did not activate/.exec(text);
+  if (!marker) return null;
+  const warning = text.slice(marker.index, marker.index + 8000).split(/\n\s*\n/)[0];
+  const diagnosis = diagnoseStartup(warning);
+  return diagnosis.code === "unknown"
+    ? {
+        ...diagnosis,
+        summary: "Harness is ready; some optional plugins did not activate",
+        remedy:
+          "Inspect the reported package and its original cause before choosing a compatible version or disabling it.",
+      }
+    : diagnosis;
+}
+
 export function clientStartupLabel(snapshot: Snapshot, t: Translator, compact = false) {
   const profiles = asObject(snapshot.profiles);
   const report = asObject(profiles.compatibility);
   switch (stringValue(currentHealth(snapshot), "state")) {
     case "active":
+      if (currentHostWarning(snapshot))
+        return compact ? t("Ready with warnings") : t("Startup checks found limited functionality");
       if (
         stringValue(asObject(report.diagnosis), "level") === "limited" &&
         pluginPolicyVerified(profiles) &&
@@ -52,17 +88,28 @@ export function StartupWarning({
 }) {
   const { t } = useI18n();
   if (clientStartupLabel(snapshot, t, true) !== t("Ready with warnings")) return null;
+  const hostWarning = currentHostWarning(snapshot);
   const diagnosis = asObject(asObject(asObject(snapshot.profiles).compatibility).diagnosis);
   const entries = arrayValue(asObject(diagnosis.activation), "entries").map(asObject);
   return (
     <div className="startup-warning-summary" role="status">
       <p>{t("Harness is ready; some optional plugins did not activate")}</p>
-      {entries.slice(0, 3).map((entry, index) => (
-        <p key={index}>
-          <strong>{stringValue(entry, "package") || stringValue(entry, "id")}</strong>:{" "}
-          {stringValue(entry, "reason")}
-        </p>
-      ))}
+      {hostWarning && (
+        <>
+          <p>{t(hostWarning.summary)}</p>
+          <p>{t(hostWarning.remedy)}</p>
+          {hostWarning.evidence.map((line, index) => (
+            <p key={index}>{line}</p>
+          ))}
+        </>
+      )}
+      {!hostWarning &&
+        entries.slice(0, 3).map((entry, index) => (
+          <p key={index}>
+            <strong>{stringValue(entry, "package") || stringValue(entry, "id")}</strong>:{" "}
+            {stringValue(entry, "reason")}
+          </p>
+        ))}
       <ActionButton onClick={onDetails}>{t("Service and plugin details")}</ActionButton>
     </div>
   );

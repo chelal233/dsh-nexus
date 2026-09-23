@@ -1,3 +1,4 @@
+import { gitDistribution, verifyLinuxGitAbi } from "./bundled-git.mjs";
 import { selectPlatform } from "./release-platform.mjs";
 import { createHash } from "node:crypto";
 import { createReadStream, createWriteStream } from "node:fs";
@@ -248,9 +249,9 @@ async function stagePnpm() {
     // Nested lifecycle scripts invoke pnpm by name. Resolve the bundled Node
     // relative to this shim, without a global install or system PATH changes.
     if (windows) await writeFile(path.join(target, "bin/pnpm.cmd"),
-      '@ECHO OFF\r\n"%~dp0..\\..\\node\\node.exe" "%~dp0pnpm.cjs" %*\r\n');
+      '@ECHO OFF\r\nIF DEFINED NEXUS_RUNTIME_NODE (\r\n  "%NEXUS_RUNTIME_NODE%" "%~dp0pnpm.cjs" %*\r\n) ELSE (\r\n  "%~dp0..\\..\\node\\node.exe" "%~dp0pnpm.cjs" %*\r\n)\r\n');
     if (!windows) {
-      await writeFile(path.join(target, "bin/pnpm"), '#!/bin/sh\nHERE=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)\nexec "$HERE/../../node/node" "$HERE/pnpm.cjs" "$@"\n');
+      await writeFile(path.join(target, "bin/pnpm"), '#!/bin/sh\nHERE=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)\nexec "${NEXUS_RUNTIME_NODE:-$HERE/../../node/node}" "$HERE/pnpm.cjs" "$@"\n');
       await chmod(path.join(target, "bin/pnpm"), 0o755);
     }
   } finally {
@@ -259,12 +260,45 @@ async function stagePnpm() {
   return { version: pnpmVersion, integrity, entry: "pnpm/bin/pnpm.cjs" };
 }
 
+async function stageGit() {
+  const dist = gitDistribution(spec);
+  const archive = path.join(cacheRoot, dist.archive);
+  await mkdir(cacheRoot, { recursive: true });
+  await cachedDownload(dist.url, archive, dist.sha256);
+  const extractDir = path.join(cacheRoot, `git-extract-${spec.target}`);
+  await rm(extractDir, { recursive: true, force: true });
+  await mkdir(extractDir, { recursive: true });
+  try {
+    await run(tarCommand, ["-xf", archive, "-C", extractDir]);
+    const target = path.join(resourceRuntime, "git");
+    // Keep helpers, certificates and licenses; packaging forbids symlinks.
+    await access(path.join(extractDir, windows ? "cmd/git.exe" : "bin/git"));
+    await rm(target, { recursive: true, force: true });
+    await cp(extractDir, target, { recursive: true, dereference: true });
+  } finally {
+    await rm(extractDir, { recursive: true, force: true });
+  }
+  const license = path.join(cacheRoot, "git-2.53.0-COPYING");
+  await cachedDownload("https://raw.githubusercontent.com/git/git/v2.53.0/COPYING", license, "5b2198d1645f767585e8a88ac0499b04472164c0d2da22e75ecf97ef443ab32e");
+  await cp(license, path.join(resourceRuntime, "git/NEXUS-Git-COPYING.txt"));
+  if (spec.platform === "linux") verifyLinuxGitAbi(path.join(resourceRuntime,"git"));
+  const binary = path.join(resourceRuntime, dist.entry);
+  const version = execFileSync(binary, ["--version"], { encoding: "utf8" }).trim();
+  if (!version.startsWith("git version 2.53.0")) throw new Error(`Unexpected bundled Git: ${version}`);
+  return { version, release: dist.release, entry: dist.entry, archiveSha256: dist.sha256, sha256: await sha256(binary) };
+}
+
 async function isUpToDate(manifestFile) {
   try {
     const manifest = JSON.parse(await readFile(manifestFile, "utf8"));
     if (manifest.target !== spec.target || manifest.node?.version !== `v${nodeVersion}` || manifest.pnpm?.version !== pnpmVersion) {
       return false;
     }
+    const git = gitDistribution(spec);
+    if (manifest.git?.release !== git.release || manifest.git?.archiveSha256 !== git.sha256
+      || manifest.git?.entry !== git.entry || await sha256(path.join(resourceRuntime, git.entry)) !== manifest.git?.sha256) return false;
+    await access(path.join(resourceRuntime, "git/NEXUS-Git-COPYING.txt"));
+    if (spec.platform === "linux") verifyLinuxGitAbi(path.join(resourceRuntime,"git"));
     // The staged binary must still match the out-of-band anchor (pinned) or
     // at least the checksum recorded at staging time; a corrupted or
     // tampered resources/runtime falls through to a fresh verified staging.
@@ -281,7 +315,8 @@ async function isUpToDate(manifestFile) {
     await access(path.join(resourceRuntime, windows ? "node/npx.cmd" : "node/npx"));
     await access(path.join(resourceRuntime, "node/node_modules/npm/bin/npm-cli.js"));
     await access(path.join(resourceRuntime, "pnpm", "bin", "pnpm.cjs"));
-    await access(path.join(resourceRuntime, "pnpm", "bin", windows ? "pnpm.cmd" : "pnpm"));
+    const shim = await readFile(path.join(resourceRuntime, "pnpm", "bin", windows ? "pnpm.cmd" : "pnpm"), "utf8");
+    if (!shim.includes("NEXUS_RUNTIME_NODE")) return false;
     return true;
   } catch {
     return false;
@@ -294,9 +329,10 @@ if (await isUpToDate(manifestFile)) {
 } else {
   const node = await stageNode();
   const pnpm = await stagePnpm();
+  const git = await stageGit();
   await writeFile(
     manifestFile,
-    `${JSON.stringify({ target: spec.target, node, pnpm }, null, 2)}\n`,
+    `${JSON.stringify({ target: spec.target, node, pnpm, git }, null, 2)}\n`,
   );
   console.log(`[prepare-runtime] staged node ${node.version} with npm ${node.npmVersion} and pnpm ${pnpm.version} at ${resourceRuntime}`);
 }

@@ -37,3 +37,11 @@ Windows x64 and macOS x64/ARM64 include the supported official Desktop kit. Wind
 `prepare:notices` currently scans the root Cargo metadata and pnpm production packages, available license files, vendored libgit2 top-level notices, and the embedded semver license. It does **not** independently expand and audit every Python wheel, CPython distribution, office-skill resource, nested OpenSSL source notice, or Electron host backup. `reviewRequired: false` only describes a scanned inventory entry, not the whole installer.
 
 For runtime additions, inspect `lock.json`, the actual runtime archives, and original component notices; record missing materials and correct the packaging if necessary. This document update identifies the scope and does not certify a completed legal audit or alter already published v0.1.8 binaries.
+
+## Full Git command line (in development)
+
+`runtime/git` uses GitHub Desktop's dugite-native v2.53.0-4 portable distribution with pinned per-platform SHA-256 digests. Git, helpers, certificates and original license files are retained. Windows Git's license is in `runtime/git/LICENSE.txt`; component notices remain in their original directories. Git's GPLv2 license is independent of Nexus's MIT license. Upstream build scripts and source references: https://github.com/desktop/dugite-native/tree/v2.53.0-4 .
+
+Corresponding-source availability and nested component redistribution requirements must still be checked per platform before release; the generated inventory marks this component `reviewRequired`. Local Windows tests do not establish installation acceptance on other platforms.
+
+The 2026-09-23 redistribution audit is complete with a **not cleared** result. See the [Git audit](docs/audits/git-redistribution-2026-09-23/README.md) for evidence and acceptance conditions. `reviewRequired` remains set; it is not an enforced CI publication gate.

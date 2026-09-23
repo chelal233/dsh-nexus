@@ -33,7 +33,10 @@ pub(crate) async fn inspect(state: &AppState, archive: &str) -> io::Result<serde
     let result = async {
         fs::write(work.join("offline-package.mjs"), HELPER)?;
         write_json_atomic(&work, &work.join("job.json"), &serde_json::json!({"action":"inspect","work":work,"archive":archive,"tools":tools,"id":"preview"}))?;
-        let mut command = std::process::Command::new(tools.join(if cfg!(windows) { "node/node.exe" } else { "node/node" }));
+        let selected = resolved_runtime_config(state).await?;
+        let node = nexus_core::resolve_runtime_command(&selected, "node")?.ok_or_else(|| io::Error::other("Selected Node runtime is unavailable"))?;
+        let mut command = std::process::Command::new(node.program);
+        command.envs(nexus_core::checked_runtime_child_env(&selected, std::env::var_os("PATH").as_deref())?);
         command.arg(work.join("offline-package.mjs")).arg(work.join("job.json"))
             .env_remove("NODE_OPTIONS").env_remove("NODE_PATH");
         run_owned_command(command, "offline preview", OFFLINE_TIMEOUT, &state.paths.run_dir, &CancellationToken::default()).await?;
@@ -71,12 +74,13 @@ fn archive_path(paths: &NexusPaths, value: &str, exporting: bool) -> io::Result<
 
 fn complete_runtime(state: &AppState) -> io::Result<PathBuf> {
     let config = state.config.load()?;
-    let pinned = config.runtime.as_ref().and_then(|runtime| runtime.node.as_ref());
+    let runtime = crate::runtime::prefer_bundled_runtime(config.runtime.unwrap_or_default(), nexus_core::bundled_runtime_dir().as_deref());
+    let pinned = runtime.node.as_ref();
     let root = if let Some(pin) = pinned {
         pin.path.parent().and_then(Path::parent).map(Path::to_path_buf)
     } else { nexus_core::bundled_runtime_dir() }.ok_or_else(|| io::Error::other("No complete portable runtime is available"))?;
     validate_runtime_root(&root)?;
-    if let Some(pin) = config.runtime.as_ref().and_then(|runtime| runtime.pnpm.as_ref()) {
+    if let Some(pin) = runtime.pnpm.as_ref() {
         if fs::canonicalize(&pin.path)? != fs::canonicalize(root.join("pnpm/bin/pnpm.cjs"))? {
             return Err(io::Error::other("Offline export requires Node and pnpm from the same complete portable runtime"));
         }
@@ -135,6 +139,7 @@ async fn helper(state: &AppState, operation: &ColdOperation, tools: &Path, actio
         "private_writer":std::env::current_exe()?,
         "tools":tools,"slot":slot,"runtime":runtime,"archive":operation.archive_path,
         "desktop_runtime":nexus_core::bundled_runtime_dir().map(|root|root.join("desktop")),
+        "git_runtime":nexus_core::bundled_runtime_dir().map(|root|root.join("git")),
         "version":operation.tag,"contents":operation.offline_contents,
         "home":if action == "export" || action == "merge_environment" { Some(crate::dsh::resolve_dsh_home_for_paths(&state.paths)?) } else { None },
         "environment":environment_root(&state.paths, &operation.operation_id)?,
@@ -143,7 +148,10 @@ async fn helper(state: &AppState, operation: &ColdOperation, tools: &Path, actio
         "nexus":{"version":env!("CARGO_PKG_VERSION"),"build_id":option_env!("NEXUS_BUILD_ID").unwrap_or("development")} });
     write_json_atomic(&work, &job, &content)?;
     fs::write(&script, HELPER)?;
-    let mut command = std::process::Command::new(tools.join(if cfg!(windows) { "node/node.exe" } else { "node/node" }));
+    let selected = resolved_runtime_config(state).await?;
+        let node = nexus_core::resolve_runtime_command(&selected, "node")?.ok_or_else(|| io::Error::other("Selected Node runtime is unavailable"))?;
+        let mut command = std::process::Command::new(node.program);
+        command.envs(nexus_core::checked_runtime_child_env(&selected, std::env::var_os("PATH").as_deref())?);
     command.arg(script).arg(job).current_dir(&work)
         .env_remove("NODE_OPTIONS").env_remove("NODE_PATH").env("npm_config_offline", "true");
     let cancellation = state.cold.token(&operation.operation_id).await;
@@ -221,6 +229,9 @@ async fn publish_verified_import(state: &AppState, mut operation: ColdOperation,
     if base { config.runtime = Some(RuntimeConfig {
         node: Some(RuntimePin { path: runtime_root.join(if cfg!(windows) { "node/node.exe" } else { "node/node" }), ownership: RuntimeOwnership::Nexus }),
         pnpm: Some(RuntimePin { path: runtime_root.join("pnpm/bin/pnpm.cjs"), ownership: RuntimeOwnership::Nexus }),
+        git: candidate.join("payload/runtime").join(if cfg!(windows) { "git/cmd/git.exe" } else { "git/bin/git" }).is_file().then(|| RuntimePin {
+            path: runtime_root.join(if cfg!(windows) { "git/cmd/git.exe" } else { "git/bin/git" }), ownership: RuntimeOwnership::Nexus,
+        }),
         ..RuntimeConfig::default()
     });
     config.harness = Some(HarnessLaunchSpec {

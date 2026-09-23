@@ -7,7 +7,7 @@ import { spawn } from 'node:child_process';
 import { pathToFileURL } from 'node:url';
 import semver from './vendor/semver.cjs';
 
-export const checkerVersion = 14;
+export const checkerVersion = 16;
 
 import { diagnoseStartup } from './startup-diagnosis.mjs';
 export { diagnoseStartup };
@@ -187,7 +187,7 @@ export function sourceInfo(home, selected) {
   }
   const saved = manifest.dsh?.profile?.nexusDisabledBundles ?? [];
   if (!Array.isArray(saved) || !saved.every(item => typeof item.package === 'string' && validPackage(item.package))) throw Error('Invalid disabled bundle metadata');
-  manualDisabled = [...new Set([...manualDisabled, ...saved.map(item => item.package)])];
+  manualDisabled = [...new Set([...manualDisabled, ...saved.map(item => item.package).filter(name => !bundles.includes(name))])];
   return { source, dir, manifest, fingerprint, manualDisabled };
 }
 
@@ -321,12 +321,15 @@ export function duplicateEntrySources(source, slot, text) {
       const directory = official.get(name) || path.join(source.dir, 'node_modules', name);
       const manifest = readJson(path.join(directory, 'package.json'));
       const patch = manifest.dsh?.bundle?.patch;
-      if (typeof patch !== 'string') continue;
-      const file = path.resolve(directory, patch);
+      const patches = typeof patch === 'string' ? [patch] : Array.isArray(patch) ? patch : [];
+      for (const declared of patches.slice(0, 256)) {
+      if (typeof declared !== 'string') continue;
+      const file = path.resolve(directory, declared);
       if (!within(directory, file) || fs.statSync(file).size > 256 * 1024) continue;
       const lines = fs.readFileSync(file, 'utf8').split(/\r?\n/);
       const line = lines.findIndex(line => /^\s*-?\s*id:\s*['"]?([\w.-]+)['"]?\s*(?:#.*)?$/.exec(line)?.[1] === id);
       if (line >= 0) matches.push({package: name, id, file, line: line + 1});
+      }
     } catch { /* Missing evidence must not replace the original loader error. */ }
   }
   return matches.slice(0, 12);
@@ -340,8 +343,10 @@ export function replacedOfficialEntries(source, slot) {
     try {
       const directory = official.get(bundle) || path.join(source.dir, 'node_modules', bundle);
       const patch = readJson(path.join(directory, 'package.json')).dsh?.bundle?.patch;
-      if (typeof patch !== 'string') continue;
-      const file = path.resolve(directory, patch);
+      const patches = typeof patch === 'string' ? [patch] : Array.isArray(patch) ? patch : [];
+      for (const declared of patches.slice(0, 256)) {
+      if (typeof declared !== 'string') continue;
+      const file = path.resolve(directory, declared);
       if (!within(directory, file) || fs.statSync(file).size > 256 * 1024) continue;
       const lines = fs.readFileSync(file, 'utf8').split(/\r?\n/);
       for (let i = 0; i + 1 < lines.length; i++) {
@@ -353,6 +358,7 @@ export function replacedOfficialEntries(source, slot) {
           replacements.push({ package: bundle, id, original: original.name, replacement: name });
         owners.set(id, { package: bundle, name });
       }
+      }
     } catch { /* Incomplete static evidence never becomes a repair decision. */ }
   }
   return replacements.slice(0, 16);
@@ -360,7 +366,7 @@ export function replacedOfficialEntries(source, slot) {
 
 export function activationRepairCandidates(activation, bundles, replacements = []) {
   const candidates = new Map();
-  if (activation?.entries.some(entry => entry.state === 'failed' && ['permission', 'port_conflict', 'storage_full', 'nexus_integration'].includes(diagnoseStartup(entry.reason).code))) return [];
+  if (activation?.entries.some(entry => entry.state === 'failed' && ['permission', 'port_conflict', 'process_lock', 'storage_full', 'nexus_integration'].includes(diagnoseStartup(entry.reason).code))) return [];
   for (const entry of activation?.entries || []) {
     if (entry.state !== 'failed') continue;
     const bundle = bundles.filter(name => !name.startsWith('@deepseek-ai/') &&

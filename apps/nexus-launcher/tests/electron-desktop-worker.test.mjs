@@ -27,7 +27,7 @@ test('failed preparation stop retains ownership until retry and never starts Des
   put('harness-desktop-worker.mjs', fs.readFileSync(new URL('../electron/harness-desktop-worker.mjs', import.meta.url)));
   put('desktop-startup-audit.mjs', fs.readFileSync(new URL('../electron/desktop-startup-audit.mjs', import.meta.url)));
   put('harness-desktop.mjs', "export const desktopCapability = source => ({app: source});");
-  put('desktop-runtime.mjs', "export const digest=()=> 'lock'; export const legacyElectronEntry=()=>''; export const portableHostEntry=()=>'';");
+  put('desktop-runtime.mjs', "export const desktopKitMatchesSource=()=>true; export const legacyElectronEntry=()=>''; export const portableHostEntry=()=>'';");
   put('desktop-paths.mjs', 'export const desktopSourceView = source => source;');
   put('desktop-process.mjs', "let attempts=0; export async function stopDesktopChild(){if(++attempts===1)throw new Error('fixture stop failed');}");
   put('node_modules/tsx/dist/loader.mjs', '');
@@ -89,7 +89,7 @@ test('official Desktop worker opens a visible Windows window', { skip: process.p
   put('harness-desktop-worker.mjs', fs.readFileSync(new URL('../electron/harness-desktop-worker.mjs', import.meta.url)));
   put('desktop-startup-audit.mjs', fs.readFileSync(new URL('../electron/desktop-startup-audit.mjs', import.meta.url)));
   put('harness-desktop.mjs', 'export const desktopCapability = source => ({app:source});');
-  put('desktop-runtime.mjs', "export const digest=()=> 'lock'; export const legacyElectronEntry=()=>''; export const portableHostEntry=()=>'';");
+  put('desktop-runtime.mjs', "export const desktopKitMatchesSource=()=>true; export const legacyElectronEntry=()=>''; export const portableHostEntry=()=>'';");
   put('desktop-paths.mjs', 'export const desktopSourceView=source=>source;');
   put('desktop-process.mjs', fs.readFileSync(new URL('../electron/desktop-process.mjs', import.meta.url)));
   put('node_modules/tsx/dist/loader.mjs', '');

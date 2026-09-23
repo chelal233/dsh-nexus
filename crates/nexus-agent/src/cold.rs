@@ -16,7 +16,7 @@ use std::{
 };
 
 use nexus_core::{
-    build_pnpm_args, build_runtime_child_env, redact_diagnostics_payload, resolve_runtime_command,
+    build_pnpm_args, checked_runtime_child_env, redact_diagnostics_payload, resolve_runtime_command,
     unix_time_nanos_for_update, unix_time_seconds, validate_update_ref, write_json_atomic,
     CancellationToken, HarnessLaunchSpec, NexusPaths, RuntimeConfig, RuntimePin,
 };
@@ -766,7 +766,7 @@ async fn prepare_inner(state: &AppState, operation_id: &str) -> io::Result<()> {
         &state.paths.run_dir,
         COMMAND_TIMEOUT,
         &cancellation,
-        crate::git_worker::selected_external(&runtime),
+        crate::git_worker::selected_external(&runtime)?,
     )
     .await?;
     let revision =
@@ -978,7 +978,7 @@ pub(crate) async fn initialize_selected_release(
     }
     let runtime = runtime_from_plan(&plan)?;
     let node = runtime.node.as_ref().ok_or_else(|| io::Error::other("Verified Node runtime is missing"))?.path.clone();
-    let runtime_env = nexus_core::build_runtime_child_env(&runtime, std::env::var_os("PATH").as_deref())?;
+    let runtime_env = nexus_core::checked_runtime_child_env(&runtime, std::env::var_os("PATH").as_deref())?;
     crate::compatibility::prepare(&state.paths, &state.snapshots.configured_dsh_home()?,
         &state.profiles.load()?.active_profile, id, &root, &node, false, &CancellationToken::default(), "version_switch", &runtime_env).await?;
     config.harness = Some(HarnessLaunchSpec {
@@ -1110,34 +1110,8 @@ async fn plan_candidate(
 
 pub(crate) async fn resolved_runtime_config(state: &AppState) -> io::Result<RuntimeConfig> {
     let configured = state.config.load()?.runtime.unwrap_or_default();
-    let request = crate::runtime::RuntimeRequestContext::production();
-    let observed =
-        crate::runtime::observe_runtime_selection_until(&state.paths, Some(&configured), &request)
-            .await;
-    let mut runtime = configured;
-    for tool in observed.tools.into_iter().filter(|tool| tool.available) {
-        let Some(path) = tool.path.map(PathBuf::from) else {
-            continue;
-        };
-        if !path.is_absolute() {
-            continue;
-        }
-        let pin = RuntimePin {
-            path,
-            ownership: match tool.source.as_deref() {
-                Some("nexus") => RuntimeOwnership::Nexus,
-                Some("bundled") => RuntimeOwnership::Bundled,
-                _ => RuntimeOwnership::System,
-            },
-        };
-        match tool.name.as_str() {
-            "git" => runtime.git = Some(pin),
-            "node" => runtime.node = Some(pin),
-            "pnpm" => runtime.pnpm = Some(pin),
-            _ => {}
-        }
-    }
-    Ok(runtime)
+    configured.validate()?;
+    Ok(crate::runtime::prefer_bundled_runtime(configured, nexus_core::bundled_runtime_dir().as_deref()))
 }
 
 /// The first install on a clean machine fetches every upstream dependency.
@@ -1162,6 +1136,9 @@ fn runtime_from_plan(plan: &nexus_protocol::RuntimePlanResponse) -> io::Result<R
         ..RuntimeConfig::default()
     };
     for tool in &plan.tools {
+        if tool.name == "git" && tool.path.is_none() && tool.ownership == Some(RuntimeOwnership::Bundled) {
+            continue; // Embedded libgit2 has no external executable pin.
+        }
         if tool.name == "git" && tool.state != nexus_protocol::RuntimePlanToolState::Reusable {
             continue;
         }
@@ -1217,7 +1194,7 @@ async fn run_pnpm(
         .env("DSH_CLIENT_COMMIT_HASH", revision)
         .stdin(Stdio::null())
         .stdout(Stdio::null());
-    for (key, value) in build_runtime_child_env(runtime, std::env::var_os("PATH").as_deref())? {
+    for (key, value) in checked_runtime_child_env(runtime, std::env::var_os("PATH").as_deref())? {
         child.env(key, value);
     }
     run_owned_command_diagnostics(
@@ -1446,7 +1423,7 @@ async fn candidate_revision(
         candidate,
         diagnostic_dir,
         cancellation,
-        crate::git_worker::selected_external(runtime),
+        crate::git_worker::selected_external(runtime)?,
     )
     .await
 }

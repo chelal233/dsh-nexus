@@ -21,6 +21,8 @@ jobs:
         run: |
           node --test .github/scripts/check-source-privacy.test.mjs
           node .github/scripts/check-source-privacy.mjs
+      - name: Require bundled Git redistribution clearance
+        run: node .github/scripts/check-git-redistribution.mjs --require
       - name: Find a complete successful build of the tagged commit
         id: source
         env:

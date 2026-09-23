@@ -173,7 +173,7 @@ async fn run(state: &AppState, profile: &str, id: &str, mode: &nexus_protocol::C
     fs::write(vendor.join("semver.cjs"), include_bytes!("vendor/semver.cjs"))?;
     fs::write(vendor.join("semver.LICENSE"), include_bytes!("vendor/semver.LICENSE"))?;
     let mut options = json!({"home":home,"selected":profile,"release_id":release,"node":node,"slot":slot,"mode":"diagnostic_only","owned_round":true,"patches":preferences.patches.as_deref().unwrap_or(&[])});
-    let mut environment = nexus_core::build_runtime_child_env(&runtime, std::env::var_os("PATH").as_deref())?;
+    let mut environment = nexus_core::checked_runtime_child_env(&runtime, std::env::var_os("PATH").as_deref())?;
     options["builtin_patches"] = json!([crate::desktop_plugins::stage(&state.paths, &home, profile)?]);
     environment.push(("NEXUS_DESKTOP_CONTEXT".into(), crate::desktop_plugins::context(&state.paths, &home, profile, &node, &slot, runtime.pnpm.as_ref().map(|pin| pin.path.as_path()))?.into()));
     environment.push(("NEXUS_DESKTOP_PROBE".into(), "1".into()));
@@ -370,14 +370,17 @@ mod tests {
         assert!(!busy(&json!({"phase":"completed","cleanup_pending":false})));
     }
     #[test]
-    fn default_web_diagnostic_requires_positive_version_and_profile_evidence() {
+    fn default_web_diagnostic_requires_positive_capability_and_profile_evidence() {
         let root = std::env::temp_dir().join(format!("canary-capabilities-{}", nexus_core::unix_time_nanos_for_update()));
         fs::create_dir_all(&root).unwrap();
         fs::write(root.join("package.json"), r#"{"name":"@deepseek-ai/dsh-root","version":"0.1.2-rc.1"}"#).unwrap();
+        crate::preference_capabilities::write_web_contract_fixture(&root);
         let p = nexus_protocol::HarnessPreferencesPayload::default();
         assert!(diagnostic_capabilities(&root, &root.join("home"), "web", &p).unwrap().web);
         assert!(diagnostic_capabilities(&root, &root.join("home"), "headless", &p).is_err());
         fs::write(root.join("package.json"), r#"{"name":"@deepseek-ai/dsh-root","version":"unknown"}"#).unwrap();
+        assert!(diagnostic_capabilities(&root, &root.join("home"), "web", &p).unwrap().web);
+        fs::remove_file(root.join("packages/bundle/web-app/src/startup.ts")).unwrap();
         assert!(diagnostic_capabilities(&root, &root.join("home"), "web", &p).is_err());
         assert!(!root.join("home").exists());
         fs::remove_dir_all(root).unwrap();

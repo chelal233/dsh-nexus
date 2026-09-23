@@ -8,7 +8,7 @@ use axum::{extract::State, response::IntoResponse, Json};
 
 #[derive(serde::Deserialize)]
 #[serde(deny_unknown_fields)]
-pub(crate) struct RepairRequest { fingerprint: String }
+pub(crate) struct RepairRequest { #[serde(default)] fingerprint: String, #[serde(default)] startup: bool, #[serde(default)] release_id: Option<String>, #[serde(default)] bind_desktop_home: Option<PathBuf> }
 
 pub(crate) async fn repair(State(state): State<super::AppState>, Json(request): Json<RepairRequest>) -> axum::response::Response {
     let Some(lifecycle) = state.supervisor.try_acquire_lifecycle() else {
@@ -25,8 +25,17 @@ pub(crate) async fn repair(State(state): State<super::AppState>, Json(request): 
         nexus_core::terminal_lease::ensure_all_idle(&state.paths)?;
         let source = super::source_context::resolve(&state.paths, &state.releases)?;
         if source.external { return Err(invalid("Dependency repair is only available for managed Harness releases")); }
+        if request.release_id.as_deref().is_some_and(|expected| source.release_id.as_deref() != Some(expected)) { return Err(invalid("Selected release changed before dependency repair")); }
         let root = source.root.ok_or_else(|| invalid("No Harness release selected"))?;
-        apply(&root, &request.fingerprint, &state.paths.root)
+        if let Some(expected_home) = request.bind_desktop_home {
+            let home = state.snapshots.configured_dsh_home()?;
+            if home != expected_home && fs::canonicalize(&home).ok().zip(fs::canonicalize(&expected_home).ok()).is_none_or(|(a,b)| a != b) {
+                return Err(invalid("Desktop home changed before module binding"));
+            }
+            let linked = nexus_core::ReleaseStore::heal_module_farm(&home, &root)?;
+            let archived = nexus_core::ReleaseStore::heal_profile_modules(&home, "desktop", &root)?;
+            Ok(serde_json::json!({"phase":"bound", "linked":linked,"archived":archived}))
+        } else if request.startup { ensure_startup(&root, &state.paths.root) } else { apply(&root, &request.fingerprint, &state.paths.root) }
     }).await;
     match result {
         Ok(Ok(value)) => Json(value).into_response(),
@@ -36,7 +45,11 @@ pub(crate) async fn repair(State(state): State<super::AppState>, Json(request): 
 }
 
 fn apply(root: &Path, expected: &str, data_root: &Path) -> io::Result<Value> {
-    let plan = preview(root)?;
+    apply_scoped(root, expected, data_root, false)
+}
+
+fn apply_scoped(root: &Path, expected: &str, data_root: &Path, startup: bool) -> io::Result<Value> {
+    let plan = preview_scoped(root, startup)?;
     if expected != plan.fingerprint { return Err(io::Error::new(io::ErrorKind::WouldBlock, "Dependency preview changed; inspect again before repairing")); }
     let candidates: Vec<_> = plan.entries.iter().filter(|entry| entry.target.is_some()).collect();
     if candidates.is_empty() { return Err(invalid("No verified missing links to repair")); }
@@ -58,7 +71,7 @@ fn apply(root: &Path, expected: &str, data_root: &Path) -> io::Result<Value> {
         manifests.insert(entry.importer.clone(), serde_json::from_slice(&bounded(&base.join("package.json"), 2 * 1024 * 1024)?)?);
     }
     write("manifests.json", &serde_json::to_vec(&manifests)?)?;
-    if preview(&plan.root)?.fingerprint != plan.fingerprint {
+    if preview_scoped(&plan.root, startup)?.fingerprint != plan.fingerprint {
         return Err(io::Error::new(io::ErrorKind::WouldBlock, "Dependency inputs changed while saving the repair record; inspect again"));
     }
     let mut repaired = Vec::new();
@@ -74,7 +87,7 @@ fn apply(root: &Path, expected: &str, data_root: &Path) -> io::Result<Value> {
         }
         Ok(())
     })();
-    let after = preview(&plan.root);
+    let after = preview_scoped(&plan.root, startup);
     let error = result.err().map(|error| error.to_string());
     let verified = error.is_none() && after.is_ok() && repaired.iter().all(|destination| {
         plan.entries.iter().find(|entry| &entry.destination == destination).is_some_and(|entry|
@@ -167,6 +180,10 @@ fn ordinary_ancestors(root: &Path, path: &Path) -> io::Result<()> {
 }
 
 pub(crate) fn preview(root: &Path) -> io::Result<DependencyPreview> {
+    preview_scoped(root, false)
+}
+
+fn preview_scoped(root: &Path, startup: bool) -> io::Result<DependencyPreview> {
     let root = fs::canonicalize(root)?;
     let lock_bytes = bounded(&root.join("pnpm-lock.yaml"), 16 * 1024 * 1024)?;
     let lock: Value = serde_yaml_ng::from_slice(&lock_bytes).map_err(io::Error::other)?;
@@ -189,6 +206,7 @@ pub(crate) fn preview(root: &Path) -> io::Result<DependencyPreview> {
     }
     let mut entries = Vec::new();
     for (importer, spec) in importers {
+        if startup && !(importer.starts_with("packages/") || importer.starts_with("vendor/") || importer == "apps/cli" || importer == "apps/desktop") { continue; }
         let base = if importer == "." { root.clone() } else { root.join(relative(importer)?) };
         ordinary_ancestors(&root, &base)?;
         let manifest_bytes = bounded(&base.join("package.json"), 2 * 1024 * 1024)?;
@@ -199,6 +217,7 @@ pub(crate) fn preview(root: &Path) -> io::Result<DependencyPreview> {
             if let Some(deps) = manifest[section].as_object() { required.extend(deps.keys()); }
         }
         for name in required {
+            if startup && manifest["peerDependenciesMeta"][name]["optional"].as_bool() == Some(true) && manifest["dependencies"].get(name).is_none() { continue; }
             if entries.len() >= 10000 { return Err(invalid("Too many missing dependencies")); }
             let package = package_path(name)?;
             let destination = base.join("node_modules").join(&package);
@@ -208,6 +227,9 @@ pub(crate) fn preview(root: &Path) -> io::Result<DependencyPreview> {
                     if nexus_core::path_is_reparse(&metadata) && fs::canonicalize(&destination).is_err() {
                         entries.push(DependencyEntry { importer: importer.clone(), package: name.clone(), destination,
                             target: None, reason: "existing_broken_link" });
+                    }
+                    if startup && !metadata.is_dir() && !nexus_core::path_is_reparse(&metadata) {
+                        return Err(invalid(&format!("Startup dependency conflicts with an existing file: {importer}: {name}")));
                     }
                     continue; // Existing entries are never replaced, including broken links.
                 }
@@ -253,6 +275,24 @@ pub(crate) fn preview(root: &Path) -> io::Result<DependencyPreview> {
     Ok(DependencyPreview { root, entries, fingerprint: format!("{:x}", identity.finalize()) })
 }
 
+// Run under the caller's lifecycle ownership, before spawning Harness. Only
+// inspect official runtime importers: no registry access, plugin execution or full tree walk.
+pub(crate) fn ensure_startup(root: &Path, data_root: &Path) -> io::Result<Value> {
+    if !root.join("packages/boot/app-boot/package.json").is_file() {
+        return Ok(serde_json::json!({"phase":"unsupported_layout"}));
+    }
+    let plan = preview_scoped(root, true)?;
+    if let Some(entry) = plan.entries.iter().find(|entry| entry.target.is_none()) {
+        return Err(invalid(&format!("Startup dependency unavailable: {}: {} ({}). Repair the selected Harness version before starting.", entry.importer, entry.package, entry.reason)));
+    }
+    if plan.entries.is_empty() { return Ok(serde_json::json!({"phase":"ready"})); }
+    let result = apply_scoped(root, &plan.fingerprint, data_root, true)?;
+    if result["phase"] != "repaired" || !preview_scoped(root, true)?.entries.is_empty() {
+        return Err(invalid("Startup dependency repair incomplete; inspect dependency-repair-history before retrying"));
+    }
+    Ok(result)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -261,13 +301,67 @@ mod tests {
     fn installed_release_preview_is_read_only() {
         let root = PathBuf::from(std::env::var_os("NEXUS_TEST_DEPENDENCY_ROOT").expect("explicit release root required"));
         let started = std::time::Instant::now();
-        let plan = preview(&root).expect("installed release preview");
+        let plan = preview_scoped(&root, true).expect("installed startup preview");
         let mut reasons = std::collections::BTreeMap::new();
         for entry in &plan.entries { *reasons.entry(entry.reason).or_insert(0usize) += 1; }
         println!("preview_ms={} entries={} reasons={reasons:?}", started.elapsed().as_millis(), plan.entries.len());
         for entry in &plan.entries { println!("{}: {} ({})", entry.importer, entry.package, entry.reason); }
-        assert_eq!(preview(&root).unwrap().fingerprint, plan.fingerprint, "unchanged installed inputs must produce a stable plan");
+        assert_eq!(preview_scoped(&root, true).unwrap().fingerprint, plan.fingerprint, "unchanged installed inputs must produce a stable plan");
     }
+    #[test]
+    fn startup_recovers_repeated_missing_entries_and_blocks_unavailable_packages() {
+        let base = std::env::temp_dir().join(format!("nexus-startup-repair-{}", nexus_core::agent_auth::random_hex().unwrap()));
+        let root = base.join("release"); let data = base.join("data");
+        let importer = root.join("packages/boot/app-boot");
+        let target = root.join("vendor/example");
+        fs::create_dir_all(&importer).unwrap(); fs::create_dir_all(&target).unwrap(); fs::create_dir_all(&data).unwrap();
+        fs::write(importer.join("package.json"), r#"{"peerDependencies":{"example":"*"}}"#).unwrap();
+        fs::write(target.join("package.json"), r#"{"name":"example","version":"1.0.0"}"#).unwrap();
+        fs::write(root.join("pnpm-lock.yaml"), "importers:\n  packages/boot/app-boot:\n    devDependencies:\n      example:\n        version: link:../../../vendor/example\n").unwrap();
+        let link = importer.join("node_modules/example");
+        for _ in 0..2 {
+            assert_eq!(ensure_startup(&root, &data).unwrap()["phase"], "repaired");
+            assert_eq!(fs::canonicalize(&link).unwrap(), fs::canonicalize(&target).unwrap());
+            assert_eq!(ensure_startup(&root, &data).unwrap()["phase"], "ready");
+            #[cfg(windows)] fs::remove_dir(&link).unwrap();
+            #[cfg(unix)] fs::remove_file(&link).unwrap();
+        }
+        fs::write(&link, "preserve user file").unwrap();
+        assert!(ensure_startup(&root, &data).is_err());
+        assert_eq!(fs::read_to_string(&link).unwrap(), "preserve user file");
+        fs::remove_file(&link).unwrap(); fs::remove_dir_all(&target).unwrap();
+        assert!(ensure_startup(&root, &data).unwrap_err().to_string().contains("example"));
+        assert!(!link.exists()); fs::remove_dir_all(base).unwrap();
+    }
+
+    #[test]
+    fn startup_recovers_official_plugin_dependencies_outside_bootstrap() {
+        let base = std::env::temp_dir().join(format!("nexus-startup-repair-{}", nexus_core::agent_auth::random_hex().unwrap()));
+        let root = base.join("release"); let data = base.join("data");
+        let importer = root.join("packages/settings/settings-file");
+        fs::create_dir_all(root.join("packages/boot/app-boot")).unwrap();
+        fs::write(root.join("packages/boot/app-boot/package.json"), "{}").unwrap();
+        let target = root.join("vendor/example");
+        fs::create_dir_all(&importer).unwrap(); fs::create_dir_all(&target).unwrap(); fs::create_dir_all(&data).unwrap();
+        fs::write(importer.join("package.json"), r#"{"peerDependencies":{"example":"*"}}"#).unwrap();
+        fs::write(target.join("package.json"), r#"{"name":"example","version":"1.0.0"}"#).unwrap();
+        fs::write(root.join("pnpm-lock.yaml"), "importers:\n  packages/settings/settings-file:\n    devDependencies:\n      example:\n        version: link:../../../vendor/example\n").unwrap();
+        let link = importer.join("node_modules/example");
+        for _ in 0..2 {
+            assert_eq!(ensure_startup(&root, &data).unwrap()["phase"], "repaired");
+            assert_eq!(fs::canonicalize(&link).unwrap(), fs::canonicalize(&target).unwrap());
+            assert_eq!(ensure_startup(&root, &data).unwrap()["phase"], "ready");
+            #[cfg(windows)] fs::remove_dir(&link).unwrap();
+            #[cfg(unix)] fs::remove_file(&link).unwrap();
+        }
+        fs::write(&link, "preserve user file").unwrap();
+        assert!(ensure_startup(&root, &data).is_err());
+        assert_eq!(fs::read_to_string(&link).unwrap(), "preserve user file");
+        fs::remove_file(&link).unwrap(); fs::remove_dir_all(&target).unwrap();
+        assert!(ensure_startup(&root, &data).unwrap_err().to_string().contains("example"));
+        assert!(!link.exists()); fs::remove_dir_all(base).unwrap();
+    }
+
     #[test]
     fn preview_uses_exact_local_package_and_never_writes() {
         let root = std::env::temp_dir().join(format!("nexus-dependency-preview-{}", nexus_core::agent_auth::random_hex().unwrap()));
@@ -326,7 +420,7 @@ mod tests {
 
     #[test]
     #[ignore = "requires NEXUS_TEST_NODE and permission to launch an owned Node fixture"]
-    fn repaired_link_restores_real_node_module_loading() {
+    fn startup_repair_restores_real_node_module_loading() {
         let node = PathBuf::from(std::env::var_os("NEXUS_TEST_NODE").expect("explicit Node executable required"));
         let base = std::env::temp_dir().join(format!("nexus-repair-load-{}", nexus_core::agent_auth::random_hex().unwrap()));
         let root = base.join("release"); let data = base.join("data");
@@ -334,11 +428,13 @@ mod tests {
         fs::create_dir_all(&package).unwrap(); fs::create_dir(&data).unwrap();
         fs::write(package.join("package.json"), r#"{"name":"example","version":"1.2.3","type":"module","exports":"./index.js"}"#).unwrap();
         fs::write(package.join("index.js"), "export default 'module-loaded';").unwrap();
-        fs::write(root.join("package.json"), r#"{"dependencies":{"example":"1.2.3"}}"#).unwrap();
-        fs::write(root.join("pnpm-lock.yaml"), "importers:\n  .:\n    dependencies:\n      example:\n        version: 1.2.3\n").unwrap();
+        let importer = root.join("packages/boot/app-boot");
+        fs::create_dir_all(&importer).unwrap();
+        fs::write(importer.join("package.json"), r#"{"dependencies":{"example":"1.2.3"}}"#).unwrap();
+        fs::write(root.join("pnpm-lock.yaml"), "importers:\n  packages/boot/app-boot:\n    dependencies:\n      example:\n        version: 1.2.3\n").unwrap();
         let run = || {
             let mut command = std::process::Command::new(&node);
-            command.current_dir(&root).env_remove("NODE_OPTIONS").env_remove("NODE_PATH")
+            command.current_dir(&importer).env_remove("NODE_OPTIONS").env_remove("NODE_PATH")
                 .args(["--input-type=module", "-e", "import value from 'example'; console.log(value)"]);
             #[cfg(windows)] { use std::os::windows::process::CommandExt; command.creation_flags(0x08000000); }
             command.output().unwrap()
@@ -346,13 +442,12 @@ mod tests {
         let before = run();
         assert!(!before.status.success());
         assert!(String::from_utf8_lossy(&before.stderr).contains("ERR_MODULE_NOT_FOUND"));
-        let plan = preview(&root).unwrap();
-        assert_eq!(apply(&root, &plan.fingerprint, &data).unwrap()["phase"], "repaired");
+        assert_eq!(ensure_startup(&root, &data).unwrap()["phase"], "repaired");
         let after = run();
         assert!(after.status.success(), "{}", String::from_utf8_lossy(&after.stderr));
         assert_eq!(String::from_utf8_lossy(&after.stdout).trim(), "module-loaded");
-        #[cfg(windows)] fs::remove_dir(root.join("node_modules/example")).unwrap();
-        #[cfg(unix)] fs::remove_file(root.join("node_modules/example")).unwrap();
+        #[cfg(windows)] fs::remove_dir(importer.join("node_modules/example")).unwrap();
+        #[cfg(unix)] fs::remove_file(importer.join("node_modules/example")).unwrap();
         fs::remove_dir_all(base).unwrap();
     }
 

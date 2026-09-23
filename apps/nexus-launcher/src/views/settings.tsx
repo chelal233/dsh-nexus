@@ -504,7 +504,10 @@ function HarnessPreferencesPanel({
     <Panel title={t("Harness configuration")} icon={<SlidersHorizontal size={18} />}>
       <BusyOverlay label={patchBusy ? t("Operation in progress") : null} />
       <p className="field-help">
-        {t("Blank fields inherit upstream behavior. Changes apply on the next launch.")}
+        {t("Blank fields inherit upstream behavior. Changes apply on the next launch.")}{" "}
+        {t(
+          "Common settings apply to Web and Desktop. Port and browser opening apply only to Web; tool mode applies to Web and headless; SDK settings apply only to their named SDK profile. Runtime patches here apply to Web CLI launches; edit the Desktop profile in the official app.",
+        )}
       </p>
       <div className="form-grid">
         {field(
@@ -1027,6 +1030,7 @@ export function SettingsView({
     return () => window.removeEventListener(ZOOM_CHANGED, sync);
   }, []);
   const { locale, setLocale, t } = useI18n();
+  const [nativeSettingsError, setNativeSettingsError] = useState("");
   const [autostartEnabled, setAutostartEnabled] = useState<boolean | null>(null);
   const desktopUpdate = useDesktopUpdate();
   const [desktopUpdateError, setDesktopUpdateError] = useState("");
@@ -1049,7 +1053,10 @@ export function SettingsView({
     }
     // Re-apply the persisted level whenever settings open; best-effort in
     // browser-only previews.
-    void invoke("agent_log_set", { level: logLevel }).catch(() => undefined);
+    if (window.nexusDesktop)
+      void invoke("agent_log_set", { level: logLevel }).catch((error) =>
+        setNativeSettingsError(errorMessage(error)),
+      );
   }, [logLevel]);
   useEffect(() => {
     // Best-effort: the launcher desktop bundle answers; browser-only
@@ -1059,11 +1066,12 @@ export function SettingsView({
       .catch(() => setAutostartEnabled(null));
   }, []);
   const toggleAutostart = async (enabled: boolean) => {
+    setNativeSettingsError("");
     try {
       await invoke("autostart_set", { enabled });
       setAutostartEnabled(enabled);
-    } catch {
-      setAutostartEnabled(null);
+    } catch (error) {
+      setNativeSettingsError(errorMessage(error));
     }
   };
   const config = asObject(snapshot.config);
@@ -1681,6 +1689,11 @@ export function SettingsView({
               "Runtime settings apply to the next Harness launch and dependency operation. Restore previous configuration can undo the last saved configuration.",
             )}
           </p>
+          <p className="field-help">
+            {t(
+              "Official Desktop uses its matched bundled runtime; these overrides apply to Web/CLI and dependency tools.",
+            )}
+          </p>
           <div className="status-block">
             <div className="form-grid">
               {(["node", "pnpm", "git"] as const).map((name) => (
@@ -1875,7 +1888,10 @@ export function SettingsView({
                 className="form-input"
                 aria-label={t("Agent log level")}
                 value={logLevel}
-                onChange={(event) => setLogLevel(event.target.value)}
+                onChange={(event) => {
+                  setNativeSettingsError("");
+                  setLogLevel(event.target.value);
+                }}
               >
                 <option value="error">{t("Error")}</option>
                 <option value="warn">{t("Warning")}</option>
@@ -1998,6 +2014,11 @@ export function SettingsView({
               </label>
             </div>
           </div>
+          {nativeSettingsError && (
+            <p className="form-error" role="alert">
+              {nativeSettingsError}
+            </p>
+          )}
           {desktopUpdateError && (
             <p className="form-error" role="alert">
               {desktopUpdateError}

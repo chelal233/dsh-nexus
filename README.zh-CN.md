@@ -79,3 +79,7 @@ Nexus 是独立项目，不代表上游 Harness 官方发布。自有代码采�
 ## 社区
 
 - 感谢 [LINUX DO](https://linux.do/) 社区提供开放、友善的技术交流平台。
+
+### Linux ARM64 运行要求（下一本地构建）
+
+完整内置 Git 要求 **glibc 2.34 或更新版本**，同时需要 libcurl、zlib 和 Electron 的桌面库。DEB/RPM 依赖声明包含该下限；AppImage 用户需核对系统版本。不能仅凭 UOS、麒麟、deepin 等发行版名称判断兼容性。此内置 Git 构建暂不覆盖更旧系统；Rust 程序仍单独维持 glibc 2.28 的构建上限。

@@ -1,3 +1,4 @@
+import { OfflineProfileRepair } from "../profile-repair";
 import { type ViewProps, type JsonObject } from "../app-types";
 import { PageIntro, Panel, ActionButton, StatusPill, DataList } from "../ui-components";
 import { DiagnosticsView, RecoveryRecordWizard, LiveLogRetention } from "./recovery";
@@ -36,6 +37,7 @@ export function MaintenanceView(props: ViewProps & { activity?: React.ReactNode 
       {props.activity}
       <DiagnosticsView {...props} embedded />
       <DependencyRepairPanel {...props} />
+      <OfflineProfileRepair {...props} />
       <CanaryPanel {...props} />
       <RecoveryRecordWizard
         disabled={props.busyAction !== null || props.snapshot.startup?.available !== true}

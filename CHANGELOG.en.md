@@ -1,5 +1,17 @@
 # Changelog
 
+## Unreleased — local test build
+
+- Normal startup runs Harness first and diagnoses confirmed startup failures. Verifiable missing dependencies receive at most one repair and retry. A readiness timeout preserves diagnostics without stopping a still-running process.
+- Official Desktop binds official modules from the selected release and backs up stale official packages that shadow them, addressing old settings-provider incompatibility while preserving third-party plugins and configuration.
+- Acceptance found incomplete corresponding-source and nested-notice materials for bundled Git. CI builds may proceed, but package uploads and public releases remain blocked.
+- Manage plugins before Harness starts. When the selected version provides the official manager, listing, enabling, disabling, inspecting, installing and removing use its implementation and protection rules. New installs remain disabled until explicitly enabled; disabling retains dependencies. Older versions retain their compatible interface.
+- Node, pnpm and full portable Git use explicit configuration first, otherwise bundled tools. Profile repair and terminal operations no longer require a prior Harness launch to discover these tools. Full offline exports retain the bundled tools.
+- Snapshot/checkpoint titles use local time; details open in a drawer with readable configuration and a Source code view.
+- Earlier local fixes include prepared-version switching, capability-based cold-start acceleration, random port zero, settings propagation and actionable startup diagnostics.
+- Validation boundaries: Windows package verification is separate from macOS/Linux real-device acceptance. Package-script approval remains with Harness. Git corresponding-source/nested-license review is tracked in third-party notices before public redistribution. This entry does not announce a GitHub release.
+
+
 [简体中文](CHANGELOG.md)
 
 

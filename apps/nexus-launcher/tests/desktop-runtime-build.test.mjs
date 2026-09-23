@@ -7,7 +7,7 @@ import { createHash } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
 import { preparePrimaryPayload, nativeTar, runtimeInventory } from '../electron/desktop-runtime-cache.mjs';
 import { cachedAsset, desktopAssets, pin } from '../desktop/scripts/prepare-desktop-runtime.mjs';
-import { verifyDesktopKit, digest } from '../electron/desktop-runtime.mjs';
+import { verifyDesktopKit, digest, desktopLocksCompatible, desktopKitMatchesSource } from '../electron/desktop-runtime.mjs';
 import { probeDesktopSupport } from '../electron/harness-desktop.mjs';
 import { desktopRuntimeForExport, desktopHostForExport } from '../../../crates/nexus-agent/scripts/offline-package.mjs';
 const temp = t => { const root=fs.mkdtempSync(path.join(os.tmpdir(),'nexus-desktop-build-')); t.after(()=>fs.rmSync(root,{recursive:true,force:true})); return root; };
@@ -41,13 +41,38 @@ test('archive kits preserve offline export and missing supported targets fail cl
  assert.equal(verifyDesktopKit(kit).archive,path.join(kit,'electron.zip'));
  for(const name of ['scripts','node_modules/electron','node_modules/pnpm'])fs.mkdirSync(path.join(slot,'apps/desktop',name),{recursive:true});
  fs.copyFileSync(path.join(kit,'lock.json'),path.join(slot,'apps/desktop/scripts/primary-runtime-lock.json'));
+ fs.writeFileSync(path.join(slot,'apps/desktop/scripts/desktop-build-paths.mjs'),`const SUPPORTED_TARGETS = new Set(['${target}'])`);
  for(const [name,version] of [['electron','44.0.0'],['pnpm','11.7.0']])fs.writeFileSync(path.join(slot,'apps/desktop/node_modules',name,'package.json'),JSON.stringify({version}));
+ assert.equal(await desktopRuntimeForExport(slot,path.join(root,'runtime')),kit);
+ fs.mkdirSync(path.join(slot,'scripts/primary-runtime'),{recursive:true});
+ fs.writeFileSync(path.join(slot,'scripts/primary-runtime/lock.json'),JSON.stringify({...lock,targets:{...lock.targets,'unrelated-target':{}}}));
+ fs.unlinkSync(path.join(slot,'apps/desktop/scripts/primary-runtime-lock.json'));
+ assert.equal(desktopKitMatchesSource(slot,kit),true);
  assert.equal(await desktopRuntimeForExport(slot,path.join(root,'runtime')),kit);
  manifest.supported=false;manifest.reason='upstream_target_unsupported';save();
  assert.throws(()=>verifyDesktopKit(kit),/invalid/);
  manifest.supported=true;manifest.files=manifest.files.filter(f=>f.path!=='electron.zip');save();
  assert.throws(()=>verifyDesktopKit(kit),/invalid/);
  await assert.rejects(desktopRuntimeForExport(slot,path.join(root,'runtime')),/Incomplete/);
+});
+
+test('runtime compatibility compares target payloads, not release labels or other platforms',()=>{
+ const lock={nodeVersion:'24.21.0',pythonVersion:'3.12.14',wheels:[],targets:{'win-x64':{nodeSha256:'a',pythonSha256:'b',wheels:[]}}};
+ assert.equal(desktopLocksCompatible({...lock,targets:{...lock.targets,'linux-arm64':{}}},lock,'win32','x64'),true);
+ assert.equal(desktopLocksCompatible({...lock,nodeVersion:'99.0.0'},lock,'win32','x64'),false);
+ assert.equal(desktopLocksCompatible({...lock,targets:{'win-x64':{...lock.targets['win-x64'],nodeSha256:'changed'}}},lock,'win32','x64'),false);
+ assert.equal(desktopLocksCompatible(lock,lock,'linux','arm64'),false);
+});
+
+test('shared runtime targets do not falsely enable unsupported Desktop shells',t=>{
+ const root=temp(t), app=path.join(root,'apps/desktop');
+ fs.mkdirSync(path.join(app,'scripts'),{recursive:true});
+ fs.mkdirSync(path.join(root,'scripts/primary-runtime'),{recursive:true});
+ fs.writeFileSync(path.join(app,'package.json'),JSON.stringify({name:'@deepseek-ai/dsh-desktop',main:'lib/main.js',version:'0.1.7-alpha.1'}));
+ fs.writeFileSync(path.join(root,'scripts/primary-runtime/lock.json'),JSON.stringify({targets:{'win-x64':{},'linux-arm64':{}}}));
+ fs.writeFileSync(path.join(app,'scripts/desktop-build-paths.mjs'),"const SUPPORTED_TARGETS = new Set(['win-x64'])");
+ assert.equal(probeDesktopSupport(root,{platform:'win32',arch:'x64'}).supported,true);
+ assert.equal(probeDesktopSupport(root,{platform:'linux',arch:'arm64'}).supported,false);
 });
 
 test('unsupported Desktop marker is valid only when the upstream lock omits that target',t=>{

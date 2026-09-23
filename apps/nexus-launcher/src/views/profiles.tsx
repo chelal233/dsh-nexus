@@ -1,14 +1,11 @@
+import { OfficialPlugins } from "../official-plugins";
 import { confirmAction, BusyOverlay } from "../confirmation";
 import { type ViewProps, type JsonObject } from "../app-types";
 import { stringValue, arrayValue, asObject, booleanValue, numberValue } from "../json-values";
 import { proxyRequest } from "../agent-bridge";
+import { errorMessage, formatTimestamp, localizedRuntimeState } from "../display-format";
 import {
-  errorMessage,
-  formatTimestamp,
-  localizedRuntimeState,
-  snapshotContentNote,
-} from "../display-format";
-import {
+  Modal,
   PageIntro,
   Panel,
   ActionButton,
@@ -18,6 +15,7 @@ import {
   ErrorState,
   EmptyState,
 } from "../ui-components";
+import { SnapshotContent } from "../snapshot-content";
 import { RestoreStatusPanel } from "../operation-notices";
 import { useI18n } from "../i18n";
 import { useState, useRef, useCallback, useEffect } from "react";
@@ -331,7 +329,31 @@ export function ProfilesView(props: ViewProps) {
                       >
                         {t("Restore")}
                       </ActionButton>
-                      {item.can_restore !== true && (
+                      <ActionButton
+                        disabled={gate.disabled}
+                        onClick={async () => {
+                          if (
+                            !(await confirmAction(
+                              locale === "zh"
+                                ? `彻底删除已删除配置档“${String(item.profile)}”？其归档文件将永久删除，无法恢复。`
+                                : `Permanently delete archived profile "${String(item.profile)}"? Its archived files will be permanently removed and cannot be restored.`,
+                            ))
+                          )
+                            return;
+                          const ok = await runAction(
+                            locale === "zh" ? "彻底删除配置档" : "Permanently delete profile",
+                            "/v1/profiles",
+                            { action: "purge_deleted", profile: item.id },
+                          );
+                          if (ok) void reloadDeleted();
+                        }}
+                      >
+                        {t("Delete permanently")}
+                      </ActionButton>
+                      {item.phase === "purging" && (
+                        <small>{t("Deletion incomplete. Retry permanent deletion.")}</small>
+                      )}
+                      {item.can_restore !== true && item.phase !== "purging" && (
                         <small>{t("A profile with this name already exists")}</small>
                       )}
                     </td>
@@ -368,6 +390,11 @@ export function CheckpointsView({
       stringValue(asObject(asObject(item).summary), "profile_name") === profileFilter,
   );
   const [detail, setDetail] = useState<JsonObject | null>(null);
+  const [detailRequest, setDetailRequest] = useState<{
+    id: string;
+    action: "detail" | "inspect";
+    title: string;
+  } | null>(null);
   const [detailError, setDetailError] = useState<string | null>(null);
   const [detailLoading, setDetailLoading] = useState(false);
   const latest = useRef(createLatestRequest());
@@ -379,7 +406,16 @@ export function CheckpointsView({
     harness.state,
     busyAction !== null,
   );
-  const loadDetail = async (id: string, action: "detail" | "inspect") => {
+  const closeDetail = () => {
+    latest.current.cancel();
+    setDetailRequest(null);
+    setDetail(null);
+    setDetailLoading(false);
+    setDetailError(null);
+  };
+  const loadDetail = async (id: string, action: "detail" | "inspect", title: string) => {
+    setDetailRequest({ id, action, title });
+    setDetail(null);
     const token = latest.current.begin();
     setDetailLoading(true);
     setDetailError(null);
@@ -428,10 +464,15 @@ export function CheckpointsView({
               const summary = asObject(asObject(item).summary);
               const id =
                 stringValue(item, "snapshot_id") || stringValue(summary, "snapshot_id") || "";
+              const title = formatTimestamp(
+                (numberValue(summary, "created_unix_ms") ?? 0) / 1000,
+                t("Time unavailable"),
+                locale,
+              );
               return (
                 <>
                   <div>
-                    <strong>{id}</strong>
+                    <strong title={id}>{title}</strong>
                     <StatusPill
                       label={localizedRuntimeState(stringValue(summary, "kind"), t)}
                       tone={booleanValue(item, "valid") ? "good" : "bad"}
@@ -444,13 +485,13 @@ export function CheckpointsView({
                   <span className="row-meta">
                     <ActionButton
                       disabled={detailLoading}
-                      onClick={() => void loadDetail(id, "detail")}
+                      onClick={() => void loadDetail(id, "detail", title)}
                     >
                       {t("Detail")}
                     </ActionButton>
                     <ActionButton
                       disabled={detailLoading}
-                      onClick={() => void loadDetail(id, "inspect")}
+                      onClick={() => void loadDetail(id, "inspect", title)}
                     >
                       {t("Inspect")}
                     </ActionButton>
@@ -506,10 +547,15 @@ export function CheckpointsView({
             const reference = asObject(asObject(item).snapshot);
             const summary = asObject(reference.summary);
             const legacy = !Object.keys(reference).length;
+            const title = formatTimestamp(
+              numberValue(item, "created_at_unix"),
+              t("Time unavailable"),
+              locale,
+            );
             return (
               <>
                 <div>
-                  <strong>{id || t("Checkpoint")}</strong>
+                  <strong title={id}>{title}</strong>
                   <StatusPill
                     label={
                       legacy
@@ -526,20 +572,34 @@ export function CheckpointsView({
                   </span>
                 </div>
                 <span className="row-meta">
-                  {formatTimestamp(
-                    numberValue(item, "created_at_unix"),
-                    t("Not available"),
-                    locale,
-                  )}{" "}
                   <ActionButton
-                    disabled={detailLoading || legacy}
-                    onClick={() => void loadDetail(id, "detail")}
+                    disabled={detailLoading}
+                    onClick={() => {
+                      if (legacy) {
+                        latest.current.cancel();
+                        setDetailError(null);
+                        setDetailLoading(false);
+                        setDetailRequest({ id, action: "detail", title });
+                        setDetail({
+                          summary: {
+                            snapshot_id: id,
+                            created_unix_ms: (numberValue(item, "created_at_unix") ?? 0) * 1000,
+                            profile_name: stringValue(item, "profile"),
+                            dsh_version: stringValue(item, "release"),
+                            kind: "legacy",
+                          },
+                          files: [],
+                          legacy: true,
+                          metadata: item,
+                        });
+                      } else void loadDetail(id, "detail", title);
+                    }}
                   >
                     {t("Detail")}
                   </ActionButton>
                   <ActionButton
                     disabled={detailLoading || legacy}
-                    onClick={() => void loadDetail(id, "inspect")}
+                    onClick={() => void loadDetail(id, "inspect", title)}
                   >
                     {t("Inspect")}
                   </ActionButton>
@@ -560,91 +620,44 @@ export function CheckpointsView({
           }}
         />
       </Panel>
-      {(detailLoading || detailError || detail) && (
-        <Panel title={t("Snapshot detail")} icon={<ClipboardText size={18} />}>
+      {detailRequest && (
+        <Modal
+          variant="drawer"
+          title={`${t(detailRequest.action === "inspect" ? "Inspect" : "Detail")} · ${detailRequest.title}`}
+          onClose={closeDetail}
+        >
           {detailLoading ? (
             <LoadingState />
           ) : detailError ? (
             <ErrorState
               title={t("Snapshot detail failed")}
               message={detailError}
-              onRetry={() => {
-                setDetail(null);
-                setDetailError(null);
-              }}
+              onRetry={() =>
+                void loadDetail(detailRequest.id, detailRequest.action, detailRequest.title)
+              }
             />
           ) : (
             <SnapshotDetail value={detail} />
           )}
-        </Panel>
+        </Modal>
       )}
     </>
   );
 }
 
 export function SnapshotDetail({ value }: { value: JsonObject | null }) {
-  const { t } = useI18n();
-  const summary = asObject(asObject(value).summary);
-  const files = arrayValue(value, "files");
-  const errors = arrayValue(value, "errors").map(String);
-  return (
-    <div className="status-block">
-      <dl className="detail-list compact-details">
-        <div>
-          <dt>{t("Snapshot")}</dt>
-          <dd>{stringValue(value, "snapshot_id") || stringValue(summary, "snapshot_id")}</dd>
-        </div>
-        <div>
-          <dt>{t("Kind")}</dt>
-          <dd>{localizedRuntimeState(stringValue(summary, "kind"), t)}</dd>
-        </div>
-        <div>
-          <dt>{t("Version")}</dt>
-          <dd>{stringValue(summary, "dsh_version")}</dd>
-        </div>
-        <div>
-          <dt>{t("Files")}</dt>
-          <dd>{files.length}</dd>
-        </div>
-      </dl>
-      {errors.map((item) => (
-        <p className="form-error" key={item}>
-          {item}
-        </p>
-      ))}
-      <DataList
-        items={files}
-        emptyTitle={t("No snapshot files")}
-        emptyDetail={t("No bounded file content was returned.")}
-        render={(item) => (
-          <div className="snapshot-file">
-            <strong>{stringValue(item, "path")}</strong>
-            <span>
-              {localizedRuntimeState(stringValue(item, "state"), t)} ·{" "}
-              {numberValue(item, "stored_size") ?? 0} B
-            </span>
-            {arrayValue(item, "redacted_paths").length > 0 && (
-              <small>
-                {t("Redacted fields")}: {arrayValue(item, "redacted_paths").map(String).join(", ")}
-              </small>
-            )}
-            {stringValue(item, "omitted_reason") && (
-              <small>{t(stringValue(item, "omitted_reason") || "")}</small>
-            )}
-            {stringValue(item, "content") && <pre>{stringValue(item, "content")}</pre>}
-            {booleanValue(item, "content_truncated") && (
-              <small className="truncation-note">
-                {snapshotContentNote(asObject(item).content_note, t)}
-              </small>
-            )}
-          </div>
-        )}
-      />
-    </div>
-  );
+  return <SnapshotContent value={value} />;
 }
 
-export function ProfilePlugins({
+export function ProfilePlugins(props: ViewProps & { profile?: string }) {
+  const profile = props.profile || stringValue(props.snapshot.profiles, "active_profile") || "";
+  return asObject(props.snapshot.profiles).official_plugin_management === true ? (
+    <OfficialPlugins {...props} profile={profile} key={profile} />
+  ) : (
+    <LegacyProfilePlugins {...props} />
+  );
+}
+function LegacyProfilePlugins({
   snapshot,
   busyAction,
   runAction,

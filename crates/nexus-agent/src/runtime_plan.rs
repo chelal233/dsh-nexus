@@ -122,15 +122,12 @@ pub(crate) fn assemble_runtime_plan(
         let action = match state {
             RuntimePlanToolState::Reusable if pinned.is_some() => RuntimePlanActionKind::UsePinned,
             RuntimePlanToolState::Reusable => RuntimePlanActionKind::UseExisting,
-            _ if name == "git" => RuntimePlanActionKind::UseExisting,
             // Runtime provisioning by download is retired: node and pnpm come
             // from a pin, the system, or the bundled copy. Without any of
             // those the plan asks the user to configure paths explicitly.
             _ => RuntimePlanActionKind::ConfigureExternal,
         };
-        let action_reason = if name == "git" && state != RuntimePlanToolState::Reusable {
-            "nexus_embedded_git_only_external_cli_unavailable".to_owned()
-        } else { match action {
+        let action_reason = match action {
             RuntimePlanActionKind::UsePinned => "configured_pin_verified".to_owned(),
             RuntimePlanActionKind::UseExisting if warning.is_some() => {
                 "compatible_bundled_pnpm_major_skew".to_owned()
@@ -145,7 +142,7 @@ pub(crate) fn assemble_runtime_plan(
             RuntimePlanActionKind::ProvisionPortable | RuntimePlanActionKind::InstallSystem => {
                 unreachable!("runtime provisioning actions are retired")
             }
-        }};
+        };
         tools.push(RuntimePlanTool {
             name: name.to_owned(),
             requirements: requirements_for_tool,
@@ -366,9 +363,7 @@ mod tests {
             RuntimeListResponse::new(Vec::new()), None,
         ).expect("an empty machine still produces a runtime supply plan");
         assert!(empty.tools.iter().all(|tool| tool.state == RuntimePlanToolState::Missing));
-        assert_eq!(empty.suggested_actions.iter().find(|action| action.tool == "git").unwrap().action,
-            RuntimePlanActionKind::UseExisting);
-        assert!(empty.suggested_actions.iter().filter(|action| action.tool != "git")
+        assert!(empty.suggested_actions.iter()
             .all(|action| action.action == RuntimePlanActionKind::ConfigureExternal));
         assert_eq!(empty.requirements, first.requirements);
         assert!(first.plan_id.starts_with("runtime-plan-v1:"));
@@ -525,8 +520,8 @@ mod tests {
             .iter()
             .all(|tool| tool.state == RuntimePlanToolState::Missing));
         let git = plan.suggested_actions.iter().find(|tool| tool.tool == "git").unwrap();
-        assert_eq!(git.action, RuntimePlanActionKind::UseExisting);
-        assert_eq!(git.reason, "nexus_embedded_git_only_external_cli_unavailable");
+        assert_eq!(git.action, RuntimePlanActionKind::ConfigureExternal);
+        assert_eq!(git.reason, "configured_path_missing");
         let error = plan_registered_release(
             &releases,
             &config,

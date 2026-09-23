@@ -2,14 +2,30 @@
 use std::io;
 use nexus_core::{NexusPaths, HarnessLaunchSpec};
 
+// Only flags whose startup semantics Nexus owns can use the single-start path.
+pub(crate) fn single_start_arguments_supported(args: &[String], profile: &str) -> bool {
+    let mut selected = false;
+    let mut i = 1;
+    while i < args.len() {
+        match args[i].as_str() {
+            "--profile" if !selected && args.get(i + 1).is_some_and(|value| value == profile) => { selected = true; i += 2; },
+            "--port" if args.get(i + 1).is_some_and(|value| value.parse::<u16>().is_ok()) => i += 2,
+            "--no-open" => i += 1,
+            value if value.strip_prefix("--port=").is_some_and(|port| port.parse::<u16>().is_ok()) => i += 1,
+            _ => return false,
+        }
+    }
+    selected
+}
+
 // This is a startup protocol capability, not support for every optional setting.
-// Unknown/older artifacts retain the isolated compatibility check.
+// Unsupported artifacts use ordinary readiness observation, never a pre-start diagnostic.
 pub(crate) fn single_start_supported(root: &std::path::Path, home: &std::path::Path, profile: &str) -> bool {
     let supported = || -> io::Result<bool> {
         let read = |file: &std::path::Path| nexus_core::read_regular_file_bounded(file, 2 * 1024 * 1024)
             .and_then(|bytes| String::from_utf8(bytes.ok_or_else(|| io::Error::other("missing startup artifact"))?).map_err(io::Error::other));
         let manifest: serde_json::Value = serde_json::from_str(&read(&root.join("package.json"))?)?;
-        if manifest["name"] != "@deepseek-ai/dsh-root" || manifest["version"] != "0.1.6-alpha.2" { return Ok(false); }
+        if manifest["name"] != "@deepseek-ai/dsh-root" { return Ok(false); }
         let profile_manifest = home.join("profiles").join(profile).join("package.json");
         if profile_manifest.exists() {
             let value: serde_json::Value = serde_json::from_str(&read(&profile_manifest)?)?;
@@ -26,7 +42,17 @@ pub(crate) fn single_start_supported(root: &std::path::Path, home: &std::path::P
             && read(&root.join("packages/boot/app-boot/lib/index.js"))?.contains("startupDiagnostic")
             && read(&cli.join("bin.js"))?.contains("reportStartupFailure"))
     };
-    supported().unwrap_or(false)
+    match supported() {
+        Ok(true) => true,
+        Ok(false) => {
+            tracing::info!(profile, "Required Web startup readiness/diagnostic capability is unavailable; using ordinary startup observation");
+            false
+        }
+        Err(error) => {
+            tracing::info!(profile, reason = %error, "Cannot verify Web startup capability; using ordinary startup observation");
+            false
+        }
+    }
 }
 
 pub(crate) fn host_startup_pid(paths: &NexusPaths, run: &str) -> Option<u32> {
@@ -132,6 +158,18 @@ pub(crate) fn prepare(paths: &NexusPaths, home: &std::path::Path, profile: &str,
 mod tests {
     use super::*;
     #[test]
+    fn web_flags_do_not_disable_single_start_but_unknown_arguments_do() {
+        for flags in [vec!["--port", "0"], vec!["--port=3851", "--no-open"], vec![]] {
+            let args: Vec<String> = [vec!["bin.js", "--profile", "web"], flags].concat().into_iter().map(str::to_owned).collect();
+            assert!(single_start_arguments_supported(&args, "web"));
+        }
+        for flags in [vec!["--port", "65536"], vec!["--patch", "custom.yml"], vec!["--profile", "other"], vec!["--unknown"]] {
+            let args: Vec<String> = [vec!["bin.js", "--profile", "web"], flags].concat().into_iter().map(str::to_owned).collect();
+            assert!(!single_start_arguments_supported(&args, "web"));
+        }
+    }
+
+    #[test]
     fn host_commit_requires_the_current_process_and_run() {
         let paths = NexusPaths::from_root(std::env::temp_dir().join(format!("nexus-host-commit-{}", nexus_core::unix_time_nanos_for_update())));
         paths.ensure_directories().unwrap();
@@ -155,6 +193,10 @@ mod tests {
         std::fs::write(root.join("apps/cli/lib/bin.js"), "reportStartupFailure").unwrap();
         std::fs::write(root.join("packages/boot/app-boot/lib/index.js"), "startupDiagnostic").unwrap();
         assert!(single_start_supported(&root, &home, "web"));
+        for version in ["0.1.7-alpha.1", "9.0.0-future"] {
+            std::fs::write(root.join("package.json"), format!(r#"{{"name":"@deepseek-ai/dsh-root","version":"{version}"}}"#)).unwrap();
+            assert!(single_start_supported(&root, &home, "web"));
+        }
         assert!(!single_start_supported(&root, &home, "headless"));
         std::fs::create_dir_all(home.join("profiles/web")).unwrap();
         std::fs::write(home.join("profiles/web/package.json"), r#"{"dsh":{"profile":{"bundles":["@deepseek-ai/dsh-headless"]}}}"#).unwrap();
