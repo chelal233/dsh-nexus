@@ -44,7 +44,18 @@ export function preparePrimaryPayload(kit, cache) {
 
 export function preparePortableHost(kit, cache) {
   return prepareArchive(kit.hostArchive, kit.hostArchiveSha256, 'host', portableHostEntry(kit.platform), cache, kit.platform === 'darwin'
-    ? root => execFileSync('/usr/bin/codesign', ['--verify', '--deep', '--strict', requireApp(root)], { timeout: 30000 }) : undefined);
+    ? root => verifyMacApp(requireApp(root)) : undefined);
+}
+
+export function verifyMacApp(app, run = execFileSync) {
+  try {
+    run('/usr/bin/codesign', ['--verify', '--deep', '--strict', app], { timeout: 120000, encoding: 'utf8' });
+  } catch (error) {
+    const reason = error.code === 'ETIMEDOUT'
+      ? 'macOS app signature verification timed out after 120 seconds'
+      : `macOS app signature verification failed: ${String(error.stderr || error.message).trim()}`;
+    throw new Error(reason, { cause: error });
+  }
 }
 
 const requireApp = root => path.join(root, 'Nexus Launcher.app');

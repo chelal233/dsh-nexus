@@ -5,7 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { createHash } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
-import { preparePrimaryPayload, nativeTar, runtimeInventory } from '../electron/desktop-runtime-cache.mjs';
+import { preparePrimaryPayload, nativeTar, runtimeInventory, verifyMacApp } from '../electron/desktop-runtime-cache.mjs';
 import { cachedAsset, desktopAssets, pin } from '../desktop/scripts/prepare-desktop-runtime.mjs';
 import { verifyDesktopKit, digest, desktopLocksCompatible, desktopKitMatchesSource } from '../electron/desktop-runtime.mjs';
 import { probeDesktopSupport } from '../electron/harness-desktop.mjs';
@@ -174,4 +174,19 @@ test('export rejects an old or changed same-version launcher before executing it
  fs.writeFileSync(path.join(resources,'app.asar'),'changed');
  fs.writeFileSync(path.join(resources,'nexus-electron-host.json'),JSON.stringify({schema:1,entry:'nexus-official-desktop',electronVersion:'44.0.0',appAsarSha256:'wrong'}));
  await assert.rejects(desktopHostForExport(kit,{desktop_host:host}),/verified Nexus host/);
+});
+
+
+test('macOS signature checks retain strict verification and distinguish timeout from invalid signatures', () => {
+  verifyMacApp('/fixture/Nexus Launcher.app', (program, args, options) => {
+    assert.equal(program, '/usr/bin/codesign');
+    assert.deepEqual(args, ['--verify', '--deep', '--strict', '/fixture/Nexus Launcher.app']);
+    assert.equal(options.timeout, 120000);
+  });
+  const timeout = Object.assign(new Error('spawn timeout'), { code: 'ETIMEDOUT' });
+  assert.throws(() => verifyMacApp('/fixture', () => { throw timeout; }), error =>
+    /timed out/.test(error.message) && error.cause === timeout);
+  assert.throws(() => verifyMacApp('/fixture', () => {
+    throw Object.assign(new Error('exit 1'), { stderr: 'a sealed resource is missing or invalid' });
+  }), /verification failed: a sealed resource is missing or invalid/);
 });
