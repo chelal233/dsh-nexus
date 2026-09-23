@@ -17,7 +17,7 @@ Inspected the five cached original dugite-native v2.53.0-4 tar.gz archives (buil
 | Target | Evidence / 实物结果 | Remaining obligations / 缺口 |
 | --- | --- | --- |
 | Windows x64 / ARM64 | 原有 LICENSE.txt 与组件许可目录保留；包含 Git LFS、GCM、MSYS/MinGW 组件 / Original licenses retained; includes LFS, GCM and MSYS/MinGW components | 对应源码与构建材料未配齐；完整嵌套组件映射未闭合 / Corresponding source, build materials and complete nested-component mapping missing |
-| macOS x64 / ARM64 | 原始包没有名称匹配 LICENSE/COPYING/copyright/third-party 的文件；构建包含 LFS 3.7.1、GCM 2.9.0 / No matching license files in original archives; includes LFS and GCM | Nexus 仅补 Git COPYING，不涵盖 LFS、GCM/.NET 依赖许可；对应源码未提供 / Added Git COPYING does not cover LFS, GCM/.NET notices; corresponding source missing |
+| macOS x64 / ARM64 | 原始包有 `libexec/git-core/NOTICE`，含 GCM/.NET 通知；旧扫描漏了 NOTICE。含 LFS 3.7.1、GCM 2.9.0 / GCM/.NET NOTICE is present; the earlier filename scan missed it | LFS 通知、GCM 自身 LICENSE 及依赖映射待补；已有 NOTICE 保留，对应源码未交付 / LFS notices, GCM own LICENSE and dependency mapping remain incomplete; existing NOTICE is retained; source delivery missing |
 | Linux ARM64 | 同样没有上述许可证文件；含 LFS 3.7.1；构建配置没有该架构的 GCM URL / No matching license files; LFS included, no ARM64 GCM URL configured | LFS 及其依赖通知、CA 材料与对应源码核查未完成 / LFS dependency notices, CA materials and source delivery incomplete |
 
 文件名匹配仅用于定位通知，不证明不存在嵌入式声明，也不证明已找到全部许可。Windows package-versions 是候选组件清单，不能把其中每项都等同于实际打包文件。
@@ -35,9 +35,13 @@ Git and dugite-native build code use GPLv2. Nexus adds Git COPYING and retains W
 
 ## 具体未决证据 / Specific unresolved evidence
 
-Windows executable reports `2.53.0.windows.4`, while its packaged `etc/package-versions.txt` lists Git `2.52.0.1-1`. The v2.53.0.windows.4 release assets include `mingw-w64-git-2.52.0.1-1.src.tar.gz`. This mismatch needs content/provenance verification; the filename alone cannot establish corresponding source. Do not relabel this source archive as matching 2.53.0.
+补充核实已解除 Windows Git 版本疑点：官方 `mingw-w64-git-2.52.0.1-1.src.tar.gz` 内实际包含 `mingw-w64-git/git-v2.53.0.windows.4.tar.gz`，其 `mingw-w64-git/PKGBUILD` 写明 `tag=2.53.0.windows.4`、`pkgver=2.52.0.1`。这是包元数据与 Git 标签不同，不能再作为源码不对应的证据。上游已有该源码；Nexus 尚未完成收集、核验及发行配套交付。
 
-Windows 实际版本与上述清单/源码附件版本不一致，必须核实内容及构建来源；当前不能把该源码附件认定为对应源码，也不能据此断言上游没有提供源码。
+Follow-up inspection resolved the apparent Windows Git version mismatch: the official source archive contains the exact 2.53.0.windows.4 source tarball and its PKGBUILD explicitly uses that tag with package version 2.52.0.1. The differently named outer archive is not evidence of missing matching source. Nexus still needs to collect, verify and deliver the source companion and map the actually shipped MSYS/MinGW components.
+
+旧许可证扫描漏掉 `NOTICE`。两个 macOS 包有 `libexec/git-core/NOTICE`，Windows x64/ARM64 分别有 `mingw64/doc/git-credential-manager/NOTICE` 与 `clangarm64/doc/git-credential-manager/NOTICE`。清单已补正。Git LFS 仍缺其 MIT/Go 及实际 Go 模块通知，不能用 Git COPYING 替代。
+
+The earlier scan omitted NOTICE filenames; the inventory now includes the verified macOS and Windows GCM NOTICE files. Git LFS-specific MIT/Go and actual dependency notices remain separate obligations; Git COPYING does not cover them.
 
 ## 公开发行放行条件 / Release acceptance
 

@@ -41,6 +41,7 @@ test('archive kits preserve offline export and missing supported targets fail cl
  assert.equal(verifyDesktopKit(kit).archive,path.join(kit,'electron.zip'));
  for(const name of ['scripts','node_modules/electron','node_modules/pnpm'])fs.mkdirSync(path.join(slot,'apps/desktop',name),{recursive:true});
  fs.copyFileSync(path.join(kit,'lock.json'),path.join(slot,'apps/desktop/scripts/primary-runtime-lock.json'));
+ fs.writeFileSync(path.join(slot,'apps/desktop/scripts/desktop-build-paths.mjs'),"export const SUPPORTED_TARGETS = new Set(["+JSON.stringify(target)+"]);" );
  fs.writeFileSync(path.join(slot,'apps/desktop/scripts/desktop-build-paths.mjs'),`const SUPPORTED_TARGETS = new Set(['${target}'])`);
  for(const [name,version] of [['electron','44.0.0'],['pnpm','11.7.0']])fs.writeFileSync(path.join(slot,'apps/desktop/node_modules',name,'package.json'),JSON.stringify({version}));
  assert.equal(await desktopRuntimeForExport(slot,path.join(root,'runtime')),kit);
@@ -154,6 +155,7 @@ test('shared kits export without a second Electron and reject missing or corrupt
  fs.writeFileSync(path.join(kit,'manifest.json'),JSON.stringify(manifest));
  for(const name of ['scripts','node_modules/electron','node_modules/pnpm'])fs.mkdirSync(path.join(slot,'apps/desktop',name),{recursive:true});
  fs.copyFileSync(path.join(kit,'lock.json'),path.join(slot,'apps/desktop/scripts/primary-runtime-lock.json'));
+ fs.writeFileSync(path.join(slot,'apps/desktop/scripts/desktop-build-paths.mjs'),"export const SUPPORTED_TARGETS = new Set(["+JSON.stringify(target)+"]);" );
  for(const [name,version] of [['electron','44.0.0'],['pnpm','11.7.0']])fs.writeFileSync(path.join(slot,'apps/desktop/node_modules',name,'package.json'),JSON.stringify({version}));
  assert.equal(verifyDesktopKit(kit).electronMode,'launcher');
  assert.equal(await desktopRuntimeForExport(slot,path.join(root,'runtime')),kit);
