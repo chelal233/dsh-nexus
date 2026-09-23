@@ -1,4 +1,4 @@
-import { gitDistribution, verifyLinuxGitAbi } from "./bundled-git.mjs";
+import { gitDistribution, verifyLinuxGitAbi, stageGitNotices, excludeGitCredentialManager, gitCredentialManagerExcluded, verifyGitNotices } from "./bundled-git.mjs";
 import { selectPlatform } from "./release-platform.mjs";
 import { createHash } from "node:crypto";
 import { createReadStream, createWriteStream } from "node:fs";
@@ -281,11 +281,13 @@ async function stageGit() {
   const license = path.join(cacheRoot, "git-2.53.0-COPYING");
   await cachedDownload("https://raw.githubusercontent.com/git/git/v2.53.0/COPYING", license, "5b2198d1645f767585e8a88ac0499b04472164c0d2da22e75ecf97ef443ab32e");
   await cp(license, path.join(resourceRuntime, "git/NEXUS-Git-COPYING.txt"));
+  excludeGitCredentialManager(path.join(resourceRuntime, "git"), JSON.parse(await readFile(path.join(repositoryRoot, "docs/audits/git-redistribution-2026-09-23/materials/gcm-official-file-boundary.json"), "utf8")), spec);
+  stageGitNotices(path.join(repositoryRoot, "docs/audits/git-redistribution-2026-09-23/materials"), path.join(resourceRuntime, "git/NEXUS-NOTICES"));
   if (spec.platform === "linux") verifyLinuxGitAbi(path.join(resourceRuntime,"git"));
   const binary = path.join(resourceRuntime, dist.entry);
   const version = execFileSync(binary, ["--version"], { encoding: "utf8" }).trim();
   if (!version.startsWith("git version 2.53.0")) throw new Error(`Unexpected bundled Git: ${version}`);
-  return { version, release: dist.release, entry: dist.entry, archiveSha256: dist.sha256, sha256: await sha256(binary) };
+  return { version, release: dist.release, entry: dist.entry, archiveSha256: dist.sha256, sha256: await sha256(binary), gcmExcluded: true };
 }
 
 async function isUpToDate(manifestFile) {
@@ -298,6 +300,11 @@ async function isUpToDate(manifestFile) {
     if (manifest.git?.release !== git.release || manifest.git?.archiveSha256 !== git.sha256
       || manifest.git?.entry !== git.entry || await sha256(path.join(resourceRuntime, git.entry)) !== manifest.git?.sha256) return false;
     await access(path.join(resourceRuntime, "git/NEXUS-Git-COPYING.txt"));
+    const boundary = JSON.parse(await readFile(path.join(repositoryRoot, "docs/audits/git-redistribution-2026-09-23/materials/gcm-official-file-boundary.json"), "utf8"));
+    if (manifest.git?.gcmExcluded !== true || !gitCredentialManagerExcluded(path.join(resourceRuntime, "git"), boundary, spec)) return false;
+    const notices = verifyGitNotices(path.join(resourceRuntime, "git/NEXUS-NOTICES"));
+    const expectedNotices = JSON.parse(await readFile(path.join(repositoryRoot, "docs/audits/git-redistribution-2026-09-23/materials/manifest.json"), "utf8"));
+    if (JSON.stringify(notices) !== JSON.stringify(expectedNotices)) return false;
     if (spec.platform === "linux") verifyLinuxGitAbi(path.join(resourceRuntime,"git"));
     // The staged binary must still match the out-of-band anchor (pinned) or
     // at least the checksum recorded at staging time; a corrupted or

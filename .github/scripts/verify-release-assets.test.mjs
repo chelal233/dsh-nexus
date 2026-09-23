@@ -36,7 +36,16 @@ test('release gate requires all tested targets, exact provenance and unmodified 
         buildId: 'test', automatedChecks: 'passed', installedPackageSmoke: 'passed-on-ci-runner', files }));
       writeFileSync(path.join(dir, `${basename}_SHA256SUMS.txt`), files.map(f => `${f.sha256}  ${f.name}\n`).join(''));
     }
-    assert.equal(verifyReleaseAssets(dir, 'v0.1.2', commit).length, 26);
+    const sources = JSON.parse(readFileSync(new URL('../../docs/audits/git-redistribution-2026-09-23/source-materials.json', import.meta.url)));
+    const sourceBase = 'dsh-nexus_0.1.2_git-sources';
+    const sourceHash = createHash('sha256').update('test sources').digest('hex');
+    writeFileSync(path.join(dir, `${sourceBase}.tar`), 'test sources');
+    writeFileSync(path.join(dir, `${sourceBase}_build.json`), JSON.stringify({version:'0.1.2',commit,file:`${sourceBase}.tar`,sha256:sourceHash,sources:sources.files}));
+    writeFileSync(path.join(dir, `${sourceBase}_SHA256SUMS.txt`), `${sourceHash}  ${sourceBase}.tar\n`);
+    assert.equal(verifyReleaseAssets(dir, 'v0.1.2', commit).length, 29);
+    writeFileSync(path.join(dir, `${sourceBase}.tar`), 'changed sources');
+    assert.throws(() => verifyReleaseAssets(dir, 'v0.1.2', commit), /source companion hash mismatch/);
+    writeFileSync(path.join(dir, `${sourceBase}.tar`), 'test sources');
     assert.throws(() => verifyReleaseAssets(dir, 'v0.1.3', commit));
     assert.throws(() => verifyReleaseAssets(dir, 'v0.1.2', 'b'.repeat(40)));
     const metadata = path.join(dir, 'dsh-nexus_0.1.2_windows_x64_build.json');

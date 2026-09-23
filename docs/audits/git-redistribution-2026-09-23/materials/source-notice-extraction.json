@@ -1,0 +1,465 @@
+[
+  {
+    "file": "dugite-native-v2.53.0-4.tar.gz",
+    "notices": [
+      "source-dugite-native-v2.53.0-4-dugite-native-2.53.0-4_LICENSE.md"
+    ]
+  },
+  {
+    "file": "git-v2.53.0.tar.gz",
+    "notices": [
+      "source-git-v2.53.0-git-2.53.0_COPYING",
+      "source-git-v2.53.0-git-2.53.0_compat_nedmalloc_License.txt",
+      "source-git-v2.53.0-git-2.53.0_contrib_subtree_COPYING",
+      "source-git-v2.53.0-git-2.53.0_reftable_LICENSE",
+      "source-git-v2.53.0-git-2.53.0_sha1dc_LICENSE.txt"
+    ]
+  },
+  {
+    "file": "mingw-w64-git-2.52.0.1-1.src.tar.gz",
+    "notices": [
+      "source-mingw-w64-git-2.52.0.1-1-mingw-w64-git_git-v2.53.0.windows.4.tar.gz_git_COPYING",
+      "source-mingw-w64-git-2.52.0.1-1-mingw-w64-git_git-v2.53.0.windows.4.tar.gz_git_compat_mimalloc_LICENSE",
+      "source-mingw-w64-git-2.52.0.1-1-mingw-w64-git_git-v2.53.0.windows.4.tar.gz_git_compat_nedmalloc_License.txt",
+      "source-mingw-w64-git-2.52.0.1-1-mingw-w64-git_git-v2.53.0.windows.4.tar.gz_git_contrib_subtree_COPYING",
+      "source-mingw-w64-git-2.52.0.1-1-mingw-w64-git_git-v2.53.0.windows.4.tar.gz_git_reftable_LICENSE",
+      "source-mingw-w64-git-2.52.0.1-1-mingw-w64-git_git-v2.53.0.windows.4.tar.gz_git_sha1dc_LICENSE.txt"
+    ]
+  },
+  {
+    "file": "libcbor-0.11.0-1.src.tar.gz",
+    "notices": [
+      "source-libcbor-0.11.0-1-libcbor_libcbor-0.11.0.tar.gz_libcbor-0.11.0_LICENSE.md"
+    ]
+  },
+  {
+    "file": "libfido2-1.15.0-1.src.tar.gz",
+    "notices": [
+      "source-libfido2-1.15.0-1-libfido2_libfido2-1.15.0.tar.gz_libfido2-1.15.0_LICENSE"
+    ]
+  },
+  {
+    "file": "heimdal-7.8.0-5.src.tar.gz",
+    "notices": [
+      "source-heimdal-7.8.0-5-heimdal_heimdal-7.8.0.tar.gz_heimdal-7.8.0_LICENSE",
+      "source-heimdal-7.8.0-5-heimdal_heimdal-7.8.0.tar.gz_heimdal-7.8.0_lib_libedit_COPYING",
+      "source-heimdal-7.8.0-5-heimdal_heimdal-7.8.0.tar.gz_heimdal-7.8.0_doc_copyright.texi"
+    ]
+  },
+  {
+    "file": "mingw-w64-git-extra-1.1.687.f502a63dc-1.src.tar.gz",
+    "notices": [],
+    "disposition": "No standalone license in source package. PKGBUILD declares GPL. Git GPL COPYING and full exact helper sources/headers retained."
+  },
+  {
+    "file": "mingw-w64-pcre2-10.47-1.src.tar.gz",
+    "notices": [
+      "source-mingw-w64-pcre2-10.47-1-mingw-w64-pcre2_pcre2-10.47.tar.bz2_pcre2-10.47_LICENCE.md",
+      "source-mingw-w64-pcre2-10.47-1-mingw-w64-pcre2_pcre2-10.47.tar.bz2_pcre2-10.47_deps_sljit_LICENSE",
+      "source-mingw-w64-pcre2-10.47-1-mingw-w64-pcre2_pcre2-10.47.tar.bz2_pcre2-10.47_cmake_COPYING-CMAKE-SCRIPTS",
+      "source-mingw-w64-pcre2-10.47-1-mingw-w64-pcre2_pcre2-10.47.tar.bz2_pcre2-10.47_COPYING"
+    ]
+  },
+  {
+    "file": "openssh-10.2p1-1.src.tar.gz",
+    "notices": [
+      "source-openssh-10.2p1-1-openssh_openssh-10.2p1.tar.gz_openssh-10.2p1_LICENCE"
+    ]
+  },
+  {
+    "file": "openssl-3.5.5-1.src.tar.gz",
+    "notices": [
+      "source-openssl-3.5.5-1-openssl_openssl-3.5.5.tar.gz_openssl-3.5.5_LICENSE.txt"
+    ]
+  },
+  {
+    "file": "bash-5.2.037-1.src.tar.gz",
+    "notices": [
+      "source-bash-5.2.037-1-bash_bash-5.2.tar.gz_bash-5.2_COPYING",
+      "source-bash-5.2.037-1-bash_bash-5.2.tar.gz_bash-5.2_examples_shellmath_LICENSE",
+      "source-bash-5.2.037-1-bash_bash-5.2.tar.gz_bash-5.2_tests_COPYRIGHT",
+      "source-bash-5.2.037-1-bash_bash-5.2.tar.gz_bash-5.2_lib_readline_COPYING"
+    ]
+  },
+  {
+    "file": "mingw-w64-openssl-3.5.5-1.src.tar.gz",
+    "notices": [
+      "source-mingw-w64-openssl-3.5.5-1-mingw-w64-openssl_openssl-3.5.5.tar.gz_openssl-3.5.5_LICENSE.txt"
+    ]
+  },
+  {
+    "file": "msys2-runtime-3.6.6-1.src.tar.gz",
+    "notices": [
+      "supplement-msys2-runtime-3.6.6-1-cygwin-3.6.6_COPYING",
+      "supplement-msys2-runtime-3.6.6-1-cygwin-3.6.6_COPYING.LIB",
+      "supplement-msys2-runtime-3.6.6-1-cygwin-3.6.6_COPYING.LIBGLOSS",
+      "supplement-msys2-runtime-3.6.6-1-cygwin-3.6.6_COPYING.NEWLIB",
+      "supplement-msys2-runtime-3.6.6-1-cygwin-3.6.6_include_COPYING",
+      "supplement-msys2-runtime-3.6.6-1-cygwin-3.6.6_newlib_libc_posix_COPYRIGHT",
+      "supplement-msys2-runtime-3.6.6-1-cygwin-3.6.6_winsup_COPYING",
+      "supplement-msys2-runtime-3.6.6-1-cygwin-3.6.6_winsup_COPYING.LIB",
+      "supplement-msys2-runtime-3.6.6-1-cygwin-3.6.6_winsup_cygwin_regex_COPYRIGHT",
+      "supplement-msys2-runtime-3.6.6-1-cygwin-3.6.6_winsup_utils_COPYING.dumper"
+    ]
+  },
+  {
+    "file": "file-5.46-2.src.tar.zst",
+    "notices": [
+      "source-file-5.46-2-file_file-5.46.tar.gz_file-5.46_COPYING",
+      "source-file-5.46-2-file_file-5.46.tar.gz_file-5.46_python_LICENSE"
+    ]
+  },
+  {
+    "file": "diffutils-3.12-1.src.tar.zst",
+    "notices": [
+      "source-diffutils-3.12-1-diffutils_diffutils-3.12.tar.xz_diffutils-3.12_COPYING"
+    ]
+  },
+  {
+    "file": "coreutils-8.32-5.src.tar.zst",
+    "notices": [
+      "source-coreutils-8.32-5-coreutils_coreutils-8.32.tar.xz_coreutils-8.32_COPYING"
+    ]
+  },
+  {
+    "file": "gmp-6.3.0-2.src.tar.zst",
+    "notices": [
+      "source-gmp-6.3.0-2-gmp_gmp-6.3.0.tar.xz_gmp-6.3.0_COPYING",
+      "source-gmp-6.3.0-2-gmp_gmp-6.3.0.tar.xz_gmp-6.3.0_COPYING.LESSERv3"
+    ]
+  },
+  {
+    "file": "findutils-4.10.0-2.src.tar.zst",
+    "notices": [
+      "source-findutils-4.10.0-2-findutils_findutils-4.10.0.tar.xz_findutils-4.10.0_COPYING"
+    ]
+  },
+  {
+    "file": "bzip2-1.0.8-4.src.tar.zst",
+    "notices": [
+      "source-bzip2-1.0.8-4-bzip2_bzip2-1.0.8.tar.gz_bzip2-1.0.8_LICENSE"
+    ]
+  },
+  {
+    "file": "grep-1~3.0-7.src.tar.zst",
+    "notices": [
+      "source-grep-1~3.0-7-grep_grep-3.0.tar.xz_grep-3.0_COPYING"
+    ]
+  },
+  {
+    "file": "xz-5.8.2-1.src.tar.zst",
+    "notices": [
+      "source-xz-5.8.2-1-xz_v5.8.2.tar.gz_xz-5.8.2_COPYING",
+      "source-xz-5.8.2-1-xz_v5.8.2.tar.gz_xz-5.8.2_COPYING.0BSD",
+      "source-xz-5.8.2-1-xz_v5.8.2.tar.gz_xz-5.8.2_COPYING.GPLv2",
+      "source-xz-5.8.2-1-xz_v5.8.2.tar.gz_xz-5.8.2_COPYING.GPLv3",
+      "source-xz-5.8.2-1-xz_v5.8.2.tar.gz_xz-5.8.2_COPYING.LGPLv2.1",
+      "source-xz-5.8.2-1-xz_v5.8.2.tar.gz_xz-5.8.2_build-aux_license-check.sh"
+    ]
+  },
+  {
+    "file": "libiconv-1.18-2.src.tar.zst",
+    "notices": [
+      "source-libiconv-1.18-2-libiconv_libiconv-1.18.tar.gz_libiconv-1.18_COPYING.LIB",
+      "source-libiconv-1.18-2-libiconv_libiconv-1.18.tar.gz_libiconv-1.18_libcharset_COPYING.LIB",
+      "source-libiconv-1.18-2-libiconv_libiconv-1.18.tar.gz_libiconv-1.18_COPYING"
+    ]
+  },
+  {
+    "file": "readline-8.3.003-1.src.tar.zst",
+    "notices": [
+      "source-readline-8.3.003-1-readline_readline-8.3.tar.gz_readline-8.3_COPYING"
+    ]
+  },
+  {
+    "file": "pcre-8.45-5.src.tar.zst",
+    "notices": [
+      "source-pcre-8.45-5-pcre_pcre-8.45.tar.bz2_pcre-8.45_LICENCE",
+      "source-pcre-8.45-5-pcre_pcre-8.45.tar.bz2_pcre-8.45_cmake_COPYING-CMAKE-SCRIPTS",
+      "source-pcre-8.45-5-pcre_pcre-8.45.tar.bz2_pcre-8.45_COPYING"
+    ]
+  },
+  {
+    "file": "cyrus-sasl-2.1.28-5.src.tar.zst",
+    "notices": [
+      "source-cyrus-sasl-2.1.28-5-cyrus-sasl_cyrus-sasl-2.1.28.tar.gz_cyrus-sasl-2.1.28_saslauthd_COPYING",
+      "source-cyrus-sasl-2.1.28-5-cyrus-sasl_cyrus-sasl-2.1.28.tar.gz_cyrus-sasl-2.1.28_COPYING"
+    ]
+  },
+  {
+    "file": "gettext-0.22.5-1.src.tar.zst",
+    "notices": [
+      "source-gettext-0.22.5-1-gettext_gettext-0.22.5.tar.gz_gettext-0.22.5_COPYING",
+      "source-gettext-0.22.5-1-gettext_gettext-0.22.5.tar.gz_gettext-0.22.5_gettext-runtime_COPYING",
+      "source-gettext-0.22.5-1-gettext_gettext-0.22.5.tar.gz_gettext-0.22.5_gettext-runtime_intl_COPYING.LIB",
+      "source-gettext-0.22.5-1-gettext_gettext-0.22.5.tar.gz_gettext-0.22.5_gettext-runtime_libasprintf_COPYING",
+      "source-gettext-0.22.5-1-gettext_gettext-0.22.5.tar.gz_gettext-0.22.5_gettext-runtime_libasprintf_COPYING.LIB",
+      "source-gettext-0.22.5-1-gettext_gettext-0.22.5.tar.gz_gettext-0.22.5_gettext-tools_COPYING",
+      "source-gettext-0.22.5-1-gettext_gettext-0.22.5.tar.gz_gettext-0.22.5_libtextstyle_COPYING"
+    ]
+  },
+  {
+    "file": "util-linux-2.40.2-2.src.tar.zst",
+    "notices": [
+      "source-util-linux-2.40.2-2-util-linux_util-linux-2.40.2.tar.xz_util-linux-2.40.2_libblkid_COPYING",
+      "source-util-linux-2.40.2-2-util-linux_util-linux-2.40.2.tar.xz_util-linux-2.40.2_libmount_COPYING",
+      "source-util-linux-2.40.2-2-util-linux_util-linux-2.40.2.tar.xz_util-linux-2.40.2_libsmartcols_COPYING",
+      "source-util-linux-2.40.2-2-util-linux_util-linux-2.40.2.tar.xz_util-linux-2.40.2_Documentation_licenses_COPYING.ISC",
+      "source-util-linux-2.40.2-2-util-linux_util-linux-2.40.2.tar.xz_util-linux-2.40.2_Documentation_licenses_COPYING.LGPL-2.1-or-later",
+      "source-util-linux-2.40.2-2-util-linux_util-linux-2.40.2.tar.xz_util-linux-2.40.2_Documentation_licenses_COPYING.GPL-3.0-or-later",
+      "source-util-linux-2.40.2-2-util-linux_util-linux-2.40.2.tar.xz_util-linux-2.40.2_Documentation_licenses_COPYING.GPL-2.0-or-later",
+      "source-util-linux-2.40.2-2-util-linux_util-linux-2.40.2.tar.xz_util-linux-2.40.2_Documentation_licenses_COPYING.GPL-2.0-only",
+      "source-util-linux-2.40.2-2-util-linux_util-linux-2.40.2.tar.xz_util-linux-2.40.2_Documentation_licenses_COPYING.MIT",
+      "source-util-linux-2.40.2-2-util-linux_util-linux-2.40.2.tar.xz_util-linux-2.40.2_Documentation_licenses_COPYING.BSD-2-Clause",
+      "source-util-linux-2.40.2-2-util-linux_util-linux-2.40.2.tar.xz_util-linux-2.40.2_Documentation_licenses_COPYING.BSD-3-Clause",
+      "source-util-linux-2.40.2-2-util-linux_util-linux-2.40.2.tar.xz_util-linux-2.40.2_Documentation_licenses_COPYING.BSD-4-Clause-UC",
+      "source-util-linux-2.40.2-2-util-linux_util-linux-2.40.2.tar.xz_util-linux-2.40.2_libuuid_COPYING",
+      "source-util-linux-2.40.2-2-util-linux_util-linux-2.40.2.tar.xz_util-linux-2.40.2_pam_lastlog2_COPYING",
+      "source-util-linux-2.40.2-2-util-linux_util-linux-2.40.2.tar.xz_util-linux-2.40.2_libfdisk_COPYING",
+      "source-util-linux-2.40.2-2-util-linux_util-linux-2.40.2.tar.xz_util-linux-2.40.2_COPYING",
+      "source-util-linux-2.40.2-2-util-linux_util-linux-2.40.2.tar.xz_util-linux-2.40.2_liblastlog2_COPYING"
+    ]
+  },
+  {
+    "file": "gawk-5.3.2-1.src.tar.zst",
+    "notices": [
+      "source-gawk-5.3.2-1-gawk_gawk-5.3.2.tar.gz_gawk-5.3.2_extension_COPYING",
+      "source-gawk-5.3.2-1-gawk_gawk-5.3.2.tar.gz_gawk-5.3.2_COPYING",
+      "source-gawk-5.3.2-1-gawk_gawk-5.3.2.tar.gz_gawk-5.3.2_missing_d_COPYING.LIB"
+    ]
+  },
+  {
+    "file": "libxcrypt-4.5.2-1.src.tar.zst",
+    "notices": [
+      "source-libxcrypt-4.5.2-1-libxcrypt_libxcrypt-4.5.2.tar.xz_libxcrypt-4.5.2_COPYING.LIB"
+    ]
+  },
+  {
+    "file": "mingw-w64-ca-certificates-20250419-1.src.tar.zst",
+    "notices": [
+      "source-mingw-w64-ca-certificates-20250419-1-mingw-w64-ca-certificates_ca-certificates_20250419.tar.xz_ca-certificates_debian_copyright"
+    ]
+  },
+  {
+    "file": "mingw-w64-brotli-1.2.0-1.src.tar.zst",
+    "notices": [
+      "source-mingw-w64-brotli-1.2.0-1-mingw-w64-brotli_brotli-1.2.0.tar.gz_brotli-1.2.0_LICENSE"
+    ]
+  },
+  {
+    "file": "zstd-1.5.7-1.src.tar.zst",
+    "notices": [
+      "source-zstd-1.5.7-1-zstd_zstd-1.5.7.tar.gz_zstd-1.5.7_COPYING",
+      "source-zstd-1.5.7-1-zstd_zstd-1.5.7.tar.gz_zstd-1.5.7_LICENSE",
+      "source-zstd-1.5.7-1-zstd_zstd-1.5.7.tar.gz_zstd-1.5.7_build_LICENSE"
+    ]
+  },
+  {
+    "file": "mingw-w64-expat-2.7.4-1.src.tar.zst",
+    "notices": [
+      "source-mingw-w64-expat-2.7.4-1-mingw-w64-expat_expat-2.7.4.tar.xz_expat-2.7.4_COPYING"
+    ]
+  },
+  {
+    "file": "mingw-w64-curl-8.18.0-1.src.tar.zst",
+    "notices": [
+      "source-mingw-w64-curl-8.18.0-1-mingw-w64-curl_curl-8.18.0.tar.xz_curl-8.18.0_COPYING"
+    ]
+  },
+  {
+    "file": "sqlite-3.51.2-1.src.tar.zst",
+    "notices": [
+      "source-sqlite-3.51.2-1-sqlite_LICENSE",
+      "source-sqlite-3.51.2-1-sqlite_sqlite-doc-3510200.zip_sqlite-doc-3510200_copyright.html",
+      "source-sqlite-3.51.2-1-sqlite_sqlite-doc-3510200.zip_sqlite-doc-3510200_copyright-release.html",
+      "source-sqlite-3.51.2-1-sqlite_sqlite-src-3510200.zip_sqlite-src-3510200_LICENSE.md",
+      "source-sqlite-3.51.2-1-sqlite_sqlite-src-3510200.zip_sqlite-src-3510200_autosetup_LICENSE",
+      "source-sqlite-3.51.2-1-sqlite_sqlite-src-3510200.zip_sqlite-src-3510200_autoconf_tea_license.terms"
+    ]
+  },
+  {
+    "file": "mingw-w64-libffi-3.5.2-1.src.tar.zst",
+    "notices": [
+      "source-mingw-w64-libffi-3.5.2-1-mingw-w64-libffi_libffi-3.5.2.tar.gz_libffi-3.5.2_LICENSE",
+      "source-mingw-w64-libffi-3.5.2-1-mingw-w64-libffi_libffi-3.5.2.tar.gz_libffi-3.5.2_LICENSE-BUILDTOOLS"
+    ]
+  },
+  {
+    "file": "mingw-w64-libssh2-1.11.1-2.src.tar.zst",
+    "notices": [
+      "source-mingw-w64-libssh2-1.11.1-2-mingw-w64-libssh2_libssh2-1.11.1.tar.gz_libssh2-1.11.1_COPYING"
+    ]
+  },
+  {
+    "file": "mingw-w64-libtasn1-4.21.0-1.src.tar.zst",
+    "notices": [
+      "source-mingw-w64-libtasn1-4.21.0-1-mingw-w64-libtasn1_libtasn1-4.21.0.tar.gz_libtasn1-4.21.0_COPYING",
+      "source-mingw-w64-libtasn1-4.21.0-1-mingw-w64-libtasn1_libtasn1-4.21.0.tar.gz_libtasn1-4.21.0_COPYING.LESSERv2"
+    ]
+  },
+  {
+    "file": "mingw-w64-gettext-1.0-1.src.tar.zst",
+    "notices": [
+      "source-mingw-w64-gettext-1.0-1-mingw-w64-gettext_gettext-1.0.tar.lz_gettext-1.0_COPYING",
+      "source-mingw-w64-gettext-1.0-1-mingw-w64-gettext_gettext-1.0.tar.lz_gettext-1.0_gettext-runtime_COPYING",
+      "source-mingw-w64-gettext-1.0-1-mingw-w64-gettext_gettext-1.0.tar.lz_gettext-1.0_gettext-runtime_libasprintf_COPYING",
+      "source-mingw-w64-gettext-1.0-1-mingw-w64-gettext_gettext-1.0.tar.lz_gettext-1.0_gettext-tools_COPYING",
+      "source-mingw-w64-gettext-1.0-1-mingw-w64-gettext_gettext-1.0.tar.lz_gettext-1.0_libtextstyle_COPYING",
+      "source-mingw-w64-gettext-1.0-1-mingw-w64-gettext_gettext-1.0.tar.lz_gettext-1.0_gettext-runtime_intl_COPYING.LIB",
+      "source-mingw-w64-gettext-1.0-1-mingw-w64-gettext_gettext-1.0.tar.lz_gettext-1.0_gettext-runtime_libasprintf_COPYING.LIB",
+      "source-mingw-w64-gettext-1.0-1-mingw-w64-gettext_gettext-1.0.tar.lz_gettext-1.0_gettext-tools_tree-sitter-0.23.2_LICENSE",
+      "source-mingw-w64-gettext-1.0-1-mingw-w64-gettext_gettext-1.0.tar.lz_gettext-1.0_gettext-tools_tree-sitter-d-0.8.2_LICENSE",
+      "source-mingw-w64-gettext-1.0-1-mingw-w64-gettext_gettext-1.0.tar.lz_gettext-1.0_gettext-tools_tree-sitter-go-0.23.4_LICENSE",
+      "source-mingw-w64-gettext-1.0-1-mingw-w64-gettext_gettext-1.0.tar.lz_gettext-1.0_gettext-tools_tree-sitter-ocaml-0.23.2_LICENSE",
+      "source-mingw-w64-gettext-1.0-1-mingw-w64-gettext_gettext-1.0.tar.lz_gettext-1.0_gettext-tools_tree-sitter-rust-0.23.2_LICENSE",
+      "source-mingw-w64-gettext-1.0-1-mingw-w64-gettext_gettext-1.0.tar.lz_gettext-1.0_gettext-tools_tree-sitter-typescript-0.23.2_LICENSE"
+    ]
+  },
+  {
+    "file": "mingw-w64-libidn2-2.3.8-4.src.tar.zst",
+    "notices": [
+      "source-mingw-w64-libidn2-2.3.8-4-mingw-w64-libidn2_libidn2-2.3.8.tar.gz_libidn2-2.3.8_COPYING",
+      "source-mingw-w64-libidn2-2.3.8-4-mingw-w64-libidn2_libidn2-2.3.8.tar.gz_libidn2-2.3.8_COPYING.LESSERv3",
+      "source-mingw-w64-libidn2-2.3.8-4-mingw-w64-libidn2_libidn2-2.3.8.tar.gz_libidn2-2.3.8_COPYING.unicode"
+    ]
+  },
+  {
+    "file": "mingw-w64-libiconv-1.18-1.src.tar.zst",
+    "notices": [
+      "source-mingw-w64-libiconv-1.18-1-mingw-w64-libiconv_libiconv-1.18.tar.gz_libiconv-1.18_COPYING.LIB",
+      "source-mingw-w64-libiconv-1.18-1-mingw-w64-libiconv_libiconv-1.18.tar.gz_libiconv-1.18_libcharset_COPYING.LIB",
+      "source-mingw-w64-libiconv-1.18-1-mingw-w64-libiconv_libiconv-1.18.tar.gz_libiconv-1.18_COPYING"
+    ]
+  },
+  {
+    "file": "mingw-w64-libpsl-0.21.5-3.src.tar.zst",
+    "notices": [
+      "source-mingw-w64-libpsl-0.21.5-3-mingw-w64-libpsl_libpsl-0.21.5.tar.gz_libpsl-0.21.5_src_LICENSE.chromium",
+      "source-mingw-w64-libpsl-0.21.5-3-mingw-w64-libpsl_libpsl-0.21.5.tar.gz_libpsl-0.21.5_COPYING",
+      "source-mingw-w64-libpsl-0.21.5-3-mingw-w64-libpsl_libpsl-0.21.5.tar.gz_libpsl-0.21.5_LICENSE"
+    ]
+  },
+  {
+    "file": "mingw-w64-libunistring-1.3-1.src.tar.zst",
+    "notices": [
+      "source-mingw-w64-libunistring-1.3-1-mingw-w64-libunistring_libunistring-1.3.tar.gz_libunistring-1.3_COPYING.LIB",
+      "source-mingw-w64-libunistring-1.3-1-mingw-w64-libunistring_libunistring-1.3.tar.gz_libunistring-1.3_COPYING"
+    ]
+  },
+  {
+    "file": "mingw-w64-nghttp2-1.68.0-1.src.tar.zst",
+    "notices": [
+      "source-mingw-w64-nghttp2-1.68.0-1-mingw-w64-nghttp2_nghttp2-1.68.0.tar.xz_nghttp2-1.68.0_COPYING",
+      "source-mingw-w64-nghttp2-1.68.0-1-mingw-w64-nghttp2_nghttp2-1.68.0.tar.xz_nghttp2-1.68.0_third-party_mruby_LICENSE",
+      "source-mingw-w64-nghttp2-1.68.0-1-mingw-w64-nghttp2_nghttp2-1.68.0.tar.xz_nghttp2-1.68.0_tests_munit_COPYING"
+    ]
+  },
+  {
+    "file": "mpfr-4.2.2-1.src.tar.zst",
+    "notices": [
+      "source-mpfr-4.2.2-1-mpfr_mpfr-4.2.2.tar.xz_mpfr-4.2.2_COPYING.LESSER",
+      "source-mpfr-4.2.2-1-mpfr_mpfr-4.2.2.tar.xz_mpfr-4.2.2_COPYING"
+    ]
+  },
+  {
+    "file": "mingw-w64-zstd-1.5.7-1.src.tar.zst",
+    "notices": [
+      "source-mingw-w64-zstd-1.5.7-1-mingw-w64-zstd_zstd-1.5.7.tar.gz_zstd-1.5.7_COPYING",
+      "source-mingw-w64-zstd-1.5.7-1-mingw-w64-zstd_zstd-1.5.7.tar.gz_zstd-1.5.7_LICENSE",
+      "source-mingw-w64-zstd-1.5.7-1-mingw-w64-zstd_zstd-1.5.7.tar.gz_zstd-1.5.7_build_LICENSE"
+    ]
+  },
+  {
+    "file": "mingw-w64-zlib-1.3.1-1.src.tar.zst",
+    "notices": [
+      "source-mingw-w64-zlib-1.3.1-1-mingw-w64-zlib_zlib-1.3.1.tar.xz_zlib-1.3.1_LICENSE",
+      "source-mingw-w64-zlib-1.3.1-1-mingw-w64-zlib_zlib-1.3.1.tar.xz_zlib-1.3.1_contrib_dotzlib_LICENSE_1_0.txt"
+    ]
+  },
+  {
+    "file": "sed-4.9-1.src.tar.zst",
+    "notices": [
+      "source-sed-4.9-1-sed_sed-4.9.tar.xz_sed-4.9_COPYING"
+    ]
+  },
+  {
+    "file": "ncurses-6.6-1.src.tar.zst",
+    "notices": [
+      "source-ncurses-6.6-1-ncurses_ncurses-6.6.tar.gz_ncurses-6.6_COPYING",
+      "source-ncurses-6.6-1-ncurses_ncurses-6.6.tar.gz_ncurses-6.6_package_debian-mingw_copyright",
+      "source-ncurses-6.6-1-ncurses_ncurses-6.6.tar.gz_ncurses-6.6_package_debian-mingw64_copyright",
+      "source-ncurses-6.6-1-ncurses_ncurses-6.6.tar.gz_ncurses-6.6_package_debian_copyright"
+    ]
+  },
+  {
+    "file": "dash-0.5.13.1-1.src.tar.zst",
+    "notices": [
+      "source-dash-0.5.13.1-1-dash_dash-0.5.13.1.tar.gz_dash-0.5.13.1_COPYING"
+    ]
+  },
+  {
+    "file": "rebase-4.5.0-5.src.tar.zst",
+    "notices": [
+      "supplement-rebase-4.5.0-5-rebase-4-5-0_COPYING"
+    ]
+  },
+  {
+    "file": "zlib-1.3.1-1.src.tar.zst",
+    "notices": [
+      "source-zlib-1.3.1-1-zlib_zlib-1.3.1.tar.xz_zlib-1.3.1_LICENSE",
+      "source-zlib-1.3.1-1-zlib_zlib-1.3.1.tar.xz_zlib-1.3.1_contrib_dotzlib_LICENSE_1_0.txt"
+    ]
+  },
+  {
+    "file": "filesystem-2025.05.08-2.src.tar.zst",
+    "notices": [],
+    "disposition": "No standalone license file in source package. Existing distributed shell/config headers retained; PKGBUILD SPDX BSD-3-Clause, individual files include CC0. Full source package with those exact headers delivered."
+  },
+  {
+    "file": "mingw-w64-llvm-21.1.8-1.src.tar.zst",
+    "notices": [
+      "source-mingw-w64-llvm-21.1.8-1-mingw-w64-llvm_clang-21.1.8.src.tar.xz_clang-21.1.8.src_LICENSE.TXT",
+      "source-mingw-w64-llvm-21.1.8-1-mingw-w64-llvm_clang-tools-extra-21.1.8.src.tar.xz_clang-tools-extra-21.1.8.src_LICENSE.TXT",
+      "source-mingw-w64-llvm-21.1.8-1-mingw-w64-llvm_clang-tools-extra-21.1.8.src.tar.xz_clang-tools-extra-21.1.8.src_clang-tidy_cert_LICENSE.TXT",
+      "source-mingw-w64-llvm-21.1.8-1-mingw-w64-llvm_clang-tools-extra-21.1.8.src.tar.xz_clang-tools-extra-21.1.8.src_clang-tidy_hicpp_LICENSE.TXT",
+      "source-mingw-w64-llvm-21.1.8-1-mingw-w64-llvm_compiler-rt-21.1.8.src.tar.xz_compiler-rt-21.1.8.src_LICENSE.TXT",
+      "source-mingw-w64-llvm-21.1.8-1-mingw-w64-llvm_lld-21.1.8.src.tar.xz_lld-21.1.8.src_LICENSE.TXT",
+      "source-mingw-w64-llvm-21.1.8-1-mingw-w64-llvm_llvm-21.1.8.src.tar.xz_llvm-21.1.8.src_LICENSE.TXT",
+      "source-mingw-w64-llvm-21.1.8-1-mingw-w64-llvm_llvm-21.1.8.src.tar.xz_llvm-21.1.8.src_lib_Support_COPYRIGHT.regex",
+      "source-mingw-w64-llvm-21.1.8-1-mingw-w64-llvm_llvm-21.1.8.src.tar.xz_llvm-21.1.8.src_test_YAMLParser_LICENSE.txt",
+      "source-mingw-w64-llvm-21.1.8-1-mingw-w64-llvm_llvm-21.1.8.src.tar.xz_llvm-21.1.8.src_utils_lit_LICENSE.TXT",
+      "source-mingw-w64-llvm-21.1.8-1-mingw-w64-llvm_third-party-21.1.8.src.tar.xz_third-party-21.1.8.src_benchmark_LICENSE",
+      "source-mingw-w64-llvm-21.1.8-1-mingw-w64-llvm_third-party-21.1.8.src.tar.xz_third-party-21.1.8.src_unittest_googlemock_LICENSE.txt",
+      "source-mingw-w64-llvm-21.1.8-1-mingw-w64-llvm_third-party-21.1.8.src.tar.xz_third-party-21.1.8.src_unittest_googletest_LICENSE.TXT"
+    ]
+  },
+  {
+    "file": "gcc-15.2.0-1.src.tar.zst",
+    "notices": [
+      "supplement-gcc-15.2.0-1-gcc-15.2.0_COPYING.RUNTIME",
+      "supplement-gcc-15.2.0-1-gcc-15.2.0_COPYING3",
+      "supplement-gcc-15.2.0-1-gcc-15.2.0_COPYING.LIB",
+      "supplement-gcc-15.2.0-1-gcc-15.2.0_COPYING3.LIB",
+      "supplement-gcc-15.2.0-1-gcc-15.2.0_COPYING"
+    ]
+  },
+  {
+    "file": "mingw-w64-winpthreads-13.0.0.r488.g3fedac280-2.src.tar.zst",
+    "notices": [
+      "supplement-mingw-w64-winpthreads-13.0.0.r488.g3fedac280-2-3fedac28018c447ccdd9519c9d556340dfa1c87e_COPYING",
+      "supplement-mingw-w64-winpthreads-13.0.0.r488.g3fedac280-2-3fedac28018c447ccdd9519c9d556340dfa1c87e_COPYING.MinGW-w64-runtime_COPYING.MinGW-w64-runtime.txt",
+      "supplement-mingw-w64-winpthreads-13.0.0.r488.g3fedac280-2-3fedac28018c447ccdd9519c9d556340dfa1c87e_COPYING.MinGW-w64_COPYING.MinGW-w64.txt",
+      "supplement-mingw-w64-winpthreads-13.0.0.r488.g3fedac280-2-3fedac28018c447ccdd9519c9d556340dfa1c87e_mingw-w64-libraries_winpthreads_COPYING"
+    ]
+  },
+  {
+    "file": "mingw-w64-gcc-15.2.0-11.src.tar.zst",
+    "notices": [
+      "supplement-mingw-w64-gcc-15.2.0-11-gcc-15.2.0_COPYING.RUNTIME",
+      "supplement-mingw-w64-gcc-15.2.0-11-gcc-15.2.0_COPYING3",
+      "supplement-mingw-w64-gcc-15.2.0-11-gcc-15.2.0_COPYING.LIB",
+      "supplement-mingw-w64-gcc-15.2.0-11-gcc-15.2.0_COPYING3.LIB",
+      "supplement-mingw-w64-gcc-15.2.0-11-gcc-15.2.0_COPYING"
+    ]
+  }
+]

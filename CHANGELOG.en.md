@@ -1,18 +1,30 @@
 # Changelog
 
-## Unreleased — local test build
+## 1.0.0 — 2026-09-23
 
-- Normal startup runs Harness first and diagnoses confirmed startup failures. Verifiable missing dependencies receive at most one repair and retry. A readiness timeout preserves diagnostics without stopping a still-running process.
-- Official Desktop binds official modules from the selected release and backs up stale official packages that shadow them, addressing old settings-provider incompatibility while preserving third-party plugins and configuration.
-- Acceptance found incomplete corresponding-source and nested-notice materials for bundled Git. CI builds may proceed, but package uploads and public releases remain blocked.
-- Manage plugins before Harness starts. When the selected version provides the official manager, listing, enabling, disabling, inspecting, installing and removing use its implementation and protection rules. New installs remain disabled until explicitly enabled; disabling retains dependencies. Older versions retain their compatible interface.
-- Node, pnpm and full portable Git use explicit configuration first, otherwise bundled tools. Profile repair and terminal operations no longer require a prior Harness launch to discover these tools. Full offline exports retain the bundled tools.
-- Snapshot/checkpoint titles use local time; details open in a drawer with readable configuration and a Source code view.
-- Earlier local fixes include prepared-version switching, capability-based cold-start acceleration, random port zero, settings propagation and actionable startup diagnostics.
-- Validation boundaries: Windows package verification is separate from macOS/Linux real-device acceptance. Package-script approval remains with Harness. Git corresponding-source/nested-license review is tracked in third-party notices before public redistribution. This entry does not announce a GitHub release.
+### User-visible changes and fixes
 
+- **Manage and repair profiles while Harness is stopped.** Plugin listing, enabling, disabling, installation, checks and removal use the selected Harness version's official manager and protection rules where available. Newly installed plugins remain disabled until enabled; disabling retains dependencies. Older versions retain a compatibility path.
+- **Run first and diagnose failures.** Normal startup avoids repeating profile copies and compatibility checks. Only evidence of missing dependencies permits one bounded repair and retry. A changed profile, release or stop request cancels stale recovery work.
+- **Preserve separate timeout and failure evidence.** A timeout means readiness is unverified; it does not stop or restart a running Harness. A later real failure still receives a separate diagnostic record.
+- **Fix stale official packages shadowing Desktop modules.** Desktop binds official modules from the selected release and backs up older official packages that shadow them, including incompatible settings providers. Third-party plugins and profile settings are preserved.
+- **Make offline repair controlled and recoverable.** Repairs provide previews, backups, rechecks and recovery paths. Waiting service consumers are not all disabled as a substitute for finding the provider failure. Node, pnpm and Git use an explicit configured path first and bundled tools otherwise; the proposed system-environment priority was cancelled.
+- **Switch prepared versions directly.** A completed preparation offers a switch-to-version action. Harness 0.1.7 compatibility and startup acceleration follow capabilities and declared build targets rather than a version allowlist.
+- **Clarify profiles and history.** Snapshots and checkpoints show local-time timestamps in drawer details, with readable and source views. Plugin versions, repository links, problem markers and removal entries are included.
+- **Report settings failures.** Random port 0 and related preference forwarding are fixed. Tool-path override scope is documented; log-level and OS startup-setting failures surface their reasons.
 
-[简体中文](CHANGELOG.md)
+### Offline tools and distribution materials
+
+- Bundled Git includes its command line, SSH and Git LFS, but excludes the optional GCM browser-login helper and its dependencies. System and user Git configuration are not changed. Users needing another login helper can explicitly select their own configured Git.
+- Runtime tools remain bundled with Nexus. Corresponding source for Git and related components accompanies installers as a separate release attachment and is not loaded during normal use. Redistributing binaries must also satisfy the applicable source-delivery conditions.
+- Publication checks original-notice hashes, the source inventory, source attachments and installer provenance. Incomplete materials prevent publication.
+
+### Known limits and acceptance scope
+
+- Nexus handles startup, readiness and offline repair; it does not guarantee capture of every third-party runtime exception. The historical session-manager JSON error was not reproduced with an isolated official Desktop Host: the relevant APIs returned HTTP 200 and valid JSON. This does not establish that the original error is fixed or that upstream is at fault.
+- Official Desktop is enabled only where both upstream and Electron support it. A Nexus package for a platform does not imply that Harness provides Desktop there.
+- Switching to an older Harness slot does not downgrade upstream session data formats. Keep a pre-upgrade data backup.
+- Automated tests, real subprocess tests, isolated Windows installer upgrades and five-platform CI are reported separately. Skips are not passes. CI package smoke tests do not replace device acceptance for every distribution, IME, display or complete workflow.
 
 
 ## 0.1.10

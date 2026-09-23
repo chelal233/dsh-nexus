@@ -41,10 +41,14 @@ Windows x64、macOS x64/ARM64 携带受支持的官方 Desktop 资源；Windows 
 
 增加运行时时，应结合 `lock.json`、实际运行时归档和组件原文逐项检查，记录缺失材料，必要时修正打包。此次文档更新说明实际范围，不代表完成法律审查，也不改变已经发布的 v0.1.8 二进制。
 
-## 完整 Git 命令行（开发中）
+## 完整 Git 命令行 / Bundled Git CLI
 
-新增 `runtime/git` 使用 GitHub Desktop 的 dugite-native v2.53.0-4 便携发行，固定每个平台归档的 SHA-256。完整保留 Git、辅助程序、证书与归档内许可文件；Windows Git 原文在 `runtime/git/LICENSE.txt`，其他组件材料保留在原目录。Git 的 GPLv2 许可独立于 Nexus MIT。上游构建脚本与来源位于 https://github.com/desktop/dugite-native/tree/v2.53.0-4 。
+内置 Git 使用固定摘要的 dugite-native v2.53.0-4。保留 Git、SSH、LFS、证书与原始通知；排除可选 GCM 程序及其匹配依赖，不修改用户或系统 Git 配置。补充的 213 份通知放在 runtime/git/NEXUS-NOTICES 及 notices/bundled-git-notices。
 
-发布前仍需逐平台核对对应源码提供与嵌套组件分发义务，自动清单标为 `reviewRequired`。当前 Windows 本地运行测试不代表其余平台安装验收完成。
+Git uses the SHA-256-pinned dugite-native v2.53.0-4 distribution. Git, SSH, LFS, certificates and original notices are retained; optional GCM executables and matched dependencies are excluded without changing user or system Git configuration. Supplemental notices are included in the two directories above.
 
-公开分发核查已于 2026-09-23 完成，结论为材料不足、暂不放行；具体证据与整改条件见 [Git 分发核查](docs/audits/git-redistribution-2026-09-23/README.md)。`reviewRequired` 保留，不代表 CI 已自动阻断发布。
+每个发行页同时提供 dsh-nexus_<version>_git-sources.tar、来源清单和摘要，包含对应源码、补丁、构建脚本及相关材料。转发二进制（包括离线转发）时，请一并提供该源码包或保持同等可获取的配套下载；源码包不属于启动时下载依赖。
+
+Each release provides dsh-nexus_<version>_git-sources.tar, provenance and checksums, containing corresponding source, patches and build materials. Keep this companion with redistributed binaries, including offline redistribution, or provide equivalent accompanying access. It is not a runtime download requirement.
+
+[分发材料与验收边界 / Materials and acceptance scope](docs/audits/git-redistribution-2026-09-23/README.md)。放行仅针对上述 Nexus 处理后的发行包；安装包及源码附件仍须通过同提交 CI 校验，不是对原始上游归档整体的授权判断。

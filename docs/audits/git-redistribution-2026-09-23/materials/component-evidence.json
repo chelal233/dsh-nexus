@@ -1,0 +1,1298 @@
+{
+  "schema": 1,
+  "release": "dugite-native-v2.53.0-4",
+  "binaries": [
+    {
+      "target": "windows-x64",
+      "archive": "dugite-native-v2.53.0-4098283-windows-x64.tar.gz",
+      "entry": "./mingw64/libexec/git-core/git-lfs.exe",
+      "sha256": "690f49b6aaa4d9dd707e08419d18f11ac2cb18051aa6779a6badff7d7c4ee95a",
+      "goVersion": "go1.25.1",
+      "buildInfo": "path\tgithub.com/git-lfs/git-lfs/v3\nmod\tgithub.com/git-lfs/git-lfs/v3\tv3.7.1\t\ndep\tgithub.com/alexbrainman/sspi\tv0.0.0-20210105120005-909beea2cc74\th1:Kk6a4nehpJ3UuJRqlA3JxYxBZEqCeOmATOvrbT4p9RA=\ndep\tgithub.com/avast/retry-go\tv2.4.2+incompatible\th1:+ZjCypQT/CyP0kyJO2EcU4d/ZEJWSbP8NENI578cPmA=\ndep\tgithub.com/dpotapov/go-spnego\tv0.0.0-20210315154721-298b63a54430\th1:oempk9HjNt6rVKyKmpdnoN7XABQv3SXLWu3pxUI7Vlk=\ndep\tgithub.com/git-lfs/gitobj/v2\tv2.1.1\th1:tf/VU6zL1kxa3he+nf6FO/syX+LGkm6WGDsMpfuXV7Q=\ndep\tgithub.com/git-lfs/go-netrc\tv0.0.0-20250218165306-ba0029b43d11\th1:LotqdxyBRc7u2fxoBrzW6Mn3ZBvv7FlcBPlAa10DKAg=\ndep\tgithub.com/git-lfs/pktline\tv0.0.0-20210330133718-06e9096e2825\th1:riQhgheTL7tMF4d5raz9t3+IzoR1i1wqxE1kZC6dY+U=\ndep\tgithub.com/git-lfs/wildmatch/v2\tv2.0.1\th1:Ds+aobrV5bK0wStILUOn9irllPyf9qrFETbKzwzoER8=\ndep\tgithub.com/golang/groupcache\tv0.0.0-20241129210726-2c02b8208cf8\th1:f+oWsMOmNPc8JmEHVZIycC7hBoQxHH9pNKQORJNozsQ=\ndep\tgithub.com/inconshreveable/mousetrap\tv1.1.0\th1:wN+x4NVGpMsO7ErUn/mUI3vEoE6Jt13X2s0bqwp9tc8=\ndep\tgithub.com/jmhodges/clock\tv1.2.0\th1:eq4kys+NI0PLngzaHEe7AmPT90XMGIEySD1JfV1PDIs=\ndep\tgithub.com/leonelquinteros/gotext\tv1.5.0\th1:ODY7LzLpZWWSJdAHnzhreOr6cwLXTAmc914FOauSkBM=\ndep\tgithub.com/mattn/go-isatty\tv0.0.4\th1:bnP0vzxcAdeI1zdubAl5PjU6zsERjGZb7raWodagDYs=\ndep\tgithub.com/olekukonko/ts\tv0.0.0-20171002115256-78ecb04241c0\th1:LiZB1h0GIcudcDci2bxbqI6DXV8bF8POAnArqvRrIyw=\ndep\tgithub.com/pkg/errors\tv0.0.0-20170505043639-c605e284fe17\th1:chPfVn+gpAM5CTpTyVU9j8J+xgRGwmoDlNDLjKnJiYo=\ndep\tgithub.com/rubyist/tracerx\tv0.0.0-20170927163412-787959303086\th1:mncRSDOqYCng7jOD+Y6+IivdRI6Kzv2BLWYkWkdQfu0=\ndep\tgithub.com/spf13/cobra\tv1.7.0\th1:hyqWnYt1ZQShIddO5kBpj3vu05/++x6tJ6dg8EC572I=\ndep\tgithub.com/spf13/pflag\tv1.0.5\th1:iy+VFUOCP1a+8yFto/drg2CJ5u0yRoB7fZw3DKv/JXA=\ndep\tgithub.com/ssgelm/cookiejarparser\tv1.0.1\th1:cRdXauUbOTFzTPJFaeiWbHnQ+tRGlpKKzvIK9PUekE4=\ndep\tgolang.org/x/net\tv0.38.0\th1:vRMAPTMaeGqVhG5QyLJHqNDwecKTomGeqbnfZyKlBI8=\ndep\tgolang.org/x/sync\tv0.12.0\th1:MHc5BpPuC30uJk597Ri8TV3CNZcTLu6B6z4lJy+g6Jw=\ndep\tgolang.org/x/sys\tv0.31.0\th1:ioabZlmFYtWhL+TRYpcnNlLwhyxaM9kWTDEmfnprqik=\ndep\tgolang.org/x/text\tv0.23.0\th1:D71I7dUrlY+VX0gQShAThNGHFxZ13dGLBHQLVl1mJlY=\nbuild\t-buildmode=exe\nbuild\t-compiler=gc\nbuild\t-gcflags=\" \"\nbuild\t-trimpath=true\nbuild\tDefaultGODEBUG=containermaxprocs=0,decoratemappings=0,gotestjsonbuildtext=1,multipathtcp=0,randseednop=0,rsa1024min=0,tlsmlkem=0,tlssha1=1,updatemaxprocs=0,x509rsacrt=0,x509sha256skid=0,x509usepolicies=0\nbuild\tCGO_ENABLED=1\nbuild\tGOARCH=amd64\nbuild\tGOOS=windows\nbuild\tGOAMD64=v1\nbuild\tvcs=git\nbuild\tvcs.revision=b84b33847fe6458f36ef521534dc0eac953cb379\nbuild\tvcs.time=2025-10-16T22:56:43Z\nbuild\tvcs.modified=false\n",
+      "dependencies": [
+        {
+          "module": "github.com/alexbrainman/sspi",
+          "version": "v0.0.0-20210105120005-909beea2cc74",
+          "sum": "h1:Kk6a4nehpJ3UuJRqlA3JxYxBZEqCeOmATOvrbT4p9RA="
+        },
+        {
+          "module": "github.com/avast/retry-go",
+          "version": "v2.4.2+incompatible",
+          "sum": "h1:+ZjCypQT/CyP0kyJO2EcU4d/ZEJWSbP8NENI578cPmA="
+        },
+        {
+          "module": "github.com/dpotapov/go-spnego",
+          "version": "v0.0.0-20210315154721-298b63a54430",
+          "sum": "h1:oempk9HjNt6rVKyKmpdnoN7XABQv3SXLWu3pxUI7Vlk="
+        },
+        {
+          "module": "github.com/git-lfs/gitobj/v2",
+          "version": "v2.1.1",
+          "sum": "h1:tf/VU6zL1kxa3he+nf6FO/syX+LGkm6WGDsMpfuXV7Q="
+        },
+        {
+          "module": "github.com/git-lfs/go-netrc",
+          "version": "v0.0.0-20250218165306-ba0029b43d11",
+          "sum": "h1:LotqdxyBRc7u2fxoBrzW6Mn3ZBvv7FlcBPlAa10DKAg="
+        },
+        {
+          "module": "github.com/git-lfs/pktline",
+          "version": "v0.0.0-20210330133718-06e9096e2825",
+          "sum": "h1:riQhgheTL7tMF4d5raz9t3+IzoR1i1wqxE1kZC6dY+U="
+        },
+        {
+          "module": "github.com/git-lfs/wildmatch/v2",
+          "version": "v2.0.1",
+          "sum": "h1:Ds+aobrV5bK0wStILUOn9irllPyf9qrFETbKzwzoER8="
+        },
+        {
+          "module": "github.com/golang/groupcache",
+          "version": "v0.0.0-20241129210726-2c02b8208cf8",
+          "sum": "h1:f+oWsMOmNPc8JmEHVZIycC7hBoQxHH9pNKQORJNozsQ="
+        },
+        {
+          "module": "github.com/inconshreveable/mousetrap",
+          "version": "v1.1.0",
+          "sum": "h1:wN+x4NVGpMsO7ErUn/mUI3vEoE6Jt13X2s0bqwp9tc8="
+        },
+        {
+          "module": "github.com/jmhodges/clock",
+          "version": "v1.2.0",
+          "sum": "h1:eq4kys+NI0PLngzaHEe7AmPT90XMGIEySD1JfV1PDIs="
+        },
+        {
+          "module": "github.com/leonelquinteros/gotext",
+          "version": "v1.5.0",
+          "sum": "h1:ODY7LzLpZWWSJdAHnzhreOr6cwLXTAmc914FOauSkBM="
+        },
+        {
+          "module": "github.com/mattn/go-isatty",
+          "version": "v0.0.4",
+          "sum": "h1:bnP0vzxcAdeI1zdubAl5PjU6zsERjGZb7raWodagDYs="
+        },
+        {
+          "module": "github.com/olekukonko/ts",
+          "version": "v0.0.0-20171002115256-78ecb04241c0",
+          "sum": "h1:LiZB1h0GIcudcDci2bxbqI6DXV8bF8POAnArqvRrIyw="
+        },
+        {
+          "module": "github.com/pkg/errors",
+          "version": "v0.0.0-20170505043639-c605e284fe17",
+          "sum": "h1:chPfVn+gpAM5CTpTyVU9j8J+xgRGwmoDlNDLjKnJiYo="
+        },
+        {
+          "module": "github.com/rubyist/tracerx",
+          "version": "v0.0.0-20170927163412-787959303086",
+          "sum": "h1:mncRSDOqYCng7jOD+Y6+IivdRI6Kzv2BLWYkWkdQfu0="
+        },
+        {
+          "module": "github.com/spf13/cobra",
+          "version": "v1.7.0",
+          "sum": "h1:hyqWnYt1ZQShIddO5kBpj3vu05/++x6tJ6dg8EC572I="
+        },
+        {
+          "module": "github.com/spf13/pflag",
+          "version": "v1.0.5",
+          "sum": "h1:iy+VFUOCP1a+8yFto/drg2CJ5u0yRoB7fZw3DKv/JXA="
+        },
+        {
+          "module": "github.com/ssgelm/cookiejarparser",
+          "version": "v1.0.1",
+          "sum": "h1:cRdXauUbOTFzTPJFaeiWbHnQ+tRGlpKKzvIK9PUekE4="
+        },
+        {
+          "module": "golang.org/x/net",
+          "version": "v0.38.0",
+          "sum": "h1:vRMAPTMaeGqVhG5QyLJHqNDwecKTomGeqbnfZyKlBI8="
+        },
+        {
+          "module": "golang.org/x/sync",
+          "version": "v0.12.0",
+          "sum": "h1:MHc5BpPuC30uJk597Ri8TV3CNZcTLu6B6z4lJy+g6Jw="
+        },
+        {
+          "module": "golang.org/x/sys",
+          "version": "v0.31.0",
+          "sum": "h1:ioabZlmFYtWhL+TRYpcnNlLwhyxaM9kWTDEmfnprqik="
+        },
+        {
+          "module": "golang.org/x/text",
+          "version": "v0.23.0",
+          "sum": "h1:D71I7dUrlY+VX0gQShAThNGHFxZ13dGLBHQLVl1mJlY="
+        }
+      ]
+    },
+    {
+      "target": "windows-arm64",
+      "archive": "dugite-native-v2.53.0-4098283-windows-arm64.tar.gz",
+      "entry": "./clangarm64/libexec/git-core/git-lfs.exe",
+      "sha256": "a5bb883d5b9d1a7b206488dc6b79471005d306460f9b54a80e3587a0f855bf5b",
+      "goVersion": "go1.25.1",
+      "buildInfo": "path\tgithub.com/git-lfs/git-lfs/v3\nmod\tgithub.com/git-lfs/git-lfs/v3\tv3.7.1+dirty\t\ndep\tgithub.com/alexbrainman/sspi\tv0.0.0-20210105120005-909beea2cc74\th1:Kk6a4nehpJ3UuJRqlA3JxYxBZEqCeOmATOvrbT4p9RA=\ndep\tgithub.com/avast/retry-go\tv2.4.2+incompatible\th1:+ZjCypQT/CyP0kyJO2EcU4d/ZEJWSbP8NENI578cPmA=\ndep\tgithub.com/dpotapov/go-spnego\tv0.0.0-20210315154721-298b63a54430\th1:oempk9HjNt6rVKyKmpdnoN7XABQv3SXLWu3pxUI7Vlk=\ndep\tgithub.com/git-lfs/gitobj/v2\tv2.1.1\th1:tf/VU6zL1kxa3he+nf6FO/syX+LGkm6WGDsMpfuXV7Q=\ndep\tgithub.com/git-lfs/go-netrc\tv0.0.0-20250218165306-ba0029b43d11\th1:LotqdxyBRc7u2fxoBrzW6Mn3ZBvv7FlcBPlAa10DKAg=\ndep\tgithub.com/git-lfs/pktline\tv0.0.0-20210330133718-06e9096e2825\th1:riQhgheTL7tMF4d5raz9t3+IzoR1i1wqxE1kZC6dY+U=\ndep\tgithub.com/git-lfs/wildmatch/v2\tv2.0.1\th1:Ds+aobrV5bK0wStILUOn9irllPyf9qrFETbKzwzoER8=\ndep\tgithub.com/golang/groupcache\tv0.0.0-20241129210726-2c02b8208cf8\th1:f+oWsMOmNPc8JmEHVZIycC7hBoQxHH9pNKQORJNozsQ=\ndep\tgithub.com/inconshreveable/mousetrap\tv1.1.0\th1:wN+x4NVGpMsO7ErUn/mUI3vEoE6Jt13X2s0bqwp9tc8=\ndep\tgithub.com/jmhodges/clock\tv1.2.0\th1:eq4kys+NI0PLngzaHEe7AmPT90XMGIEySD1JfV1PDIs=\ndep\tgithub.com/leonelquinteros/gotext\tv1.5.0\th1:ODY7LzLpZWWSJdAHnzhreOr6cwLXTAmc914FOauSkBM=\ndep\tgithub.com/mattn/go-isatty\tv0.0.4\th1:bnP0vzxcAdeI1zdubAl5PjU6zsERjGZb7raWodagDYs=\ndep\tgithub.com/olekukonko/ts\tv0.0.0-20171002115256-78ecb04241c0\th1:LiZB1h0GIcudcDci2bxbqI6DXV8bF8POAnArqvRrIyw=\ndep\tgithub.com/pkg/errors\tv0.0.0-20170505043639-c605e284fe17\th1:chPfVn+gpAM5CTpTyVU9j8J+xgRGwmoDlNDLjKnJiYo=\ndep\tgithub.com/rubyist/tracerx\tv0.0.0-20170927163412-787959303086\th1:mncRSDOqYCng7jOD+Y6+IivdRI6Kzv2BLWYkWkdQfu0=\ndep\tgithub.com/spf13/cobra\tv1.7.0\th1:hyqWnYt1ZQShIddO5kBpj3vu05/++x6tJ6dg8EC572I=\ndep\tgithub.com/spf13/pflag\tv1.0.5\th1:iy+VFUOCP1a+8yFto/drg2CJ5u0yRoB7fZw3DKv/JXA=\ndep\tgithub.com/ssgelm/cookiejarparser\tv1.0.1\th1:cRdXauUbOTFzTPJFaeiWbHnQ+tRGlpKKzvIK9PUekE4=\ndep\tgolang.org/x/net\tv0.38.0\th1:vRMAPTMaeGqVhG5QyLJHqNDwecKTomGeqbnfZyKlBI8=\ndep\tgolang.org/x/sync\tv0.12.0\th1:MHc5BpPuC30uJk597Ri8TV3CNZcTLu6B6z4lJy+g6Jw=\ndep\tgolang.org/x/sys\tv0.31.0\th1:ioabZlmFYtWhL+TRYpcnNlLwhyxaM9kWTDEmfnprqik=\ndep\tgolang.org/x/text\tv0.23.0\th1:D71I7dUrlY+VX0gQShAThNGHFxZ13dGLBHQLVl1mJlY=\nbuild\t-buildmode=exe\nbuild\t-compiler=gc\nbuild\t-gcflags=\" \"\nbuild\t-trimpath=true\nbuild\tDefaultGODEBUG=containermaxprocs=0,decoratemappings=0,gotestjsonbuildtext=1,multipathtcp=0,randseednop=0,rsa1024min=0,tlsmlkem=0,tlssha1=1,updatemaxprocs=0,x509rsacrt=0,x509sha256skid=0,x509usepolicies=0\nbuild\tCGO_ENABLED=0\nbuild\tGOARCH=arm64\nbuild\tGOOS=windows\nbuild\tGOARM64=v8.0\nbuild\tvcs=git\nbuild\tvcs.revision=b84b33847fe6458f36ef521534dc0eac953cb379\nbuild\tvcs.time=2025-10-16T22:56:43Z\nbuild\tvcs.modified=true\n",
+      "dependencies": [
+        {
+          "module": "github.com/alexbrainman/sspi",
+          "version": "v0.0.0-20210105120005-909beea2cc74",
+          "sum": "h1:Kk6a4nehpJ3UuJRqlA3JxYxBZEqCeOmATOvrbT4p9RA="
+        },
+        {
+          "module": "github.com/avast/retry-go",
+          "version": "v2.4.2+incompatible",
+          "sum": "h1:+ZjCypQT/CyP0kyJO2EcU4d/ZEJWSbP8NENI578cPmA="
+        },
+        {
+          "module": "github.com/dpotapov/go-spnego",
+          "version": "v0.0.0-20210315154721-298b63a54430",
+          "sum": "h1:oempk9HjNt6rVKyKmpdnoN7XABQv3SXLWu3pxUI7Vlk="
+        },
+        {
+          "module": "github.com/git-lfs/gitobj/v2",
+          "version": "v2.1.1",
+          "sum": "h1:tf/VU6zL1kxa3he+nf6FO/syX+LGkm6WGDsMpfuXV7Q="
+        },
+        {
+          "module": "github.com/git-lfs/go-netrc",
+          "version": "v0.0.0-20250218165306-ba0029b43d11",
+          "sum": "h1:LotqdxyBRc7u2fxoBrzW6Mn3ZBvv7FlcBPlAa10DKAg="
+        },
+        {
+          "module": "github.com/git-lfs/pktline",
+          "version": "v0.0.0-20210330133718-06e9096e2825",
+          "sum": "h1:riQhgheTL7tMF4d5raz9t3+IzoR1i1wqxE1kZC6dY+U="
+        },
+        {
+          "module": "github.com/git-lfs/wildmatch/v2",
+          "version": "v2.0.1",
+          "sum": "h1:Ds+aobrV5bK0wStILUOn9irllPyf9qrFETbKzwzoER8="
+        },
+        {
+          "module": "github.com/golang/groupcache",
+          "version": "v0.0.0-20241129210726-2c02b8208cf8",
+          "sum": "h1:f+oWsMOmNPc8JmEHVZIycC7hBoQxHH9pNKQORJNozsQ="
+        },
+        {
+          "module": "github.com/inconshreveable/mousetrap",
+          "version": "v1.1.0",
+          "sum": "h1:wN+x4NVGpMsO7ErUn/mUI3vEoE6Jt13X2s0bqwp9tc8="
+        },
+        {
+          "module": "github.com/jmhodges/clock",
+          "version": "v1.2.0",
+          "sum": "h1:eq4kys+NI0PLngzaHEe7AmPT90XMGIEySD1JfV1PDIs="
+        },
+        {
+          "module": "github.com/leonelquinteros/gotext",
+          "version": "v1.5.0",
+          "sum": "h1:ODY7LzLpZWWSJdAHnzhreOr6cwLXTAmc914FOauSkBM="
+        },
+        {
+          "module": "github.com/mattn/go-isatty",
+          "version": "v0.0.4",
+          "sum": "h1:bnP0vzxcAdeI1zdubAl5PjU6zsERjGZb7raWodagDYs="
+        },
+        {
+          "module": "github.com/olekukonko/ts",
+          "version": "v0.0.0-20171002115256-78ecb04241c0",
+          "sum": "h1:LiZB1h0GIcudcDci2bxbqI6DXV8bF8POAnArqvRrIyw="
+        },
+        {
+          "module": "github.com/pkg/errors",
+          "version": "v0.0.0-20170505043639-c605e284fe17",
+          "sum": "h1:chPfVn+gpAM5CTpTyVU9j8J+xgRGwmoDlNDLjKnJiYo="
+        },
+        {
+          "module": "github.com/rubyist/tracerx",
+          "version": "v0.0.0-20170927163412-787959303086",
+          "sum": "h1:mncRSDOqYCng7jOD+Y6+IivdRI6Kzv2BLWYkWkdQfu0="
+        },
+        {
+          "module": "github.com/spf13/cobra",
+          "version": "v1.7.0",
+          "sum": "h1:hyqWnYt1ZQShIddO5kBpj3vu05/++x6tJ6dg8EC572I="
+        },
+        {
+          "module": "github.com/spf13/pflag",
+          "version": "v1.0.5",
+          "sum": "h1:iy+VFUOCP1a+8yFto/drg2CJ5u0yRoB7fZw3DKv/JXA="
+        },
+        {
+          "module": "github.com/ssgelm/cookiejarparser",
+          "version": "v1.0.1",
+          "sum": "h1:cRdXauUbOTFzTPJFaeiWbHnQ+tRGlpKKzvIK9PUekE4="
+        },
+        {
+          "module": "golang.org/x/net",
+          "version": "v0.38.0",
+          "sum": "h1:vRMAPTMaeGqVhG5QyLJHqNDwecKTomGeqbnfZyKlBI8="
+        },
+        {
+          "module": "golang.org/x/sync",
+          "version": "v0.12.0",
+          "sum": "h1:MHc5BpPuC30uJk597Ri8TV3CNZcTLu6B6z4lJy+g6Jw="
+        },
+        {
+          "module": "golang.org/x/sys",
+          "version": "v0.31.0",
+          "sum": "h1:ioabZlmFYtWhL+TRYpcnNlLwhyxaM9kWTDEmfnprqik="
+        },
+        {
+          "module": "golang.org/x/text",
+          "version": "v0.23.0",
+          "sum": "h1:D71I7dUrlY+VX0gQShAThNGHFxZ13dGLBHQLVl1mJlY="
+        }
+      ]
+    },
+    {
+      "target": "macOS-x64",
+      "archive": "dugite-native-v2.53.0-4098283-macOS-x64.tar.gz",
+      "entry": "./libexec/git-core/git-lfs",
+      "sha256": "30b1f438f81d3342af60707ecde1aa23f96627da193c2ba27db87303a3a2f8e5",
+      "goVersion": "go1.25.1",
+      "buildInfo": "path\tcommand-line-arguments\ndep\tgithub.com/dpotapov/go-spnego\tv0.0.0-20210315154721-298b63a54430\th1:oempk9HjNt6rVKyKmpdnoN7XABQv3SXLWu3pxUI7Vlk=\ndep\tgithub.com/git-lfs/git-lfs/v3\t(devel)\t\ndep\tgithub.com/git-lfs/gitobj/v2\tv2.1.1\th1:tf/VU6zL1kxa3he+nf6FO/syX+LGkm6WGDsMpfuXV7Q=\ndep\tgithub.com/git-lfs/go-netrc\tv0.0.0-20250218165306-ba0029b43d11\th1:LotqdxyBRc7u2fxoBrzW6Mn3ZBvv7FlcBPlAa10DKAg=\ndep\tgithub.com/git-lfs/pktline\tv0.0.0-20210330133718-06e9096e2825\th1:riQhgheTL7tMF4d5raz9t3+IzoR1i1wqxE1kZC6dY+U=\ndep\tgithub.com/git-lfs/wildmatch/v2\tv2.0.1\th1:Ds+aobrV5bK0wStILUOn9irllPyf9qrFETbKzwzoER8=\ndep\tgithub.com/golang/groupcache\tv0.0.0-20241129210726-2c02b8208cf8\th1:f+oWsMOmNPc8JmEHVZIycC7hBoQxHH9pNKQORJNozsQ=\ndep\tgithub.com/hashicorp/go-uuid\tv1.0.2\th1:cfejS+Tpcp13yd5nYHWDI6qVCny6wyX2Mt5SGur2IGE=\ndep\tgithub.com/jcmturner/aescts/v2\tv2.0.0\th1:9YKLH6ey7H4eDBXW8khjYslgyqG2xZikXP0EQFKrle8=\ndep\tgithub.com/jcmturner/dnsutils/v2\tv2.0.0\th1:lltnkeZGL0wILNvrNiVCR6Ro5PGU/SeBvVO/8c/iPbo=\ndep\tgithub.com/jcmturner/gofork\tv1.0.0\th1:J7uCkflzTEhUZ64xqKnkDxq3kzc96ajM1Gli5ktUem8=\ndep\tgithub.com/jcmturner/goidentity/v6\tv6.0.1\th1:VKnZd2oEIMorCTsFBnJWbExfNN7yZr3EhJAxwOkZg6o=\ndep\tgithub.com/jcmturner/gokrb5/v8\tv8.4.2\th1:6ZIM6b/JJN0X8UM43ZOM6Z4SJzla+a/u7scXFJzodkA=\ndep\tgithub.com/jcmturner/rpc/v2\tv2.0.3\th1:7FXXj8Ti1IaVFpSAziCZWNzbNuZmnvw/i6CqLNdWfZY=\ndep\tgithub.com/jmhodges/clock\tv1.2.0\th1:eq4kys+NI0PLngzaHEe7AmPT90XMGIEySD1JfV1PDIs=\ndep\tgithub.com/leonelquinteros/gotext\tv1.5.0\th1:ODY7LzLpZWWSJdAHnzhreOr6cwLXTAmc914FOauSkBM=\ndep\tgithub.com/mattn/go-isatty\tv0.0.4\th1:bnP0vzxcAdeI1zdubAl5PjU6zsERjGZb7raWodagDYs=\ndep\tgithub.com/olekukonko/ts\tv0.0.0-20171002115256-78ecb04241c0\th1:LiZB1h0GIcudcDci2bxbqI6DXV8bF8POAnArqvRrIyw=\ndep\tgithub.com/pkg/errors\tv0.0.0-20170505043639-c605e284fe17\th1:chPfVn+gpAM5CTpTyVU9j8J+xgRGwmoDlNDLjKnJiYo=\ndep\tgithub.com/rubyist/tracerx\tv0.0.0-20170927163412-787959303086\th1:mncRSDOqYCng7jOD+Y6+IivdRI6Kzv2BLWYkWkdQfu0=\ndep\tgithub.com/spf13/cobra\tv1.7.0\th1:hyqWnYt1ZQShIddO5kBpj3vu05/++x6tJ6dg8EC572I=\ndep\tgithub.com/spf13/pflag\tv1.0.5\th1:iy+VFUOCP1a+8yFto/drg2CJ5u0yRoB7fZw3DKv/JXA=\ndep\tgithub.com/ssgelm/cookiejarparser\tv1.0.1\th1:cRdXauUbOTFzTPJFaeiWbHnQ+tRGlpKKzvIK9PUekE4=\ndep\tgolang.org/x/crypto\tv0.36.0\th1:AnAEvhDddvBdpY+uR+MyHmuZzzNqXSe/GvuDeob5L34=\ndep\tgolang.org/x/net\tv0.38.0\th1:vRMAPTMaeGqVhG5QyLJHqNDwecKTomGeqbnfZyKlBI8=\ndep\tgolang.org/x/sync\tv0.12.0\th1:MHc5BpPuC30uJk597Ri8TV3CNZcTLu6B6z4lJy+g6Jw=\ndep\tgolang.org/x/sys\tv0.31.0\th1:ioabZlmFYtWhL+TRYpcnNlLwhyxaM9kWTDEmfnprqik=\ndep\tgolang.org/x/text\tv0.23.0\th1:D71I7dUrlY+VX0gQShAThNGHFxZ13dGLBHQLVl1mJlY=\nbuild\t-buildmode=exe\nbuild\t-compiler=gc\nbuild\t-gcflags=\" \"\nbuild\t-trimpath=true\nbuild\tDefaultGODEBUG=containermaxprocs=0,decoratemappings=0,gotestjsonbuildtext=1,multipathtcp=0,randseednop=0,rsa1024min=0,tlsmlkem=0,tlssha1=1,updatemaxprocs=0,x509rsacrt=0,x509sha256skid=0,x509usepolicies=0\nbuild\tCGO_ENABLED=0\nbuild\tGOARCH=amd64\nbuild\tGOOS=darwin\nbuild\tGOAMD64=v1\n",
+      "dependencies": [
+        {
+          "module": "github.com/dpotapov/go-spnego",
+          "version": "v0.0.0-20210315154721-298b63a54430",
+          "sum": "h1:oempk9HjNt6rVKyKmpdnoN7XABQv3SXLWu3pxUI7Vlk="
+        },
+        {
+          "module": "github.com/git-lfs/git-lfs/v3",
+          "version": "(devel)",
+          "sum": ""
+        },
+        {
+          "module": "github.com/git-lfs/gitobj/v2",
+          "version": "v2.1.1",
+          "sum": "h1:tf/VU6zL1kxa3he+nf6FO/syX+LGkm6WGDsMpfuXV7Q="
+        },
+        {
+          "module": "github.com/git-lfs/go-netrc",
+          "version": "v0.0.0-20250218165306-ba0029b43d11",
+          "sum": "h1:LotqdxyBRc7u2fxoBrzW6Mn3ZBvv7FlcBPlAa10DKAg="
+        },
+        {
+          "module": "github.com/git-lfs/pktline",
+          "version": "v0.0.0-20210330133718-06e9096e2825",
+          "sum": "h1:riQhgheTL7tMF4d5raz9t3+IzoR1i1wqxE1kZC6dY+U="
+        },
+        {
+          "module": "github.com/git-lfs/wildmatch/v2",
+          "version": "v2.0.1",
+          "sum": "h1:Ds+aobrV5bK0wStILUOn9irllPyf9qrFETbKzwzoER8="
+        },
+        {
+          "module": "github.com/golang/groupcache",
+          "version": "v0.0.0-20241129210726-2c02b8208cf8",
+          "sum": "h1:f+oWsMOmNPc8JmEHVZIycC7hBoQxHH9pNKQORJNozsQ="
+        },
+        {
+          "module": "github.com/hashicorp/go-uuid",
+          "version": "v1.0.2",
+          "sum": "h1:cfejS+Tpcp13yd5nYHWDI6qVCny6wyX2Mt5SGur2IGE="
+        },
+        {
+          "module": "github.com/jcmturner/aescts/v2",
+          "version": "v2.0.0",
+          "sum": "h1:9YKLH6ey7H4eDBXW8khjYslgyqG2xZikXP0EQFKrle8="
+        },
+        {
+          "module": "github.com/jcmturner/dnsutils/v2",
+          "version": "v2.0.0",
+          "sum": "h1:lltnkeZGL0wILNvrNiVCR6Ro5PGU/SeBvVO/8c/iPbo="
+        },
+        {
+          "module": "github.com/jcmturner/gofork",
+          "version": "v1.0.0",
+          "sum": "h1:J7uCkflzTEhUZ64xqKnkDxq3kzc96ajM1Gli5ktUem8="
+        },
+        {
+          "module": "github.com/jcmturner/goidentity/v6",
+          "version": "v6.0.1",
+          "sum": "h1:VKnZd2oEIMorCTsFBnJWbExfNN7yZr3EhJAxwOkZg6o="
+        },
+        {
+          "module": "github.com/jcmturner/gokrb5/v8",
+          "version": "v8.4.2",
+          "sum": "h1:6ZIM6b/JJN0X8UM43ZOM6Z4SJzla+a/u7scXFJzodkA="
+        },
+        {
+          "module": "github.com/jcmturner/rpc/v2",
+          "version": "v2.0.3",
+          "sum": "h1:7FXXj8Ti1IaVFpSAziCZWNzbNuZmnvw/i6CqLNdWfZY="
+        },
+        {
+          "module": "github.com/jmhodges/clock",
+          "version": "v1.2.0",
+          "sum": "h1:eq4kys+NI0PLngzaHEe7AmPT90XMGIEySD1JfV1PDIs="
+        },
+        {
+          "module": "github.com/leonelquinteros/gotext",
+          "version": "v1.5.0",
+          "sum": "h1:ODY7LzLpZWWSJdAHnzhreOr6cwLXTAmc914FOauSkBM="
+        },
+        {
+          "module": "github.com/mattn/go-isatty",
+          "version": "v0.0.4",
+          "sum": "h1:bnP0vzxcAdeI1zdubAl5PjU6zsERjGZb7raWodagDYs="
+        },
+        {
+          "module": "github.com/olekukonko/ts",
+          "version": "v0.0.0-20171002115256-78ecb04241c0",
+          "sum": "h1:LiZB1h0GIcudcDci2bxbqI6DXV8bF8POAnArqvRrIyw="
+        },
+        {
+          "module": "github.com/pkg/errors",
+          "version": "v0.0.0-20170505043639-c605e284fe17",
+          "sum": "h1:chPfVn+gpAM5CTpTyVU9j8J+xgRGwmoDlNDLjKnJiYo="
+        },
+        {
+          "module": "github.com/rubyist/tracerx",
+          "version": "v0.0.0-20170927163412-787959303086",
+          "sum": "h1:mncRSDOqYCng7jOD+Y6+IivdRI6Kzv2BLWYkWkdQfu0="
+        },
+        {
+          "module": "github.com/spf13/cobra",
+          "version": "v1.7.0",
+          "sum": "h1:hyqWnYt1ZQShIddO5kBpj3vu05/++x6tJ6dg8EC572I="
+        },
+        {
+          "module": "github.com/spf13/pflag",
+          "version": "v1.0.5",
+          "sum": "h1:iy+VFUOCP1a+8yFto/drg2CJ5u0yRoB7fZw3DKv/JXA="
+        },
+        {
+          "module": "github.com/ssgelm/cookiejarparser",
+          "version": "v1.0.1",
+          "sum": "h1:cRdXauUbOTFzTPJFaeiWbHnQ+tRGlpKKzvIK9PUekE4="
+        },
+        {
+          "module": "golang.org/x/crypto",
+          "version": "v0.36.0",
+          "sum": "h1:AnAEvhDddvBdpY+uR+MyHmuZzzNqXSe/GvuDeob5L34="
+        },
+        {
+          "module": "golang.org/x/net",
+          "version": "v0.38.0",
+          "sum": "h1:vRMAPTMaeGqVhG5QyLJHqNDwecKTomGeqbnfZyKlBI8="
+        },
+        {
+          "module": "golang.org/x/sync",
+          "version": "v0.12.0",
+          "sum": "h1:MHc5BpPuC30uJk597Ri8TV3CNZcTLu6B6z4lJy+g6Jw="
+        },
+        {
+          "module": "golang.org/x/sys",
+          "version": "v0.31.0",
+          "sum": "h1:ioabZlmFYtWhL+TRYpcnNlLwhyxaM9kWTDEmfnprqik="
+        },
+        {
+          "module": "golang.org/x/text",
+          "version": "v0.23.0",
+          "sum": "h1:D71I7dUrlY+VX0gQShAThNGHFxZ13dGLBHQLVl1mJlY="
+        }
+      ]
+    },
+    {
+      "target": "macOS-arm64",
+      "archive": "dugite-native-v2.53.0-4098283-macOS-arm64.tar.gz",
+      "entry": "./libexec/git-core/git-lfs",
+      "sha256": "48bb6497160105ef852044da75147acee19502efd5f164b9a4429c3a60be7d4a",
+      "goVersion": "go1.25.1",
+      "buildInfo": "path\tcommand-line-arguments\ndep\tgithub.com/dpotapov/go-spnego\tv0.0.0-20210315154721-298b63a54430\th1:oempk9HjNt6rVKyKmpdnoN7XABQv3SXLWu3pxUI7Vlk=\ndep\tgithub.com/git-lfs/git-lfs/v3\t(devel)\t\ndep\tgithub.com/git-lfs/gitobj/v2\tv2.1.1\th1:tf/VU6zL1kxa3he+nf6FO/syX+LGkm6WGDsMpfuXV7Q=\ndep\tgithub.com/git-lfs/go-netrc\tv0.0.0-20250218165306-ba0029b43d11\th1:LotqdxyBRc7u2fxoBrzW6Mn3ZBvv7FlcBPlAa10DKAg=\ndep\tgithub.com/git-lfs/pktline\tv0.0.0-20210330133718-06e9096e2825\th1:riQhgheTL7tMF4d5raz9t3+IzoR1i1wqxE1kZC6dY+U=\ndep\tgithub.com/git-lfs/wildmatch/v2\tv2.0.1\th1:Ds+aobrV5bK0wStILUOn9irllPyf9qrFETbKzwzoER8=\ndep\tgithub.com/golang/groupcache\tv0.0.0-20241129210726-2c02b8208cf8\th1:f+oWsMOmNPc8JmEHVZIycC7hBoQxHH9pNKQORJNozsQ=\ndep\tgithub.com/hashicorp/go-uuid\tv1.0.2\th1:cfejS+Tpcp13yd5nYHWDI6qVCny6wyX2Mt5SGur2IGE=\ndep\tgithub.com/jcmturner/aescts/v2\tv2.0.0\th1:9YKLH6ey7H4eDBXW8khjYslgyqG2xZikXP0EQFKrle8=\ndep\tgithub.com/jcmturner/dnsutils/v2\tv2.0.0\th1:lltnkeZGL0wILNvrNiVCR6Ro5PGU/SeBvVO/8c/iPbo=\ndep\tgithub.com/jcmturner/gofork\tv1.0.0\th1:J7uCkflzTEhUZ64xqKnkDxq3kzc96ajM1Gli5ktUem8=\ndep\tgithub.com/jcmturner/goidentity/v6\tv6.0.1\th1:VKnZd2oEIMorCTsFBnJWbExfNN7yZr3EhJAxwOkZg6o=\ndep\tgithub.com/jcmturner/gokrb5/v8\tv8.4.2\th1:6ZIM6b/JJN0X8UM43ZOM6Z4SJzla+a/u7scXFJzodkA=\ndep\tgithub.com/jcmturner/rpc/v2\tv2.0.3\th1:7FXXj8Ti1IaVFpSAziCZWNzbNuZmnvw/i6CqLNdWfZY=\ndep\tgithub.com/jmhodges/clock\tv1.2.0\th1:eq4kys+NI0PLngzaHEe7AmPT90XMGIEySD1JfV1PDIs=\ndep\tgithub.com/leonelquinteros/gotext\tv1.5.0\th1:ODY7LzLpZWWSJdAHnzhreOr6cwLXTAmc914FOauSkBM=\ndep\tgithub.com/mattn/go-isatty\tv0.0.4\th1:bnP0vzxcAdeI1zdubAl5PjU6zsERjGZb7raWodagDYs=\ndep\tgithub.com/olekukonko/ts\tv0.0.0-20171002115256-78ecb04241c0\th1:LiZB1h0GIcudcDci2bxbqI6DXV8bF8POAnArqvRrIyw=\ndep\tgithub.com/pkg/errors\tv0.0.0-20170505043639-c605e284fe17\th1:chPfVn+gpAM5CTpTyVU9j8J+xgRGwmoDlNDLjKnJiYo=\ndep\tgithub.com/rubyist/tracerx\tv0.0.0-20170927163412-787959303086\th1:mncRSDOqYCng7jOD+Y6+IivdRI6Kzv2BLWYkWkdQfu0=\ndep\tgithub.com/spf13/cobra\tv1.7.0\th1:hyqWnYt1ZQShIddO5kBpj3vu05/++x6tJ6dg8EC572I=\ndep\tgithub.com/spf13/pflag\tv1.0.5\th1:iy+VFUOCP1a+8yFto/drg2CJ5u0yRoB7fZw3DKv/JXA=\ndep\tgithub.com/ssgelm/cookiejarparser\tv1.0.1\th1:cRdXauUbOTFzTPJFaeiWbHnQ+tRGlpKKzvIK9PUekE4=\ndep\tgolang.org/x/crypto\tv0.36.0\th1:AnAEvhDddvBdpY+uR+MyHmuZzzNqXSe/GvuDeob5L34=\ndep\tgolang.org/x/net\tv0.38.0\th1:vRMAPTMaeGqVhG5QyLJHqNDwecKTomGeqbnfZyKlBI8=\ndep\tgolang.org/x/sync\tv0.12.0\th1:MHc5BpPuC30uJk597Ri8TV3CNZcTLu6B6z4lJy+g6Jw=\ndep\tgolang.org/x/sys\tv0.31.0\th1:ioabZlmFYtWhL+TRYpcnNlLwhyxaM9kWTDEmfnprqik=\ndep\tgolang.org/x/text\tv0.23.0\th1:D71I7dUrlY+VX0gQShAThNGHFxZ13dGLBHQLVl1mJlY=\nbuild\t-buildmode=exe\nbuild\t-compiler=gc\nbuild\t-gcflags=\" \"\nbuild\t-trimpath=true\nbuild\tDefaultGODEBUG=containermaxprocs=0,decoratemappings=0,gotestjsonbuildtext=1,multipathtcp=0,randseednop=0,rsa1024min=0,tlsmlkem=0,tlssha1=1,updatemaxprocs=0,x509rsacrt=0,x509sha256skid=0,x509usepolicies=0\nbuild\tCGO_ENABLED=1\nbuild\tGOARCH=arm64\nbuild\tGOOS=darwin\nbuild\tGOARM64=v8.0\n",
+      "dependencies": [
+        {
+          "module": "github.com/dpotapov/go-spnego",
+          "version": "v0.0.0-20210315154721-298b63a54430",
+          "sum": "h1:oempk9HjNt6rVKyKmpdnoN7XABQv3SXLWu3pxUI7Vlk="
+        },
+        {
+          "module": "github.com/git-lfs/git-lfs/v3",
+          "version": "(devel)",
+          "sum": ""
+        },
+        {
+          "module": "github.com/git-lfs/gitobj/v2",
+          "version": "v2.1.1",
+          "sum": "h1:tf/VU6zL1kxa3he+nf6FO/syX+LGkm6WGDsMpfuXV7Q="
+        },
+        {
+          "module": "github.com/git-lfs/go-netrc",
+          "version": "v0.0.0-20250218165306-ba0029b43d11",
+          "sum": "h1:LotqdxyBRc7u2fxoBrzW6Mn3ZBvv7FlcBPlAa10DKAg="
+        },
+        {
+          "module": "github.com/git-lfs/pktline",
+          "version": "v0.0.0-20210330133718-06e9096e2825",
+          "sum": "h1:riQhgheTL7tMF4d5raz9t3+IzoR1i1wqxE1kZC6dY+U="
+        },
+        {
+          "module": "github.com/git-lfs/wildmatch/v2",
+          "version": "v2.0.1",
+          "sum": "h1:Ds+aobrV5bK0wStILUOn9irllPyf9qrFETbKzwzoER8="
+        },
+        {
+          "module": "github.com/golang/groupcache",
+          "version": "v0.0.0-20241129210726-2c02b8208cf8",
+          "sum": "h1:f+oWsMOmNPc8JmEHVZIycC7hBoQxHH9pNKQORJNozsQ="
+        },
+        {
+          "module": "github.com/hashicorp/go-uuid",
+          "version": "v1.0.2",
+          "sum": "h1:cfejS+Tpcp13yd5nYHWDI6qVCny6wyX2Mt5SGur2IGE="
+        },
+        {
+          "module": "github.com/jcmturner/aescts/v2",
+          "version": "v2.0.0",
+          "sum": "h1:9YKLH6ey7H4eDBXW8khjYslgyqG2xZikXP0EQFKrle8="
+        },
+        {
+          "module": "github.com/jcmturner/dnsutils/v2",
+          "version": "v2.0.0",
+          "sum": "h1:lltnkeZGL0wILNvrNiVCR6Ro5PGU/SeBvVO/8c/iPbo="
+        },
+        {
+          "module": "github.com/jcmturner/gofork",
+          "version": "v1.0.0",
+          "sum": "h1:J7uCkflzTEhUZ64xqKnkDxq3kzc96ajM1Gli5ktUem8="
+        },
+        {
+          "module": "github.com/jcmturner/goidentity/v6",
+          "version": "v6.0.1",
+          "sum": "h1:VKnZd2oEIMorCTsFBnJWbExfNN7yZr3EhJAxwOkZg6o="
+        },
+        {
+          "module": "github.com/jcmturner/gokrb5/v8",
+          "version": "v8.4.2",
+          "sum": "h1:6ZIM6b/JJN0X8UM43ZOM6Z4SJzla+a/u7scXFJzodkA="
+        },
+        {
+          "module": "github.com/jcmturner/rpc/v2",
+          "version": "v2.0.3",
+          "sum": "h1:7FXXj8Ti1IaVFpSAziCZWNzbNuZmnvw/i6CqLNdWfZY="
+        },
+        {
+          "module": "github.com/jmhodges/clock",
+          "version": "v1.2.0",
+          "sum": "h1:eq4kys+NI0PLngzaHEe7AmPT90XMGIEySD1JfV1PDIs="
+        },
+        {
+          "module": "github.com/leonelquinteros/gotext",
+          "version": "v1.5.0",
+          "sum": "h1:ODY7LzLpZWWSJdAHnzhreOr6cwLXTAmc914FOauSkBM="
+        },
+        {
+          "module": "github.com/mattn/go-isatty",
+          "version": "v0.0.4",
+          "sum": "h1:bnP0vzxcAdeI1zdubAl5PjU6zsERjGZb7raWodagDYs="
+        },
+        {
+          "module": "github.com/olekukonko/ts",
+          "version": "v0.0.0-20171002115256-78ecb04241c0",
+          "sum": "h1:LiZB1h0GIcudcDci2bxbqI6DXV8bF8POAnArqvRrIyw="
+        },
+        {
+          "module": "github.com/pkg/errors",
+          "version": "v0.0.0-20170505043639-c605e284fe17",
+          "sum": "h1:chPfVn+gpAM5CTpTyVU9j8J+xgRGwmoDlNDLjKnJiYo="
+        },
+        {
+          "module": "github.com/rubyist/tracerx",
+          "version": "v0.0.0-20170927163412-787959303086",
+          "sum": "h1:mncRSDOqYCng7jOD+Y6+IivdRI6Kzv2BLWYkWkdQfu0="
+        },
+        {
+          "module": "github.com/spf13/cobra",
+          "version": "v1.7.0",
+          "sum": "h1:hyqWnYt1ZQShIddO5kBpj3vu05/++x6tJ6dg8EC572I="
+        },
+        {
+          "module": "github.com/spf13/pflag",
+          "version": "v1.0.5",
+          "sum": "h1:iy+VFUOCP1a+8yFto/drg2CJ5u0yRoB7fZw3DKv/JXA="
+        },
+        {
+          "module": "github.com/ssgelm/cookiejarparser",
+          "version": "v1.0.1",
+          "sum": "h1:cRdXauUbOTFzTPJFaeiWbHnQ+tRGlpKKzvIK9PUekE4="
+        },
+        {
+          "module": "golang.org/x/crypto",
+          "version": "v0.36.0",
+          "sum": "h1:AnAEvhDddvBdpY+uR+MyHmuZzzNqXSe/GvuDeob5L34="
+        },
+        {
+          "module": "golang.org/x/net",
+          "version": "v0.38.0",
+          "sum": "h1:vRMAPTMaeGqVhG5QyLJHqNDwecKTomGeqbnfZyKlBI8="
+        },
+        {
+          "module": "golang.org/x/sync",
+          "version": "v0.12.0",
+          "sum": "h1:MHc5BpPuC30uJk597Ri8TV3CNZcTLu6B6z4lJy+g6Jw="
+        },
+        {
+          "module": "golang.org/x/sys",
+          "version": "v0.31.0",
+          "sum": "h1:ioabZlmFYtWhL+TRYpcnNlLwhyxaM9kWTDEmfnprqik="
+        },
+        {
+          "module": "golang.org/x/text",
+          "version": "v0.23.0",
+          "sum": "h1:D71I7dUrlY+VX0gQShAThNGHFxZ13dGLBHQLVl1mJlY="
+        }
+      ]
+    },
+    {
+      "target": "ubuntu-arm64",
+      "archive": "dugite-native-v2.53.0-4098283-ubuntu-arm64.tar.gz",
+      "entry": "./libexec/git-core/git-lfs",
+      "sha256": "83a0e15428950cf52d8806223f05cc61788f965ed90fb634226a5610c852bba3",
+      "goVersion": "go1.25.3",
+      "buildInfo": "path\tcommand-line-arguments\ndep\tgithub.com/dpotapov/go-spnego\tv0.0.0-20210315154721-298b63a54430\th1:oempk9HjNt6rVKyKmpdnoN7XABQv3SXLWu3pxUI7Vlk=\ndep\tgithub.com/git-lfs/git-lfs/v3\t(devel)\t\ndep\tgithub.com/git-lfs/gitobj/v2\tv2.1.1\th1:tf/VU6zL1kxa3he+nf6FO/syX+LGkm6WGDsMpfuXV7Q=\ndep\tgithub.com/git-lfs/go-netrc\tv0.0.0-20250218165306-ba0029b43d11\th1:LotqdxyBRc7u2fxoBrzW6Mn3ZBvv7FlcBPlAa10DKAg=\ndep\tgithub.com/git-lfs/pktline\tv0.0.0-20210330133718-06e9096e2825\th1:riQhgheTL7tMF4d5raz9t3+IzoR1i1wqxE1kZC6dY+U=\ndep\tgithub.com/git-lfs/wildmatch/v2\tv2.0.1\th1:Ds+aobrV5bK0wStILUOn9irllPyf9qrFETbKzwzoER8=\ndep\tgithub.com/golang/groupcache\tv0.0.0-20241129210726-2c02b8208cf8\th1:f+oWsMOmNPc8JmEHVZIycC7hBoQxHH9pNKQORJNozsQ=\ndep\tgithub.com/hashicorp/go-uuid\tv1.0.2\th1:cfejS+Tpcp13yd5nYHWDI6qVCny6wyX2Mt5SGur2IGE=\ndep\tgithub.com/jcmturner/aescts/v2\tv2.0.0\th1:9YKLH6ey7H4eDBXW8khjYslgyqG2xZikXP0EQFKrle8=\ndep\tgithub.com/jcmturner/dnsutils/v2\tv2.0.0\th1:lltnkeZGL0wILNvrNiVCR6Ro5PGU/SeBvVO/8c/iPbo=\ndep\tgithub.com/jcmturner/gofork\tv1.0.0\th1:J7uCkflzTEhUZ64xqKnkDxq3kzc96ajM1Gli5ktUem8=\ndep\tgithub.com/jcmturner/goidentity/v6\tv6.0.1\th1:VKnZd2oEIMorCTsFBnJWbExfNN7yZr3EhJAxwOkZg6o=\ndep\tgithub.com/jcmturner/gokrb5/v8\tv8.4.2\th1:6ZIM6b/JJN0X8UM43ZOM6Z4SJzla+a/u7scXFJzodkA=\ndep\tgithub.com/jcmturner/rpc/v2\tv2.0.3\th1:7FXXj8Ti1IaVFpSAziCZWNzbNuZmnvw/i6CqLNdWfZY=\ndep\tgithub.com/jmhodges/clock\tv1.2.0\th1:eq4kys+NI0PLngzaHEe7AmPT90XMGIEySD1JfV1PDIs=\ndep\tgithub.com/leonelquinteros/gotext\tv1.5.0\th1:ODY7LzLpZWWSJdAHnzhreOr6cwLXTAmc914FOauSkBM=\ndep\tgithub.com/mattn/go-isatty\tv0.0.4\th1:bnP0vzxcAdeI1zdubAl5PjU6zsERjGZb7raWodagDYs=\ndep\tgithub.com/olekukonko/ts\tv0.0.0-20171002115256-78ecb04241c0\th1:LiZB1h0GIcudcDci2bxbqI6DXV8bF8POAnArqvRrIyw=\ndep\tgithub.com/pkg/errors\tv0.0.0-20170505043639-c605e284fe17\th1:chPfVn+gpAM5CTpTyVU9j8J+xgRGwmoDlNDLjKnJiYo=\ndep\tgithub.com/rubyist/tracerx\tv0.0.0-20170927163412-787959303086\th1:mncRSDOqYCng7jOD+Y6+IivdRI6Kzv2BLWYkWkdQfu0=\ndep\tgithub.com/spf13/cobra\tv1.7.0\th1:hyqWnYt1ZQShIddO5kBpj3vu05/++x6tJ6dg8EC572I=\ndep\tgithub.com/spf13/pflag\tv1.0.5\th1:iy+VFUOCP1a+8yFto/drg2CJ5u0yRoB7fZw3DKv/JXA=\ndep\tgithub.com/ssgelm/cookiejarparser\tv1.0.1\th1:cRdXauUbOTFzTPJFaeiWbHnQ+tRGlpKKzvIK9PUekE4=\ndep\tgolang.org/x/crypto\tv0.36.0\th1:AnAEvhDddvBdpY+uR+MyHmuZzzNqXSe/GvuDeob5L34=\ndep\tgolang.org/x/net\tv0.38.0\th1:vRMAPTMaeGqVhG5QyLJHqNDwecKTomGeqbnfZyKlBI8=\ndep\tgolang.org/x/sync\tv0.12.0\th1:MHc5BpPuC30uJk597Ri8TV3CNZcTLu6B6z4lJy+g6Jw=\ndep\tgolang.org/x/sys\tv0.31.0\th1:ioabZlmFYtWhL+TRYpcnNlLwhyxaM9kWTDEmfnprqik=\ndep\tgolang.org/x/text\tv0.23.0\th1:D71I7dUrlY+VX0gQShAThNGHFxZ13dGLBHQLVl1mJlY=\nbuild\t-buildmode=exe\nbuild\t-compiler=gc\nbuild\t-gcflags=\" \"\nbuild\t-trimpath=true\nbuild\tDefaultGODEBUG=containermaxprocs=0,decoratemappings=0,gotestjsonbuildtext=1,httpcookiemaxnum=0,multipathtcp=0,randseednop=0,rsa1024min=0,tlsmlkem=0,tlssha1=1,updatemaxprocs=0,x509rsacrt=0,x509sha256skid=0,x509usepolicies=0\nbuild\tCGO_ENABLED=0\nbuild\tGOARCH=arm64\nbuild\tGOOS=linux\nbuild\tGOARM64=v8.0\n",
+      "dependencies": [
+        {
+          "module": "github.com/dpotapov/go-spnego",
+          "version": "v0.0.0-20210315154721-298b63a54430",
+          "sum": "h1:oempk9HjNt6rVKyKmpdnoN7XABQv3SXLWu3pxUI7Vlk="
+        },
+        {
+          "module": "github.com/git-lfs/git-lfs/v3",
+          "version": "(devel)",
+          "sum": ""
+        },
+        {
+          "module": "github.com/git-lfs/gitobj/v2",
+          "version": "v2.1.1",
+          "sum": "h1:tf/VU6zL1kxa3he+nf6FO/syX+LGkm6WGDsMpfuXV7Q="
+        },
+        {
+          "module": "github.com/git-lfs/go-netrc",
+          "version": "v0.0.0-20250218165306-ba0029b43d11",
+          "sum": "h1:LotqdxyBRc7u2fxoBrzW6Mn3ZBvv7FlcBPlAa10DKAg="
+        },
+        {
+          "module": "github.com/git-lfs/pktline",
+          "version": "v0.0.0-20210330133718-06e9096e2825",
+          "sum": "h1:riQhgheTL7tMF4d5raz9t3+IzoR1i1wqxE1kZC6dY+U="
+        },
+        {
+          "module": "github.com/git-lfs/wildmatch/v2",
+          "version": "v2.0.1",
+          "sum": "h1:Ds+aobrV5bK0wStILUOn9irllPyf9qrFETbKzwzoER8="
+        },
+        {
+          "module": "github.com/golang/groupcache",
+          "version": "v0.0.0-20241129210726-2c02b8208cf8",
+          "sum": "h1:f+oWsMOmNPc8JmEHVZIycC7hBoQxHH9pNKQORJNozsQ="
+        },
+        {
+          "module": "github.com/hashicorp/go-uuid",
+          "version": "v1.0.2",
+          "sum": "h1:cfejS+Tpcp13yd5nYHWDI6qVCny6wyX2Mt5SGur2IGE="
+        },
+        {
+          "module": "github.com/jcmturner/aescts/v2",
+          "version": "v2.0.0",
+          "sum": "h1:9YKLH6ey7H4eDBXW8khjYslgyqG2xZikXP0EQFKrle8="
+        },
+        {
+          "module": "github.com/jcmturner/dnsutils/v2",
+          "version": "v2.0.0",
+          "sum": "h1:lltnkeZGL0wILNvrNiVCR6Ro5PGU/SeBvVO/8c/iPbo="
+        },
+        {
+          "module": "github.com/jcmturner/gofork",
+          "version": "v1.0.0",
+          "sum": "h1:J7uCkflzTEhUZ64xqKnkDxq3kzc96ajM1Gli5ktUem8="
+        },
+        {
+          "module": "github.com/jcmturner/goidentity/v6",
+          "version": "v6.0.1",
+          "sum": "h1:VKnZd2oEIMorCTsFBnJWbExfNN7yZr3EhJAxwOkZg6o="
+        },
+        {
+          "module": "github.com/jcmturner/gokrb5/v8",
+          "version": "v8.4.2",
+          "sum": "h1:6ZIM6b/JJN0X8UM43ZOM6Z4SJzla+a/u7scXFJzodkA="
+        },
+        {
+          "module": "github.com/jcmturner/rpc/v2",
+          "version": "v2.0.3",
+          "sum": "h1:7FXXj8Ti1IaVFpSAziCZWNzbNuZmnvw/i6CqLNdWfZY="
+        },
+        {
+          "module": "github.com/jmhodges/clock",
+          "version": "v1.2.0",
+          "sum": "h1:eq4kys+NI0PLngzaHEe7AmPT90XMGIEySD1JfV1PDIs="
+        },
+        {
+          "module": "github.com/leonelquinteros/gotext",
+          "version": "v1.5.0",
+          "sum": "h1:ODY7LzLpZWWSJdAHnzhreOr6cwLXTAmc914FOauSkBM="
+        },
+        {
+          "module": "github.com/mattn/go-isatty",
+          "version": "v0.0.4",
+          "sum": "h1:bnP0vzxcAdeI1zdubAl5PjU6zsERjGZb7raWodagDYs="
+        },
+        {
+          "module": "github.com/olekukonko/ts",
+          "version": "v0.0.0-20171002115256-78ecb04241c0",
+          "sum": "h1:LiZB1h0GIcudcDci2bxbqI6DXV8bF8POAnArqvRrIyw="
+        },
+        {
+          "module": "github.com/pkg/errors",
+          "version": "v0.0.0-20170505043639-c605e284fe17",
+          "sum": "h1:chPfVn+gpAM5CTpTyVU9j8J+xgRGwmoDlNDLjKnJiYo="
+        },
+        {
+          "module": "github.com/rubyist/tracerx",
+          "version": "v0.0.0-20170927163412-787959303086",
+          "sum": "h1:mncRSDOqYCng7jOD+Y6+IivdRI6Kzv2BLWYkWkdQfu0="
+        },
+        {
+          "module": "github.com/spf13/cobra",
+          "version": "v1.7.0",
+          "sum": "h1:hyqWnYt1ZQShIddO5kBpj3vu05/++x6tJ6dg8EC572I="
+        },
+        {
+          "module": "github.com/spf13/pflag",
+          "version": "v1.0.5",
+          "sum": "h1:iy+VFUOCP1a+8yFto/drg2CJ5u0yRoB7fZw3DKv/JXA="
+        },
+        {
+          "module": "github.com/ssgelm/cookiejarparser",
+          "version": "v1.0.1",
+          "sum": "h1:cRdXauUbOTFzTPJFaeiWbHnQ+tRGlpKKzvIK9PUekE4="
+        },
+        {
+          "module": "golang.org/x/crypto",
+          "version": "v0.36.0",
+          "sum": "h1:AnAEvhDddvBdpY+uR+MyHmuZzzNqXSe/GvuDeob5L34="
+        },
+        {
+          "module": "golang.org/x/net",
+          "version": "v0.38.0",
+          "sum": "h1:vRMAPTMaeGqVhG5QyLJHqNDwecKTomGeqbnfZyKlBI8="
+        },
+        {
+          "module": "golang.org/x/sync",
+          "version": "v0.12.0",
+          "sum": "h1:MHc5BpPuC30uJk597Ri8TV3CNZcTLu6B6z4lJy+g6Jw="
+        },
+        {
+          "module": "golang.org/x/sys",
+          "version": "v0.31.0",
+          "sum": "h1:ioabZlmFYtWhL+TRYpcnNlLwhyxaM9kWTDEmfnprqik="
+        },
+        {
+          "module": "golang.org/x/text",
+          "version": "v0.23.0",
+          "sum": "h1:D71I7dUrlY+VX0gQShAThNGHFxZ13dGLBHQLVl1mJlY="
+        }
+      ]
+    }
+  ],
+  "licenses": [
+    {
+      "component": "Git Credential Manager bundled NOTICE",
+      "target": "windows-x64",
+      "archive": "dugite-native-v2.53.0-4098283-windows-x64.tar.gz",
+      "entry": "./mingw64/doc/git-credential-manager/NOTICE",
+      "file": "gcm-windows-x64-NOTICE.txt",
+      "sha256": "f573f5d21d5d8a054aad1ffcbe0165391a4d93a5aa3e23c3db0752759adfd50c"
+    },
+    {
+      "component": "Git Credential Manager bundled NOTICE",
+      "target": "windows-arm64",
+      "archive": "dugite-native-v2.53.0-4098283-windows-arm64.tar.gz",
+      "entry": "./clangarm64/doc/git-credential-manager/NOTICE",
+      "file": "gcm-windows-arm64-NOTICE.txt",
+      "sha256": "f573f5d21d5d8a054aad1ffcbe0165391a4d93a5aa3e23c3db0752759adfd50c"
+    },
+    {
+      "component": "Git Credential Manager bundled NOTICE",
+      "target": "macOS-x64",
+      "archive": "dugite-native-v2.53.0-4098283-macOS-x64.tar.gz",
+      "entry": "./libexec/git-core/NOTICE",
+      "file": "gcm-macOS-x64-NOTICE.txt",
+      "sha256": "f573f5d21d5d8a054aad1ffcbe0165391a4d93a5aa3e23c3db0752759adfd50c"
+    },
+    {
+      "component": "Git Credential Manager bundled NOTICE",
+      "target": "macOS-arm64",
+      "archive": "dugite-native-v2.53.0-4098283-macOS-arm64.tar.gz",
+      "entry": "./libexec/git-core/NOTICE",
+      "file": "gcm-macOS-arm64-NOTICE.txt",
+      "sha256": "f573f5d21d5d8a054aad1ffcbe0165391a4d93a5aa3e23c3db0752759adfd50c"
+    },
+    {
+      "component": "Git LFS 3.7.1",
+      "url": "https://raw.githubusercontent.com/git-lfs/git-lfs/v3.7.1/LICENSE.md",
+      "file": "git-lfs-3.7.1-LICENSE.md",
+      "sha256": "4fae9062ab5cdd5fb15486b728534d8aded8b4ae9d84b6d66a956f5162c366b6"
+    },
+    {
+      "component": "Git Credential Manager 2.9.0",
+      "url": "https://raw.githubusercontent.com/git-ecosystem/git-credential-manager/v2.9.0/LICENSE",
+      "file": "gcm-2.9.0-LICENSE.txt",
+      "sha256": "b47f1a8a744ecdc7a3da35804f88552805d33f51a726b87a2105acdfae406b07"
+    },
+    {
+      "component": "go1.25.1",
+      "url": "https://raw.githubusercontent.com/golang/go/go1.25.1/LICENSE",
+      "file": "go1.25.1-LICENSE.txt",
+      "sha256": "911f8f5782931320f5b8d1160a76365b83aea6447ee6c04fa6d5591467db9dad"
+    },
+    {
+      "component": "go1.25.3",
+      "url": "https://raw.githubusercontent.com/golang/go/go1.25.3/LICENSE",
+      "file": "go1.25.3-LICENSE.txt",
+      "sha256": "911f8f5782931320f5b8d1160a76365b83aea6447ee6c04fa6d5591467db9dad"
+    },
+    {
+      "component": "github.com/alexbrainman/sspi@v0.0.0-20210105120005-909beea2cc74",
+      "url": "https://raw.githubusercontent.com/alexbrainman/sspi/909beea2cc74/LICENSE",
+      "file": "github.com_alexbrainman_sspi-909beea2cc74-LICENSE",
+      "sha256": "dd26a7abddd02e2d0aba97805b31f248ef7835d9e10da289b22e3b8ab78b324d"
+    },
+    {
+      "component": "github.com/avast/retry-go@v2.4.2+incompatible",
+      "url": "https://raw.githubusercontent.com/avast/retry-go/v2.4.2/LICENSE",
+      "file": "github.com_avast_retry-go-v2.4.2-LICENSE",
+      "sha256": "2fc9e8c374cacc9c0e0c7214911cc2f90f1ade45af2cef646460de278042d930"
+    },
+    {
+      "component": "github.com/dpotapov/go-spnego@v0.0.0-20210315154721-298b63a54430",
+      "url": "https://raw.githubusercontent.com/dpotapov/go-spnego/298b63a54430/LICENSE",
+      "file": "github.com_dpotapov_go-spnego-298b63a54430-LICENSE",
+      "sha256": "74e635bc5b835cbac01362dc69dcf5d84c4e8f69aa4207ed7301b1a9f238214c"
+    },
+    {
+      "component": "github.com/git-lfs/gitobj/v2@v2.1.1",
+      "url": "https://raw.githubusercontent.com/git-lfs/gitobj/v2.1.1/LICENSE.md",
+      "file": "github.com_git-lfs_gitobj_v2-v2.1.1-LICENSE.md",
+      "sha256": "49e9a8cbb772da6682b4613a36aa17934fa949e5e30e58b3f0f24d6ea3265c69"
+    },
+    {
+      "component": "github.com/git-lfs/go-netrc@v0.0.0-20250218165306-ba0029b43d11",
+      "url": "https://raw.githubusercontent.com/git-lfs/go-netrc/ba0029b43d11/LICENSE",
+      "file": "github.com_git-lfs_go-netrc-ba0029b43d11-LICENSE",
+      "sha256": "c3880f30146c2ad11c85a243858027e8a1d61e241e53284d7cef3aa9452f16df"
+    },
+    {
+      "component": "github.com/git-lfs/pktline@v0.0.0-20210330133718-06e9096e2825",
+      "url": "https://raw.githubusercontent.com/git-lfs/pktline/06e9096e2825/LICENSE.md",
+      "file": "github.com_git-lfs_pktline-06e9096e2825-LICENSE.md",
+      "sha256": "09c5e6c848991ae3a8884ce05457102a474e00ca237b92745eef333a9b0e813a"
+    },
+    {
+      "component": "github.com/git-lfs/wildmatch/v2@v2.0.1",
+      "url": "https://raw.githubusercontent.com/git-lfs/wildmatch/v2.0.1/LICENSE.md",
+      "file": "github.com_git-lfs_wildmatch_v2-v2.0.1-LICENSE.md",
+      "sha256": "34ece938f52ea9d3b706a780db52c14ba4544c2e0fdbccaa2701283000182c23"
+    },
+    {
+      "component": "github.com/golang/groupcache@v0.0.0-20241129210726-2c02b8208cf8",
+      "url": "https://raw.githubusercontent.com/golang/groupcache/2c02b8208cf8/LICENSE",
+      "file": "github.com_golang_groupcache-2c02b8208cf8-LICENSE",
+      "sha256": "73ba74dfaa520b49a401b5d21459a8523a146f3b7518a833eea5efa85130bf68"
+    },
+    {
+      "component": "github.com/inconshreveable/mousetrap@v1.1.0",
+      "url": "https://raw.githubusercontent.com/inconshreveable/mousetrap/v1.1.0/LICENSE",
+      "file": "github.com_inconshreveable_mousetrap-v1.1.0-LICENSE",
+      "sha256": "4819582701f150b28a563a6cd8ed0bf5a754e3c67b90ad38d78ba4131bf77795"
+    },
+    {
+      "component": "github.com/jmhodges/clock@v1.2.0",
+      "url": "https://raw.githubusercontent.com/jmhodges/clock/v1.2.0/LICENSE",
+      "file": "github.com_jmhodges_clock-v1.2.0-LICENSE",
+      "sha256": "6fd396f2d21c26cac28597b7aea66706684fe7e0aede98c7ce08e8d7886409a1"
+    },
+    {
+      "component": "github.com/leonelquinteros/gotext@v1.5.0",
+      "url": "https://raw.githubusercontent.com/leonelquinteros/gotext/v1.5.0/LICENSE",
+      "file": "github.com_leonelquinteros_gotext-v1.5.0-LICENSE",
+      "sha256": "bf78e51361b486dc8b97c5be426574ffb5ce736414db00af90a11f8e4f9dccdf"
+    },
+    {
+      "component": "github.com/mattn/go-isatty@v0.0.4",
+      "url": "https://raw.githubusercontent.com/mattn/go-isatty/v0.0.4/LICENSE",
+      "file": "github.com_mattn_go-isatty-v0.0.4-LICENSE",
+      "sha256": "08eab1118c80885fa1fa6a6dd7303f65a379fcb3733e063d20d1bbc2c76e6fa1"
+    },
+    {
+      "component": "github.com/pkg/errors@v0.0.0-20170505043639-c605e284fe17",
+      "url": "https://raw.githubusercontent.com/pkg/errors/c605e284fe17/LICENSE",
+      "file": "github.com_pkg_errors-c605e284fe17-LICENSE",
+      "sha256": "8d427fd87bc9579ea368fde3d49f9ca22eac857f91a9dec7e3004bdfab7dee86"
+    },
+    {
+      "component": "github.com/rubyist/tracerx@v0.0.0-20170927163412-787959303086",
+      "url": "https://raw.githubusercontent.com/rubyist/tracerx/787959303086/LICENSE",
+      "file": "github.com_rubyist_tracerx-787959303086-LICENSE",
+      "sha256": "82f0d2a1029154f3184c82cc146f39ae8fd3f357b76832b58190c759cbb9105a"
+    },
+    {
+      "component": "github.com/spf13/cobra@v1.7.0",
+      "url": "https://raw.githubusercontent.com/spf13/cobra/v1.7.0/LICENSE.txt",
+      "file": "github.com_spf13_cobra-v1.7.0-LICENSE.txt",
+      "sha256": "5e3400b93bbb099e83e52bab885e7441750673c21f97988ca3f1240639b63283"
+    },
+    {
+      "component": "github.com/spf13/pflag@v1.0.5",
+      "url": "https://raw.githubusercontent.com/spf13/pflag/v1.0.5/LICENSE",
+      "file": "github.com_spf13_pflag-v1.0.5-LICENSE",
+      "sha256": "b8514c577c1c4b46cee454d5a882b15fa411e72c5bd7f801f241591789fce61a"
+    },
+    {
+      "component": "github.com/ssgelm/cookiejarparser@v1.0.1",
+      "url": "https://raw.githubusercontent.com/ssgelm/cookiejarparser/v1.0.1/LICENSE.md",
+      "file": "github.com_ssgelm_cookiejarparser-v1.0.1-LICENSE.md",
+      "sha256": "5438a5672aec3e69f928ce05bdec56d887e023297129c17340f08d5d2572cfc7"
+    },
+    {
+      "component": "golang.org/x/net@v0.38.0",
+      "url": "https://raw.githubusercontent.com/golang/net/v0.38.0/LICENSE",
+      "file": "golang.org_x_net-v0.38.0-LICENSE",
+      "sha256": "911f8f5782931320f5b8d1160a76365b83aea6447ee6c04fa6d5591467db9dad"
+    },
+    {
+      "component": "golang.org/x/sync@v0.12.0",
+      "url": "https://raw.githubusercontent.com/golang/sync/v0.12.0/LICENSE",
+      "file": "golang.org_x_sync-v0.12.0-LICENSE",
+      "sha256": "911f8f5782931320f5b8d1160a76365b83aea6447ee6c04fa6d5591467db9dad"
+    },
+    {
+      "component": "golang.org/x/sys@v0.31.0",
+      "url": "https://raw.githubusercontent.com/golang/sys/v0.31.0/LICENSE",
+      "file": "golang.org_x_sys-v0.31.0-LICENSE",
+      "sha256": "911f8f5782931320f5b8d1160a76365b83aea6447ee6c04fa6d5591467db9dad"
+    },
+    {
+      "component": "golang.org/x/text@v0.23.0",
+      "url": "https://raw.githubusercontent.com/golang/text/v0.23.0/LICENSE",
+      "file": "golang.org_x_text-v0.23.0-LICENSE",
+      "sha256": "911f8f5782931320f5b8d1160a76365b83aea6447ee6c04fa6d5591467db9dad"
+    },
+    {
+      "component": "github.com/hashicorp/go-uuid@v1.0.2",
+      "url": "https://raw.githubusercontent.com/hashicorp/go-uuid/v1.0.2/LICENSE",
+      "file": "github.com_hashicorp_go-uuid-v1.0.2-LICENSE",
+      "sha256": "60222c28c1a7f6a92c7df98e5c5f4459e624e6e285e0b9b94467af5f6ab3343d"
+    },
+    {
+      "component": "github.com/jcmturner/aescts/v2@v2.0.0",
+      "url": "https://raw.githubusercontent.com/jcmturner/aescts/v2.0.0/LICENSE",
+      "file": "github.com_jcmturner_aescts_v2-v2.0.0-LICENSE",
+      "sha256": "b40930bbcf80744c86c46a12bc9da056641d722716c378f5659b9e555ef833e1"
+    },
+    {
+      "component": "github.com/jcmturner/dnsutils/v2@v2.0.0",
+      "url": "https://raw.githubusercontent.com/jcmturner/dnsutils/v2.0.0/LICENSE",
+      "file": "github.com_jcmturner_dnsutils_v2-v2.0.0-LICENSE",
+      "sha256": "c71d239df91726fc519c6eb72d318ec65820627232b2f796219e87dcf35d0ab4"
+    },
+    {
+      "component": "github.com/jcmturner/gofork@v1.0.0",
+      "url": "https://raw.githubusercontent.com/jcmturner/gofork/v1.0.0/LICENSE",
+      "file": "github.com_jcmturner_gofork-v1.0.0-LICENSE",
+      "sha256": "2d36597f7117c38b006835ae7f537487207d8ec407aa9d9980794b2030cbc067"
+    },
+    {
+      "component": "github.com/jcmturner/goidentity/v6@v6.0.1",
+      "url": "https://raw.githubusercontent.com/jcmturner/goidentity/v6.0.1/LICENSE",
+      "file": "github.com_jcmturner_goidentity_v6-v6.0.1-LICENSE",
+      "sha256": "b40930bbcf80744c86c46a12bc9da056641d722716c378f5659b9e555ef833e1"
+    },
+    {
+      "component": "github.com/jcmturner/gokrb5/v8@v8.4.2",
+      "url": "https://raw.githubusercontent.com/jcmturner/gokrb5/v8.4.2/LICENSE",
+      "file": "github.com_jcmturner_gokrb5_v8-v8.4.2-LICENSE",
+      "sha256": "b40930bbcf80744c86c46a12bc9da056641d722716c378f5659b9e555ef833e1"
+    },
+    {
+      "component": "github.com/jcmturner/rpc/v2@v2.0.3",
+      "url": "https://raw.githubusercontent.com/jcmturner/rpc/v2.0.3/LICENSE",
+      "file": "github.com_jcmturner_rpc_v2-v2.0.3-LICENSE",
+      "sha256": "c71d239df91726fc519c6eb72d318ec65820627232b2f796219e87dcf35d0ab4"
+    },
+    {
+      "component": "golang.org/x/crypto@v0.36.0",
+      "url": "https://raw.githubusercontent.com/golang/crypto/v0.36.0/LICENSE",
+      "file": "golang.org_x_crypto-v0.36.0-LICENSE",
+      "sha256": "911f8f5782931320f5b8d1160a76365b83aea6447ee6c04fa6d5591467db9dad"
+    },
+    {
+      "component": "github.com/olekukonko/ts",
+      "version": "v0.0.0-20171002115256-78ecb04241c0",
+      "url": "https://raw.githubusercontent.com/olekukonko/ts/78ecb04241c0/LICENCE",
+      "file": "github.com_olekukonko_ts-78ecb04241c0-LICENCE",
+      "sha256": "eb472e25a1963b3078249c9bbcff5e7ed81e5f0e1ceb8fc8ecc4b43f45e87867"
+    },
+    {
+      "component": "Avalonia",
+      "version": "11.1.3",
+      "url": "https://raw.githubusercontent.com/AvaloniaUI/Avalonia/11.1.3/licence.md",
+      "file": "Avalonia-11.1.3-LICENSE.txt",
+      "sha256": "213814d306090074d234d760239ff0f67eb9b8d20eefb4d5631bb39dbe0b769b"
+    },
+    {
+      "component": "SkiaSharp",
+      "version": "v2.88.8",
+      "url": "https://raw.githubusercontent.com/mono/SkiaSharp/v2.88.8/LICENSE.md",
+      "file": "SkiaSharp-v2.88.8-LICENSE.txt",
+      "sha256": "ad9ec300dcb006b80c012b9d263c0e0dc26fcbfdcd0c02e8c4181365b7c1439b"
+    },
+    {
+      "component": "Microsoft.Identity.Client",
+      "version": "4.84.2",
+      "url": "https://raw.githubusercontent.com/AzureAD/microsoft-authentication-library-for-dotnet/4.84.2/LICENSE",
+      "file": "Microsoft.Identity.Client-4.84.2-LICENSE.txt",
+      "sha256": "2f07c72751aed99790b8a4869cf2311df85a860b22ded05fa22803587a48922c"
+    },
+    {
+      "component": "Microsoft.IdentityModel.Abstractions",
+      "version": "8.14.0",
+      "url": "https://raw.githubusercontent.com/AzureAD/azure-activedirectory-identitymodel-extensions-for-dotnet/8.14.0/LICENSE.txt",
+      "file": "Microsoft.IdentityModel.Abstractions-8.14.0-LICENSE.txt",
+      "sha256": "cba03f5387b05405e56b688376421acae396136af4b5116738dc6e5160f87ddd"
+    },
+    {
+      "component": "Tmds.DBus.Protocol",
+      "version": "rel/0.16.0",
+      "url": "https://raw.githubusercontent.com/tmds/Tmds.DBus/rel/0.16.0/COPYING",
+      "file": "Tmds.DBus.Protocol-rel_0.16.0-LICENSE.txt",
+      "sha256": "aca3b49277abcc7886ccb2f115603a9f5b15fc3f96019a10c00f2974098b210c"
+    },
+    {
+      "component": "harfbuzzsharp",
+      "version": "7.3.0.2",
+      "url": "https://api.nuget.org/v3-flatcontainer/harfbuzzsharp/7.3.0.2/harfbuzzsharp.7.3.0.2.nupkg#LICENSE.txt",
+      "file": "harfbuzzsharp-7.3.0.2-LICENSE.txt",
+      "sha256": "89101e35a8c66fd4d6dffc1763259161d35cb564c169714ec227a768c89f2938"
+    },
+    {
+      "component": "harfbuzzsharp",
+      "version": "7.3.0.2",
+      "url": "https://api.nuget.org/v3-flatcontainer/harfbuzzsharp/7.3.0.2/harfbuzzsharp.7.3.0.2.nupkg#THIRD-PARTY-NOTICES.txt",
+      "file": "harfbuzzsharp-7.3.0.2-THIRD-PARTY-NOTICES.txt",
+      "sha256": "21504c46c4c58aa64c1055bd2dcbc5f9a136b4b8c412ed3cc6740e22c5b127f5"
+    },
+    {
+      "component": "skiasharp",
+      "version": "2.88.8",
+      "url": "https://api.nuget.org/v3-flatcontainer/skiasharp/2.88.8/skiasharp.2.88.8.nupkg#LICENSE.txt",
+      "file": "skiasharp-2.88.8-LICENSE.txt",
+      "sha256": "89101e35a8c66fd4d6dffc1763259161d35cb564c169714ec227a768c89f2938"
+    },
+    {
+      "component": "skiasharp",
+      "version": "2.88.8",
+      "url": "https://api.nuget.org/v3-flatcontainer/skiasharp/2.88.8/skiasharp.2.88.8.nupkg#THIRD-PARTY-NOTICES.txt",
+      "file": "skiasharp-2.88.8-THIRD-PARTY-NOTICES.txt",
+      "sha256": "21504c46c4c58aa64c1055bd2dcbc5f9a136b4b8c412ed3cc6740e22c5b127f5"
+    },
+    {
+      "component": "harfbuzzsharp.nativeassets.macos",
+      "version": "7.3.0.2",
+      "url": "https://api.nuget.org/v3-flatcontainer/harfbuzzsharp.nativeassets.macos/7.3.0.2/harfbuzzsharp.nativeassets.macos.7.3.0.2.nupkg#THIRD-PARTY-NOTICES.txt",
+      "file": "harfbuzzsharp.nativeassets.macos-7.3.0.2-THIRD-PARTY-NOTICES.txt",
+      "sha256": "21504c46c4c58aa64c1055bd2dcbc5f9a136b4b8c412ed3cc6740e22c5b127f5"
+    },
+    {
+      "component": "harfbuzzsharp.nativeassets.macos",
+      "version": "7.3.0.2",
+      "url": "https://api.nuget.org/v3-flatcontainer/harfbuzzsharp.nativeassets.macos/7.3.0.2/harfbuzzsharp.nativeassets.macos.7.3.0.2.nupkg#LICENSE.txt",
+      "file": "harfbuzzsharp.nativeassets.macos-7.3.0.2-LICENSE.txt",
+      "sha256": "89101e35a8c66fd4d6dffc1763259161d35cb564c169714ec227a768c89f2938"
+    },
+    {
+      "component": "skiasharp.nativeassets.macos",
+      "version": "2.88.8",
+      "url": "https://api.nuget.org/v3-flatcontainer/skiasharp.nativeassets.macos/2.88.8/skiasharp.nativeassets.macos.2.88.8.nupkg#LICENSE.txt",
+      "file": "skiasharp.nativeassets.macos-2.88.8-LICENSE.txt",
+      "sha256": "89101e35a8c66fd4d6dffc1763259161d35cb564c169714ec227a768c89f2938"
+    },
+    {
+      "component": "skiasharp.nativeassets.macos",
+      "version": "2.88.8",
+      "url": "https://api.nuget.org/v3-flatcontainer/skiasharp.nativeassets.macos/2.88.8/skiasharp.nativeassets.macos.2.88.8.nupkg#THIRD-PARTY-NOTICES.txt",
+      "file": "skiasharp.nativeassets.macos-2.88.8-THIRD-PARTY-NOTICES.txt",
+      "sha256": "21504c46c4c58aa64c1055bd2dcbc5f9a136b4b8c412ed3cc6740e22c5b127f5"
+    },
+    {
+      "component": "System.CommandLine",
+      "version": "2.0.0-beta4.22272.1",
+      "url": "https://raw.githubusercontent.com/dotnet/command-line-api/209b724a3c843253d3071e8348c353b297b0b8b5/LICENSE.md",
+      "file": "System.CommandLine-2.0.0-beta4.22272.1-LICENSE.md",
+      "sha256": "58fd5ebf25d75b5bb5f4cd407a9fef3befd3641e1af90a1d0716618e6430fc19"
+    },
+    {
+      "component": "MicroCom.Runtime",
+      "version": "0.11.0",
+      "url": "https://raw.githubusercontent.com/kekekeks/MicroCom/4b8a38f773c109bad558ee3713d9f16d80776e42/LICENSE",
+      "file": "MicroCom.Runtime-0.11.0-LICENSE.txt",
+      "sha256": "6ee769c9ac4dac9abb16b98b1341e9528ff9f4ab685481410d3376d14148f3a9"
+    },
+    {
+      "component": "microsoft.identity.client.nativeinterop",
+      "version": "0.20.6",
+      "url": "https://api.nuget.org/v3-flatcontainer/microsoft.identity.client.nativeinterop/0.20.6/microsoft.identity.client.nativeinterop.0.20.6.nupkg#LICENSE",
+      "file": "microsoft.identity.client.nativeinterop-0.20.6-LICENSE",
+      "sha256": "0fe665c2ada5962fd01190ab5b2947b9a9d2c625a9f8225577441eb3256e14e3"
+    },
+    {
+      "component": "harfbuzzsharp.nativeassets.win32",
+      "version": "7.3.0.2",
+      "url": "https://api.nuget.org/v3-flatcontainer/harfbuzzsharp.nativeassets.win32/7.3.0.2/harfbuzzsharp.nativeassets.win32.7.3.0.2.nupkg#LICENSE.txt",
+      "file": "harfbuzzsharp.nativeassets.win32-7.3.0.2-LICENSE.txt",
+      "sha256": "89101e35a8c66fd4d6dffc1763259161d35cb564c169714ec227a768c89f2938"
+    },
+    {
+      "component": "harfbuzzsharp.nativeassets.win32",
+      "version": "7.3.0.2",
+      "url": "https://api.nuget.org/v3-flatcontainer/harfbuzzsharp.nativeassets.win32/7.3.0.2/harfbuzzsharp.nativeassets.win32.7.3.0.2.nupkg#THIRD-PARTY-NOTICES.txt",
+      "file": "harfbuzzsharp.nativeassets.win32-7.3.0.2-THIRD-PARTY-NOTICES.txt",
+      "sha256": "21504c46c4c58aa64c1055bd2dcbc5f9a136b4b8c412ed3cc6740e22c5b127f5"
+    },
+    {
+      "component": "skiasharp.nativeassets.win32",
+      "version": "2.88.8",
+      "url": "https://api.nuget.org/v3-flatcontainer/skiasharp.nativeassets.win32/2.88.8/skiasharp.nativeassets.win32.2.88.8.nupkg#LICENSE.txt",
+      "file": "skiasharp.nativeassets.win32-2.88.8-LICENSE.txt",
+      "sha256": "89101e35a8c66fd4d6dffc1763259161d35cb564c169714ec227a768c89f2938"
+    },
+    {
+      "component": "skiasharp.nativeassets.win32",
+      "version": "2.88.8",
+      "url": "https://api.nuget.org/v3-flatcontainer/skiasharp.nativeassets.win32/2.88.8/skiasharp.nativeassets.win32.2.88.8.nupkg#THIRD-PARTY-NOTICES.txt",
+      "file": "skiasharp.nativeassets.win32-2.88.8-THIRD-PARTY-NOTICES.txt",
+      "sha256": "21504c46c4c58aa64c1055bd2dcbc5f9a136b4b8c412ed3cc6740e22c5b127f5"
+    },
+    {
+      "component": "Git Credential Manager official distribution NOTICE",
+      "version": "2.9.0",
+      "target": "windows-x64",
+      "file": "gcm-official-windows-x64-NOTICE",
+      "url": "https://github.com/git-ecosystem/git-credential-manager/releases/download/v2.9.0/gcm-win-x64-2.9.0.zip#NOTICE",
+      "sha256": "2be49945738c886020a9055ddce98ff16e416f1d0b515de9ddb3a1ff3ebca5b6"
+    },
+    {
+      "component": "Git Credential Manager official distribution NOTICE",
+      "version": "2.9.0",
+      "target": "windows-arm64",
+      "file": "gcm-official-windows-arm64-NOTICE",
+      "url": "https://github.com/git-ecosystem/git-credential-manager/releases/download/v2.9.0/gcm-win-arm64-2.9.0.zip#NOTICE",
+      "sha256": "2be49945738c886020a9055ddce98ff16e416f1d0b515de9ddb3a1ff3ebca5b6"
+    }
+  ],
+  "unresolved": [
+    {
+      "component": "Microsoft.Identity.Client.NativeInterop/0.20.6",
+      "targets": [
+        "windows-x64",
+        "windows-arm64"
+      ],
+      "reason": "Official NuGet package LICENSE clause 3(e) restricts sharing/publishing/distribution; no separate redistribution grant found in official GCM 2.9.0 source LICENSE/NOTICE or Windows release archives. This is an unresolved downstream authorization question, not a finding of upstream infringement.",
+      "evidence": "microsoft.identity.client.nativeinterop-0.20.6-LICENSE"
+    },
+    {
+      "component": "GCM dependency license completeness",
+      "reason": "Actual macOS deps.json and Windows files are identified. Remaining license mapping includes ANGLE av_libglesv2, exact dotnet/corefx System.* versions and .NET runtime third-party notice scope; core GCM MIT does not automatically cover these dependencies."
+    }
+  ],
+  "gcmDependencyInventories": [
+    {
+      "target": "macOS-x64",
+      "archive": "dugite-native-v2.53.0-4098283-macOS-x64.tar.gz",
+      "entry": "./libexec/git-core/git-credential-manager.deps.json",
+      "libraries": [
+        "git-credential-manager/2.9.0",
+        "runtimepack.Microsoft.NETCore.App.Runtime.osx-x64/10.0.9",
+        "Avalonia/11.1.3",
+        "Avalonia.Desktop/11.1.3",
+        "Avalonia.FreeDesktop/11.1.3",
+        "Avalonia.Native/11.1.3",
+        "Avalonia.Remote.Protocol/11.1.3",
+        "Avalonia.Skia/11.1.3",
+        "Avalonia.Themes.Fluent/11.1.3",
+        "Avalonia.Win32/11.1.3",
+        "Avalonia.X11/11.1.3",
+        "HarfBuzzSharp/7.3.0.2",
+        "HarfBuzzSharp.NativeAssets.macOS/7.3.0.2",
+        "MicroCom.Runtime/0.11.0",
+        "Microsoft.Identity.Client/4.84.2",
+        "Microsoft.Identity.Client.Extensions.Msal/4.84.2",
+        "Microsoft.IdentityModel.Abstractions/8.14.0",
+        "SkiaSharp/2.88.8",
+        "SkiaSharp.NativeAssets.macOS/2.88.8",
+        "System.CommandLine/2.0.0-beta4.22272.1",
+        "System.Security.Cryptography.ProtectedData/4.5.0",
+        "Tmds.DBus.Protocol/0.16.0",
+        "Atlassian.Bitbucket/2.9.0",
+        "gcmcore/2.9.0",
+        "GitHub/2.9.0",
+        "GitLab/2.9.0",
+        "Microsoft.AzureRepos/2.9.0",
+        "gcmcore.Reference/2.9.0.0"
+      ]
+    },
+    {
+      "target": "macOS-arm64",
+      "archive": "dugite-native-v2.53.0-4098283-macOS-arm64.tar.gz",
+      "entry": "./libexec/git-core/git-credential-manager.deps.json",
+      "libraries": [
+        "git-credential-manager/2.9.0",
+        "runtimepack.Microsoft.NETCore.App.Runtime.osx-arm64/10.0.9",
+        "Avalonia/11.1.3",
+        "Avalonia.Desktop/11.1.3",
+        "Avalonia.FreeDesktop/11.1.3",
+        "Avalonia.Native/11.1.3",
+        "Avalonia.Remote.Protocol/11.1.3",
+        "Avalonia.Skia/11.1.3",
+        "Avalonia.Themes.Fluent/11.1.3",
+        "Avalonia.Win32/11.1.3",
+        "Avalonia.X11/11.1.3",
+        "HarfBuzzSharp/7.3.0.2",
+        "HarfBuzzSharp.NativeAssets.macOS/7.3.0.2",
+        "MicroCom.Runtime/0.11.0",
+        "Microsoft.Identity.Client/4.84.2",
+        "Microsoft.Identity.Client.Extensions.Msal/4.84.2",
+        "Microsoft.IdentityModel.Abstractions/8.14.0",
+        "SkiaSharp/2.88.8",
+        "SkiaSharp.NativeAssets.macOS/2.88.8",
+        "System.CommandLine/2.0.0-beta4.22272.1",
+        "System.Security.Cryptography.ProtectedData/4.5.0",
+        "Tmds.DBus.Protocol/0.16.0",
+        "Atlassian.Bitbucket/2.9.0",
+        "gcmcore/2.9.0",
+        "GitHub/2.9.0",
+        "GitLab/2.9.0",
+        "Microsoft.AzureRepos/2.9.0",
+        "gcmcore.Reference/2.9.0.0"
+      ]
+    }
+  ],
+  "nugetMetadata": [
+    {
+      "component": "microcom.runtime",
+      "version": "0.11.0",
+      "url": "https://api.nuget.org/v3-flatcontainer/microcom.runtime/0.11.0/microcom.runtime.0.11.0.nupkg",
+      "archiveSha256": "55dc293f97ec725bcda89ba9a5a3afc04c2fda87e7008e594b3d95f9411d2c5d",
+      "nuspec": "﻿<?xml version=\"1.0\" encoding=\"utf-8\"?>\n<package xmlns=\"http://schemas.microsoft.com/packaging/2012/06/nuspec.xsd\">\n  <metadata>\n    <id>MicroCom.Runtime</id>\n    <version>0.11.0</version>\n    <authors>MicroCom.Runtime</authors>\n    <license type=\"expression\">MIT</license>\n    <licenseUrl>https://licenses.nuget.org/MIT</licenseUrl>\n    <description>IDL-based COM interop codegen. Consumes MIDL-like IDL file, generates efficient cross-platform C# interop and C++ header files.</description>\n    <copyright>Copyright 2021 © Nikita Tsukanov</copyright>\n    <repository type=\"git\" url=\"https://github.com/kekekeks/MicroCom\" />\n    <dependencies>\n      <group targetFramework=\"net5.0\" />\n      <group targetFramework=\".NETStandard2.0\" />\n    </dependencies>\n  </metadata>\n</package>"
+    },
+    {
+      "component": "system.commandline",
+      "version": "2.0.0-beta4.22272.1",
+      "url": "https://api.nuget.org/v3-flatcontainer/system.commandline/2.0.0-beta4.22272.1/system.commandline.2.0.0-beta4.22272.1.nupkg",
+      "archiveSha256": "cd23be0989cc1fc75e0470c8f431e108f8fbf427b718ecc70b21f5fd3887c5c7",
+      "nuspec": "﻿<?xml version=\"1.0\" encoding=\"utf-8\"?>\r\n<package xmlns=\"http://schemas.microsoft.com/packaging/2013/05/nuspec.xsd\">\r\n  <metadata>\r\n    <id>System.CommandLine</id>\r\n    <version>2.0.0-beta4.22272.1</version>\r\n    <authors>Microsoft</authors>\r\n    <requireLicenseAcceptance>true</requireLicenseAcceptance>\r\n    <license type=\"expression\">MIT</license>\r\n    <licenseUrl>https://licenses.nuget.org/MIT</licenseUrl>\r\n    <icon>Icon.png</icon>\r\n    <projectUrl>https://github.com/dotnet/command-line-api</projectUrl>\r\n    <description>This package includes a powerful command line parser and other tools for building command line applications, including:\r\n    \r\n    * Shell-agnostic support for command line completions\r\n    * Method invocation and an extensible middleware pipeline\r\n    * Constructor- and property-based model binding for complex types\r\n    * Test and debug support</description>\r\n    <copyright>© Microsoft Corporation. All rights reserved.</copyright>\r\n    <serviceable>true</serviceable>\r\n    <repository type=\"git\" url=\"https://github.com/dotnet/command-line-api\" commit=\"209b724a3c843253d3071e8348c353b297b0b8b5\" />\r\n    <dependencies>\r\n      <group targetFramework=\"net6.0\" />\r\n      <group targetFramework=\".NETStandard2.0\">\r\n        <dependency id=\"System.Memory\" version=\"4.5.4\" exclude=\"Build,Analyzers\" />\r\n      </group>\r\n    </dependencies>\r\n  </metadata>\r\n</package>"
+    },
+    {
+      "component": "harfbuzzsharp",
+      "version": "7.3.0.2",
+      "url": "https://api.nuget.org/v3-flatcontainer/harfbuzzsharp/7.3.0.2/harfbuzzsharp.7.3.0.2.nupkg",
+      "archiveSha256": "89b828ab34f5355ed0a397bb5f65ba56defdf3d4caae4776336a6efa58520e0f",
+      "nuspec": "﻿<?xml version=\"1.0\" encoding=\"utf-8\"?>\r\n<package xmlns=\"http://schemas.microsoft.com/packaging/2013/05/nuspec.xsd\">\r\n  <metadata>\r\n    <id>HarfBuzzSharp</id>\r\n    <version>7.3.0.2</version>\r\n    <title>HarfBuzzSharp</title>\r\n    <authors>Microsoft</authors>\r\n    <owners>Microsoft</owners>\r\n    <requireLicenseAcceptance>true</requireLicenseAcceptance>\r\n    <licenseUrl>https://go.microsoft.com/fwlink/?linkid=868514</licenseUrl>\r\n    <projectUrl>https://go.microsoft.com/fwlink/?linkid=868515</projectUrl>\r\n    <iconUrl>https://go.microsoft.com/fwlink/?linkid=2130524</iconUrl>\r\n    <description>HarfBuzzSharp is a cross-platform OpenType text shaping engine for .NET platforms.</description>\r\n    <summary>HarfBuzzSharp is a cross-platform OpenType text shaping engine for .NET platforms.</summary>\r\n    <releaseNotes>Please visit https://go.microsoft.com/fwlink/?linkid=868517 to view the release notes.</releaseNotes>\r\n    <copyright>© Microsoft Corporation. All rights reserved.</copyright>\r\n    <tags>xamarin text harfbuzz ios android linux windows uwp tvos macos tizen cross-platform harfbuzzsharp</tags>\r\n    <repository type=\"git\" url=\"https://github.com/mono/SkiaSharp\" branch=\"release/2.88.8\" commit=\"7af1d0840a381c0ce7ef2877454a88dbb2949686\" />\r\n    <dependencies>\r\n      <group targetFramework=\".NETFramework4.6.2\">\r\n        <dependency id=\"HarfBuzzSharp.NativeAssets.Win32\" version=\"7.3.0.2\" />\r\n        <dependency id=\"HarfBuzzSharp.NativeAssets.macOS\" version=\"7.3.0.2\" />\r\n        <dependency id=\"System.Memory\" version=\"4.5.5\" />\r\n      </group>\r\n      <group targetFramework=\".NETStandard1.3\">\r\n        <dependency id=\"HarfBuzzSharp.NativeAssets.Win32\" version=\"7.3.0.2\" />\r\n        <dependency id=\"HarfBuzzSharp.NativeAssets.macOS\" version=\"7.3.0.2\" />\r\n        <dependency id=\"System.IO.UnmanagedMemoryStream\" version=\"4.3.0\" />\r\n        <dependency id=\"System.Memory\" version=\"4.5.5\" />\r\n      </group>\r\n      <group targetFramework=\".NETStandard2.0\">\r\n        <dependency id=\"HarfBuzzSharp.NativeAssets.Win32\" version=\"7.3.0.2\" />\r\n        <dependency id=\"HarfBuzzSharp.NativeAssets.macOS\" version=\"7.3.0.2\" />\r\n        <dependency id=\"System.Memory\" version=\"4.5.5\" />\r\n      </group>\r\n      <group targetFramework=\".NETStandard2.1\">\r\n        <dependency id=\"HarfBuzzSharp.NativeAssets.Win32\" version=\"7.3.0.2\" />\r\n        <dependency id=\"HarfBuzzSharp.NativeAssets.macOS\" version=\"7.3.0.2\" />\r\n      </group>\r\n      <group targetFramework=\"MonoAndroid1.0\">\r\n        <dependency id=\"HarfBuzzSharp.NativeAssets.Android\" version=\"7.3.0.2\" />\r\n      </group>\r\n      <group targetFramework=\"Xamarin.iOS1.0\">\r\n        <dependency id=\"HarfBuzzSharp.NativeAssets.iOS\" version=\"7.3.0.2\" />\r\n      </group>\r\n      <group targetFramework=\"Xamarin.TVOS1.0\">\r\n        <dependency id=\"HarfBuzzSharp.NativeAssets.tvOS\" version=\"7.3.0.2\" />\r\n      </group>\r\n      <group targetFramework=\"Xamarin.WatchOS1.0\">\r\n        <dependency id=\"HarfBuzzSharp.NativeAssets.watchOS\" version=\"7.3.0.2\" />\r\n      </group>\r\n      <group targetFramework=\"Xamarin.Mac2.0\">\r\n        <dependency id=\"HarfBuzzSharp.NativeAssets.macOS\" version=\"7.3.0.2\" />\r\n      </group>\r\n      <group targetFramework=\"UAP10.0.10240\">\r\n        <dependency id=\"HarfBuzzSharp.NativeAssets.UWP\" version=\"7.3.0.2\" />\r\n        <dependency id=\"System.Memory\" version=\"4.5.5\" />\r\n      </group>\r\n      <group targetFramework=\"UAP10.0.16299\">\r\n        <dependency id=\"HarfBuzzSharp.NativeAssets.UWP\" version=\"7.3.0.2\" />\r\n        <dependency id=\"System.Memory\" version=\"4.5.5\" />\r\n      </group>\r\n      <group targetFramework=\"Tizen4.0\">\r\n        <dependency id=\"HarfBuzzSharp.NativeAssets.Tizen\" version=\"7.3.0.2\" />\r\n        <dependency id=\"System.Memory\" version=\"4.5.5\" />\r\n      </group>\r\n      <group targetFramework=\".NETCoreApp3.1\">\r\n        <dependency id=\"HarfBuzzSharp.NativeAssets.Win32\" version=\"7.3.0.2\" />\r\n        <dependency id=\"HarfBuzzSharp.NativeAssets.macOS\" version=\"7.3.0.2\" />\r\n      </group>\r\n      <group targetFramework=\"net6.0\">\r\n        <dependency id=\"HarfBuzzSharp.NativeAssets.Win32\" version=\"7.3.0.2\" />\r\n        <dependency id=\"HarfBuzzSharp.NativeAssets.macOS\" version=\"7.3.0.2\" />\r\n      </group>\r\n      <group targetFramework=\"net6.0-ios13.6\">\r\n        <dependency id=\"HarfBuzzSharp.NativeAssets.iOS\" version=\"7.3.0.2\" />\r\n      </group>\r\n      <group targetFramework=\"net6.0-maccatalyst13.5\">\r\n        <dependency id=\"HarfBuzzSharp.NativeAssets.MacCatalyst\" version=\"7.3.0.2\" />\r\n      </group>\r\n      <group targetFramework=\"net6.0-tvos13.4\">\r\n        <dependency id=\"HarfBuzzSharp.NativeAssets.tvOS\" version=\"7.3.0.2\" />\r\n      </group>\r\n      <group targetFramework=\"net6.0-macos10.15\">\r\n        <dependency id=\"HarfBuzzSharp.NativeAssets.macOS\" version=\"7.3.0.2\" />\r\n      </group>\r\n      <group targetFramework=\"net6.0-android30.0\">\r\n        <dependency id=\"HarfBuzzSharp.NativeAssets.Android\" version=\"7.3.0.2\" />\r\n      </group>\r\n    </dependencies>\r\n  </metadata>\r\n</package>"
+    },
+    {
+      "component": "skiasharp",
+      "version": "2.88.8",
+      "url": "https://api.nuget.org/v3-flatcontainer/skiasharp/2.88.8/skiasharp.2.88.8.nupkg",
+      "archiveSha256": "ac3e607384a79514d7c33dfaeee1e6f171b9780210a599681aa2d11a7bcdbb40",
+      "nuspec": "﻿<?xml version=\"1.0\" encoding=\"utf-8\"?>\r\n<package xmlns=\"http://schemas.microsoft.com/packaging/2013/05/nuspec.xsd\">\r\n  <metadata>\r\n    <id>SkiaSharp</id>\r\n    <version>2.88.8</version>\r\n    <title>SkiaSharp</title>\r\n    <authors>Microsoft</authors>\r\n    <owners>Microsoft</owners>\r\n    <requireLicenseAcceptance>true</requireLicenseAcceptance>\r\n    <licenseUrl>https://go.microsoft.com/fwlink/?linkid=868514</licenseUrl>\r\n    <projectUrl>https://go.microsoft.com/fwlink/?linkid=868515</projectUrl>\r\n    <iconUrl>https://go.microsoft.com/fwlink/?linkid=2130524</iconUrl>\r\n    <description>SkiaSharp is a cross-platform 2D graphics API for .NET platforms based on Google's Skia Graphics Library.\r\nIt provides a comprehensive 2D API that can be used across mobile, server and desktop models to render images.</description>\r\n    <summary>SkiaSharp is a cross-platform 2D graphics API for .NET platforms that can be used across mobile, server and desktop models to render images.</summary>\r\n    <releaseNotes>Please visit https://go.microsoft.com/fwlink/?linkid=868517 to view the release notes.</releaseNotes>\r\n    <copyright>© Microsoft Corporation. All rights reserved.</copyright>\r\n    <tags>xamarin graphics ios android linux windows uwp tvos watchos macos tizen cross-platform skiasharp</tags>\r\n    <repository type=\"git\" url=\"https://github.com/mono/SkiaSharp\" branch=\"release/2.88.8\" commit=\"7af1d0840a381c0ce7ef2877454a88dbb2949686\" />\r\n    <dependencies>\r\n      <group targetFramework=\".NETFramework4.6.2\">\r\n        <dependency id=\"SkiaSharp.NativeAssets.Win32\" version=\"2.88.8\" />\r\n        <dependency id=\"SkiaSharp.NativeAssets.macOS\" version=\"2.88.8\" />\r\n        <dependency id=\"System.Memory\" version=\"4.5.5\" />\r\n      </group>\r\n      <group targetFramework=\".NETStandard1.3\">\r\n        <dependency id=\"SkiaSharp.NativeAssets.Win32\" version=\"2.88.8\" />\r\n        <dependency id=\"SkiaSharp.NativeAssets.macOS\" version=\"2.88.8\" />\r\n        <dependency id=\"System.IO.UnmanagedMemoryStream\" version=\"4.3.0\" />\r\n        <dependency id=\"System.Memory\" version=\"4.5.5\" />\r\n      </group>\r\n      <group targetFramework=\".NETStandard2.0\">\r\n        <dependency id=\"SkiaSharp.NativeAssets.Win32\" version=\"2.88.8\" />\r\n        <dependency id=\"SkiaSharp.NativeAssets.macOS\" version=\"2.88.8\" />\r\n        <dependency id=\"System.Memory\" version=\"4.5.5\" />\r\n      </group>\r\n      <group targetFramework=\".NETStandard2.1\">\r\n        <dependency id=\"SkiaSharp.NativeAssets.Win32\" version=\"2.88.8\" />\r\n        <dependency id=\"SkiaSharp.NativeAssets.macOS\" version=\"2.88.8\" />\r\n      </group>\r\n      <group targetFramework=\"MonoAndroid1.0\">\r\n        <dependency id=\"SkiaSharp.NativeAssets.Android\" version=\"2.88.8\" />\r\n      </group>\r\n      <group targetFramework=\"Xamarin.iOS1.0\">\r\n        <dependency id=\"SkiaSharp.NativeAssets.iOS\" version=\"2.88.8\" />\r\n      </group>\r\n      <group targetFramework=\"Xamarin.TVOS1.0\">\r\n        <dependency id=\"SkiaSharp.NativeAssets.tvOS\" version=\"2.88.8\" />\r\n      </group>\r\n      <group targetFramework=\"Xamarin.WatchOS1.0\">\r\n        <dependency id=\"SkiaSharp.NativeAssets.watchOS\" version=\"2.88.8\" />\r\n      </group>\r\n      <group targetFramework=\"Xamarin.Mac2.0\">\r\n        <dependency id=\"SkiaSharp.NativeAssets.macOS\" version=\"2.88.8\" />\r\n      </group>\r\n      <group targetFramework=\"UAP10.0.10240\">\r\n        <dependency id=\"SkiaSharp.NativeAssets.UWP\" version=\"2.88.8\" />\r\n        <dependency id=\"System.Memory\" version=\"4.5.5\" />\r\n      </group>\r\n      <group targetFramework=\"UAP10.0.16299\">\r\n        <dependency id=\"SkiaSharp.NativeAssets.UWP\" version=\"2.88.8\" />\r\n        <dependency id=\"System.Memory\" version=\"4.5.5\" />\r\n      </group>\r\n      <group targetFramework=\"Tizen4.0\">\r\n        <dependency id=\"SkiaSharp.NativeAssets.Tizen\" version=\"2.88.8\" />\r\n        <dependency id=\"System.Memory\" version=\"4.5.5\" />\r\n      </group>\r\n      <group targetFramework=\".NETCoreApp3.1\">\r\n        <dependency id=\"SkiaSharp.NativeAssets.Win32\" version=\"2.88.8\" />\r\n        <dependency id=\"SkiaSharp.NativeAssets.macOS\" version=\"2.88.8\" />\r\n      </group>\r\n      <group targetFramework=\"net6.0\">\r\n        <dependency id=\"SkiaSharp.NativeAssets.Win32\" version=\"2.88.8\" />\r\n        <dependency id=\"SkiaSharp.NativeAssets.macOS\" version=\"2.88.8\" />\r\n      </group>\r\n      <group targetFramework=\"net6.0-ios13.6\">\r\n        <dependency id=\"SkiaSharp.NativeAssets.iOS\" version=\"2.88.8\" />\r\n      </group>\r\n      <group targetFramework=\"net6.0-maccatalyst13.5\">\r\n        <dependency id=\"SkiaSharp.NativeAssets.MacCatalyst\" version=\"2.88.8\" />\r\n      </group>\r\n      <group targetFramework=\"net6.0-tvos13.4\">\r\n        <dependency id=\"SkiaSharp.NativeAssets.tvOS\" version=\"2.88.8\" />\r\n      </group>\r\n      <group targetFramework=\"net6.0-macos10.15\">\r\n        <dependency id=\"SkiaSharp.NativeAssets.macOS\" version=\"2.88.8\" />\r\n      </group>\r\n      <group targetFramework=\"net6.0-android30.0\">\r\n        <dependency id=\"SkiaSharp.NativeAssets.Android\" version=\"2.88.8\" />\r\n      </group>\r\n      <group targetFramework=\"net6.0-tizen7.0\">\r\n        <dependency id=\"SkiaSharp.NativeAssets.Tizen\" version=\"2.88.8\" />\r\n      </group>\r\n    </dependencies>\r\n  </metadata>\r\n</package>"
+    },
+    {
+      "component": "harfbuzzsharp.nativeassets.macos",
+      "version": "7.3.0.2",
+      "url": "https://api.nuget.org/v3-flatcontainer/harfbuzzsharp.nativeassets.macos/7.3.0.2/harfbuzzsharp.nativeassets.macos.7.3.0.2.nupkg",
+      "archiveSha256": "76612a47d326a42c0af00bac71f0bbc5496728863bf8dbe2d3a574bb925f7f4f",
+      "nuspec": "﻿<?xml version=\"1.0\" encoding=\"utf-8\"?>\r\n<package xmlns=\"http://schemas.microsoft.com/packaging/2012/06/nuspec.xsd\">\r\n  <metadata>\r\n    <id>HarfBuzzSharp.NativeAssets.macOS</id>\r\n    <version>7.3.0.2</version>\r\n    <title>HarfBuzzSharp - Native Assets for macOS</title>\r\n    <authors>Microsoft</authors>\r\n    <owners>Microsoft</owners>\r\n    <requireLicenseAcceptance>true</requireLicenseAcceptance>\r\n    <licenseUrl>https://go.microsoft.com/fwlink/?linkid=868514</licenseUrl>\r\n    <projectUrl>https://go.microsoft.com/fwlink/?linkid=868515</projectUrl>\r\n    <iconUrl>https://go.microsoft.com/fwlink/?linkid=2130524</iconUrl>\r\n    <description>HarfBuzzSharp is a cross-platform OpenType text shaping engine for .NET platforms.</description>\r\n    <summary>HarfBuzzSharp is a cross-platform OpenType text shaping engine for .NET platforms.</summary>\r\n    <releaseNotes>Please visit https://go.microsoft.com/fwlink/?linkid=868517 to view the release notes.</releaseNotes>\r\n    <copyright>© Microsoft Corporation. All rights reserved.</copyright>\r\n    <tags>xamarin text harfbuzz ios android linux windows uwp tvos macos tizen cross-platform harfbuzzsharp</tags>\r\n    <repository type=\"git\" url=\"https://github.com/mono/SkiaSharp\" branch=\"release/2.88.8\" commit=\"7af1d0840a381c0ce7ef2877454a88dbb2949686\" />\r\n    <dependencies>\r\n      <group targetFramework=\"Xamarin.Mac2.0\" />\r\n      <group targetFramework=\"net6.0-macos10.15\" />\r\n      <group targetFramework=\".NETFramework4.6.2\" />\r\n      <group targetFramework=\".NETStandard1.3\" />\r\n      <group targetFramework=\".NETCoreApp3.1\" />\r\n      <group targetFramework=\"net6.0\" />\r\n    </dependencies>\r\n  </metadata>\r\n</package>"
+    },
+    {
+      "component": "skiasharp.nativeassets.macos",
+      "version": "2.88.8",
+      "url": "https://api.nuget.org/v3-flatcontainer/skiasharp.nativeassets.macos/2.88.8/skiasharp.nativeassets.macos.2.88.8.nupkg",
+      "archiveSha256": "09d72bcd01f009c98e08fb52f041adc2c2ac81d9639c7e35b05cad5bb37d3e62",
+      "nuspec": "﻿<?xml version=\"1.0\" encoding=\"utf-8\"?>\r\n<package xmlns=\"http://schemas.microsoft.com/packaging/2012/06/nuspec.xsd\">\r\n  <metadata>\r\n    <id>SkiaSharp.NativeAssets.macOS</id>\r\n    <version>2.88.8</version>\r\n    <title>SkiaSharp - Native Assets for macOS</title>\r\n    <authors>Microsoft</authors>\r\n    <owners>Microsoft</owners>\r\n    <requireLicenseAcceptance>true</requireLicenseAcceptance>\r\n    <licenseUrl>https://go.microsoft.com/fwlink/?linkid=868514</licenseUrl>\r\n    <projectUrl>https://go.microsoft.com/fwlink/?linkid=868515</projectUrl>\r\n    <iconUrl>https://go.microsoft.com/fwlink/?linkid=2130524</iconUrl>\r\n    <description>SkiaSharp is a cross-platform 2D graphics API for .NET platforms based on Google's Skia Graphics Library.\r\nIt provides a comprehensive 2D API that can be used across mobile, server and desktop models to render images.</description>\r\n    <summary>SkiaSharp is a cross-platform 2D graphics API for .NET platforms that can be used across mobile, server and desktop models to render images.</summary>\r\n    <releaseNotes>Please visit https://go.microsoft.com/fwlink/?linkid=868517 to view the release notes.</releaseNotes>\r\n    <copyright>© Microsoft Corporation. All rights reserved.</copyright>\r\n    <tags>xamarin graphics ios android linux windows uwp tvos watchos macos tizen cross-platform skiasharp</tags>\r\n    <repository type=\"git\" url=\"https://github.com/mono/SkiaSharp\" branch=\"release/2.88.8\" commit=\"7af1d0840a381c0ce7ef2877454a88dbb2949686\" />\r\n    <dependencies>\r\n      <group targetFramework=\"Xamarin.Mac2.0\" />\r\n      <group targetFramework=\"net6.0-macos10.15\" />\r\n      <group targetFramework=\".NETFramework4.6.2\" />\r\n      <group targetFramework=\".NETStandard1.3\" />\r\n      <group targetFramework=\".NETCoreApp3.1\" />\r\n      <group targetFramework=\"net6.0\" />\r\n    </dependencies>\r\n  </metadata>\r\n</package>"
+    },
+    {
+      "component": "microsoft.identity.client.nativeinterop",
+      "version": "0.20.6",
+      "url": "https://api.nuget.org/v3-flatcontainer/microsoft.identity.client.nativeinterop/0.20.6/microsoft.identity.client.nativeinterop.0.20.6.nupkg",
+      "archiveSha256": "3db68ddb526eba1e5f9dfa7ce2e5fe42d19727436614611013f5a3ca59d60fc3",
+      "nuspec": "﻿<?xml version=\"1.0\" encoding=\"utf-8\"?>\r\n<package xmlns=\"http://schemas.microsoft.com/packaging/2013/01/nuspec.xsd\">\r\n  <metadata minClientVersion=\"2.8.1\">\r\n    <id>Microsoft.Identity.Client.NativeInterop</id>\r\n    <version>0.20.6</version>\r\n    <title>MSAL.NET extension for public client broker support.</title>\r\n    <authors>Microsoft</authors>\r\n    <owners>Microsoft Corporation</owners>\r\n    <requireLicenseAcceptance>false</requireLicenseAcceptance>\r\n    <license type=\"file\">LICENSE</license>\r\n    <licenseUrl>https://aka.ms/deprecateLicenseUrl</licenseUrl>\r\n    <projectUrl>https://office.visualstudio.com/_git/OneAuth</projectUrl>\r\n    <description>This package contains binaries needed to use brokers in public client desktop applications. The release notes are available at https://office.visualstudio.com/_git/OneAuth?path=/CHANGELOG.md.</description>\r\n    <copyright>© Microsoft Corporation. All rights reserved.</copyright>\r\n    <tags>Microsoft Authentication Library Desktop MSAL WAM broker Windows Manager</tags>\r\n    <repository type=\"git\" url=\"https://office.visualstudio.com/_git/OneAuth\" />\r\n    <dependencies>\r\n      <group targetFramework=\".NETFramework4.6.2\" />\r\n      <group targetFramework=\".NETStandard2.0\" />\r\n      <group targetFramework=\"net9.0\" />\r\n    </dependencies>\r\n  </metadata>\r\n</package>"
+    },
+    {
+      "component": "microsoft.identity.client.broker",
+      "version": "4.84.2",
+      "url": "https://api.nuget.org/v3-flatcontainer/microsoft.identity.client.broker/4.84.2/microsoft.identity.client.broker.4.84.2.nupkg",
+      "archiveSha256": "c9150b209bc24e203fa47260782f2df30a467e3e55b6d2c9c10b7c20e395f68d",
+      "nuspec": "﻿<?xml version=\"1.0\" encoding=\"utf-8\"?>\r\n<package xmlns=\"http://schemas.microsoft.com/packaging/2013/05/nuspec.xsd\">\r\n  <metadata>\r\n    <id>Microsoft.Identity.Client.Broker</id>\r\n    <version>4.84.2</version>\r\n    <title>MSAL.NET extension for public client broker support</title>\r\n    <authors>Microsoft</authors>\r\n    <requireLicenseAcceptance>true</requireLicenseAcceptance>\r\n    <license type=\"expression\">MIT</license>\r\n    <licenseUrl>https://licenses.nuget.org/MIT</licenseUrl>\r\n    <projectUrl>https://go.microsoft.com/fwlink/?linkid=844761</projectUrl>\r\n    <description>This package contains binaries needed to use brokers in public client desktop applications and supersedes Microsoft.Identity.Client.Desktop.</description>\r\n    <releaseNotes>The release notes are available at https://github.com/AzureAD/microsoft-authentication-library-for-dotnet/releases and the roadmap at https://github.com/AzureAD/microsoft-authentication-library-for-dotnet/wiki#roadmap. To provide feedback, fill-in the survey at https://ncv.microsoft.com/JrXkdySi0m.</releaseNotes>\r\n    <copyright>© Microsoft Corporation. All rights reserved.</copyright>\r\n    <tags>Microsoft Authentication Library Desktop MSAL WAM broker Windows Authentication Manager</tags>\r\n    <repository type=\"git\" url=\"https://github.com/AzureAD/microsoft-authentication-library-for-dotnet\" commit=\"bad7cae331c1d9e699ca2150a5fecb108ea54916\" />\r\n    <dependencies>\r\n      <group targetFramework=\".NETFramework4.6.2\">\r\n        <dependency id=\"Microsoft.Identity.Client\" version=\"4.84.2\" exclude=\"Build,Analyzers\" />\r\n        <dependency id=\"Microsoft.Identity.Client.NativeInterop\" version=\"0.20.6\" exclude=\"Build,Analyzers\" />\r\n      </group>\r\n      <group targetFramework=\".NETStandard2.0\">\r\n        <dependency id=\"Microsoft.Identity.Client\" version=\"4.84.2\" exclude=\"Build,Analyzers\" />\r\n        <dependency id=\"Microsoft.Identity.Client.NativeInterop\" version=\"0.20.6\" exclude=\"Build,Analyzers\" />\r\n      </group>\r\n    </dependencies>\r\n    <frameworkAssemblies>\r\n      <frameworkAssembly assemblyName=\"System.Net.Http\" targetFramework=\".NETFramework4.6.2\" />\r\n    </frameworkAssemblies>\r\n  </metadata>\r\n</package>"
+    },
+    {
+      "component": "microsoft.identity.client.extensions.msal",
+      "version": "4.84.2",
+      "url": "https://api.nuget.org/v3-flatcontainer/microsoft.identity.client.extensions.msal/4.84.2/microsoft.identity.client.extensions.msal.4.84.2.nupkg",
+      "archiveSha256": "b9611017286cb42bbd5f3c6e55ddf6eca648fba8426d795f4030d6e10adf3c27",
+      "nuspec": "﻿<?xml version=\"1.0\" encoding=\"utf-8\"?>\r\n<package xmlns=\"http://schemas.microsoft.com/packaging/2013/05/nuspec.xsd\">\r\n  <metadata>\r\n    <id>Microsoft.Identity.Client.Extensions.Msal</id>\r\n    <version>4.84.2</version>\r\n    <authors>Microsoft</authors>\r\n    <requireLicenseAcceptance>true</requireLicenseAcceptance>\r\n    <license type=\"expression\">MIT</license>\r\n    <licenseUrl>https://licenses.nuget.org/MIT</licenseUrl>\r\n    <readme>README.md</readme>\r\n    <projectUrl>https://go.microsoft.com/fwlink/?linkid=844761</projectUrl>\r\n    <description>This package contains the public client (desktop) caching to Microsoft Authentication Library for .NET (MSAL.NET)</description>\r\n    <releaseNotes>The release notes are available at https://github.com/AzureAD/microsoft-authentication-library-for-dotnet/releases and the roadmap at https://github.com/AzureAD/microsoft-authentication-library-for-dotnet/wiki#roadmap. To provide feedback, fill-in the survey at https://ncv.microsoft.com/JrXkdySi0m.</releaseNotes>\r\n    <copyright>© Microsoft Corporation. All rights reserved.</copyright>\r\n    <tags>Microsoft Authentication Library MSA MSAL B2C Azure Active Directory AAD Identity Authentication .NET Windows Store MAUI</tags>\r\n    <repository type=\"git\" url=\"https://github.com/AzureAD/microsoft-authentication-library-for-dotnet\" commit=\"bad7cae331c1d9e699ca2150a5fecb108ea54916\" />\r\n    <dependencies>\r\n      <group targetFramework=\"net8.0\">\r\n        <dependency id=\"Microsoft.Identity.Client\" version=\"4.84.2\" exclude=\"Build,Analyzers\" />\r\n        <dependency id=\"System.Security.Cryptography.ProtectedData\" version=\"4.5.0\" exclude=\"Build,Analyzers\" />\r\n      </group>\r\n      <group targetFramework=\".NETStandard2.0\">\r\n        <dependency id=\"Microsoft.Identity.Client\" version=\"4.84.2\" exclude=\"Build,Analyzers\" />\r\n        <dependency id=\"System.IO.FileSystem.AccessControl\" version=\"5.0.0\" exclude=\"Build,Analyzers\" />\r\n        <dependency id=\"System.Security.Cryptography.ProtectedData\" version=\"4.5.0\" exclude=\"Build,Analyzers\" />\r\n      </group>\r\n    </dependencies>\r\n  </metadata>\r\n</package>"
+    },
+    {
+      "component": "avalonia",
+      "version": "11.1.3",
+      "url": "https://api.nuget.org/v3-flatcontainer/avalonia/11.1.3/avalonia.11.1.3.nupkg",
+      "archiveSha256": "933fa4fef92e5a82f45c1bd14fc49a74c3a699108593d5bf27893f20cea8617d",
+      "nuspec": "﻿<?xml version=\"1.0\" encoding=\"utf-8\"?>\r\n<package xmlns=\"http://schemas.microsoft.com/packaging/2013/05/nuspec.xsd\">\r\n  <metadata>\r\n    <id>Avalonia</id>\r\n    <version>11.1.3</version>\r\n    <authors>Avalonia Team</authors>\r\n    <license type=\"expression\">MIT</license>\r\n    <licenseUrl>https://licenses.nuget.org/MIT</licenseUrl>\r\n    <icon>Icon.png</icon>\r\n    <projectUrl>https://avaloniaui.net/</projectUrl>\r\n    <description>Avalonia is a cross-platform UI framework for .NET providing a flexible styling system and supporting a wide range of Operating Systems such as Windows, Linux, macOS and with experimental support for Android, iOS and WebAssembly.</description>\r\n    <releaseNotes>https://github.com/AvaloniaUI/Avalonia/releases</releaseNotes>\r\n    <copyright>Copyright 2013-2024 © The AvaloniaUI Project</copyright>\r\n    <tags>avalonia avaloniaui mvvm rx reactive extensions android ios mac forms wpf net netstandard net461 uwp xamarin</tags>\r\n    <repository type=\"git\" url=\"https://github.com/AvaloniaUI/Avalonia/\" commit=\"45a2d36e3214ac4b3623940ba728b2503de5c668\" />\r\n    <dependencies>\r\n      <group targetFramework=\"net6.0\">\r\n        <dependency id=\"Avalonia.BuildServices\" version=\"0.0.29\" exclude=\"Build,Analyzers\" />\r\n        <dependency id=\"Avalonia.Remote.Protocol\" version=\"11.1.3\" exclude=\"Build,Analyzers\" />\r\n        <dependency id=\"MicroCom.Runtime\" version=\"0.11.0\" exclude=\"Build,Analyzers\" />\r\n      </group>\r\n      <group targetFramework=\"net8.0\">\r\n        <dependency id=\"Avalonia.BuildServices\" version=\"0.0.29\" exclude=\"Build,Analyzers\" />\r\n        <dependency id=\"Avalonia.Remote.Protocol\" version=\"11.1.3\" exclude=\"Build,Analyzers\" />\r\n        <dependency id=\"MicroCom.Runtime\" version=\"0.11.0\" exclude=\"Build,Analyzers\" />\r\n      </group>\r\n      <group targetFramework=\".NETStandard2.0\">\r\n        <dependency id=\"Avalonia.BuildServices\" version=\"0.0.29\" exclude=\"Build,Analyzers\" />\r\n        <dependency id=\"Avalonia.Remote.Protocol\" version=\"11.1.3\" exclude=\"Build,Analyzers\" />\r\n        <dependency id=\"Microsoft.Bcl.AsyncInterfaces\" version=\"6.0.0\" exclude=\"Build,Analyzers\" />\r\n        <dependency id=\"System.ComponentModel.Annotations\" version=\"4.5.0\" exclude=\"Build,Analyzers\" />\r\n        <dependency id=\"System.Memory\" version=\"4.5.3\" exclude=\"Build,Analyzers\" />\r\n        <dependency id=\"System.Runtime.CompilerServices.Unsafe\" version=\"4.6.0\" exclude=\"Build,Analyzers\" />\r\n        <dependency id=\"System.Threading.Tasks.Extensions\" version=\"4.5.4\" exclude=\"Build,Analyzers\" />\r\n        <dependency id=\"System.ValueTuple\" version=\"4.5.0\" exclude=\"Build,Analyzers\" />\r\n        <dependency id=\"MicroCom.Runtime\" version=\"0.11.0\" exclude=\"Build,Analyzers\" />\r\n      </group>\r\n    </dependencies>\r\n  </metadata>\r\n</package>"
+    },
+    {
+      "component": "avalonia.win32",
+      "version": "11.1.3",
+      "url": "https://api.nuget.org/v3-flatcontainer/avalonia.win32/11.1.3/avalonia.win32.11.1.3.nupkg",
+      "archiveSha256": "cdcc53a449e92dfe74a7c61a8b2964e7f092f4c3437bb94ad6e5f508f6890547",
+      "nuspec": "﻿<?xml version=\"1.0\" encoding=\"utf-8\"?>\r\n<package xmlns=\"http://schemas.microsoft.com/packaging/2013/05/nuspec.xsd\">\r\n  <metadata>\r\n    <id>Avalonia.Win32</id>\r\n    <version>11.1.3</version>\r\n    <authors>Avalonia Team</authors>\r\n    <license type=\"expression\">MIT</license>\r\n    <licenseUrl>https://licenses.nuget.org/MIT</licenseUrl>\r\n    <icon>Icon.png</icon>\r\n    <projectUrl>https://avaloniaui.net/</projectUrl>\r\n    <description>Avalonia is a cross-platform UI framework for .NET providing a flexible styling system and supporting a wide range of Operating Systems such as Windows, Linux, macOS and with experimental support for Android, iOS and WebAssembly.</description>\r\n    <releaseNotes>https://github.com/AvaloniaUI/Avalonia/releases</releaseNotes>\r\n    <copyright>Copyright 2013-2024 © The AvaloniaUI Project</copyright>\r\n    <tags>avalonia avaloniaui mvvm rx reactive extensions android ios mac forms wpf net netstandard net461 uwp xamarin</tags>\r\n    <repository type=\"git\" url=\"https://github.com/AvaloniaUI/Avalonia/\" commit=\"45a2d36e3214ac4b3623940ba728b2503de5c668\" />\r\n    <dependencies>\r\n      <group targetFramework=\"net6.0\">\r\n        <dependency id=\"Avalonia.Angle.Windows.Natives\" version=\"2.1.22045.20230930\" exclude=\"Build,Analyzers\" />\r\n        <dependency id=\"System.Numerics.Vectors\" version=\"4.5.0\" exclude=\"Build,Analyzers\" />\r\n        <dependency id=\"Avalonia\" version=\"11.1.3\" />\r\n      </group>\r\n      <group targetFramework=\"net8.0\">\r\n        <dependency id=\"Avalonia.Angle.Windows.Natives\" version=\"2.1.22045.20230930\" exclude=\"Build,Analyzers\" />\r\n        <dependency id=\"System.Numerics.Vectors\" version=\"4.5.0\" exclude=\"Build,Analyzers\" />\r\n        <dependency id=\"Avalonia\" version=\"11.1.3\" />\r\n      </group>\r\n      <group targetFramework=\".NETStandard2.0\">\r\n        <dependency id=\"Avalonia.Angle.Windows.Natives\" version=\"2.1.22045.20230930\" exclude=\"Build,Analyzers\" />\r\n        <dependency id=\"System.Numerics.Vectors\" version=\"4.5.0\" exclude=\"Build,Analyzers\" />\r\n        <dependency id=\"Avalonia\" version=\"11.1.3\" />\r\n      </group>\r\n    </dependencies>\r\n  </metadata>\r\n</package>"
+    },
+    {
+      "component": "avalonia.native",
+      "version": "11.1.3",
+      "url": "https://api.nuget.org/v3-flatcontainer/avalonia.native/11.1.3/avalonia.native.11.1.3.nupkg",
+      "archiveSha256": "6f2015196ed7824cb30e3d539ea68278353fc530fdcfc0021ab48983027e5d7b",
+      "nuspec": "﻿<?xml version=\"1.0\" encoding=\"utf-8\"?>\n<package xmlns=\"http://schemas.microsoft.com/packaging/2013/05/nuspec.xsd\">\n  <metadata>\n    <id>Avalonia.Native</id>\n    <version>11.1.3</version>\n    <authors>Avalonia Team</authors>\n    <license type=\"expression\">MIT</license>\n    <licenseUrl>https://licenses.nuget.org/MIT</licenseUrl>\n    <icon>Icon.png</icon>\n    <projectUrl>https://avaloniaui.net/</projectUrl>\n    <description>Avalonia is a cross-platform UI framework for .NET providing a flexible styling system and supporting a wide range of Operating Systems such as Windows, Linux, macOS and with experimental support for Android, iOS and WebAssembly.</description>\n    <releaseNotes>https://github.com/AvaloniaUI/Avalonia/releases</releaseNotes>\n    <copyright>Copyright 2013-2024 © The AvaloniaUI Project</copyright>\n    <tags>avalonia avaloniaui mvvm rx reactive extensions android ios mac forms wpf net netstandard net461 uwp xamarin</tags>\n    <repository type=\"git\" url=\"https://github.com/AvaloniaUI/Avalonia/\" commit=\"45a2d36e3214ac4b3623940ba728b2503de5c668\" />\n    <dependencies>\n      <group targetFramework=\"net6.0\">\n        <dependency id=\"Avalonia\" version=\"11.1.3\" />\n      </group>\n      <group targetFramework=\"net8.0\">\n        <dependency id=\"Avalonia\" version=\"11.1.3\" />\n      </group>\n      <group targetFramework=\".NETStandard2.0\">\n        <dependency id=\"Avalonia\" version=\"11.1.3\" />\n      </group>\n    </dependencies>\n  </metadata>\n</package>"
+    },
+    {
+      "component": "harfbuzzsharp.nativeassets.win32",
+      "version": "7.3.0.2",
+      "url": "https://api.nuget.org/v3-flatcontainer/harfbuzzsharp.nativeassets.win32/7.3.0.2/harfbuzzsharp.nativeassets.win32.7.3.0.2.nupkg",
+      "archiveSha256": "c7888cdcd1ecf55cb0786e7bc40ef8c9de2e2ee5e5cb5e3ba287b49af350f33a",
+      "nuspec": "﻿<?xml version=\"1.0\" encoding=\"utf-8\"?>\r\n<package xmlns=\"http://schemas.microsoft.com/packaging/2012/06/nuspec.xsd\">\r\n  <metadata>\r\n    <id>HarfBuzzSharp.NativeAssets.Win32</id>\r\n    <version>7.3.0.2</version>\r\n    <title>HarfBuzzSharp - Native Assets for Win32</title>\r\n    <authors>Microsoft</authors>\r\n    <owners>Microsoft</owners>\r\n    <requireLicenseAcceptance>true</requireLicenseAcceptance>\r\n    <licenseUrl>https://go.microsoft.com/fwlink/?linkid=868514</licenseUrl>\r\n    <projectUrl>https://go.microsoft.com/fwlink/?linkid=868515</projectUrl>\r\n    <iconUrl>https://go.microsoft.com/fwlink/?linkid=2130524</iconUrl>\r\n    <description>HarfBuzzSharp is a cross-platform OpenType text shaping engine for .NET platforms.</description>\r\n    <summary>HarfBuzzSharp is a cross-platform OpenType text shaping engine for .NET platforms.</summary>\r\n    <releaseNotes>Please visit https://go.microsoft.com/fwlink/?linkid=868517 to view the release notes.</releaseNotes>\r\n    <copyright>© Microsoft Corporation. All rights reserved.</copyright>\r\n    <tags>xamarin text harfbuzz ios android linux windows uwp tvos macos tizen cross-platform harfbuzzsharp</tags>\r\n    <repository type=\"git\" url=\"https://github.com/mono/SkiaSharp\" branch=\"release/2.88.8\" commit=\"7af1d0840a381c0ce7ef2877454a88dbb2949686\" />\r\n    <dependencies>\r\n      <group targetFramework=\".NETFramework4.6.2\" />\r\n      <group targetFramework=\".NETStandard1.3\" />\r\n      <group targetFramework=\".NETCoreApp3.1\" />\r\n      <group targetFramework=\"net6.0\" />\r\n    </dependencies>\r\n  </metadata>\r\n</package>"
+    },
+    {
+      "component": "skiasharp.nativeassets.win32",
+      "version": "2.88.8",
+      "url": "https://api.nuget.org/v3-flatcontainer/skiasharp.nativeassets.win32/2.88.8/skiasharp.nativeassets.win32.2.88.8.nupkg",
+      "archiveSha256": "6fc55bf78acd8f03ca4890d0819d17bf675657b80c5459791b04cafd08993cf3",
+      "nuspec": "﻿<?xml version=\"1.0\" encoding=\"utf-8\"?>\r\n<package xmlns=\"http://schemas.microsoft.com/packaging/2012/06/nuspec.xsd\">\r\n  <metadata>\r\n    <id>SkiaSharp.NativeAssets.Win32</id>\r\n    <version>2.88.8</version>\r\n    <title>SkiaSharp - Native Assets for Win32</title>\r\n    <authors>Microsoft</authors>\r\n    <owners>Microsoft</owners>\r\n    <requireLicenseAcceptance>true</requireLicenseAcceptance>\r\n    <licenseUrl>https://go.microsoft.com/fwlink/?linkid=868514</licenseUrl>\r\n    <projectUrl>https://go.microsoft.com/fwlink/?linkid=868515</projectUrl>\r\n    <iconUrl>https://go.microsoft.com/fwlink/?linkid=2130524</iconUrl>\r\n    <description>SkiaSharp is a cross-platform 2D graphics API for .NET platforms based on Google's Skia Graphics Library.\r\nIt provides a comprehensive 2D API that can be used across mobile, server and desktop models to render images.</description>\r\n    <summary>SkiaSharp is a cross-platform 2D graphics API for .NET platforms that can be used across mobile, server and desktop models to render images.</summary>\r\n    <releaseNotes>Please visit https://go.microsoft.com/fwlink/?linkid=868517 to view the release notes.</releaseNotes>\r\n    <copyright>© Microsoft Corporation. All rights reserved.</copyright>\r\n    <tags>xamarin graphics ios android linux windows uwp tvos watchos macos tizen cross-platform skiasharp</tags>\r\n    <repository type=\"git\" url=\"https://github.com/mono/SkiaSharp\" branch=\"release/2.88.8\" commit=\"7af1d0840a381c0ce7ef2877454a88dbb2949686\" />\r\n    <dependencies>\r\n      <group targetFramework=\".NETFramework4.6.2\" />\r\n      <group targetFramework=\".NETStandard1.3\" />\r\n      <group targetFramework=\".NETCoreApp3.1\" />\r\n      <group targetFramework=\"net6.0\" />\r\n    </dependencies>\r\n  </metadata>\r\n</package>"
+    }
+  ],
+  "microComProvenance": {
+    "package": "MicroCom.Runtime/0.11.0",
+    "nugetLicenseExpression": "MIT",
+    "licenseHistory": "GitHub commits?path=LICENSE returned sole creation commit 4b8a38f773c109bad558ee3713d9f16d80776e42 on 2021-11-14; file content unchanged since creation. Package nuspec gives repository but no build commit."
+  },
+  "lfsDevelopmentModuleMapping": {
+    "module": "github.com/git-lfs/git-lfs/v3",
+    "binaryVersion": "(devel) in non-Windows build info",
+    "license": "git-lfs-3.7.1-LICENSE.md",
+    "basis": "Pinned dugite-native v2.53.0-4 dependency manifest downloads fixed Git LFS v3.7.1 archives with checksums; devel is the module metadata, not evidence of another release."
+  },
+  "packageBinaryMatches": [],
+  "windowsGcmCorrection": {
+    "deployment": ".NET Framework 4.7.2 executable with 50 side-by-side files, not a single-file bundle",
+    "evidence": "windows-gcm-file-evidence.json",
+    "distributionBoundary": "gcm-official-file-boundary.json",
+    "verification": "Each platform official GCM ZIP has 52 entries; all 51 executable/config/DLL entries byte-match the corresponding existing dugite files. The other entry is NOTICE, located under doc/git-credential-manager in dugite.",
+    "systemConfig": "etc/gitconfig: [credential] helper = manager",
+    "safeOptionalBoundary": "Only a future explicitly selected packaging variant could omit these exact files after hash checks and its packaged helper=manager entry; do not remove or change any user-owned global/local configuration."
+  }
+}

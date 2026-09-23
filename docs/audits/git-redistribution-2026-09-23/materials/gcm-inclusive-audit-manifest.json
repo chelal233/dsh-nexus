@@ -1,0 +1,459 @@
+{
+  "schema": 1,
+  "complete": false,
+  "files": [
+    {
+      "path": "gcm-windows-x64-NOTICE.txt",
+      "sha256": "f573f5d21d5d8a054aad1ffcbe0165391a4d93a5aa3e23c3db0752759adfd50c",
+      "source": "https://github.com/desktop/dugite-native/releases/download/v2.53.0-4/dugite-native-v2.53.0-4098283-windows-x64.tar.gz#./mingw64/doc/git-credential-manager/NOTICE",
+      "component": "Git Credential Manager bundled NOTICE",
+      "version": "2.9.0",
+      "platforms": [
+        "windows-x64"
+      ]
+    },
+    {
+      "path": "gcm-windows-arm64-NOTICE.txt",
+      "sha256": "f573f5d21d5d8a054aad1ffcbe0165391a4d93a5aa3e23c3db0752759adfd50c",
+      "source": "https://github.com/desktop/dugite-native/releases/download/v2.53.0-4/dugite-native-v2.53.0-4098283-windows-arm64.tar.gz#./clangarm64/doc/git-credential-manager/NOTICE",
+      "component": "Git Credential Manager bundled NOTICE",
+      "version": "2.9.0",
+      "platforms": [
+        "windows-arm64"
+      ]
+    },
+    {
+      "path": "gcm-macOS-x64-NOTICE.txt",
+      "sha256": "f573f5d21d5d8a054aad1ffcbe0165391a4d93a5aa3e23c3db0752759adfd50c",
+      "source": "https://github.com/desktop/dugite-native/releases/download/v2.53.0-4/dugite-native-v2.53.0-4098283-macOS-x64.tar.gz#./libexec/git-core/NOTICE",
+      "component": "Git Credential Manager bundled NOTICE",
+      "version": "2.9.0",
+      "platforms": [
+        "macOS-x64"
+      ]
+    },
+    {
+      "path": "gcm-macOS-arm64-NOTICE.txt",
+      "sha256": "f573f5d21d5d8a054aad1ffcbe0165391a4d93a5aa3e23c3db0752759adfd50c",
+      "source": "https://github.com/desktop/dugite-native/releases/download/v2.53.0-4/dugite-native-v2.53.0-4098283-macOS-arm64.tar.gz#./libexec/git-core/NOTICE",
+      "component": "Git Credential Manager bundled NOTICE",
+      "version": "2.9.0",
+      "platforms": [
+        "macOS-arm64"
+      ]
+    },
+    {
+      "path": "git-lfs-3.7.1-LICENSE.md",
+      "sha256": "4fae9062ab5cdd5fb15486b728534d8aded8b4ae9d84b6d66a956f5162c366b6",
+      "source": "https://raw.githubusercontent.com/git-lfs/git-lfs/v3.7.1/LICENSE.md",
+      "component": "Git LFS 3.7.1",
+      "version": "3.7.1"
+    },
+    {
+      "path": "gcm-2.9.0-LICENSE.txt",
+      "sha256": "b47f1a8a744ecdc7a3da35804f88552805d33f51a726b87a2105acdfae406b07",
+      "source": "https://raw.githubusercontent.com/git-ecosystem/git-credential-manager/v2.9.0/LICENSE",
+      "component": "Git Credential Manager 2.9.0",
+      "version": "2.9.0"
+    },
+    {
+      "path": "go1.25.1-LICENSE.txt",
+      "sha256": "911f8f5782931320f5b8d1160a76365b83aea6447ee6c04fa6d5591467db9dad",
+      "source": "https://raw.githubusercontent.com/golang/go/go1.25.1/LICENSE",
+      "component": "go1.25.1",
+      "version": "go1.25.1"
+    },
+    {
+      "path": "go1.25.3-LICENSE.txt",
+      "sha256": "911f8f5782931320f5b8d1160a76365b83aea6447ee6c04fa6d5591467db9dad",
+      "source": "https://raw.githubusercontent.com/golang/go/go1.25.3/LICENSE",
+      "component": "go1.25.3",
+      "version": "go1.25.3"
+    },
+    {
+      "path": "github.com_alexbrainman_sspi-909beea2cc74-LICENSE",
+      "sha256": "dd26a7abddd02e2d0aba97805b31f248ef7835d9e10da289b22e3b8ab78b324d",
+      "source": "https://raw.githubusercontent.com/alexbrainman/sspi/909beea2cc74/LICENSE",
+      "component": "github.com/alexbrainman/sspi@v0.0.0-20210105120005-909beea2cc74",
+      "version": "v0.0.0-20210105120005-909beea2cc74"
+    },
+    {
+      "path": "github.com_avast_retry-go-v2.4.2-LICENSE",
+      "sha256": "2fc9e8c374cacc9c0e0c7214911cc2f90f1ade45af2cef646460de278042d930",
+      "source": "https://raw.githubusercontent.com/avast/retry-go/v2.4.2/LICENSE",
+      "component": "github.com/avast/retry-go@v2.4.2+incompatible",
+      "version": "v2.4.2+incompatible"
+    },
+    {
+      "path": "github.com_dpotapov_go-spnego-298b63a54430-LICENSE",
+      "sha256": "74e635bc5b835cbac01362dc69dcf5d84c4e8f69aa4207ed7301b1a9f238214c",
+      "source": "https://raw.githubusercontent.com/dpotapov/go-spnego/298b63a54430/LICENSE",
+      "component": "github.com/dpotapov/go-spnego@v0.0.0-20210315154721-298b63a54430",
+      "version": "v0.0.0-20210315154721-298b63a54430"
+    },
+    {
+      "path": "github.com_git-lfs_gitobj_v2-v2.1.1-LICENSE.md",
+      "sha256": "49e9a8cbb772da6682b4613a36aa17934fa949e5e30e58b3f0f24d6ea3265c69",
+      "source": "https://raw.githubusercontent.com/git-lfs/gitobj/v2.1.1/LICENSE.md",
+      "component": "github.com/git-lfs/gitobj/v2@v2.1.1",
+      "version": "v2.1.1"
+    },
+    {
+      "path": "github.com_git-lfs_go-netrc-ba0029b43d11-LICENSE",
+      "sha256": "c3880f30146c2ad11c85a243858027e8a1d61e241e53284d7cef3aa9452f16df",
+      "source": "https://raw.githubusercontent.com/git-lfs/go-netrc/ba0029b43d11/LICENSE",
+      "component": "github.com/git-lfs/go-netrc@v0.0.0-20250218165306-ba0029b43d11",
+      "version": "v0.0.0-20250218165306-ba0029b43d11"
+    },
+    {
+      "path": "github.com_git-lfs_pktline-06e9096e2825-LICENSE.md",
+      "sha256": "09c5e6c848991ae3a8884ce05457102a474e00ca237b92745eef333a9b0e813a",
+      "source": "https://raw.githubusercontent.com/git-lfs/pktline/06e9096e2825/LICENSE.md",
+      "component": "github.com/git-lfs/pktline@v0.0.0-20210330133718-06e9096e2825",
+      "version": "v0.0.0-20210330133718-06e9096e2825"
+    },
+    {
+      "path": "github.com_git-lfs_wildmatch_v2-v2.0.1-LICENSE.md",
+      "sha256": "34ece938f52ea9d3b706a780db52c14ba4544c2e0fdbccaa2701283000182c23",
+      "source": "https://raw.githubusercontent.com/git-lfs/wildmatch/v2.0.1/LICENSE.md",
+      "component": "github.com/git-lfs/wildmatch/v2@v2.0.1",
+      "version": "v2.0.1"
+    },
+    {
+      "path": "github.com_golang_groupcache-2c02b8208cf8-LICENSE",
+      "sha256": "73ba74dfaa520b49a401b5d21459a8523a146f3b7518a833eea5efa85130bf68",
+      "source": "https://raw.githubusercontent.com/golang/groupcache/2c02b8208cf8/LICENSE",
+      "component": "github.com/golang/groupcache@v0.0.0-20241129210726-2c02b8208cf8",
+      "version": "v0.0.0-20241129210726-2c02b8208cf8"
+    },
+    {
+      "path": "github.com_inconshreveable_mousetrap-v1.1.0-LICENSE",
+      "sha256": "4819582701f150b28a563a6cd8ed0bf5a754e3c67b90ad38d78ba4131bf77795",
+      "source": "https://raw.githubusercontent.com/inconshreveable/mousetrap/v1.1.0/LICENSE",
+      "component": "github.com/inconshreveable/mousetrap@v1.1.0",
+      "version": "v1.1.0"
+    },
+    {
+      "path": "github.com_jmhodges_clock-v1.2.0-LICENSE",
+      "sha256": "6fd396f2d21c26cac28597b7aea66706684fe7e0aede98c7ce08e8d7886409a1",
+      "source": "https://raw.githubusercontent.com/jmhodges/clock/v1.2.0/LICENSE",
+      "component": "github.com/jmhodges/clock@v1.2.0",
+      "version": "v1.2.0"
+    },
+    {
+      "path": "github.com_leonelquinteros_gotext-v1.5.0-LICENSE",
+      "sha256": "bf78e51361b486dc8b97c5be426574ffb5ce736414db00af90a11f8e4f9dccdf",
+      "source": "https://raw.githubusercontent.com/leonelquinteros/gotext/v1.5.0/LICENSE",
+      "component": "github.com/leonelquinteros/gotext@v1.5.0",
+      "version": "v1.5.0"
+    },
+    {
+      "path": "github.com_mattn_go-isatty-v0.0.4-LICENSE",
+      "sha256": "08eab1118c80885fa1fa6a6dd7303f65a379fcb3733e063d20d1bbc2c76e6fa1",
+      "source": "https://raw.githubusercontent.com/mattn/go-isatty/v0.0.4/LICENSE",
+      "component": "github.com/mattn/go-isatty@v0.0.4",
+      "version": "v0.0.4"
+    },
+    {
+      "path": "github.com_pkg_errors-c605e284fe17-LICENSE",
+      "sha256": "8d427fd87bc9579ea368fde3d49f9ca22eac857f91a9dec7e3004bdfab7dee86",
+      "source": "https://raw.githubusercontent.com/pkg/errors/c605e284fe17/LICENSE",
+      "component": "github.com/pkg/errors@v0.0.0-20170505043639-c605e284fe17",
+      "version": "v0.0.0-20170505043639-c605e284fe17"
+    },
+    {
+      "path": "github.com_rubyist_tracerx-787959303086-LICENSE",
+      "sha256": "82f0d2a1029154f3184c82cc146f39ae8fd3f357b76832b58190c759cbb9105a",
+      "source": "https://raw.githubusercontent.com/rubyist/tracerx/787959303086/LICENSE",
+      "component": "github.com/rubyist/tracerx@v0.0.0-20170927163412-787959303086",
+      "version": "v0.0.0-20170927163412-787959303086"
+    },
+    {
+      "path": "github.com_spf13_cobra-v1.7.0-LICENSE.txt",
+      "sha256": "5e3400b93bbb099e83e52bab885e7441750673c21f97988ca3f1240639b63283",
+      "source": "https://raw.githubusercontent.com/spf13/cobra/v1.7.0/LICENSE.txt",
+      "component": "github.com/spf13/cobra@v1.7.0",
+      "version": "v1.7.0"
+    },
+    {
+      "path": "github.com_spf13_pflag-v1.0.5-LICENSE",
+      "sha256": "b8514c577c1c4b46cee454d5a882b15fa411e72c5bd7f801f241591789fce61a",
+      "source": "https://raw.githubusercontent.com/spf13/pflag/v1.0.5/LICENSE",
+      "component": "github.com/spf13/pflag@v1.0.5",
+      "version": "v1.0.5"
+    },
+    {
+      "path": "github.com_ssgelm_cookiejarparser-v1.0.1-LICENSE.md",
+      "sha256": "5438a5672aec3e69f928ce05bdec56d887e023297129c17340f08d5d2572cfc7",
+      "source": "https://raw.githubusercontent.com/ssgelm/cookiejarparser/v1.0.1/LICENSE.md",
+      "component": "github.com/ssgelm/cookiejarparser@v1.0.1",
+      "version": "v1.0.1"
+    },
+    {
+      "path": "golang.org_x_net-v0.38.0-LICENSE",
+      "sha256": "911f8f5782931320f5b8d1160a76365b83aea6447ee6c04fa6d5591467db9dad",
+      "source": "https://raw.githubusercontent.com/golang/net/v0.38.0/LICENSE",
+      "component": "golang.org/x/net@v0.38.0",
+      "version": "v0.38.0"
+    },
+    {
+      "path": "golang.org_x_sync-v0.12.0-LICENSE",
+      "sha256": "911f8f5782931320f5b8d1160a76365b83aea6447ee6c04fa6d5591467db9dad",
+      "source": "https://raw.githubusercontent.com/golang/sync/v0.12.0/LICENSE",
+      "component": "golang.org/x/sync@v0.12.0",
+      "version": "v0.12.0"
+    },
+    {
+      "path": "golang.org_x_sys-v0.31.0-LICENSE",
+      "sha256": "911f8f5782931320f5b8d1160a76365b83aea6447ee6c04fa6d5591467db9dad",
+      "source": "https://raw.githubusercontent.com/golang/sys/v0.31.0/LICENSE",
+      "component": "golang.org/x/sys@v0.31.0",
+      "version": "v0.31.0"
+    },
+    {
+      "path": "golang.org_x_text-v0.23.0-LICENSE",
+      "sha256": "911f8f5782931320f5b8d1160a76365b83aea6447ee6c04fa6d5591467db9dad",
+      "source": "https://raw.githubusercontent.com/golang/text/v0.23.0/LICENSE",
+      "component": "golang.org/x/text@v0.23.0",
+      "version": "v0.23.0"
+    },
+    {
+      "path": "github.com_hashicorp_go-uuid-v1.0.2-LICENSE",
+      "sha256": "60222c28c1a7f6a92c7df98e5c5f4459e624e6e285e0b9b94467af5f6ab3343d",
+      "source": "https://raw.githubusercontent.com/hashicorp/go-uuid/v1.0.2/LICENSE",
+      "component": "github.com/hashicorp/go-uuid@v1.0.2",
+      "version": "v1.0.2"
+    },
+    {
+      "path": "github.com_jcmturner_aescts_v2-v2.0.0-LICENSE",
+      "sha256": "b40930bbcf80744c86c46a12bc9da056641d722716c378f5659b9e555ef833e1",
+      "source": "https://raw.githubusercontent.com/jcmturner/aescts/v2.0.0/LICENSE",
+      "component": "github.com/jcmturner/aescts/v2@v2.0.0",
+      "version": "v2.0.0"
+    },
+    {
+      "path": "github.com_jcmturner_dnsutils_v2-v2.0.0-LICENSE",
+      "sha256": "c71d239df91726fc519c6eb72d318ec65820627232b2f796219e87dcf35d0ab4",
+      "source": "https://raw.githubusercontent.com/jcmturner/dnsutils/v2.0.0/LICENSE",
+      "component": "github.com/jcmturner/dnsutils/v2@v2.0.0",
+      "version": "v2.0.0"
+    },
+    {
+      "path": "github.com_jcmturner_gofork-v1.0.0-LICENSE",
+      "sha256": "2d36597f7117c38b006835ae7f537487207d8ec407aa9d9980794b2030cbc067",
+      "source": "https://raw.githubusercontent.com/jcmturner/gofork/v1.0.0/LICENSE",
+      "component": "github.com/jcmturner/gofork@v1.0.0",
+      "version": "v1.0.0"
+    },
+    {
+      "path": "github.com_jcmturner_goidentity_v6-v6.0.1-LICENSE",
+      "sha256": "b40930bbcf80744c86c46a12bc9da056641d722716c378f5659b9e555ef833e1",
+      "source": "https://raw.githubusercontent.com/jcmturner/goidentity/v6.0.1/LICENSE",
+      "component": "github.com/jcmturner/goidentity/v6@v6.0.1",
+      "version": "v6.0.1"
+    },
+    {
+      "path": "github.com_jcmturner_gokrb5_v8-v8.4.2-LICENSE",
+      "sha256": "b40930bbcf80744c86c46a12bc9da056641d722716c378f5659b9e555ef833e1",
+      "source": "https://raw.githubusercontent.com/jcmturner/gokrb5/v8.4.2/LICENSE",
+      "component": "github.com/jcmturner/gokrb5/v8@v8.4.2",
+      "version": "v8.4.2"
+    },
+    {
+      "path": "github.com_jcmturner_rpc_v2-v2.0.3-LICENSE",
+      "sha256": "c71d239df91726fc519c6eb72d318ec65820627232b2f796219e87dcf35d0ab4",
+      "source": "https://raw.githubusercontent.com/jcmturner/rpc/v2.0.3/LICENSE",
+      "component": "github.com/jcmturner/rpc/v2@v2.0.3",
+      "version": "v2.0.3"
+    },
+    {
+      "path": "golang.org_x_crypto-v0.36.0-LICENSE",
+      "sha256": "911f8f5782931320f5b8d1160a76365b83aea6447ee6c04fa6d5591467db9dad",
+      "source": "https://raw.githubusercontent.com/golang/crypto/v0.36.0/LICENSE",
+      "component": "golang.org/x/crypto@v0.36.0",
+      "version": "v0.36.0"
+    },
+    {
+      "path": "github.com_olekukonko_ts-78ecb04241c0-LICENCE",
+      "sha256": "eb472e25a1963b3078249c9bbcff5e7ed81e5f0e1ceb8fc8ecc4b43f45e87867",
+      "source": "https://raw.githubusercontent.com/olekukonko/ts/78ecb04241c0/LICENCE",
+      "component": "github.com/olekukonko/ts",
+      "version": "v0.0.0-20171002115256-78ecb04241c0"
+    },
+    {
+      "path": "Avalonia-11.1.3-LICENSE.txt",
+      "sha256": "213814d306090074d234d760239ff0f67eb9b8d20eefb4d5631bb39dbe0b769b",
+      "source": "https://raw.githubusercontent.com/AvaloniaUI/Avalonia/11.1.3/licence.md",
+      "component": "Avalonia",
+      "version": "11.1.3"
+    },
+    {
+      "path": "SkiaSharp-v2.88.8-LICENSE.txt",
+      "sha256": "ad9ec300dcb006b80c012b9d263c0e0dc26fcbfdcd0c02e8c4181365b7c1439b",
+      "source": "https://raw.githubusercontent.com/mono/SkiaSharp/v2.88.8/LICENSE.md",
+      "component": "SkiaSharp",
+      "version": "v2.88.8"
+    },
+    {
+      "path": "Microsoft.Identity.Client-4.84.2-LICENSE.txt",
+      "sha256": "2f07c72751aed99790b8a4869cf2311df85a860b22ded05fa22803587a48922c",
+      "source": "https://raw.githubusercontent.com/AzureAD/microsoft-authentication-library-for-dotnet/4.84.2/LICENSE",
+      "component": "Microsoft.Identity.Client",
+      "version": "4.84.2"
+    },
+    {
+      "path": "Microsoft.IdentityModel.Abstractions-8.14.0-LICENSE.txt",
+      "sha256": "cba03f5387b05405e56b688376421acae396136af4b5116738dc6e5160f87ddd",
+      "source": "https://raw.githubusercontent.com/AzureAD/azure-activedirectory-identitymodel-extensions-for-dotnet/8.14.0/LICENSE.txt",
+      "component": "Microsoft.IdentityModel.Abstractions",
+      "version": "8.14.0"
+    },
+    {
+      "path": "Tmds.DBus.Protocol-rel_0.16.0-LICENSE.txt",
+      "sha256": "aca3b49277abcc7886ccb2f115603a9f5b15fc3f96019a10c00f2974098b210c",
+      "source": "https://raw.githubusercontent.com/tmds/Tmds.DBus/rel/0.16.0/COPYING",
+      "component": "Tmds.DBus.Protocol",
+      "version": "rel/0.16.0"
+    },
+    {
+      "path": "harfbuzzsharp-7.3.0.2-LICENSE.txt",
+      "sha256": "89101e35a8c66fd4d6dffc1763259161d35cb564c169714ec227a768c89f2938",
+      "source": "https://api.nuget.org/v3-flatcontainer/harfbuzzsharp/7.3.0.2/harfbuzzsharp.7.3.0.2.nupkg#LICENSE.txt",
+      "component": "harfbuzzsharp",
+      "version": "7.3.0.2"
+    },
+    {
+      "path": "harfbuzzsharp-7.3.0.2-THIRD-PARTY-NOTICES.txt",
+      "sha256": "21504c46c4c58aa64c1055bd2dcbc5f9a136b4b8c412ed3cc6740e22c5b127f5",
+      "source": "https://api.nuget.org/v3-flatcontainer/harfbuzzsharp/7.3.0.2/harfbuzzsharp.7.3.0.2.nupkg#THIRD-PARTY-NOTICES.txt",
+      "component": "harfbuzzsharp",
+      "version": "7.3.0.2"
+    },
+    {
+      "path": "skiasharp-2.88.8-LICENSE.txt",
+      "sha256": "89101e35a8c66fd4d6dffc1763259161d35cb564c169714ec227a768c89f2938",
+      "source": "https://api.nuget.org/v3-flatcontainer/skiasharp/2.88.8/skiasharp.2.88.8.nupkg#LICENSE.txt",
+      "component": "skiasharp",
+      "version": "2.88.8"
+    },
+    {
+      "path": "skiasharp-2.88.8-THIRD-PARTY-NOTICES.txt",
+      "sha256": "21504c46c4c58aa64c1055bd2dcbc5f9a136b4b8c412ed3cc6740e22c5b127f5",
+      "source": "https://api.nuget.org/v3-flatcontainer/skiasharp/2.88.8/skiasharp.2.88.8.nupkg#THIRD-PARTY-NOTICES.txt",
+      "component": "skiasharp",
+      "version": "2.88.8"
+    },
+    {
+      "path": "harfbuzzsharp.nativeassets.macos-7.3.0.2-THIRD-PARTY-NOTICES.txt",
+      "sha256": "21504c46c4c58aa64c1055bd2dcbc5f9a136b4b8c412ed3cc6740e22c5b127f5",
+      "source": "https://api.nuget.org/v3-flatcontainer/harfbuzzsharp.nativeassets.macos/7.3.0.2/harfbuzzsharp.nativeassets.macos.7.3.0.2.nupkg#THIRD-PARTY-NOTICES.txt",
+      "component": "harfbuzzsharp.nativeassets.macos",
+      "version": "7.3.0.2"
+    },
+    {
+      "path": "harfbuzzsharp.nativeassets.macos-7.3.0.2-LICENSE.txt",
+      "sha256": "89101e35a8c66fd4d6dffc1763259161d35cb564c169714ec227a768c89f2938",
+      "source": "https://api.nuget.org/v3-flatcontainer/harfbuzzsharp.nativeassets.macos/7.3.0.2/harfbuzzsharp.nativeassets.macos.7.3.0.2.nupkg#LICENSE.txt",
+      "component": "harfbuzzsharp.nativeassets.macos",
+      "version": "7.3.0.2"
+    },
+    {
+      "path": "skiasharp.nativeassets.macos-2.88.8-LICENSE.txt",
+      "sha256": "89101e35a8c66fd4d6dffc1763259161d35cb564c169714ec227a768c89f2938",
+      "source": "https://api.nuget.org/v3-flatcontainer/skiasharp.nativeassets.macos/2.88.8/skiasharp.nativeassets.macos.2.88.8.nupkg#LICENSE.txt",
+      "component": "skiasharp.nativeassets.macos",
+      "version": "2.88.8"
+    },
+    {
+      "path": "skiasharp.nativeassets.macos-2.88.8-THIRD-PARTY-NOTICES.txt",
+      "sha256": "21504c46c4c58aa64c1055bd2dcbc5f9a136b4b8c412ed3cc6740e22c5b127f5",
+      "source": "https://api.nuget.org/v3-flatcontainer/skiasharp.nativeassets.macos/2.88.8/skiasharp.nativeassets.macos.2.88.8.nupkg#THIRD-PARTY-NOTICES.txt",
+      "component": "skiasharp.nativeassets.macos",
+      "version": "2.88.8"
+    },
+    {
+      "path": "System.CommandLine-2.0.0-beta4.22272.1-LICENSE.md",
+      "sha256": "58fd5ebf25d75b5bb5f4cd407a9fef3befd3641e1af90a1d0716618e6430fc19",
+      "source": "https://raw.githubusercontent.com/dotnet/command-line-api/209b724a3c843253d3071e8348c353b297b0b8b5/LICENSE.md",
+      "component": "System.CommandLine",
+      "version": "2.0.0-beta4.22272.1"
+    },
+    {
+      "path": "MicroCom.Runtime-0.11.0-LICENSE.txt",
+      "sha256": "6ee769c9ac4dac9abb16b98b1341e9528ff9f4ab685481410d3376d14148f3a9",
+      "source": "https://raw.githubusercontent.com/kekekeks/MicroCom/4b8a38f773c109bad558ee3713d9f16d80776e42/LICENSE",
+      "component": "MicroCom.Runtime",
+      "version": "0.11.0"
+    },
+    {
+      "path": "microsoft.identity.client.nativeinterop-0.20.6-LICENSE",
+      "sha256": "0fe665c2ada5962fd01190ab5b2947b9a9d2c625a9f8225577441eb3256e14e3",
+      "source": "https://api.nuget.org/v3-flatcontainer/microsoft.identity.client.nativeinterop/0.20.6/microsoft.identity.client.nativeinterop.0.20.6.nupkg#LICENSE",
+      "component": "microsoft.identity.client.nativeinterop",
+      "version": "0.20.6"
+    },
+    {
+      "path": "harfbuzzsharp.nativeassets.win32-7.3.0.2-LICENSE.txt",
+      "sha256": "89101e35a8c66fd4d6dffc1763259161d35cb564c169714ec227a768c89f2938",
+      "source": "https://api.nuget.org/v3-flatcontainer/harfbuzzsharp.nativeassets.win32/7.3.0.2/harfbuzzsharp.nativeassets.win32.7.3.0.2.nupkg#LICENSE.txt",
+      "component": "harfbuzzsharp.nativeassets.win32",
+      "version": "7.3.0.2"
+    },
+    {
+      "path": "harfbuzzsharp.nativeassets.win32-7.3.0.2-THIRD-PARTY-NOTICES.txt",
+      "sha256": "21504c46c4c58aa64c1055bd2dcbc5f9a136b4b8c412ed3cc6740e22c5b127f5",
+      "source": "https://api.nuget.org/v3-flatcontainer/harfbuzzsharp.nativeassets.win32/7.3.0.2/harfbuzzsharp.nativeassets.win32.7.3.0.2.nupkg#THIRD-PARTY-NOTICES.txt",
+      "component": "harfbuzzsharp.nativeassets.win32",
+      "version": "7.3.0.2"
+    },
+    {
+      "path": "skiasharp.nativeassets.win32-2.88.8-LICENSE.txt",
+      "sha256": "89101e35a8c66fd4d6dffc1763259161d35cb564c169714ec227a768c89f2938",
+      "source": "https://api.nuget.org/v3-flatcontainer/skiasharp.nativeassets.win32/2.88.8/skiasharp.nativeassets.win32.2.88.8.nupkg#LICENSE.txt",
+      "component": "skiasharp.nativeassets.win32",
+      "version": "2.88.8"
+    },
+    {
+      "path": "skiasharp.nativeassets.win32-2.88.8-THIRD-PARTY-NOTICES.txt",
+      "sha256": "21504c46c4c58aa64c1055bd2dcbc5f9a136b4b8c412ed3cc6740e22c5b127f5",
+      "source": "https://api.nuget.org/v3-flatcontainer/skiasharp.nativeassets.win32/2.88.8/skiasharp.nativeassets.win32.2.88.8.nupkg#THIRD-PARTY-NOTICES.txt",
+      "component": "skiasharp.nativeassets.win32",
+      "version": "2.88.8"
+    },
+    {
+      "path": "gcm-official-windows-x64-NOTICE",
+      "sha256": "2be49945738c886020a9055ddce98ff16e416f1d0b515de9ddb3a1ff3ebca5b6",
+      "source": "https://github.com/git-ecosystem/git-credential-manager/releases/download/v2.9.0/gcm-win-x64-2.9.0.zip#NOTICE",
+      "component": "Git Credential Manager official distribution NOTICE",
+      "version": "2.9.0",
+      "platforms": [
+        "windows-x64"
+      ]
+    },
+    {
+      "path": "gcm-official-windows-arm64-NOTICE",
+      "sha256": "2be49945738c886020a9055ddce98ff16e416f1d0b515de9ddb3a1ff3ebca5b6",
+      "source": "https://github.com/git-ecosystem/git-credential-manager/releases/download/v2.9.0/gcm-win-arm64-2.9.0.zip#NOTICE",
+      "component": "Git Credential Manager official distribution NOTICE",
+      "version": "2.9.0",
+      "platforms": [
+        "windows-arm64"
+      ]
+    }
+  ],
+  "remaining": [
+    {
+      "component": "Microsoft.Identity.Client.NativeInterop/0.20.6",
+      "targets": [
+        "windows-x64",
+        "windows-arm64"
+      ],
+      "reason": "Official NuGet package LICENSE clause 3(e) restricts sharing/publishing/distribution; no separate redistribution grant found in official GCM 2.9.0 source LICENSE/NOTICE or Windows release archives. This is an unresolved downstream authorization question, not a finding of upstream infringement.",
+      "evidence": "microsoft.identity.client.nativeinterop-0.20.6-LICENSE"
+    },
+    {
+      "component": "GCM dependency license completeness",
+      "reason": "Actual macOS deps.json and Windows files are identified. Remaining license mapping includes ANGLE av_libglesv2, exact dotnet/corefx System.* versions and .NET runtime third-party notice scope; core GCM MIT does not automatically cover these dependencies."
+    }
+  ]
+}

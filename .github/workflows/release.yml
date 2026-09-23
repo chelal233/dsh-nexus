@@ -34,7 +34,7 @@ jobs:
           test "$RELEASE_TAG" = "v$(node -p "require('./apps/nexus-launcher/package.json').version")"
           sha=$(git rev-parse HEAD)
           runs=$(gh run list --repo "$GITHUB_REPOSITORY" --workflow build.yml --commit "$sha" --status success --limit 100 --json databaseId --jq '.[].databaseId')
-          expected=$(node --input-type=module -e "import { targets } from './apps/nexus-launcher/desktop/scripts/release-platform.mjs'; console.log(Object.keys(targets).map(target => 'release-' + target).sort().join('\n'))")
+          expected=$(node --input-type=module -e "import { targets } from './apps/nexus-launcher/desktop/scripts/release-platform.mjs'; console.log(Object.keys(targets).map(target => 'release-' + target).concat('release-git-sources').sort().join('\n'))")
           for run in $runs; do
             names=$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$run/artifacts" --paginate --jq '.artifacts[] | select(.expired == false) | .name' | sort)
             if [[ "$names" == "$expected" ]]; then

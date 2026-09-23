@@ -1,3 +1,6 @@
+import { createHash } from 'node:crypto';
+import { cleared } from '../../../../.github/scripts/check-git-redistribution.mjs';
+import { stageGitNotices } from './bundled-git.mjs';
 import { execFileSync } from 'node:child_process';
 import { copyFile, mkdir, readFile, readdir, writeFile } from 'node:fs/promises';
 import path from 'node:path';
@@ -47,6 +50,18 @@ for (const [id, pkg] of [...packages].sort(([a], [b]) => a.localeCompare(b))) {
     texts.push({ file: pkg.licenseFile, text: await readFile(path.resolve(pkg.directory, pkg.licenseFile), 'utf8') });
   }
   if (pkg.name === 'libgit2-sys') await collect(path.join(pkg.directory, 'libgit2'), 'libgit2/');
+  if (!texts.length && (pkg.name === 'valuable' && pkg.version === '0.1.1' || pkg.name === 'lazy-val' && pkg.version === '1.0.5')) {
+    const supplemental = path.join(root, 'docs/audits/third-party-notices-2026-09-23');
+    const files = pkg.name === 'valuable'
+      ? [['valuable-0.1.1-LICENSE', 'ed60d479b8fd1f64e9cbc3de449a16a53ac1b3d1b6aeb9bf9d190a8e93061b44']]
+      : [['lazy-val-1.0.5-package.json', 'a642078ae0684963e5747e9499487a4c649c150bbddbfdfd8eb357bfcbf9c1c2'], ['SPDX-MIT.txt', 'b05785f9f18e6716bab63424b11454513b9943a222595b70411009202fc592b5']];
+    for (const [file, sha256] of files) {
+      const bytes = await readFile(path.join(supplemental, file));
+      if (createHash('sha256').update(bytes).digest('hex') !== sha256) throw new Error('Supplemental notice checksum mismatch: '+file);
+      texts.push({file, text: bytes.toString('utf8')});
+    }
+    if (pkg.name === 'lazy-val') texts.unshift({file: 'Nexus source explanation', text: 'The original package metadata declares MIT and author Vladimir Krivosheev. No separate copyright notice was found at the exact published commit b69ad4119f1b19bdab13c61ee2fcc88d46b89071. The appended SPDX v3.27.0 MIT text is standard license wording, not an upstream LICENSE file; its copyright placeholders do not assert a year or rights holder. Original source and review details: docs/audits/third-party-notices-2026-09-23/README.md in the Nexus source release.'});
+  }
   const file = `${id.replaceAll('@', '')}.txt`;
   if (texts.length) await writeFile(path.join(output, file), texts.map(t => `--- ${t.file} ---\n${t.text}\n`).join('\n'));
   inventory.push({ name: pkg.name, version: pkg.version, license: pkg.license, source: pkg.source,
@@ -59,7 +74,14 @@ const runtimeManifest = JSON.parse(await readFile(path.join(app, 'desktop/resour
 await copyFile(path.join(gitRuntime, 'NEXUS-Git-COPYING.txt'), path.join(output, 'bundled-git-LICENSE.txt'));
 inventory.push({ name: 'Git (dugite-native)', version: runtimeManifest.git.version, license: 'GPL-2.0-only',
   source: `https://github.com/desktop/dugite-native/releases/tag/${runtimeManifest.git.release}`,
-  text: 'bundled-git-LICENSE.txt', reviewRequired: true });
+  text: 'bundled-git-LICENSE.txt', reviewRequired: !cleared(JSON.parse(await readFile(path.join(root, 'docs/audits/git-redistribution-2026-09-23/archive-inventory.json'), 'utf8'))) || runtimeManifest.git.gcmExcluded !== true });
+const gitMaterials = path.join(gitRuntime, 'NEXUS-NOTICES');
+stageGitNotices(gitMaterials, path.join(output, 'bundled-git-notices'));
+const gitNotices = JSON.parse(await readFile(path.join(gitMaterials, 'manifest.json'), 'utf8'));
+for (const item of gitNotices.files) inventory.push({
+  name: `bundled-git/${item.component}`, version: item.version, source: item.source,
+  license: 'See original notice', text: `bundled-git-notices/${item.path}`, reviewRequired: !gitNotices.complete,
+});
 await copyFile(path.join(root, 'LICENSE'), path.join(output, 'Nexus-LICENSE.txt'));
 await copyFile(path.join(root, 'THIRD_PARTY_NOTICES.md'), path.join(output, 'README.md'));
 await writeFile(path.join(output, 'components.json'), JSON.stringify(inventory, null, 2) + '\n');

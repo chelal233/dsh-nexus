@@ -1,0 +1,2229 @@
+{
+  "schema": 1,
+  "complete": true,
+  "files": [
+    {
+      "path": "git-lfs-3.7.1-LICENSE.md",
+      "sha256": "4fae9062ab5cdd5fb15486b728534d8aded8b4ae9d84b6d66a956f5162c366b6",
+      "source": "https://raw.githubusercontent.com/git-lfs/git-lfs/v3.7.1/LICENSE.md",
+      "component": "Git LFS 3.7.1",
+      "version": "3.7.1"
+    },
+    {
+      "path": "github.com_alexbrainman_sspi-909beea2cc74-LICENSE",
+      "sha256": "dd26a7abddd02e2d0aba97805b31f248ef7835d9e10da289b22e3b8ab78b324d",
+      "source": "https://raw.githubusercontent.com/alexbrainman/sspi/909beea2cc74/LICENSE",
+      "component": "github.com/alexbrainman/sspi@v0.0.0-20210105120005-909beea2cc74",
+      "version": "v0.0.0-20210105120005-909beea2cc74"
+    },
+    {
+      "path": "github.com_avast_retry-go-v2.4.2-LICENSE",
+      "sha256": "2fc9e8c374cacc9c0e0c7214911cc2f90f1ade45af2cef646460de278042d930",
+      "source": "https://raw.githubusercontent.com/avast/retry-go/v2.4.2/LICENSE",
+      "component": "github.com/avast/retry-go@v2.4.2+incompatible",
+      "version": "v2.4.2+incompatible"
+    },
+    {
+      "path": "github.com_dpotapov_go-spnego-298b63a54430-LICENSE",
+      "sha256": "74e635bc5b835cbac01362dc69dcf5d84c4e8f69aa4207ed7301b1a9f238214c",
+      "source": "https://raw.githubusercontent.com/dpotapov/go-spnego/298b63a54430/LICENSE",
+      "component": "github.com/dpotapov/go-spnego@v0.0.0-20210315154721-298b63a54430",
+      "version": "v0.0.0-20210315154721-298b63a54430"
+    },
+    {
+      "path": "github.com_git-lfs_gitobj_v2-v2.1.1-LICENSE.md",
+      "sha256": "49e9a8cbb772da6682b4613a36aa17934fa949e5e30e58b3f0f24d6ea3265c69",
+      "source": "https://raw.githubusercontent.com/git-lfs/gitobj/v2.1.1/LICENSE.md",
+      "component": "github.com/git-lfs/gitobj/v2@v2.1.1",
+      "version": "v2.1.1"
+    },
+    {
+      "path": "github.com_git-lfs_go-netrc-ba0029b43d11-LICENSE",
+      "sha256": "c3880f30146c2ad11c85a243858027e8a1d61e241e53284d7cef3aa9452f16df",
+      "source": "https://raw.githubusercontent.com/git-lfs/go-netrc/ba0029b43d11/LICENSE",
+      "component": "github.com/git-lfs/go-netrc@v0.0.0-20250218165306-ba0029b43d11",
+      "version": "v0.0.0-20250218165306-ba0029b43d11"
+    },
+    {
+      "path": "github.com_git-lfs_pktline-06e9096e2825-LICENSE.md",
+      "sha256": "09c5e6c848991ae3a8884ce05457102a474e00ca237b92745eef333a9b0e813a",
+      "source": "https://raw.githubusercontent.com/git-lfs/pktline/06e9096e2825/LICENSE.md",
+      "component": "github.com/git-lfs/pktline@v0.0.0-20210330133718-06e9096e2825",
+      "version": "v0.0.0-20210330133718-06e9096e2825"
+    },
+    {
+      "path": "github.com_git-lfs_wildmatch_v2-v2.0.1-LICENSE.md",
+      "sha256": "34ece938f52ea9d3b706a780db52c14ba4544c2e0fdbccaa2701283000182c23",
+      "source": "https://raw.githubusercontent.com/git-lfs/wildmatch/v2.0.1/LICENSE.md",
+      "component": "github.com/git-lfs/wildmatch/v2@v2.0.1",
+      "version": "v2.0.1"
+    },
+    {
+      "path": "github.com_golang_groupcache-2c02b8208cf8-LICENSE",
+      "sha256": "73ba74dfaa520b49a401b5d21459a8523a146f3b7518a833eea5efa85130bf68",
+      "source": "https://raw.githubusercontent.com/golang/groupcache/2c02b8208cf8/LICENSE",
+      "component": "github.com/golang/groupcache@v0.0.0-20241129210726-2c02b8208cf8",
+      "version": "v0.0.0-20241129210726-2c02b8208cf8"
+    },
+    {
+      "path": "github.com_inconshreveable_mousetrap-v1.1.0-LICENSE",
+      "sha256": "4819582701f150b28a563a6cd8ed0bf5a754e3c67b90ad38d78ba4131bf77795",
+      "source": "https://raw.githubusercontent.com/inconshreveable/mousetrap/v1.1.0/LICENSE",
+      "component": "github.com/inconshreveable/mousetrap@v1.1.0",
+      "version": "v1.1.0"
+    },
+    {
+      "path": "github.com_jmhodges_clock-v1.2.0-LICENSE",
+      "sha256": "6fd396f2d21c26cac28597b7aea66706684fe7e0aede98c7ce08e8d7886409a1",
+      "source": "https://raw.githubusercontent.com/jmhodges/clock/v1.2.0/LICENSE",
+      "component": "github.com/jmhodges/clock@v1.2.0",
+      "version": "v1.2.0"
+    },
+    {
+      "path": "github.com_leonelquinteros_gotext-v1.5.0-LICENSE",
+      "sha256": "bf78e51361b486dc8b97c5be426574ffb5ce736414db00af90a11f8e4f9dccdf",
+      "source": "https://raw.githubusercontent.com/leonelquinteros/gotext/v1.5.0/LICENSE",
+      "component": "github.com/leonelquinteros/gotext@v1.5.0",
+      "version": "v1.5.0"
+    },
+    {
+      "path": "github.com_mattn_go-isatty-v0.0.4-LICENSE",
+      "sha256": "08eab1118c80885fa1fa6a6dd7303f65a379fcb3733e063d20d1bbc2c76e6fa1",
+      "source": "https://raw.githubusercontent.com/mattn/go-isatty/v0.0.4/LICENSE",
+      "component": "github.com/mattn/go-isatty@v0.0.4",
+      "version": "v0.0.4"
+    },
+    {
+      "path": "github.com_pkg_errors-c605e284fe17-LICENSE",
+      "sha256": "8d427fd87bc9579ea368fde3d49f9ca22eac857f91a9dec7e3004bdfab7dee86",
+      "source": "https://raw.githubusercontent.com/pkg/errors/c605e284fe17/LICENSE",
+      "component": "github.com/pkg/errors@v0.0.0-20170505043639-c605e284fe17",
+      "version": "v0.0.0-20170505043639-c605e284fe17"
+    },
+    {
+      "path": "github.com_rubyist_tracerx-787959303086-LICENSE",
+      "sha256": "82f0d2a1029154f3184c82cc146f39ae8fd3f357b76832b58190c759cbb9105a",
+      "source": "https://raw.githubusercontent.com/rubyist/tracerx/787959303086/LICENSE",
+      "component": "github.com/rubyist/tracerx@v0.0.0-20170927163412-787959303086",
+      "version": "v0.0.0-20170927163412-787959303086"
+    },
+    {
+      "path": "github.com_spf13_cobra-v1.7.0-LICENSE.txt",
+      "sha256": "5e3400b93bbb099e83e52bab885e7441750673c21f97988ca3f1240639b63283",
+      "source": "https://raw.githubusercontent.com/spf13/cobra/v1.7.0/LICENSE.txt",
+      "component": "github.com/spf13/cobra@v1.7.0",
+      "version": "v1.7.0"
+    },
+    {
+      "path": "github.com_spf13_pflag-v1.0.5-LICENSE",
+      "sha256": "b8514c577c1c4b46cee454d5a882b15fa411e72c5bd7f801f241591789fce61a",
+      "source": "https://raw.githubusercontent.com/spf13/pflag/v1.0.5/LICENSE",
+      "component": "github.com/spf13/pflag@v1.0.5",
+      "version": "v1.0.5"
+    },
+    {
+      "path": "github.com_ssgelm_cookiejarparser-v1.0.1-LICENSE.md",
+      "sha256": "5438a5672aec3e69f928ce05bdec56d887e023297129c17340f08d5d2572cfc7",
+      "source": "https://raw.githubusercontent.com/ssgelm/cookiejarparser/v1.0.1/LICENSE.md",
+      "component": "github.com/ssgelm/cookiejarparser@v1.0.1",
+      "version": "v1.0.1"
+    },
+    {
+      "path": "golang.org_x_net-v0.38.0-LICENSE",
+      "sha256": "911f8f5782931320f5b8d1160a76365b83aea6447ee6c04fa6d5591467db9dad",
+      "source": "https://raw.githubusercontent.com/golang/net/v0.38.0/LICENSE",
+      "component": "golang.org/x/net@v0.38.0",
+      "version": "v0.38.0"
+    },
+    {
+      "path": "golang.org_x_sync-v0.12.0-LICENSE",
+      "sha256": "911f8f5782931320f5b8d1160a76365b83aea6447ee6c04fa6d5591467db9dad",
+      "source": "https://raw.githubusercontent.com/golang/sync/v0.12.0/LICENSE",
+      "component": "golang.org/x/sync@v0.12.0",
+      "version": "v0.12.0"
+    },
+    {
+      "path": "golang.org_x_sys-v0.31.0-LICENSE",
+      "sha256": "911f8f5782931320f5b8d1160a76365b83aea6447ee6c04fa6d5591467db9dad",
+      "source": "https://raw.githubusercontent.com/golang/sys/v0.31.0/LICENSE",
+      "component": "golang.org/x/sys@v0.31.0",
+      "version": "v0.31.0"
+    },
+    {
+      "path": "golang.org_x_text-v0.23.0-LICENSE",
+      "sha256": "911f8f5782931320f5b8d1160a76365b83aea6447ee6c04fa6d5591467db9dad",
+      "source": "https://raw.githubusercontent.com/golang/text/v0.23.0/LICENSE",
+      "component": "golang.org/x/text@v0.23.0",
+      "version": "v0.23.0"
+    },
+    {
+      "path": "github.com_hashicorp_go-uuid-v1.0.2-LICENSE",
+      "sha256": "60222c28c1a7f6a92c7df98e5c5f4459e624e6e285e0b9b94467af5f6ab3343d",
+      "source": "https://raw.githubusercontent.com/hashicorp/go-uuid/v1.0.2/LICENSE",
+      "component": "github.com/hashicorp/go-uuid@v1.0.2",
+      "version": "v1.0.2"
+    },
+    {
+      "path": "github.com_jcmturner_aescts_v2-v2.0.0-LICENSE",
+      "sha256": "b40930bbcf80744c86c46a12bc9da056641d722716c378f5659b9e555ef833e1",
+      "source": "https://raw.githubusercontent.com/jcmturner/aescts/v2.0.0/LICENSE",
+      "component": "github.com/jcmturner/aescts/v2@v2.0.0",
+      "version": "v2.0.0"
+    },
+    {
+      "path": "github.com_jcmturner_dnsutils_v2-v2.0.0-LICENSE",
+      "sha256": "c71d239df91726fc519c6eb72d318ec65820627232b2f796219e87dcf35d0ab4",
+      "source": "https://raw.githubusercontent.com/jcmturner/dnsutils/v2.0.0/LICENSE",
+      "component": "github.com/jcmturner/dnsutils/v2@v2.0.0",
+      "version": "v2.0.0"
+    },
+    {
+      "path": "github.com_jcmturner_gofork-v1.0.0-LICENSE",
+      "sha256": "2d36597f7117c38b006835ae7f537487207d8ec407aa9d9980794b2030cbc067",
+      "source": "https://raw.githubusercontent.com/jcmturner/gofork/v1.0.0/LICENSE",
+      "component": "github.com/jcmturner/gofork@v1.0.0",
+      "version": "v1.0.0"
+    },
+    {
+      "path": "github.com_jcmturner_goidentity_v6-v6.0.1-LICENSE",
+      "sha256": "b40930bbcf80744c86c46a12bc9da056641d722716c378f5659b9e555ef833e1",
+      "source": "https://raw.githubusercontent.com/jcmturner/goidentity/v6.0.1/LICENSE",
+      "component": "github.com/jcmturner/goidentity/v6@v6.0.1",
+      "version": "v6.0.1"
+    },
+    {
+      "path": "github.com_jcmturner_gokrb5_v8-v8.4.2-LICENSE",
+      "sha256": "b40930bbcf80744c86c46a12bc9da056641d722716c378f5659b9e555ef833e1",
+      "source": "https://raw.githubusercontent.com/jcmturner/gokrb5/v8.4.2/LICENSE",
+      "component": "github.com/jcmturner/gokrb5/v8@v8.4.2",
+      "version": "v8.4.2"
+    },
+    {
+      "path": "github.com_jcmturner_rpc_v2-v2.0.3-LICENSE",
+      "sha256": "c71d239df91726fc519c6eb72d318ec65820627232b2f796219e87dcf35d0ab4",
+      "source": "https://raw.githubusercontent.com/jcmturner/rpc/v2.0.3/LICENSE",
+      "component": "github.com/jcmturner/rpc/v2@v2.0.3",
+      "version": "v2.0.3"
+    },
+    {
+      "path": "golang.org_x_crypto-v0.36.0-LICENSE",
+      "sha256": "911f8f5782931320f5b8d1160a76365b83aea6447ee6c04fa6d5591467db9dad",
+      "source": "https://raw.githubusercontent.com/golang/crypto/v0.36.0/LICENSE",
+      "component": "golang.org/x/crypto@v0.36.0",
+      "version": "v0.36.0"
+    },
+    {
+      "path": "github.com_olekukonko_ts-78ecb04241c0-LICENCE",
+      "sha256": "eb472e25a1963b3078249c9bbcff5e7ed81e5f0e1ceb8fc8ecc4b43f45e87867",
+      "source": "https://raw.githubusercontent.com/olekukonko/ts/78ecb04241c0/LICENCE",
+      "component": "github.com/olekukonko/ts",
+      "version": "v0.0.0-20171002115256-78ecb04241c0"
+    },
+    {
+      "path": "go1.25.1-LICENSE.txt",
+      "sha256": "911f8f5782931320f5b8d1160a76365b83aea6447ee6c04fa6d5591467db9dad",
+      "source": "https://raw.githubusercontent.com/golang/go/go1.25.1/LICENSE",
+      "component": "go1.25.1",
+      "version": "go1.25.1"
+    },
+    {
+      "path": "go1.25.3-LICENSE.txt",
+      "sha256": "911f8f5782931320f5b8d1160a76365b83aea6447ee6c04fa6d5591467db9dad",
+      "source": "https://raw.githubusercontent.com/golang/go/go1.25.3/LICENSE",
+      "component": "go1.25.3",
+      "version": "go1.25.3"
+    },
+    {
+      "path": "source-dugite-native-v2.53.0-4-dugite-native-2.53.0-4_LICENSE.md",
+      "sha256": "db296f2f7f35bca3a174efb0eb392b3b17bd94b341851429a3dff411b1c2fc73",
+      "source": "https://codeload.github.com/desktop/dugite-native/tar.gz/refs/tags/v2.53.0-4#dugite-native-2.53.0-4/LICENSE.md",
+      "component": "dugite-native build scripts",
+      "version": "dugite-native-v2.53.0-4.tar.gz",
+      "platforms": [
+        "win32/x64",
+        "win32/arm64",
+        "darwin/x64",
+        "darwin/arm64",
+        "linux/arm64"
+      ]
+    },
+    {
+      "path": "source-git-v2.53.0-git-2.53.0_COPYING",
+      "sha256": "5b2198d1645f767585e8a88ac0499b04472164c0d2da22e75ecf97ef443ab32e",
+      "source": "https://codeload.github.com/git/git/tar.gz/refs/tags/v2.53.0#git-2.53.0/COPYING",
+      "component": "Git 2.53.0",
+      "version": "git-v2.53.0.tar.gz",
+      "platforms": [
+        "darwin/x64",
+        "darwin/arm64",
+        "linux/arm64"
+      ]
+    },
+    {
+      "path": "source-git-v2.53.0-git-2.53.0_compat_nedmalloc_License.txt",
+      "sha256": "c9bff75738922193e67fa726fa225535870d2aa1059f91452c411736284ad566",
+      "source": "https://codeload.github.com/git/git/tar.gz/refs/tags/v2.53.0#git-2.53.0/compat/nedmalloc/License.txt",
+      "component": "Git 2.53.0",
+      "version": "git-v2.53.0.tar.gz",
+      "platforms": [
+        "darwin/x64",
+        "darwin/arm64",
+        "linux/arm64"
+      ]
+    },
+    {
+      "path": "source-git-v2.53.0-git-2.53.0_contrib_subtree_COPYING",
+      "sha256": "ab15fd526bd8dd18a9e77ebc139656bf4d33e97fc7238cd11bf60e2b9b8666c6",
+      "source": "https://codeload.github.com/git/git/tar.gz/refs/tags/v2.53.0#git-2.53.0/contrib/subtree/COPYING",
+      "component": "Git 2.53.0",
+      "version": "git-v2.53.0.tar.gz",
+      "platforms": [
+        "darwin/x64",
+        "darwin/arm64",
+        "linux/arm64"
+      ]
+    },
+    {
+      "path": "source-git-v2.53.0-git-2.53.0_reftable_LICENSE",
+      "sha256": "8aa118e56e554e9086beb82494e8044d0856d5eb0b162a9061f3553a58f04d67",
+      "source": "https://codeload.github.com/git/git/tar.gz/refs/tags/v2.53.0#git-2.53.0/reftable/LICENSE",
+      "component": "Git 2.53.0",
+      "version": "git-v2.53.0.tar.gz",
+      "platforms": [
+        "darwin/x64",
+        "darwin/arm64",
+        "linux/arm64"
+      ]
+    },
+    {
+      "path": "source-git-v2.53.0-git-2.53.0_sha1dc_LICENSE.txt",
+      "sha256": "9daac99c665ddc38fde6d7c91b9173c112d5e6c6e7e5f7d8bb8747c630efc83d",
+      "source": "https://codeload.github.com/git/git/tar.gz/refs/tags/v2.53.0#git-2.53.0/sha1dc/LICENSE.txt",
+      "component": "Git 2.53.0",
+      "version": "git-v2.53.0.tar.gz",
+      "platforms": [
+        "darwin/x64",
+        "darwin/arm64",
+        "linux/arm64"
+      ]
+    },
+    {
+      "path": "source-mingw-w64-git-2.52.0.1-1-mingw-w64-git_git-v2.53.0.windows.4.tar.gz_git_COPYING",
+      "sha256": "454649ddc02b5cc098513cea28db6592b45ac0a906386287c4d48cf8dbde651c",
+      "source": "https://github.com/git-for-windows/git/releases/download/v2.53.0.windows.4/mingw-w64-git-2.52.0.1-1.src.tar.gz#mingw-w64-git/git-v2.53.0.windows.4.tar.gz!git/COPYING",
+      "component": "mingw-w64-clang-aarch64-git, mingw-w64-clang-aarch64-git-credential-wincred, mingw-w64-clang-aarch64-git-for-windows-addons, mingw-w64-clang-aarch64-git-gui, mingw-w64-clang-aarch64-git-perl, mingw-w64-clang-aarch64-git-send-email, mingw-w64-clang-aarch64-git-subtree, mingw-w64-x86_64-git, mingw-w64-x86_64-git-credential-wincred, mingw-w64-x86_64-git-for-windows-addons, mingw-w64-x86_64-git-gui, mingw-w64-x86_64-git-perl, mingw-w64-x86_64-git-send-email, mingw-w64-x86_64-git-subtree, mingw-w64-clang-aarch64-gitk, mingw-w64-x86_64-gitk",
+      "version": "mingw-w64-git-2.52.0.1-1.src.tar.gz",
+      "platforms": [
+        "win32/x64",
+        "win32/arm64"
+      ]
+    },
+    {
+      "path": "source-mingw-w64-git-2.52.0.1-1-mingw-w64-git_git-v2.53.0.windows.4.tar.gz_git_compat_mimalloc_LICENSE",
+      "sha256": "815e7954241acbb5a81cd72583e6a0b52bb7308c70cd06f445d70bcfe58936d4",
+      "source": "https://github.com/git-for-windows/git/releases/download/v2.53.0.windows.4/mingw-w64-git-2.52.0.1-1.src.tar.gz#mingw-w64-git/git-v2.53.0.windows.4.tar.gz!git/compat/mimalloc/LICENSE",
+      "component": "mingw-w64-clang-aarch64-git, mingw-w64-clang-aarch64-git-credential-wincred, mingw-w64-clang-aarch64-git-for-windows-addons, mingw-w64-clang-aarch64-git-gui, mingw-w64-clang-aarch64-git-perl, mingw-w64-clang-aarch64-git-send-email, mingw-w64-clang-aarch64-git-subtree, mingw-w64-x86_64-git, mingw-w64-x86_64-git-credential-wincred, mingw-w64-x86_64-git-for-windows-addons, mingw-w64-x86_64-git-gui, mingw-w64-x86_64-git-perl, mingw-w64-x86_64-git-send-email, mingw-w64-x86_64-git-subtree, mingw-w64-clang-aarch64-gitk, mingw-w64-x86_64-gitk",
+      "version": "mingw-w64-git-2.52.0.1-1.src.tar.gz",
+      "platforms": [
+        "win32/x64",
+        "win32/arm64"
+      ]
+    },
+    {
+      "path": "source-mingw-w64-git-2.52.0.1-1-mingw-w64-git_git-v2.53.0.windows.4.tar.gz_git_compat_nedmalloc_License.txt",
+      "sha256": "beb8e42e9d6b4284e03304d05a81a0755200a965fc8d0a5e0aea1e84cf805d6e",
+      "source": "https://github.com/git-for-windows/git/releases/download/v2.53.0.windows.4/mingw-w64-git-2.52.0.1-1.src.tar.gz#mingw-w64-git/git-v2.53.0.windows.4.tar.gz!git/compat/nedmalloc/License.txt",
+      "component": "mingw-w64-clang-aarch64-git, mingw-w64-clang-aarch64-git-credential-wincred, mingw-w64-clang-aarch64-git-for-windows-addons, mingw-w64-clang-aarch64-git-gui, mingw-w64-clang-aarch64-git-perl, mingw-w64-clang-aarch64-git-send-email, mingw-w64-clang-aarch64-git-subtree, mingw-w64-x86_64-git, mingw-w64-x86_64-git-credential-wincred, mingw-w64-x86_64-git-for-windows-addons, mingw-w64-x86_64-git-gui, mingw-w64-x86_64-git-perl, mingw-w64-x86_64-git-send-email, mingw-w64-x86_64-git-subtree, mingw-w64-clang-aarch64-gitk, mingw-w64-x86_64-gitk",
+      "version": "mingw-w64-git-2.52.0.1-1.src.tar.gz",
+      "platforms": [
+        "win32/x64",
+        "win32/arm64"
+      ]
+    },
+    {
+      "path": "source-mingw-w64-git-2.52.0.1-1-mingw-w64-git_git-v2.53.0.windows.4.tar.gz_git_contrib_subtree_COPYING",
+      "sha256": "9f2e250993c6206fac643824e05e5a0d7d3e0895d9e09a5ce4b12bc2610afc11",
+      "source": "https://github.com/git-for-windows/git/releases/download/v2.53.0.windows.4/mingw-w64-git-2.52.0.1-1.src.tar.gz#mingw-w64-git/git-v2.53.0.windows.4.tar.gz!git/contrib/subtree/COPYING",
+      "component": "mingw-w64-clang-aarch64-git, mingw-w64-clang-aarch64-git-credential-wincred, mingw-w64-clang-aarch64-git-for-windows-addons, mingw-w64-clang-aarch64-git-gui, mingw-w64-clang-aarch64-git-perl, mingw-w64-clang-aarch64-git-send-email, mingw-w64-clang-aarch64-git-subtree, mingw-w64-x86_64-git, mingw-w64-x86_64-git-credential-wincred, mingw-w64-x86_64-git-for-windows-addons, mingw-w64-x86_64-git-gui, mingw-w64-x86_64-git-perl, mingw-w64-x86_64-git-send-email, mingw-w64-x86_64-git-subtree, mingw-w64-clang-aarch64-gitk, mingw-w64-x86_64-gitk",
+      "version": "mingw-w64-git-2.52.0.1-1.src.tar.gz",
+      "platforms": [
+        "win32/x64",
+        "win32/arm64"
+      ]
+    },
+    {
+      "path": "source-mingw-w64-git-2.52.0.1-1-mingw-w64-git_git-v2.53.0.windows.4.tar.gz_git_reftable_LICENSE",
+      "sha256": "e4e9625ef7c247ced8002b5f608a8f9df8aada59e51db7f909ba255f7200b1d1",
+      "source": "https://github.com/git-for-windows/git/releases/download/v2.53.0.windows.4/mingw-w64-git-2.52.0.1-1.src.tar.gz#mingw-w64-git/git-v2.53.0.windows.4.tar.gz!git/reftable/LICENSE",
+      "component": "mingw-w64-clang-aarch64-git, mingw-w64-clang-aarch64-git-credential-wincred, mingw-w64-clang-aarch64-git-for-windows-addons, mingw-w64-clang-aarch64-git-gui, mingw-w64-clang-aarch64-git-perl, mingw-w64-clang-aarch64-git-send-email, mingw-w64-clang-aarch64-git-subtree, mingw-w64-x86_64-git, mingw-w64-x86_64-git-credential-wincred, mingw-w64-x86_64-git-for-windows-addons, mingw-w64-x86_64-git-gui, mingw-w64-x86_64-git-perl, mingw-w64-x86_64-git-send-email, mingw-w64-x86_64-git-subtree, mingw-w64-clang-aarch64-gitk, mingw-w64-x86_64-gitk",
+      "version": "mingw-w64-git-2.52.0.1-1.src.tar.gz",
+      "platforms": [
+        "win32/x64",
+        "win32/arm64"
+      ]
+    },
+    {
+      "path": "source-mingw-w64-git-2.52.0.1-1-mingw-w64-git_git-v2.53.0.windows.4.tar.gz_git_sha1dc_LICENSE.txt",
+      "sha256": "c833ef049e9765501a82498c444b916f76caf8fb25b4110fe928890f7b34bcba",
+      "source": "https://github.com/git-for-windows/git/releases/download/v2.53.0.windows.4/mingw-w64-git-2.52.0.1-1.src.tar.gz#mingw-w64-git/git-v2.53.0.windows.4.tar.gz!git/sha1dc/LICENSE.txt",
+      "component": "mingw-w64-clang-aarch64-git, mingw-w64-clang-aarch64-git-credential-wincred, mingw-w64-clang-aarch64-git-for-windows-addons, mingw-w64-clang-aarch64-git-gui, mingw-w64-clang-aarch64-git-perl, mingw-w64-clang-aarch64-git-send-email, mingw-w64-clang-aarch64-git-subtree, mingw-w64-x86_64-git, mingw-w64-x86_64-git-credential-wincred, mingw-w64-x86_64-git-for-windows-addons, mingw-w64-x86_64-git-gui, mingw-w64-x86_64-git-perl, mingw-w64-x86_64-git-send-email, mingw-w64-x86_64-git-subtree, mingw-w64-clang-aarch64-gitk, mingw-w64-x86_64-gitk",
+      "version": "mingw-w64-git-2.52.0.1-1.src.tar.gz",
+      "platforms": [
+        "win32/x64",
+        "win32/arm64"
+      ]
+    },
+    {
+      "path": "source-libcbor-0.11.0-1-libcbor_libcbor-0.11.0.tar.gz_libcbor-0.11.0_LICENSE.md",
+      "sha256": "6a5e182d758db66ecad6e6fa304dc637d4d2585bafceb5003c86e8dc9f6344ff",
+      "source": "https://github.com/git-for-windows/pacman-repo/releases/download/2024-02-05T16-30-39.000Z/libcbor-0.11.0-1.src.tar.gz#libcbor/libcbor-0.11.0.tar.gz!libcbor-0.11.0/LICENSE.md",
+      "component": "libcbor",
+      "version": "libcbor-0.11.0-1.src.tar.gz",
+      "platforms": [
+        "win32/x64",
+        "win32/arm64"
+      ]
+    },
+    {
+      "path": "source-libfido2-1.15.0-1-libfido2_libfido2-1.15.0.tar.gz_libfido2-1.15.0_LICENSE",
+      "sha256": "e8946152897134a9e9205b0db0659dd77c279de683d7cc64465629a12d1abfd8",
+      "source": "https://github.com/git-for-windows/pacman-repo/releases/download/2024-06-14T09-31-36.000Z/libfido2-1.15.0-1.src.tar.gz#libfido2/libfido2-1.15.0.tar.gz!libfido2-1.15.0/LICENSE",
+      "component": "libfido2",
+      "version": "libfido2-1.15.0-1.src.tar.gz",
+      "platforms": [
+        "win32/x64",
+        "win32/arm64"
+      ]
+    },
+    {
+      "path": "source-heimdal-7.8.0-5-heimdal_heimdal-7.8.0.tar.gz_heimdal-7.8.0_LICENSE",
+      "sha256": "0c4b07bf5b98f7a1d01f8e60722d6c6747ef052c2aa6d2043daf690d4e1b0a7f",
+      "source": "https://github.com/git-for-windows/pacman-repo/releases/download/2025-02-17T19-44-32.968336700Z/heimdal-7.8.0-5.src.tar.gz#heimdal/heimdal-7.8.0.tar.gz!heimdal-7.8.0/LICENSE",
+      "component": "heimdal-libs",
+      "version": "heimdal-7.8.0-5.src.tar.gz",
+      "platforms": [
+        "win32/x64",
+        "win32/arm64"
+      ]
+    },
+    {
+      "path": "source-heimdal-7.8.0-5-heimdal_heimdal-7.8.0.tar.gz_heimdal-7.8.0_lib_libedit_COPYING",
+      "sha256": "9da6c9c74987a36c84302982799d17d2f748ba1c1c0c471425716173c1d07649",
+      "source": "https://github.com/git-for-windows/pacman-repo/releases/download/2025-02-17T19-44-32.968336700Z/heimdal-7.8.0-5.src.tar.gz#heimdal/heimdal-7.8.0.tar.gz!heimdal-7.8.0/lib/libedit/COPYING",
+      "component": "heimdal-libs",
+      "version": "heimdal-7.8.0-5.src.tar.gz",
+      "platforms": [
+        "win32/x64",
+        "win32/arm64"
+      ]
+    },
+    {
+      "path": "source-heimdal-7.8.0-5-heimdal_heimdal-7.8.0.tar.gz_heimdal-7.8.0_doc_copyright.texi",
+      "sha256": "b7cab01601d5349711c11e2c67fbccb5c55d7064547fec1c4346be7bcf80c5ef",
+      "source": "https://github.com/git-for-windows/pacman-repo/releases/download/2025-02-17T19-44-32.968336700Z/heimdal-7.8.0-5.src.tar.gz#heimdal/heimdal-7.8.0.tar.gz!heimdal-7.8.0/doc/copyright.texi",
+      "component": "heimdal-libs",
+      "version": "heimdal-7.8.0-5.src.tar.gz",
+      "platforms": [
+        "win32/x64",
+        "win32/arm64"
+      ]
+    },
+    {
+      "path": "source-mingw-w64-pcre2-10.47-1-mingw-w64-pcre2_pcre2-10.47.tar.bz2_pcre2-10.47_LICENCE.md",
+      "sha256": "197d8a73ffee0d6b09adba2f9c677b5f5aede24edf89258a68e48248d010d811",
+      "source": "https://github.com/git-for-windows/pacman-repo/releases/download/2025-11-04T09-21-59.197225000Z/mingw-w64-pcre2-10.47-1.src.tar.gz#mingw-w64-pcre2/pcre2-10.47.tar.bz2!pcre2-10.47/LICENCE.md",
+      "component": "mingw-w64-clang-aarch64-pcre2, mingw-w64-x86_64-pcre2",
+      "version": "mingw-w64-pcre2-10.47-1.src.tar.gz",
+      "platforms": [
+        "win32/x64",
+        "win32/arm64"
+      ]
+    },
+    {
+      "path": "source-mingw-w64-pcre2-10.47-1-mingw-w64-pcre2_pcre2-10.47.tar.bz2_pcre2-10.47_deps_sljit_LICENSE",
+      "sha256": "5f216505c0f6ea3273caec89e766eef93cdeb7bbb0c429f9360116d7c938feeb",
+      "source": "https://github.com/git-for-windows/pacman-repo/releases/download/2025-11-04T09-21-59.197225000Z/mingw-w64-pcre2-10.47-1.src.tar.gz#mingw-w64-pcre2/pcre2-10.47.tar.bz2!pcre2-10.47/deps/sljit/LICENSE",
+      "component": "mingw-w64-clang-aarch64-pcre2, mingw-w64-x86_64-pcre2",
+      "version": "mingw-w64-pcre2-10.47-1.src.tar.gz",
+      "platforms": [
+        "win32/x64",
+        "win32/arm64"
+      ]
+    },
+    {
+      "path": "source-mingw-w64-pcre2-10.47-1-mingw-w64-pcre2_pcre2-10.47.tar.bz2_pcre2-10.47_cmake_COPYING-CMAKE-SCRIPTS",
+      "sha256": "c666ec2313dba24523ccad88f4c04ea4b24fad6545263a35b1d4ab2b08efe50a",
+      "source": "https://github.com/git-for-windows/pacman-repo/releases/download/2025-11-04T09-21-59.197225000Z/mingw-w64-pcre2-10.47-1.src.tar.gz#mingw-w64-pcre2/pcre2-10.47.tar.bz2!pcre2-10.47/cmake/COPYING-CMAKE-SCRIPTS",
+      "component": "mingw-w64-clang-aarch64-pcre2, mingw-w64-x86_64-pcre2",
+      "version": "mingw-w64-pcre2-10.47-1.src.tar.gz",
+      "platforms": [
+        "win32/x64",
+        "win32/arm64"
+      ]
+    },
+    {
+      "path": "source-mingw-w64-pcre2-10.47-1-mingw-w64-pcre2_pcre2-10.47.tar.bz2_pcre2-10.47_COPYING",
+      "sha256": "99272c55f3dcfa07a8a7e15a5c1a33096e4727de74241d65fa049fccfdd59507",
+      "source": "https://github.com/git-for-windows/pacman-repo/releases/download/2025-11-04T09-21-59.197225000Z/mingw-w64-pcre2-10.47-1.src.tar.gz#mingw-w64-pcre2/pcre2-10.47.tar.bz2!pcre2-10.47/COPYING",
+      "component": "mingw-w64-clang-aarch64-pcre2, mingw-w64-x86_64-pcre2",
+      "version": "mingw-w64-pcre2-10.47-1.src.tar.gz",
+      "platforms": [
+        "win32/x64",
+        "win32/arm64"
+      ]
+    },
+    {
+      "path": "source-openssh-10.2p1-1-openssh_openssh-10.2p1.tar.gz_openssh-10.2p1_LICENCE",
+      "sha256": "5bb5b160726ef5756e4f32fe95b35249c294962419650f48d05134b486d27ccb",
+      "source": "https://github.com/git-for-windows/pacman-repo/releases/download/2025-10-10T11-57-54.774519200Z/openssh-10.2p1-1.src.tar.gz#openssh/openssh-10.2p1.tar.gz!openssh-10.2p1/LICENCE",
+      "component": "openssh",
+      "version": "openssh-10.2p1-1.src.tar.gz",
+      "platforms": [
+        "win32/x64",
+        "win32/arm64"
+      ]
+    },
+    {
+      "path": "source-openssl-3.5.5-1-openssl_openssl-3.5.5.tar.gz_openssl-3.5.5_LICENSE.txt",
+      "sha256": "7d5450cb2d142651b8afa315b5f238efc805dad827d91ba367d8516bc9d49e7a",
+      "source": "https://github.com/git-for-windows/pacman-repo/releases/download/2026-01-27T17-20-29.895194200Z/openssl-3.5.5-1.src.tar.gz#openssl/openssl-3.5.5.tar.gz!openssl-3.5.5/LICENSE.txt",
+      "component": "libopenssl, openssl",
+      "version": "openssl-3.5.5-1.src.tar.gz",
+      "platforms": [
+        "win32/x64",
+        "win32/arm64"
+      ]
+    },
+    {
+      "path": "source-bash-5.2.037-1-bash_bash-5.2.tar.gz_bash-5.2_COPYING",
+      "sha256": "8ceb4b9ee5adedde47b31e975c1d90c73ad27b6b165a1dcd80c7c545eb65b903",
+      "source": "https://github.com/git-for-windows/pacman-repo/releases/download/2024-09-24T09-17-25.000Z/bash-5.2.037-1.src.tar.gz#bash/bash-5.2.tar.gz!bash-5.2/COPYING",
+      "component": "bash",
+      "version": "bash-5.2.037-1.src.tar.gz",
+      "platforms": [
+        "win32/x64",
+        "win32/arm64"
+      ]
+    },
+    {
+      "path": "source-bash-5.2.037-1-bash_bash-5.2.tar.gz_bash-5.2_examples_shellmath_LICENSE",
+      "sha256": "5908bd3b6f430bffa4f8a20290eebdd933b62e2213908b83da1230355f3e9c1a",
+      "source": "https://github.com/git-for-windows/pacman-repo/releases/download/2024-09-24T09-17-25.000Z/bash-5.2.037-1.src.tar.gz#bash/bash-5.2.tar.gz!bash-5.2/examples/shellmath/LICENSE",
+      "component": "bash",
+      "version": "bash-5.2.037-1.src.tar.gz",
+      "platforms": [
+        "win32/x64",
+        "win32/arm64"
+      ]
+    },
+    {
+      "path": "source-bash-5.2.037-1-bash_bash-5.2.tar.gz_bash-5.2_tests_COPYRIGHT",
+      "sha256": "e649815d1b6becdc545dda87c91f1b65497ddf6461240b904b2d8511a63476fb",
+      "source": "https://github.com/git-for-windows/pacman-repo/releases/download/2024-09-24T09-17-25.000Z/bash-5.2.037-1.src.tar.gz#bash/bash-5.2.tar.gz!bash-5.2/tests/COPYRIGHT",
+      "component": "bash",
+      "version": "bash-5.2.037-1.src.tar.gz",
+      "platforms": [
+        "win32/x64",
+        "win32/arm64"
+      ]
+    },
+    {
+      "path": "source-bash-5.2.037-1-bash_bash-5.2.tar.gz_bash-5.2_lib_readline_COPYING",
+      "sha256": "8ceb4b9ee5adedde47b31e975c1d90c73ad27b6b165a1dcd80c7c545eb65b903",
+      "source": "https://github.com/git-for-windows/pacman-repo/releases/download/2024-09-24T09-17-25.000Z/bash-5.2.037-1.src.tar.gz#bash/bash-5.2.tar.gz!bash-5.2/lib/readline/COPYING",
+      "component": "bash",
+      "version": "bash-5.2.037-1.src.tar.gz",
+      "platforms": [
+        "win32/x64",
+        "win32/arm64"
+      ]
+    },
+    {
+      "path": "source-mingw-w64-openssl-3.5.5-1-mingw-w64-openssl_openssl-3.5.5.tar.gz_openssl-3.5.5_LICENSE.txt",
+      "sha256": "7d5450cb2d142651b8afa315b5f238efc805dad827d91ba367d8516bc9d49e7a",
+      "source": "https://github.com/git-for-windows/pacman-repo/releases/download/2026-01-27T20-36-22.546922300Z/mingw-w64-openssl-3.5.5-1.src.tar.gz#mingw-w64-openssl/openssl-3.5.5.tar.gz!openssl-3.5.5/LICENSE.txt",
+      "component": "mingw-w64-clang-aarch64-openssl, mingw-w64-x86_64-openssl",
+      "version": "mingw-w64-openssl-3.5.5-1.src.tar.gz",
+      "platforms": [
+        "win32/x64",
+        "win32/arm64"
+      ]
+    },
+    {
+      "path": "source-file-5.46-2-file_file-5.46.tar.gz_file-5.46_COPYING",
+      "sha256": "0bfa856a9930bddadbef95d1be1cf4e163c0be618e76ea3275caaf255283e274",
+      "source": "https://repo.msys2.org/msys/sources/file-5.46-2.src.tar.zst#file/file-5.46.tar.gz!file-5.46/COPYING",
+      "component": "file",
+      "version": "file-5.46-2.src.tar.zst",
+      "platforms": [
+        "win32/x64",
+        "win32/arm64"
+      ]
+    },
+    {
+      "path": "source-file-5.46-2-file_file-5.46.tar.gz_file-5.46_python_LICENSE",
+      "sha256": "9d402e401ecfd65d9c600cf84ecb317aba1c5c6fcb788dd79af94fd1fdc527a8",
+      "source": "https://repo.msys2.org/msys/sources/file-5.46-2.src.tar.zst#file/file-5.46.tar.gz!file-5.46/python/LICENSE",
+      "component": "file",
+      "version": "file-5.46-2.src.tar.zst",
+      "platforms": [
+        "win32/x64",
+        "win32/arm64"
+      ]
+    },
+    {
+      "path": "source-diffutils-3.12-1-diffutils_diffutils-3.12.tar.xz_diffutils-3.12_COPYING",
+      "sha256": "8ceb4b9ee5adedde47b31e975c1d90c73ad27b6b165a1dcd80c7c545eb65b903",
+      "source": "https://repo.msys2.org/msys/sources/diffutils-3.12-1.src.tar.zst#diffutils/diffutils-3.12.tar.xz!diffutils-3.12/COPYING",
+      "component": "diffutils",
+      "version": "diffutils-3.12-1.src.tar.zst",
+      "platforms": [
+        "win32/x64",
+        "win32/arm64"
+      ]
+    },
+    {
+      "path": "source-coreutils-8.32-5-coreutils_coreutils-8.32.tar.xz_coreutils-8.32_COPYING",
+      "sha256": "3972dc9744f6499f0f9b2dbf76696f2ae7ad8af9b23dde66d6af86c9dfb36986",
+      "source": "https://repo.msys2.org/msys/sources/coreutils-8.32-5.src.tar.zst#coreutils/coreutils-8.32.tar.xz!coreutils-8.32/COPYING",
+      "component": "coreutils",
+      "version": "coreutils-8.32-5.src.tar.zst",
+      "platforms": [
+        "win32/x64",
+        "win32/arm64"
+      ]
+    },
+    {
+      "path": "source-gmp-6.3.0-2-gmp_gmp-6.3.0.tar.xz_gmp-6.3.0_COPYING",
+      "sha256": "8ceb4b9ee5adedde47b31e975c1d90c73ad27b6b165a1dcd80c7c545eb65b903",
+      "source": "https://repo.msys2.org/msys/sources/gmp-6.3.0-2.src.tar.zst#gmp/gmp-6.3.0.tar.xz!gmp-6.3.0/COPYING",
+      "component": "gmp",
+      "version": "gmp-6.3.0-2.src.tar.zst",
+      "platforms": [
+        "win32/x64",
+        "win32/arm64"
+      ]
+    },
+    {
+      "path": "source-gmp-6.3.0-2-gmp_gmp-6.3.0.tar.xz_gmp-6.3.0_COPYING.LESSERv3",
+      "sha256": "a853c2ffec17057872340eee242ae4d96cbf2b520ae27d903e1b2fef1a5f9d1c",
+      "source": "https://repo.msys2.org/msys/sources/gmp-6.3.0-2.src.tar.zst#gmp/gmp-6.3.0.tar.xz!gmp-6.3.0/COPYING.LESSERv3",
+      "component": "gmp",
+      "version": "gmp-6.3.0-2.src.tar.zst",
+      "platforms": [
+        "win32/x64",
+        "win32/arm64"
+      ]
+    },
+    {
+      "path": "source-findutils-4.10.0-2-findutils_findutils-4.10.0.tar.xz_findutils-4.10.0_COPYING",
+      "sha256": "3972dc9744f6499f0f9b2dbf76696f2ae7ad8af9b23dde66d6af86c9dfb36986",
+      "source": "https://repo.msys2.org/msys/sources/findutils-4.10.0-2.src.tar.zst#findutils/findutils-4.10.0.tar.xz!findutils-4.10.0/COPYING",
+      "component": "findutils",
+      "version": "findutils-4.10.0-2.src.tar.zst",
+      "platforms": [
+        "win32/x64",
+        "win32/arm64"
+      ]
+    },
+    {
+      "path": "source-bzip2-1.0.8-4-bzip2_bzip2-1.0.8.tar.gz_bzip2-1.0.8_LICENSE",
+      "sha256": "c6dbbf828498be844a89eaa3b84adbab3199e342eb5cb2ed2f0d4ba7ec0f38a3",
+      "source": "https://repo.msys2.org/msys/sources/bzip2-1.0.8-4.src.tar.zst#bzip2/bzip2-1.0.8.tar.gz!bzip2-1.0.8/LICENSE",
+      "component": "libbz2",
+      "version": "bzip2-1.0.8-4.src.tar.zst",
+      "platforms": [
+        "win32/x64",
+        "win32/arm64"
+      ]
+    },
+    {
+      "path": "source-grep-1~3.0-7-grep_grep-3.0.tar.xz_grep-3.0_COPYING",
+      "sha256": "ca372a7d92560b1fa9f6d832b440e8bcd62d9adfa8870c98287deab66d98310e",
+      "source": "https://repo.msys2.org/msys/sources/grep-1~3.0-7.src.tar.zst#grep/grep-3.0.tar.xz!grep-3.0/COPYING",
+      "component": "grep",
+      "version": "grep-1~3.0-7.src.tar.zst",
+      "platforms": [
+        "win32/x64",
+        "win32/arm64"
+      ]
+    },
+    {
+      "path": "source-xz-5.8.2-1-xz_v5.8.2.tar.gz_xz-5.8.2_COPYING",
+      "sha256": "616a3ad264ce29b8f1cb97e53037b139d406899ca8d1f799651e17bfa09830b8",
+      "source": "https://repo.msys2.org/msys/sources/xz-5.8.2-1.src.tar.zst#xz/v5.8.2.tar.gz!xz-5.8.2/COPYING",
+      "component": "liblzma",
+      "version": "xz-5.8.2-1.src.tar.zst",
+      "platforms": [
+        "win32/x64",
+        "win32/arm64"
+      ]
+    },
+    {
+      "path": "source-xz-5.8.2-1-xz_v5.8.2.tar.gz_xz-5.8.2_COPYING.0BSD",
+      "sha256": "0b01625d853911cd0e2e088dcfb743261034a091bb379246cb25a14cc4c74bf1",
+      "source": "https://repo.msys2.org/msys/sources/xz-5.8.2-1.src.tar.zst#xz/v5.8.2.tar.gz!xz-5.8.2/COPYING.0BSD",
+      "component": "liblzma",
+      "version": "xz-5.8.2-1.src.tar.zst",
+      "platforms": [
+        "win32/x64",
+        "win32/arm64"
+      ]
+    },
+    {
+      "path": "source-xz-5.8.2-1-xz_v5.8.2.tar.gz_xz-5.8.2_COPYING.GPLv2",
+      "sha256": "edaef632cbb643e4e7a221717a6c441a4c1a7c918e6e4d56debc3d8739b233f6",
+      "source": "https://repo.msys2.org/msys/sources/xz-5.8.2-1.src.tar.zst#xz/v5.8.2.tar.gz!xz-5.8.2/COPYING.GPLv2",
+      "component": "liblzma",
+      "version": "xz-5.8.2-1.src.tar.zst",
+      "platforms": [
+        "win32/x64",
+        "win32/arm64"
+      ]
+    },
+    {
+      "path": "source-xz-5.8.2-1-xz_v5.8.2.tar.gz_xz-5.8.2_COPYING.GPLv3",
+      "sha256": "3972dc9744f6499f0f9b2dbf76696f2ae7ad8af9b23dde66d6af86c9dfb36986",
+      "source": "https://repo.msys2.org/msys/sources/xz-5.8.2-1.src.tar.zst#xz/v5.8.2.tar.gz!xz-5.8.2/COPYING.GPLv3",
+      "component": "liblzma",
+      "version": "xz-5.8.2-1.src.tar.zst",
+      "platforms": [
+        "win32/x64",
+        "win32/arm64"
+      ]
+    },
+    {
+      "path": "source-xz-5.8.2-1-xz_v5.8.2.tar.gz_xz-5.8.2_COPYING.LGPLv2.1",
+      "sha256": "20e50fe7aae3e56378ebf0417d9de904f55a0e61e4df315333e632a4d3555d95",
+      "source": "https://repo.msys2.org/msys/sources/xz-5.8.2-1.src.tar.zst#xz/v5.8.2.tar.gz!xz-5.8.2/COPYING.LGPLv2.1",
+      "component": "liblzma",
+      "version": "xz-5.8.2-1.src.tar.zst",
+      "platforms": [
+        "win32/x64",
+        "win32/arm64"
+      ]
+    },
+    {
+      "path": "source-xz-5.8.2-1-xz_v5.8.2.tar.gz_xz-5.8.2_build-aux_license-check.sh",
+      "sha256": "2b3fa1d23cb2ab084f3d919908159473cc0e1eed059d106e2a2857c0ec8af98a",
+      "source": "https://repo.msys2.org/msys/sources/xz-5.8.2-1.src.tar.zst#xz/v5.8.2.tar.gz!xz-5.8.2/build-aux/license-check.sh",
+      "component": "liblzma",
+      "version": "xz-5.8.2-1.src.tar.zst",
+      "platforms": [
+        "win32/x64",
+        "win32/arm64"
+      ]
+    },
+    {
+      "path": "source-libiconv-1.18-2-libiconv_libiconv-1.18.tar.gz_libiconv-1.18_COPYING.LIB",
+      "sha256": "20e50fe7aae3e56378ebf0417d9de904f55a0e61e4df315333e632a4d3555d95",
+      "source": "https://repo.msys2.org/msys/sources/libiconv-1.18-2.src.tar.zst#libiconv/libiconv-1.18.tar.gz!libiconv-1.18/COPYING.LIB",
+      "component": "libiconv",
+      "version": "libiconv-1.18-2.src.tar.zst",
+      "platforms": [
+        "win32/x64",
+        "win32/arm64"
+      ]
+    },
+    {
+      "path": "source-libiconv-1.18-2-libiconv_libiconv-1.18.tar.gz_libiconv-1.18_libcharset_COPYING.LIB",
+      "sha256": "20e50fe7aae3e56378ebf0417d9de904f55a0e61e4df315333e632a4d3555d95",
+      "source": "https://repo.msys2.org/msys/sources/libiconv-1.18-2.src.tar.zst#libiconv/libiconv-1.18.tar.gz!libiconv-1.18/libcharset/COPYING.LIB",
+      "component": "libiconv",
+      "version": "libiconv-1.18-2.src.tar.zst",
+      "platforms": [
+        "win32/x64",
+        "win32/arm64"
+      ]
+    },
+    {
+      "path": "source-libiconv-1.18-2-libiconv_libiconv-1.18.tar.gz_libiconv-1.18_COPYING",
+      "sha256": "8ceb4b9ee5adedde47b31e975c1d90c73ad27b6b165a1dcd80c7c545eb65b903",
+      "source": "https://repo.msys2.org/msys/sources/libiconv-1.18-2.src.tar.zst#libiconv/libiconv-1.18.tar.gz!libiconv-1.18/COPYING",
+      "component": "libiconv",
+      "version": "libiconv-1.18-2.src.tar.zst",
+      "platforms": [
+        "win32/x64",
+        "win32/arm64"
+      ]
+    },
+    {
+      "path": "source-readline-8.3.003-1-readline_readline-8.3.tar.gz_readline-8.3_COPYING",
+      "sha256": "8ceb4b9ee5adedde47b31e975c1d90c73ad27b6b165a1dcd80c7c545eb65b903",
+      "source": "https://repo.msys2.org/msys/sources/readline-8.3.003-1.src.tar.zst#readline/readline-8.3.tar.gz!readline-8.3/COPYING",
+      "component": "libreadline",
+      "version": "readline-8.3.003-1.src.tar.zst",
+      "platforms": [
+        "win32/x64",
+        "win32/arm64"
+      ]
+    },
+    {
+      "path": "source-pcre-8.45-5-pcre_pcre-8.45.tar.bz2_pcre-8.45_LICENCE",
+      "sha256": "51b3dea44f63338b84b9c97b3d793826a8397309068cf9379a423216ab8ea5b2",
+      "source": "https://repo.msys2.org/msys/sources/pcre-8.45-5.src.tar.zst#pcre/pcre-8.45.tar.bz2!pcre-8.45/LICENCE",
+      "component": "libpcre",
+      "version": "pcre-8.45-5.src.tar.zst",
+      "platforms": [
+        "win32/x64",
+        "win32/arm64"
+      ]
+    },
+    {
+      "path": "source-pcre-8.45-5-pcre_pcre-8.45.tar.bz2_pcre-8.45_cmake_COPYING-CMAKE-SCRIPTS",
+      "sha256": "46cde7dc11e64c78d650b4851b88f6704b4665ff60f22a1caf68ceb15e217e5b",
+      "source": "https://repo.msys2.org/msys/sources/pcre-8.45-5.src.tar.zst#pcre/pcre-8.45.tar.bz2!pcre-8.45/cmake/COPYING-CMAKE-SCRIPTS",
+      "component": "libpcre",
+      "version": "pcre-8.45-5.src.tar.zst",
+      "platforms": [
+        "win32/x64",
+        "win32/arm64"
+      ]
+    },
+    {
+      "path": "source-pcre-8.45-5-pcre_pcre-8.45.tar.bz2_pcre-8.45_COPYING",
+      "sha256": "17abe1dbb92b21ab173cf9757dd57b0b15cd8d863b2ccdef635fdbef03077fb0",
+      "source": "https://repo.msys2.org/msys/sources/pcre-8.45-5.src.tar.zst#pcre/pcre-8.45.tar.bz2!pcre-8.45/COPYING",
+      "component": "libpcre",
+      "version": "pcre-8.45-5.src.tar.zst",
+      "platforms": [
+        "win32/x64",
+        "win32/arm64"
+      ]
+    },
+    {
+      "path": "source-cyrus-sasl-2.1.28-5-cyrus-sasl_cyrus-sasl-2.1.28.tar.gz_cyrus-sasl-2.1.28_saslauthd_COPYING",
+      "sha256": "331d1ea802ff1643aa00ff1304844f52b1696ca9c90d1e89610654acadee875b",
+      "source": "https://repo.msys2.org/msys/sources/cyrus-sasl-2.1.28-5.src.tar.zst#cyrus-sasl/cyrus-sasl-2.1.28.tar.gz!cyrus-sasl-2.1.28/saslauthd/COPYING",
+      "component": "libsasl",
+      "version": "cyrus-sasl-2.1.28-5.src.tar.zst",
+      "platforms": [
+        "win32/x64",
+        "win32/arm64"
+      ]
+    },
+    {
+      "path": "source-cyrus-sasl-2.1.28-5-cyrus-sasl_cyrus-sasl-2.1.28.tar.gz_cyrus-sasl-2.1.28_COPYING",
+      "sha256": "9d6e5d1632140a6c135b251260953650d17d87cd1124f87aaf72192aa4580d4b",
+      "source": "https://repo.msys2.org/msys/sources/cyrus-sasl-2.1.28-5.src.tar.zst#cyrus-sasl/cyrus-sasl-2.1.28.tar.gz!cyrus-sasl-2.1.28/COPYING",
+      "component": "libsasl",
+      "version": "cyrus-sasl-2.1.28-5.src.tar.zst",
+      "platforms": [
+        "win32/x64",
+        "win32/arm64"
+      ]
+    },
+    {
+      "path": "source-gettext-0.22.5-1-gettext_gettext-0.22.5.tar.gz_gettext-0.22.5_COPYING",
+      "sha256": "e79e9c8a0c85d735ff98185918ec94ed7d175efc377012787aebcf3b80f0d90b",
+      "source": "https://repo.msys2.org/msys/sources/gettext-0.22.5-1.src.tar.zst#gettext/gettext-0.22.5.tar.gz!gettext-0.22.5/COPYING",
+      "component": "libintl",
+      "version": "gettext-0.22.5-1.src.tar.zst",
+      "platforms": [
+        "win32/x64",
+        "win32/arm64"
+      ]
+    },
+    {
+      "path": "source-gettext-0.22.5-1-gettext_gettext-0.22.5.tar.gz_gettext-0.22.5_gettext-runtime_COPYING",
+      "sha256": "7ef2cdfe58e0c0460657b6598b49af29d4e03c1e41cbaf0e1da1eb8ad74b95d0",
+      "source": "https://repo.msys2.org/msys/sources/gettext-0.22.5-1.src.tar.zst#gettext/gettext-0.22.5.tar.gz!gettext-0.22.5/gettext-runtime/COPYING",
+      "component": "libintl",
+      "version": "gettext-0.22.5-1.src.tar.zst",
+      "platforms": [
+        "win32/x64",
+        "win32/arm64"
+      ]
+    },
+    {
+      "path": "source-gettext-0.22.5-1-gettext_gettext-0.22.5.tar.gz_gettext-0.22.5_gettext-runtime_intl_COPYING.LIB",
+      "sha256": "3fe5361f24b7c49ba12911c08f5a33f9cb18871d95d9fb881f5b8a4793e04288",
+      "source": "https://repo.msys2.org/msys/sources/gettext-0.22.5-1.src.tar.zst#gettext/gettext-0.22.5.tar.gz!gettext-0.22.5/gettext-runtime/intl/COPYING.LIB",
+      "component": "libintl",
+      "version": "gettext-0.22.5-1.src.tar.zst",
+      "platforms": [
+        "win32/x64",
+        "win32/arm64"
+      ]
+    },
+    {
+      "path": "source-gettext-0.22.5-1-gettext_gettext-0.22.5.tar.gz_gettext-0.22.5_gettext-runtime_libasprintf_COPYING",
+      "sha256": "03133addae5b99a6148c538300e6d97074453089be1423b741bd081f18e2b298",
+      "source": "https://repo.msys2.org/msys/sources/gettext-0.22.5-1.src.tar.zst#gettext/gettext-0.22.5.tar.gz!gettext-0.22.5/gettext-runtime/libasprintf/COPYING",
+      "component": "libintl",
+      "version": "gettext-0.22.5-1.src.tar.zst",
+      "platforms": [
+        "win32/x64",
+        "win32/arm64"
+      ]
+    },
+    {
+      "path": "source-gettext-0.22.5-1-gettext_gettext-0.22.5.tar.gz_gettext-0.22.5_gettext-runtime_libasprintf_COPYING.LIB",
+      "sha256": "3fe5361f24b7c49ba12911c08f5a33f9cb18871d95d9fb881f5b8a4793e04288",
+      "source": "https://repo.msys2.org/msys/sources/gettext-0.22.5-1.src.tar.zst#gettext/gettext-0.22.5.tar.gz!gettext-0.22.5/gettext-runtime/libasprintf/COPYING.LIB",
+      "component": "libintl",
+      "version": "gettext-0.22.5-1.src.tar.zst",
+      "platforms": [
+        "win32/x64",
+        "win32/arm64"
+      ]
+    },
+    {
+      "path": "source-gettext-0.22.5-1-gettext_gettext-0.22.5.tar.gz_gettext-0.22.5_gettext-tools_COPYING",
+      "sha256": "5d4cff30d5038f82a0edc79798456049b61e1752fdb7e9ab1f4bfb9fae3a7303",
+      "source": "https://repo.msys2.org/msys/sources/gettext-0.22.5-1.src.tar.zst#gettext/gettext-0.22.5.tar.gz!gettext-0.22.5/gettext-tools/COPYING",
+      "component": "libintl",
+      "version": "gettext-0.22.5-1.src.tar.zst",
+      "platforms": [
+        "win32/x64",
+        "win32/arm64"
+      ]
+    },
+    {
+      "path": "source-gettext-0.22.5-1-gettext_gettext-0.22.5.tar.gz_gettext-0.22.5_libtextstyle_COPYING",
+      "sha256": "e79e9c8a0c85d735ff98185918ec94ed7d175efc377012787aebcf3b80f0d90b",
+      "source": "https://repo.msys2.org/msys/sources/gettext-0.22.5-1.src.tar.zst#gettext/gettext-0.22.5.tar.gz!gettext-0.22.5/libtextstyle/COPYING",
+      "component": "libintl",
+      "version": "gettext-0.22.5-1.src.tar.zst",
+      "platforms": [
+        "win32/x64",
+        "win32/arm64"
+      ]
+    },
+    {
+      "path": "source-util-linux-2.40.2-2-util-linux_util-linux-2.40.2.tar.xz_util-linux-2.40.2_libblkid_COPYING",
+      "sha256": "f03b01c1251bc3bfee959aea99ed7906a0b08a2ff132d55a1ece18ee573a52a1",
+      "source": "https://repo.msys2.org/msys/sources/util-linux-2.40.2-2.src.tar.zst#util-linux/util-linux-2.40.2.tar.xz!util-linux-2.40.2/libblkid/COPYING",
+      "component": "libutil-linux",
+      "version": "util-linux-2.40.2-2.src.tar.zst",
+      "platforms": [
+        "win32/x64",
+        "win32/arm64"
+      ]
+    },
+    {
+      "path": "source-util-linux-2.40.2-2-util-linux_util-linux-2.40.2.tar.xz_util-linux-2.40.2_libmount_COPYING",
+      "sha256": "5f12c2408a84be40fbff8ad7e281aa4e884fb92ee3f9a61aedf886a9503d3500",
+      "source": "https://repo.msys2.org/msys/sources/util-linux-2.40.2-2.src.tar.zst#util-linux/util-linux-2.40.2.tar.xz!util-linux-2.40.2/libmount/COPYING",
+      "component": "libutil-linux",
+      "version": "util-linux-2.40.2-2.src.tar.zst",
+      "platforms": [
+        "win32/x64",
+        "win32/arm64"
+      ]
+    },
+    {
+      "path": "source-util-linux-2.40.2-2-util-linux_util-linux-2.40.2.tar.xz_util-linux-2.40.2_libsmartcols_COPYING",
+      "sha256": "f03b01c1251bc3bfee959aea99ed7906a0b08a2ff132d55a1ece18ee573a52a1",
+      "source": "https://repo.msys2.org/msys/sources/util-linux-2.40.2-2.src.tar.zst#util-linux/util-linux-2.40.2.tar.xz!util-linux-2.40.2/libsmartcols/COPYING",
+      "component": "libutil-linux",
+      "version": "util-linux-2.40.2-2.src.tar.zst",
+      "platforms": [
+        "win32/x64",
+        "win32/arm64"
+      ]
+    },
+    {
+      "path": "source-util-linux-2.40.2-2-util-linux_util-linux-2.40.2.tar.xz_util-linux-2.40.2_Documentation_licenses_COPYING.ISC",
+      "sha256": "e53348ce276358e9997014071c5294b36a18c4b34f32f00ee57b9acce0aafd63",
+      "source": "https://repo.msys2.org/msys/sources/util-linux-2.40.2-2.src.tar.zst#util-linux/util-linux-2.40.2.tar.xz!util-linux-2.40.2/Documentation/licenses/COPYING.ISC",
+      "component": "libutil-linux",
+      "version": "util-linux-2.40.2-2.src.tar.zst",
+      "platforms": [
+        "win32/x64",
+        "win32/arm64"
+      ]
+    },
+    {
+      "path": "source-util-linux-2.40.2-2-util-linux_util-linux-2.40.2.tar.xz_util-linux-2.40.2_Documentation_licenses_COPYING.LGPL-2.1-or-later",
+      "sha256": "dc626520dcd53a22f727af3ee42c770e56c97a64fe3adb063799d8ab032fe551",
+      "source": "https://repo.msys2.org/msys/sources/util-linux-2.40.2-2.src.tar.zst#util-linux/util-linux-2.40.2.tar.xz!util-linux-2.40.2/Documentation/licenses/COPYING.LGPL-2.1-or-later",
+      "component": "libutil-linux",
+      "version": "util-linux-2.40.2-2.src.tar.zst",
+      "platforms": [
+        "win32/x64",
+        "win32/arm64"
+      ]
+    },
+    {
+      "path": "source-util-linux-2.40.2-2-util-linux_util-linux-2.40.2.tar.xz_util-linux-2.40.2_Documentation_licenses_COPYING.GPL-3.0-or-later",
+      "sha256": "3972dc9744f6499f0f9b2dbf76696f2ae7ad8af9b23dde66d6af86c9dfb36986",
+      "source": "https://repo.msys2.org/msys/sources/util-linux-2.40.2-2.src.tar.zst#util-linux/util-linux-2.40.2.tar.xz!util-linux-2.40.2/Documentation/licenses/COPYING.GPL-3.0-or-later",
+      "component": "libutil-linux",
+      "version": "util-linux-2.40.2-2.src.tar.zst",
+      "platforms": [
+        "win32/x64",
+        "win32/arm64"
+      ]
+    },
+    {
+      "path": "source-util-linux-2.40.2-2-util-linux_util-linux-2.40.2.tar.xz_util-linux-2.40.2_Documentation_licenses_COPYING.GPL-2.0-or-later",
+      "sha256": "8177f97513213526df2cf6184d8ff986c675afb514d4e68a404010521b880643",
+      "source": "https://repo.msys2.org/msys/sources/util-linux-2.40.2-2.src.tar.zst#util-linux/util-linux-2.40.2.tar.xz!util-linux-2.40.2/Documentation/licenses/COPYING.GPL-2.0-or-later",
+      "component": "libutil-linux",
+      "version": "util-linux-2.40.2-2.src.tar.zst",
+      "platforms": [
+        "win32/x64",
+        "win32/arm64"
+      ]
+    },
+    {
+      "path": "source-util-linux-2.40.2-2-util-linux_util-linux-2.40.2.tar.xz_util-linux-2.40.2_Documentation_licenses_COPYING.GPL-2.0-only",
+      "sha256": "8177f97513213526df2cf6184d8ff986c675afb514d4e68a404010521b880643",
+      "source": "https://repo.msys2.org/msys/sources/util-linux-2.40.2-2.src.tar.zst#util-linux/util-linux-2.40.2.tar.xz!util-linux-2.40.2/Documentation/licenses/COPYING.GPL-2.0-only",
+      "component": "libutil-linux",
+      "version": "util-linux-2.40.2-2.src.tar.zst",
+      "platforms": [
+        "win32/x64",
+        "win32/arm64"
+      ]
+    },
+    {
+      "path": "source-util-linux-2.40.2-2-util-linux_util-linux-2.40.2.tar.xz_util-linux-2.40.2_Documentation_licenses_COPYING.MIT",
+      "sha256": "8555341619542abb48c102afd954e42d4478e5be16ad3d5af7b0ff71009e7348",
+      "source": "https://repo.msys2.org/msys/sources/util-linux-2.40.2-2.src.tar.zst#util-linux/util-linux-2.40.2.tar.xz!util-linux-2.40.2/Documentation/licenses/COPYING.MIT",
+      "component": "libutil-linux",
+      "version": "util-linux-2.40.2-2.src.tar.zst",
+      "platforms": [
+        "win32/x64",
+        "win32/arm64"
+      ]
+    },
+    {
+      "path": "source-util-linux-2.40.2-2-util-linux_util-linux-2.40.2.tar.xz_util-linux-2.40.2_Documentation_licenses_COPYING.BSD-2-Clause",
+      "sha256": "527f738966ca396cd5a68c1509390de2a780c6b614d9ee57f7544a6161938ed1",
+      "source": "https://repo.msys2.org/msys/sources/util-linux-2.40.2-2.src.tar.zst#util-linux/util-linux-2.40.2.tar.xz!util-linux-2.40.2/Documentation/licenses/COPYING.BSD-2-Clause",
+      "component": "libutil-linux",
+      "version": "util-linux-2.40.2-2.src.tar.zst",
+      "platforms": [
+        "win32/x64",
+        "win32/arm64"
+      ]
+    },
+    {
+      "path": "source-util-linux-2.40.2-2-util-linux_util-linux-2.40.2.tar.xz_util-linux-2.40.2_Documentation_licenses_COPYING.BSD-3-Clause",
+      "sha256": "9b718a9460fed5952466421235bc79eb49d4e9eacc920d7a9dd6285ab8fd6c6d",
+      "source": "https://repo.msys2.org/msys/sources/util-linux-2.40.2-2.src.tar.zst#util-linux/util-linux-2.40.2.tar.xz!util-linux-2.40.2/Documentation/licenses/COPYING.BSD-3-Clause",
+      "component": "libutil-linux",
+      "version": "util-linux-2.40.2-2.src.tar.zst",
+      "platforms": [
+        "win32/x64",
+        "win32/arm64"
+      ]
+    },
+    {
+      "path": "source-util-linux-2.40.2-2-util-linux_util-linux-2.40.2.tar.xz_util-linux-2.40.2_Documentation_licenses_COPYING.BSD-4-Clause-UC",
+      "sha256": "ba7640f00d93e72e92b94b9d71f25ec53bac2f1682f5c4adcccb0018359f60f8",
+      "source": "https://repo.msys2.org/msys/sources/util-linux-2.40.2-2.src.tar.zst#util-linux/util-linux-2.40.2.tar.xz!util-linux-2.40.2/Documentation/licenses/COPYING.BSD-4-Clause-UC",
+      "component": "libutil-linux",
+      "version": "util-linux-2.40.2-2.src.tar.zst",
+      "platforms": [
+        "win32/x64",
+        "win32/arm64"
+      ]
+    },
+    {
+      "path": "source-util-linux-2.40.2-2-util-linux_util-linux-2.40.2.tar.xz_util-linux-2.40.2_libuuid_COPYING",
+      "sha256": "5068749ee9c2f2c545af4a4de9fde3c39dc8d90af47cc0b3a42700116f9b7e71",
+      "source": "https://repo.msys2.org/msys/sources/util-linux-2.40.2-2.src.tar.zst#util-linux/util-linux-2.40.2.tar.xz!util-linux-2.40.2/libuuid/COPYING",
+      "component": "libutil-linux",
+      "version": "util-linux-2.40.2-2.src.tar.zst",
+      "platforms": [
+        "win32/x64",
+        "win32/arm64"
+      ]
+    },
+    {
+      "path": "source-util-linux-2.40.2-2-util-linux_util-linux-2.40.2.tar.xz_util-linux-2.40.2_pam_lastlog2_COPYING",
+      "sha256": "d0a359f02d74adc85263c88a1f2e9911e96619fef67067e832ef7936b0606863",
+      "source": "https://repo.msys2.org/msys/sources/util-linux-2.40.2-2.src.tar.zst#util-linux/util-linux-2.40.2.tar.xz!util-linux-2.40.2/pam_lastlog2/COPYING",
+      "component": "libutil-linux",
+      "version": "util-linux-2.40.2-2.src.tar.zst",
+      "platforms": [
+        "win32/x64",
+        "win32/arm64"
+      ]
+    },
+    {
+      "path": "source-util-linux-2.40.2-2-util-linux_util-linux-2.40.2.tar.xz_util-linux-2.40.2_libfdisk_COPYING",
+      "sha256": "f03b01c1251bc3bfee959aea99ed7906a0b08a2ff132d55a1ece18ee573a52a1",
+      "source": "https://repo.msys2.org/msys/sources/util-linux-2.40.2-2.src.tar.zst#util-linux/util-linux-2.40.2.tar.xz!util-linux-2.40.2/libfdisk/COPYING",
+      "component": "libutil-linux",
+      "version": "util-linux-2.40.2-2.src.tar.zst",
+      "platforms": [
+        "win32/x64",
+        "win32/arm64"
+      ]
+    },
+    {
+      "path": "source-util-linux-2.40.2-2-util-linux_util-linux-2.40.2.tar.xz_util-linux-2.40.2_COPYING",
+      "sha256": "8177f97513213526df2cf6184d8ff986c675afb514d4e68a404010521b880643",
+      "source": "https://repo.msys2.org/msys/sources/util-linux-2.40.2-2.src.tar.zst#util-linux/util-linux-2.40.2.tar.xz!util-linux-2.40.2/COPYING",
+      "component": "libutil-linux",
+      "version": "util-linux-2.40.2-2.src.tar.zst",
+      "platforms": [
+        "win32/x64",
+        "win32/arm64"
+      ]
+    },
+    {
+      "path": "source-util-linux-2.40.2-2-util-linux_util-linux-2.40.2.tar.xz_util-linux-2.40.2_liblastlog2_COPYING",
+      "sha256": "d0a359f02d74adc85263c88a1f2e9911e96619fef67067e832ef7936b0606863",
+      "source": "https://repo.msys2.org/msys/sources/util-linux-2.40.2-2.src.tar.zst#util-linux/util-linux-2.40.2.tar.xz!util-linux-2.40.2/liblastlog2/COPYING",
+      "component": "libutil-linux",
+      "version": "util-linux-2.40.2-2.src.tar.zst",
+      "platforms": [
+        "win32/x64",
+        "win32/arm64"
+      ]
+    },
+    {
+      "path": "source-gawk-5.3.2-1-gawk_gawk-5.3.2.tar.gz_gawk-5.3.2_extension_COPYING",
+      "sha256": "8ceb4b9ee5adedde47b31e975c1d90c73ad27b6b165a1dcd80c7c545eb65b903",
+      "source": "https://repo.msys2.org/msys/sources/gawk-5.3.2-1.src.tar.zst#gawk/gawk-5.3.2.tar.gz!gawk-5.3.2/extension/COPYING",
+      "component": "gawk",
+      "version": "gawk-5.3.2-1.src.tar.zst",
+      "platforms": [
+        "win32/x64",
+        "win32/arm64"
+      ]
+    },
+    {
+      "path": "source-gawk-5.3.2-1-gawk_gawk-5.3.2.tar.gz_gawk-5.3.2_COPYING",
+      "sha256": "8ceb4b9ee5adedde47b31e975c1d90c73ad27b6b165a1dcd80c7c545eb65b903",
+      "source": "https://repo.msys2.org/msys/sources/gawk-5.3.2-1.src.tar.zst#gawk/gawk-5.3.2.tar.gz!gawk-5.3.2/COPYING",
+      "component": "gawk",
+      "version": "gawk-5.3.2-1.src.tar.zst",
+      "platforms": [
+        "win32/x64",
+        "win32/arm64"
+      ]
+    },
+    {
+      "path": "source-gawk-5.3.2-1-gawk_gawk-5.3.2.tar.gz_gawk-5.3.2_missing_d_COPYING.LIB",
+      "sha256": "56bdea73b6145ef6ac5259b3da390b981d840c24cb03b8e1cbc678de7ecfa18d",
+      "source": "https://repo.msys2.org/msys/sources/gawk-5.3.2-1.src.tar.zst#gawk/gawk-5.3.2.tar.gz!gawk-5.3.2/missing_d/COPYING.LIB",
+      "component": "gawk",
+      "version": "gawk-5.3.2-1.src.tar.zst",
+      "platforms": [
+        "win32/x64",
+        "win32/arm64"
+      ]
+    },
+    {
+      "path": "source-libxcrypt-4.5.2-1-libxcrypt_libxcrypt-4.5.2.tar.xz_libxcrypt-4.5.2_COPYING.LIB",
+      "sha256": "dc626520dcd53a22f727af3ee42c770e56c97a64fe3adb063799d8ab032fe551",
+      "source": "https://repo.msys2.org/msys/sources/libxcrypt-4.5.2-1.src.tar.zst#libxcrypt/libxcrypt-4.5.2.tar.xz!libxcrypt-4.5.2/COPYING.LIB",
+      "component": "libxcrypt",
+      "version": "libxcrypt-4.5.2-1.src.tar.zst",
+      "platforms": [
+        "win32/x64",
+        "win32/arm64"
+      ]
+    },
+    {
+      "path": "source-mingw-w64-ca-certificates-20250419-1-mingw-w64-ca-certificates_ca-certificates_20250419.tar.xz_ca-certificates_debian_copyright",
+      "sha256": "e85e1bcad3a915dc7e6f41412bc5bdeba275cadd817896ea0451f2140a93967c",
+      "source": "https://repo.msys2.org/mingw/sources/mingw-w64-ca-certificates-20250419-1.src.tar.zst#mingw-w64-ca-certificates/ca-certificates_20250419.tar.xz!ca-certificates/debian/copyright",
+      "component": "mingw-w64-clang-aarch64-ca-certificates, mingw-w64-x86_64-ca-certificates",
+      "version": "mingw-w64-ca-certificates-20250419-1.src.tar.zst",
+      "platforms": [
+        "win32/x64",
+        "win32/arm64"
+      ]
+    },
+    {
+      "path": "source-mingw-w64-brotli-1.2.0-1-mingw-w64-brotli_brotli-1.2.0.tar.gz_brotli-1.2.0_LICENSE",
+      "sha256": "3d180008e36922a4e8daec11c34c7af264fed5962d07924aea928c38e8663c94",
+      "source": "https://repo.msys2.org/mingw/sources/mingw-w64-brotli-1.2.0-1.src.tar.zst#mingw-w64-brotli/brotli-1.2.0.tar.gz!brotli-1.2.0/LICENSE",
+      "component": "mingw-w64-clang-aarch64-brotli, mingw-w64-x86_64-brotli",
+      "version": "mingw-w64-brotli-1.2.0-1.src.tar.zst",
+      "platforms": [
+        "win32/x64",
+        "win32/arm64"
+      ]
+    },
+    {
+      "path": "source-zstd-1.5.7-1-zstd_zstd-1.5.7.tar.gz_zstd-1.5.7_COPYING",
+      "sha256": "f9c375a1be4a41f7b70301dd83c91cb89e41567478859b77eef375a52d782505",
+      "source": "https://repo.msys2.org/msys/sources/zstd-1.5.7-1.src.tar.zst#zstd/zstd-1.5.7.tar.gz!zstd-1.5.7/COPYING",
+      "component": "libzstd",
+      "version": "zstd-1.5.7-1.src.tar.zst",
+      "platforms": [
+        "win32/x64",
+        "win32/arm64"
+      ]
+    },
+    {
+      "path": "source-zstd-1.5.7-1-zstd_zstd-1.5.7.tar.gz_zstd-1.5.7_LICENSE",
+      "sha256": "7055266497633c9025b777c78eb7235af13922117480ed5c674677adc381c9d8",
+      "source": "https://repo.msys2.org/msys/sources/zstd-1.5.7-1.src.tar.zst#zstd/zstd-1.5.7.tar.gz!zstd-1.5.7/LICENSE",
+      "component": "libzstd",
+      "version": "zstd-1.5.7-1.src.tar.zst",
+      "platforms": [
+        "win32/x64",
+        "win32/arm64"
+      ]
+    },
+    {
+      "path": "source-zstd-1.5.7-1-zstd_zstd-1.5.7.tar.gz_zstd-1.5.7_build_LICENSE",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "source": "https://repo.msys2.org/msys/sources/zstd-1.5.7-1.src.tar.zst#zstd/zstd-1.5.7.tar.gz!zstd-1.5.7/build/LICENSE",
+      "component": "libzstd",
+      "version": "zstd-1.5.7-1.src.tar.zst",
+      "platforms": [
+        "win32/x64",
+        "win32/arm64"
+      ]
+    },
+    {
+      "path": "source-mingw-w64-expat-2.7.4-1-mingw-w64-expat_expat-2.7.4.tar.xz_expat-2.7.4_COPYING",
+      "sha256": "31b15de82aa19a845156169a17a5488bf597e561b2c318d159ed583139b25e87",
+      "source": "https://repo.msys2.org/mingw/sources/mingw-w64-expat-2.7.4-1.src.tar.zst#mingw-w64-expat/expat-2.7.4.tar.xz!expat-2.7.4/COPYING",
+      "component": "mingw-w64-clang-aarch64-expat, mingw-w64-x86_64-expat",
+      "version": "mingw-w64-expat-2.7.4-1.src.tar.zst",
+      "platforms": [
+        "win32/x64",
+        "win32/arm64"
+      ]
+    },
+    {
+      "path": "source-mingw-w64-curl-8.18.0-1-mingw-w64-curl_curl-8.18.0.tar.xz_curl-8.18.0_COPYING",
+      "sha256": "e18f1989333b70044b2adfb7dc2f905d0119dbdcac3bc9f4bc9d540e3a29de5b",
+      "source": "https://repo.msys2.org/mingw/sources/mingw-w64-curl-8.18.0-1.src.tar.zst#mingw-w64-curl/curl-8.18.0.tar.xz!curl-8.18.0/COPYING",
+      "component": "mingw-w64-clang-aarch64-curl-winssl, mingw-w64-x86_64-curl-winssl, mingw-w64-clang-aarch64-curl-openssl-alternate, mingw-w64-x86_64-curl-openssl-alternate",
+      "version": "mingw-w64-curl-8.18.0-1.src.tar.zst",
+      "platforms": [
+        "win32/x64",
+        "win32/arm64"
+      ]
+    },
+    {
+      "path": "source-sqlite-3.51.2-1-sqlite_LICENSE",
+      "sha256": "0b76663a90e034f3d7f2af5bfada4cedec5ebc275361899eccc5c18e6f01ff1f",
+      "source": "https://repo.msys2.org/msys/sources/sqlite-3.51.2-1.src.tar.zst#sqlite/LICENSE",
+      "component": "libsqlite",
+      "version": "sqlite-3.51.2-1.src.tar.zst",
+      "platforms": [
+        "win32/x64",
+        "win32/arm64"
+      ]
+    },
+    {
+      "path": "source-sqlite-3.51.2-1-sqlite_sqlite-doc-3510200.zip_sqlite-doc-3510200_copyright.html",
+      "sha256": "809bade600571b7f3af006676a9de113a2c2f31c371f3c279032ca903da3db1c",
+      "source": "https://repo.msys2.org/msys/sources/sqlite-3.51.2-1.src.tar.zst#sqlite/sqlite-doc-3510200.zip!sqlite-doc-3510200/copyright.html",
+      "component": "libsqlite",
+      "version": "sqlite-3.51.2-1.src.tar.zst",
+      "platforms": [
+        "win32/x64",
+        "win32/arm64"
+      ]
+    },
+    {
+      "path": "source-sqlite-3.51.2-1-sqlite_sqlite-doc-3510200.zip_sqlite-doc-3510200_copyright-release.html",
+      "sha256": "5c412b62178e71d3f50d5c1f8bee2be49bed70e04473772d4979ae7759f04b02",
+      "source": "https://repo.msys2.org/msys/sources/sqlite-3.51.2-1.src.tar.zst#sqlite/sqlite-doc-3510200.zip!sqlite-doc-3510200/copyright-release.html",
+      "component": "libsqlite",
+      "version": "sqlite-3.51.2-1.src.tar.zst",
+      "platforms": [
+        "win32/x64",
+        "win32/arm64"
+      ]
+    },
+    {
+      "path": "source-sqlite-3.51.2-1-sqlite_sqlite-src-3510200.zip_sqlite-src-3510200_LICENSE.md",
+      "sha256": "ee6af51062b30d532991face5164136ae6f84e265ecf8abe89dc69dac45ca1e7",
+      "source": "https://repo.msys2.org/msys/sources/sqlite-3.51.2-1.src.tar.zst#sqlite/sqlite-src-3510200.zip!sqlite-src-3510200/LICENSE.md",
+      "component": "libsqlite",
+      "version": "sqlite-3.51.2-1.src.tar.zst",
+      "platforms": [
+        "win32/x64",
+        "win32/arm64"
+      ]
+    },
+    {
+      "path": "source-sqlite-3.51.2-1-sqlite_sqlite-src-3510200.zip_sqlite-src-3510200_autosetup_LICENSE",
+      "sha256": "679b9208e67df09977456d1d2ae4d885b9badf02c47b45a28cf95ee27c14cb18",
+      "source": "https://repo.msys2.org/msys/sources/sqlite-3.51.2-1.src.tar.zst#sqlite/sqlite-src-3510200.zip!sqlite-src-3510200/autosetup/LICENSE",
+      "component": "libsqlite",
+      "version": "sqlite-3.51.2-1.src.tar.zst",
+      "platforms": [
+        "win32/x64",
+        "win32/arm64"
+      ]
+    },
+    {
+      "path": "source-sqlite-3.51.2-1-sqlite_sqlite-src-3510200.zip_sqlite-src-3510200_autoconf_tea_license.terms",
+      "sha256": "66e056b6e8687f32af30d5187611b98b12a8f46f07aaf62f43585f276e8f0ac9",
+      "source": "https://repo.msys2.org/msys/sources/sqlite-3.51.2-1.src.tar.zst#sqlite/sqlite-src-3510200.zip!sqlite-src-3510200/autoconf/tea/license.terms",
+      "component": "libsqlite",
+      "version": "sqlite-3.51.2-1.src.tar.zst",
+      "platforms": [
+        "win32/x64",
+        "win32/arm64"
+      ]
+    },
+    {
+      "path": "source-mingw-w64-libffi-3.5.2-1-mingw-w64-libffi_libffi-3.5.2.tar.gz_libffi-3.5.2_LICENSE",
+      "sha256": "d5699fa516968e3a1550e6c902b7441c78856f2603d61bedd0b0662a26655366",
+      "source": "https://repo.msys2.org/mingw/sources/mingw-w64-libffi-3.5.2-1.src.tar.zst#mingw-w64-libffi/libffi-3.5.2.tar.gz!libffi-3.5.2/LICENSE",
+      "component": "mingw-w64-clang-aarch64-libffi, mingw-w64-x86_64-libffi",
+      "version": "mingw-w64-libffi-3.5.2-1.src.tar.zst",
+      "platforms": [
+        "win32/x64",
+        "win32/arm64"
+      ]
+    },
+    {
+      "path": "source-mingw-w64-libffi-3.5.2-1-mingw-w64-libffi_libffi-3.5.2.tar.gz_libffi-3.5.2_LICENSE-BUILDTOOLS",
+      "sha256": "e67978cd18816c0cb7d29aaaacde7b7447402c2fb321a051698890a8eaedda94",
+      "source": "https://repo.msys2.org/mingw/sources/mingw-w64-libffi-3.5.2-1.src.tar.zst#mingw-w64-libffi/libffi-3.5.2.tar.gz!libffi-3.5.2/LICENSE-BUILDTOOLS",
+      "component": "mingw-w64-clang-aarch64-libffi, mingw-w64-x86_64-libffi",
+      "version": "mingw-w64-libffi-3.5.2-1.src.tar.zst",
+      "platforms": [
+        "win32/x64",
+        "win32/arm64"
+      ]
+    },
+    {
+      "path": "source-mingw-w64-libssh2-1.11.1-2-mingw-w64-libssh2_libssh2-1.11.1.tar.gz_libssh2-1.11.1_COPYING",
+      "sha256": "f7f9633cf9ff2f1333f3d7ce46973a8716a4d2a2815ad56f30d437d5fea7bafe",
+      "source": "https://repo.msys2.org/mingw/sources/mingw-w64-libssh2-1.11.1-2.src.tar.zst#mingw-w64-libssh2/libssh2-1.11.1.tar.gz!libssh2-1.11.1/COPYING",
+      "component": "mingw-w64-clang-aarch64-libssh2-wincng, mingw-w64-x86_64-libssh2-wincng",
+      "version": "mingw-w64-libssh2-1.11.1-2.src.tar.zst",
+      "platforms": [
+        "win32/x64",
+        "win32/arm64"
+      ]
+    },
+    {
+      "path": "source-mingw-w64-libtasn1-4.21.0-1-mingw-w64-libtasn1_libtasn1-4.21.0.tar.gz_libtasn1-4.21.0_COPYING",
+      "sha256": "3972dc9744f6499f0f9b2dbf76696f2ae7ad8af9b23dde66d6af86c9dfb36986",
+      "source": "https://repo.msys2.org/mingw/sources/mingw-w64-libtasn1-4.21.0-1.src.tar.zst#mingw-w64-libtasn1/libtasn1-4.21.0.tar.gz!libtasn1-4.21.0/COPYING",
+      "component": "mingw-w64-clang-aarch64-libtasn1, mingw-w64-x86_64-libtasn1",
+      "version": "mingw-w64-libtasn1-4.21.0-1.src.tar.zst",
+      "platforms": [
+        "win32/x64",
+        "win32/arm64"
+      ]
+    },
+    {
+      "path": "source-mingw-w64-libtasn1-4.21.0-1-mingw-w64-libtasn1_libtasn1-4.21.0.tar.gz_libtasn1-4.21.0_COPYING.LESSERv2",
+      "sha256": "20e50fe7aae3e56378ebf0417d9de904f55a0e61e4df315333e632a4d3555d95",
+      "source": "https://repo.msys2.org/mingw/sources/mingw-w64-libtasn1-4.21.0-1.src.tar.zst#mingw-w64-libtasn1/libtasn1-4.21.0.tar.gz!libtasn1-4.21.0/COPYING.LESSERv2",
+      "component": "mingw-w64-clang-aarch64-libtasn1, mingw-w64-x86_64-libtasn1",
+      "version": "mingw-w64-libtasn1-4.21.0-1.src.tar.zst",
+      "platforms": [
+        "win32/x64",
+        "win32/arm64"
+      ]
+    },
+    {
+      "path": "source-mingw-w64-gettext-1.0-1-mingw-w64-gettext_gettext-1.0.tar.lz_gettext-1.0_COPYING",
+      "sha256": "e79e9c8a0c85d735ff98185918ec94ed7d175efc377012787aebcf3b80f0d90b",
+      "source": "https://repo.msys2.org/mingw/sources/mingw-w64-gettext-1.0-1.src.tar.zst#mingw-w64-gettext/gettext-1.0.tar.lz!gettext-1.0/COPYING",
+      "component": "mingw-w64-clang-aarch64-gettext-runtime, mingw-w64-x86_64-gettext-runtime",
+      "version": "mingw-w64-gettext-1.0-1.src.tar.zst",
+      "platforms": [
+        "win32/x64",
+        "win32/arm64"
+      ]
+    },
+    {
+      "path": "source-mingw-w64-gettext-1.0-1-mingw-w64-gettext_gettext-1.0.tar.lz_gettext-1.0_gettext-runtime_COPYING",
+      "sha256": "7ef2cdfe58e0c0460657b6598b49af29d4e03c1e41cbaf0e1da1eb8ad74b95d0",
+      "source": "https://repo.msys2.org/mingw/sources/mingw-w64-gettext-1.0-1.src.tar.zst#mingw-w64-gettext/gettext-1.0.tar.lz!gettext-1.0/gettext-runtime/COPYING",
+      "component": "mingw-w64-clang-aarch64-gettext-runtime, mingw-w64-x86_64-gettext-runtime",
+      "version": "mingw-w64-gettext-1.0-1.src.tar.zst",
+      "platforms": [
+        "win32/x64",
+        "win32/arm64"
+      ]
+    },
+    {
+      "path": "source-mingw-w64-gettext-1.0-1-mingw-w64-gettext_gettext-1.0.tar.lz_gettext-1.0_gettext-runtime_libasprintf_COPYING",
+      "sha256": "03133addae5b99a6148c538300e6d97074453089be1423b741bd081f18e2b298",
+      "source": "https://repo.msys2.org/mingw/sources/mingw-w64-gettext-1.0-1.src.tar.zst#mingw-w64-gettext/gettext-1.0.tar.lz!gettext-1.0/gettext-runtime/libasprintf/COPYING",
+      "component": "mingw-w64-clang-aarch64-gettext-runtime, mingw-w64-x86_64-gettext-runtime",
+      "version": "mingw-w64-gettext-1.0-1.src.tar.zst",
+      "platforms": [
+        "win32/x64",
+        "win32/arm64"
+      ]
+    },
+    {
+      "path": "source-mingw-w64-gettext-1.0-1-mingw-w64-gettext_gettext-1.0.tar.lz_gettext-1.0_gettext-tools_COPYING",
+      "sha256": "5d4cff30d5038f82a0edc79798456049b61e1752fdb7e9ab1f4bfb9fae3a7303",
+      "source": "https://repo.msys2.org/mingw/sources/mingw-w64-gettext-1.0-1.src.tar.zst#mingw-w64-gettext/gettext-1.0.tar.lz!gettext-1.0/gettext-tools/COPYING",
+      "component": "mingw-w64-clang-aarch64-gettext-runtime, mingw-w64-x86_64-gettext-runtime",
+      "version": "mingw-w64-gettext-1.0-1.src.tar.zst",
+      "platforms": [
+        "win32/x64",
+        "win32/arm64"
+      ]
+    },
+    {
+      "path": "source-mingw-w64-gettext-1.0-1-mingw-w64-gettext_gettext-1.0.tar.lz_gettext-1.0_libtextstyle_COPYING",
+      "sha256": "e79e9c8a0c85d735ff98185918ec94ed7d175efc377012787aebcf3b80f0d90b",
+      "source": "https://repo.msys2.org/mingw/sources/mingw-w64-gettext-1.0-1.src.tar.zst#mingw-w64-gettext/gettext-1.0.tar.lz!gettext-1.0/libtextstyle/COPYING",
+      "component": "mingw-w64-clang-aarch64-gettext-runtime, mingw-w64-x86_64-gettext-runtime",
+      "version": "mingw-w64-gettext-1.0-1.src.tar.zst",
+      "platforms": [
+        "win32/x64",
+        "win32/arm64"
+      ]
+    },
+    {
+      "path": "source-mingw-w64-gettext-1.0-1-mingw-w64-gettext_gettext-1.0.tar.lz_gettext-1.0_gettext-runtime_intl_COPYING.LIB",
+      "sha256": "20e50fe7aae3e56378ebf0417d9de904f55a0e61e4df315333e632a4d3555d95",
+      "source": "https://repo.msys2.org/mingw/sources/mingw-w64-gettext-1.0-1.src.tar.zst#mingw-w64-gettext/gettext-1.0.tar.lz!gettext-1.0/gettext-runtime/intl/COPYING.LIB",
+      "component": "mingw-w64-clang-aarch64-gettext-runtime, mingw-w64-x86_64-gettext-runtime",
+      "version": "mingw-w64-gettext-1.0-1.src.tar.zst",
+      "platforms": [
+        "win32/x64",
+        "win32/arm64"
+      ]
+    },
+    {
+      "path": "source-mingw-w64-gettext-1.0-1-mingw-w64-gettext_gettext-1.0.tar.lz_gettext-1.0_gettext-runtime_libasprintf_COPYING.LIB",
+      "sha256": "20e50fe7aae3e56378ebf0417d9de904f55a0e61e4df315333e632a4d3555d95",
+      "source": "https://repo.msys2.org/mingw/sources/mingw-w64-gettext-1.0-1.src.tar.zst#mingw-w64-gettext/gettext-1.0.tar.lz!gettext-1.0/gettext-runtime/libasprintf/COPYING.LIB",
+      "component": "mingw-w64-clang-aarch64-gettext-runtime, mingw-w64-x86_64-gettext-runtime",
+      "version": "mingw-w64-gettext-1.0-1.src.tar.zst",
+      "platforms": [
+        "win32/x64",
+        "win32/arm64"
+      ]
+    },
+    {
+      "path": "source-mingw-w64-gettext-1.0-1-mingw-w64-gettext_gettext-1.0.tar.lz_gettext-1.0_gettext-tools_tree-sitter-0.23.2_LICENSE",
+      "sha256": "5f9cf9fb6acb1972b35ae29119ce563bb60ec097656bc4b69b9bac2d04c7a147",
+      "source": "https://repo.msys2.org/mingw/sources/mingw-w64-gettext-1.0-1.src.tar.zst#mingw-w64-gettext/gettext-1.0.tar.lz!gettext-1.0/gettext-tools/tree-sitter-0.23.2/LICENSE",
+      "component": "mingw-w64-clang-aarch64-gettext-runtime, mingw-w64-x86_64-gettext-runtime",
+      "version": "mingw-w64-gettext-1.0-1.src.tar.zst",
+      "platforms": [
+        "win32/x64",
+        "win32/arm64"
+      ]
+    },
+    {
+      "path": "source-mingw-w64-gettext-1.0-1-mingw-w64-gettext_gettext-1.0.tar.lz_gettext-1.0_gettext-tools_tree-sitter-d-0.8.2_LICENSE",
+      "sha256": "ecf206b1a27e8e4ea07f1e1529cb111b4be5ce8420bd27b8269981d9c0c389f8",
+      "source": "https://repo.msys2.org/mingw/sources/mingw-w64-gettext-1.0-1.src.tar.zst#mingw-w64-gettext/gettext-1.0.tar.lz!gettext-1.0/gettext-tools/tree-sitter-d-0.8.2/LICENSE",
+      "component": "mingw-w64-clang-aarch64-gettext-runtime, mingw-w64-x86_64-gettext-runtime",
+      "version": "mingw-w64-gettext-1.0-1.src.tar.zst",
+      "platforms": [
+        "win32/x64",
+        "win32/arm64"
+      ]
+    },
+    {
+      "path": "source-mingw-w64-gettext-1.0-1-mingw-w64-gettext_gettext-1.0.tar.lz_gettext-1.0_gettext-tools_tree-sitter-go-0.23.4_LICENSE",
+      "sha256": "2e0110e07abef7c2548b26ec9d6969775617ca539a0dc8dbeeb14d6452c711d1",
+      "source": "https://repo.msys2.org/mingw/sources/mingw-w64-gettext-1.0-1.src.tar.zst#mingw-w64-gettext/gettext-1.0.tar.lz!gettext-1.0/gettext-tools/tree-sitter-go-0.23.4/LICENSE",
+      "component": "mingw-w64-clang-aarch64-gettext-runtime, mingw-w64-x86_64-gettext-runtime",
+      "version": "mingw-w64-gettext-1.0-1.src.tar.zst",
+      "platforms": [
+        "win32/x64",
+        "win32/arm64"
+      ]
+    },
+    {
+      "path": "source-mingw-w64-gettext-1.0-1-mingw-w64-gettext_gettext-1.0.tar.lz_gettext-1.0_gettext-tools_tree-sitter-ocaml-0.23.2_LICENSE",
+      "sha256": "f977a20805dd6e275f14bc090a5f8e638401dad4df366841c1060f12c75b74ae",
+      "source": "https://repo.msys2.org/mingw/sources/mingw-w64-gettext-1.0-1.src.tar.zst#mingw-w64-gettext/gettext-1.0.tar.lz!gettext-1.0/gettext-tools/tree-sitter-ocaml-0.23.2/LICENSE",
+      "component": "mingw-w64-clang-aarch64-gettext-runtime, mingw-w64-x86_64-gettext-runtime",
+      "version": "mingw-w64-gettext-1.0-1.src.tar.zst",
+      "platforms": [
+        "win32/x64",
+        "win32/arm64"
+      ]
+    },
+    {
+      "path": "source-mingw-w64-gettext-1.0-1-mingw-w64-gettext_gettext-1.0.tar.lz_gettext-1.0_gettext-tools_tree-sitter-rust-0.23.2_LICENSE",
+      "sha256": "31d5b6f4243d5c7c6e1c4ebbbb9f6407bd1457a08bcc4f706521710341acba36",
+      "source": "https://repo.msys2.org/mingw/sources/mingw-w64-gettext-1.0-1.src.tar.zst#mingw-w64-gettext/gettext-1.0.tar.lz!gettext-1.0/gettext-tools/tree-sitter-rust-0.23.2/LICENSE",
+      "component": "mingw-w64-clang-aarch64-gettext-runtime, mingw-w64-x86_64-gettext-runtime",
+      "version": "mingw-w64-gettext-1.0-1.src.tar.zst",
+      "platforms": [
+        "win32/x64",
+        "win32/arm64"
+      ]
+    },
+    {
+      "path": "source-mingw-w64-gettext-1.0-1-mingw-w64-gettext_gettext-1.0.tar.lz_gettext-1.0_gettext-tools_tree-sitter-typescript-0.23.2_LICENSE",
+      "sha256": "49bf33cf78ef5897e4e161ce1517df7de1ae5042a65b6bcfd44401e0fc606559",
+      "source": "https://repo.msys2.org/mingw/sources/mingw-w64-gettext-1.0-1.src.tar.zst#mingw-w64-gettext/gettext-1.0.tar.lz!gettext-1.0/gettext-tools/tree-sitter-typescript-0.23.2/LICENSE",
+      "component": "mingw-w64-clang-aarch64-gettext-runtime, mingw-w64-x86_64-gettext-runtime",
+      "version": "mingw-w64-gettext-1.0-1.src.tar.zst",
+      "platforms": [
+        "win32/x64",
+        "win32/arm64"
+      ]
+    },
+    {
+      "path": "source-mingw-w64-libidn2-2.3.8-4-mingw-w64-libidn2_libidn2-2.3.8.tar.gz_libidn2-2.3.8_COPYING",
+      "sha256": "3972dc9744f6499f0f9b2dbf76696f2ae7ad8af9b23dde66d6af86c9dfb36986",
+      "source": "https://repo.msys2.org/mingw/sources/mingw-w64-libidn2-2.3.8-4.src.tar.zst#mingw-w64-libidn2/libidn2-2.3.8.tar.gz!libidn2-2.3.8/COPYING",
+      "component": "mingw-w64-clang-aarch64-libidn2, mingw-w64-x86_64-libidn2",
+      "version": "mingw-w64-libidn2-2.3.8-4.src.tar.zst",
+      "platforms": [
+        "win32/x64",
+        "win32/arm64"
+      ]
+    },
+    {
+      "path": "source-mingw-w64-libidn2-2.3.8-4-mingw-w64-libidn2_libidn2-2.3.8.tar.gz_libidn2-2.3.8_COPYING.LESSERv3",
+      "sha256": "e3a994d82e644b03a792a930f574002658412f62407f5fee083f2555c5f23118",
+      "source": "https://repo.msys2.org/mingw/sources/mingw-w64-libidn2-2.3.8-4.src.tar.zst#mingw-w64-libidn2/libidn2-2.3.8.tar.gz!libidn2-2.3.8/COPYING.LESSERv3",
+      "component": "mingw-w64-clang-aarch64-libidn2, mingw-w64-x86_64-libidn2",
+      "version": "mingw-w64-libidn2-2.3.8-4.src.tar.zst",
+      "platforms": [
+        "win32/x64",
+        "win32/arm64"
+      ]
+    },
+    {
+      "path": "source-mingw-w64-libidn2-2.3.8-4-mingw-w64-libidn2_libidn2-2.3.8.tar.gz_libidn2-2.3.8_COPYING.unicode",
+      "sha256": "01d621eef165cf4d3d3dbb737aa0699178d94c6f18cf87e9dde6db3ca7790f46",
+      "source": "https://repo.msys2.org/mingw/sources/mingw-w64-libidn2-2.3.8-4.src.tar.zst#mingw-w64-libidn2/libidn2-2.3.8.tar.gz!libidn2-2.3.8/COPYING.unicode",
+      "component": "mingw-w64-clang-aarch64-libidn2, mingw-w64-x86_64-libidn2",
+      "version": "mingw-w64-libidn2-2.3.8-4.src.tar.zst",
+      "platforms": [
+        "win32/x64",
+        "win32/arm64"
+      ]
+    },
+    {
+      "path": "source-mingw-w64-libiconv-1.18-1-mingw-w64-libiconv_libiconv-1.18.tar.gz_libiconv-1.18_COPYING.LIB",
+      "sha256": "20e50fe7aae3e56378ebf0417d9de904f55a0e61e4df315333e632a4d3555d95",
+      "source": "https://repo.msys2.org/mingw/sources/mingw-w64-libiconv-1.18-1.src.tar.zst#mingw-w64-libiconv/libiconv-1.18.tar.gz!libiconv-1.18/COPYING.LIB",
+      "component": "mingw-w64-clang-aarch64-libiconv, mingw-w64-x86_64-libiconv",
+      "version": "mingw-w64-libiconv-1.18-1.src.tar.zst",
+      "platforms": [
+        "win32/x64",
+        "win32/arm64"
+      ]
+    },
+    {
+      "path": "source-mingw-w64-libiconv-1.18-1-mingw-w64-libiconv_libiconv-1.18.tar.gz_libiconv-1.18_libcharset_COPYING.LIB",
+      "sha256": "20e50fe7aae3e56378ebf0417d9de904f55a0e61e4df315333e632a4d3555d95",
+      "source": "https://repo.msys2.org/mingw/sources/mingw-w64-libiconv-1.18-1.src.tar.zst#mingw-w64-libiconv/libiconv-1.18.tar.gz!libiconv-1.18/libcharset/COPYING.LIB",
+      "component": "mingw-w64-clang-aarch64-libiconv, mingw-w64-x86_64-libiconv",
+      "version": "mingw-w64-libiconv-1.18-1.src.tar.zst",
+      "platforms": [
+        "win32/x64",
+        "win32/arm64"
+      ]
+    },
+    {
+      "path": "source-mingw-w64-libiconv-1.18-1-mingw-w64-libiconv_libiconv-1.18.tar.gz_libiconv-1.18_COPYING",
+      "sha256": "8ceb4b9ee5adedde47b31e975c1d90c73ad27b6b165a1dcd80c7c545eb65b903",
+      "source": "https://repo.msys2.org/mingw/sources/mingw-w64-libiconv-1.18-1.src.tar.zst#mingw-w64-libiconv/libiconv-1.18.tar.gz!libiconv-1.18/COPYING",
+      "component": "mingw-w64-clang-aarch64-libiconv, mingw-w64-x86_64-libiconv",
+      "version": "mingw-w64-libiconv-1.18-1.src.tar.zst",
+      "platforms": [
+        "win32/x64",
+        "win32/arm64"
+      ]
+    },
+    {
+      "path": "source-mingw-w64-libpsl-0.21.5-3-mingw-w64-libpsl_libpsl-0.21.5.tar.gz_libpsl-0.21.5_src_LICENSE.chromium",
+      "sha256": "1d7f52747a9169751cdf2641a8299c0098e9ecdf9429296ffd55bdb14c9ed5b3",
+      "source": "https://repo.msys2.org/mingw/sources/mingw-w64-libpsl-0.21.5-3.src.tar.zst#mingw-w64-libpsl/libpsl-0.21.5.tar.gz!libpsl-0.21.5/src/LICENSE.chromium",
+      "component": "mingw-w64-clang-aarch64-libpsl, mingw-w64-x86_64-libpsl",
+      "version": "mingw-w64-libpsl-0.21.5-3.src.tar.zst",
+      "platforms": [
+        "win32/x64",
+        "win32/arm64"
+      ]
+    },
+    {
+      "path": "source-mingw-w64-libpsl-0.21.5-3-mingw-w64-libpsl_libpsl-0.21.5.tar.gz_libpsl-0.21.5_COPYING",
+      "sha256": "322392e6001b2b3b0fca705dc9f11f26e12441188ecde50eb1d22909980b2925",
+      "source": "https://repo.msys2.org/mingw/sources/mingw-w64-libpsl-0.21.5-3.src.tar.zst#mingw-w64-libpsl/libpsl-0.21.5.tar.gz!libpsl-0.21.5/COPYING",
+      "component": "mingw-w64-clang-aarch64-libpsl, mingw-w64-x86_64-libpsl",
+      "version": "mingw-w64-libpsl-0.21.5-3.src.tar.zst",
+      "platforms": [
+        "win32/x64",
+        "win32/arm64"
+      ]
+    },
+    {
+      "path": "source-mingw-w64-libpsl-0.21.5-3-mingw-w64-libpsl_libpsl-0.21.5.tar.gz_libpsl-0.21.5_LICENSE",
+      "sha256": "322392e6001b2b3b0fca705dc9f11f26e12441188ecde50eb1d22909980b2925",
+      "source": "https://repo.msys2.org/mingw/sources/mingw-w64-libpsl-0.21.5-3.src.tar.zst#mingw-w64-libpsl/libpsl-0.21.5.tar.gz!libpsl-0.21.5/LICENSE",
+      "component": "mingw-w64-clang-aarch64-libpsl, mingw-w64-x86_64-libpsl",
+      "version": "mingw-w64-libpsl-0.21.5-3.src.tar.zst",
+      "platforms": [
+        "win32/x64",
+        "win32/arm64"
+      ]
+    },
+    {
+      "path": "source-mingw-w64-libunistring-1.3-1-mingw-w64-libunistring_libunistring-1.3.tar.gz_libunistring-1.3_COPYING.LIB",
+      "sha256": "a853c2ffec17057872340eee242ae4d96cbf2b520ae27d903e1b2fef1a5f9d1c",
+      "source": "https://repo.msys2.org/mingw/sources/mingw-w64-libunistring-1.3-1.src.tar.zst#mingw-w64-libunistring/libunistring-1.3.tar.gz!libunistring-1.3/COPYING.LIB",
+      "component": "mingw-w64-clang-aarch64-libunistring, mingw-w64-x86_64-libunistring",
+      "version": "mingw-w64-libunistring-1.3-1.src.tar.zst",
+      "platforms": [
+        "win32/x64",
+        "win32/arm64"
+      ]
+    },
+    {
+      "path": "source-mingw-w64-libunistring-1.3-1-mingw-w64-libunistring_libunistring-1.3.tar.gz_libunistring-1.3_COPYING",
+      "sha256": "8ceb4b9ee5adedde47b31e975c1d90c73ad27b6b165a1dcd80c7c545eb65b903",
+      "source": "https://repo.msys2.org/mingw/sources/mingw-w64-libunistring-1.3-1.src.tar.zst#mingw-w64-libunistring/libunistring-1.3.tar.gz!libunistring-1.3/COPYING",
+      "component": "mingw-w64-clang-aarch64-libunistring, mingw-w64-x86_64-libunistring",
+      "version": "mingw-w64-libunistring-1.3-1.src.tar.zst",
+      "platforms": [
+        "win32/x64",
+        "win32/arm64"
+      ]
+    },
+    {
+      "path": "source-mingw-w64-nghttp2-1.68.0-1-mingw-w64-nghttp2_nghttp2-1.68.0.tar.xz_nghttp2-1.68.0_COPYING",
+      "sha256": "6b94f3abc1aabd0c72a7c7d92a77f79dda7c8a0cb3df839a97890b4116a2de2a",
+      "source": "https://repo.msys2.org/mingw/sources/mingw-w64-nghttp2-1.68.0-1.src.tar.zst#mingw-w64-nghttp2/nghttp2-1.68.0.tar.xz!nghttp2-1.68.0/COPYING",
+      "component": "mingw-w64-clang-aarch64-nghttp2, mingw-w64-x86_64-nghttp2",
+      "version": "mingw-w64-nghttp2-1.68.0-1.src.tar.zst",
+      "platforms": [
+        "win32/x64",
+        "win32/arm64"
+      ]
+    },
+    {
+      "path": "source-mingw-w64-nghttp2-1.68.0-1-mingw-w64-nghttp2_nghttp2-1.68.0.tar.xz_nghttp2-1.68.0_third-party_mruby_LICENSE",
+      "sha256": "07dc3c033f3f0ee600f76ac52211a04cbb67e722f8da44767687e86151586170",
+      "source": "https://repo.msys2.org/mingw/sources/mingw-w64-nghttp2-1.68.0-1.src.tar.zst#mingw-w64-nghttp2/nghttp2-1.68.0.tar.xz!nghttp2-1.68.0/third-party/mruby/LICENSE",
+      "component": "mingw-w64-clang-aarch64-nghttp2, mingw-w64-x86_64-nghttp2",
+      "version": "mingw-w64-nghttp2-1.68.0-1.src.tar.zst",
+      "platforms": [
+        "win32/x64",
+        "win32/arm64"
+      ]
+    },
+    {
+      "path": "source-mingw-w64-nghttp2-1.68.0-1-mingw-w64-nghttp2_nghttp2-1.68.0.tar.xz_nghttp2-1.68.0_tests_munit_COPYING",
+      "sha256": "551a04ab9278e48e3d4ef8b0381ad54e54e84fac1a225c50247fa3669dfdef75",
+      "source": "https://repo.msys2.org/mingw/sources/mingw-w64-nghttp2-1.68.0-1.src.tar.zst#mingw-w64-nghttp2/nghttp2-1.68.0.tar.xz!nghttp2-1.68.0/tests/munit/COPYING",
+      "component": "mingw-w64-clang-aarch64-nghttp2, mingw-w64-x86_64-nghttp2",
+      "version": "mingw-w64-nghttp2-1.68.0-1.src.tar.zst",
+      "platforms": [
+        "win32/x64",
+        "win32/arm64"
+      ]
+    },
+    {
+      "path": "source-mpfr-4.2.2-1-mpfr_mpfr-4.2.2.tar.xz_mpfr-4.2.2_COPYING.LESSER",
+      "sha256": "e3a994d82e644b03a792a930f574002658412f62407f5fee083f2555c5f23118",
+      "source": "https://repo.msys2.org/msys/sources/mpfr-4.2.2-1.src.tar.zst#mpfr/mpfr-4.2.2.tar.xz!mpfr-4.2.2/COPYING.LESSER",
+      "component": "mpfr",
+      "version": "mpfr-4.2.2-1.src.tar.zst",
+      "platforms": [
+        "win32/x64",
+        "win32/arm64"
+      ]
+    },
+    {
+      "path": "source-mpfr-4.2.2-1-mpfr_mpfr-4.2.2.tar.xz_mpfr-4.2.2_COPYING",
+      "sha256": "3972dc9744f6499f0f9b2dbf76696f2ae7ad8af9b23dde66d6af86c9dfb36986",
+      "source": "https://repo.msys2.org/msys/sources/mpfr-4.2.2-1.src.tar.zst#mpfr/mpfr-4.2.2.tar.xz!mpfr-4.2.2/COPYING",
+      "component": "mpfr",
+      "version": "mpfr-4.2.2-1.src.tar.zst",
+      "platforms": [
+        "win32/x64",
+        "win32/arm64"
+      ]
+    },
+    {
+      "path": "source-mingw-w64-zstd-1.5.7-1-mingw-w64-zstd_zstd-1.5.7.tar.gz_zstd-1.5.7_COPYING",
+      "sha256": "f9c375a1be4a41f7b70301dd83c91cb89e41567478859b77eef375a52d782505",
+      "source": "https://repo.msys2.org/mingw/sources/mingw-w64-zstd-1.5.7-1.src.tar.zst#mingw-w64-zstd/zstd-1.5.7.tar.gz!zstd-1.5.7/COPYING",
+      "component": "mingw-w64-clang-aarch64-zstd, mingw-w64-x86_64-zstd",
+      "version": "mingw-w64-zstd-1.5.7-1.src.tar.zst",
+      "platforms": [
+        "win32/x64",
+        "win32/arm64"
+      ]
+    },
+    {
+      "path": "source-mingw-w64-zstd-1.5.7-1-mingw-w64-zstd_zstd-1.5.7.tar.gz_zstd-1.5.7_LICENSE",
+      "sha256": "7055266497633c9025b777c78eb7235af13922117480ed5c674677adc381c9d8",
+      "source": "https://repo.msys2.org/mingw/sources/mingw-w64-zstd-1.5.7-1.src.tar.zst#mingw-w64-zstd/zstd-1.5.7.tar.gz!zstd-1.5.7/LICENSE",
+      "component": "mingw-w64-clang-aarch64-zstd, mingw-w64-x86_64-zstd",
+      "version": "mingw-w64-zstd-1.5.7-1.src.tar.zst",
+      "platforms": [
+        "win32/x64",
+        "win32/arm64"
+      ]
+    },
+    {
+      "path": "source-mingw-w64-zstd-1.5.7-1-mingw-w64-zstd_zstd-1.5.7.tar.gz_zstd-1.5.7_build_LICENSE",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "source": "https://repo.msys2.org/mingw/sources/mingw-w64-zstd-1.5.7-1.src.tar.zst#mingw-w64-zstd/zstd-1.5.7.tar.gz!zstd-1.5.7/build/LICENSE",
+      "component": "mingw-w64-clang-aarch64-zstd, mingw-w64-x86_64-zstd",
+      "version": "mingw-w64-zstd-1.5.7-1.src.tar.zst",
+      "platforms": [
+        "win32/x64",
+        "win32/arm64"
+      ]
+    },
+    {
+      "path": "source-mingw-w64-zlib-1.3.1-1-mingw-w64-zlib_zlib-1.3.1.tar.xz_zlib-1.3.1_LICENSE",
+      "sha256": "845efc77857d485d91fb3e0b884aaa929368c717ae8186b66fe1ed2495753243",
+      "source": "https://repo.msys2.org/mingw/sources/mingw-w64-zlib-1.3.1-1.src.tar.zst#mingw-w64-zlib/zlib-1.3.1.tar.xz!zlib-1.3.1/LICENSE",
+      "component": "mingw-w64-clang-aarch64-zlib, mingw-w64-x86_64-zlib",
+      "version": "mingw-w64-zlib-1.3.1-1.src.tar.zst",
+      "platforms": [
+        "win32/x64",
+        "win32/arm64"
+      ]
+    },
+    {
+      "path": "source-mingw-w64-zlib-1.3.1-1-mingw-w64-zlib_zlib-1.3.1.tar.xz_zlib-1.3.1_contrib_dotzlib_LICENSE_1_0.txt",
+      "sha256": "36266a8fd073568394cb81cdb2b124f7fdae2c64c1a7ed09db34b4d22efa2951",
+      "source": "https://repo.msys2.org/mingw/sources/mingw-w64-zlib-1.3.1-1.src.tar.zst#mingw-w64-zlib/zlib-1.3.1.tar.xz!zlib-1.3.1/contrib/dotzlib/LICENSE_1_0.txt",
+      "component": "mingw-w64-clang-aarch64-zlib, mingw-w64-x86_64-zlib",
+      "version": "mingw-w64-zlib-1.3.1-1.src.tar.zst",
+      "platforms": [
+        "win32/x64",
+        "win32/arm64"
+      ]
+    },
+    {
+      "path": "source-sed-4.9-1-sed_sed-4.9.tar.xz_sed-4.9_COPYING",
+      "sha256": "3972dc9744f6499f0f9b2dbf76696f2ae7ad8af9b23dde66d6af86c9dfb36986",
+      "source": "https://repo.msys2.org/msys/sources/sed-4.9-1.src.tar.zst#sed/sed-4.9.tar.xz!sed-4.9/COPYING",
+      "component": "sed",
+      "version": "sed-4.9-1.src.tar.zst",
+      "platforms": [
+        "win32/x64",
+        "win32/arm64"
+      ]
+    },
+    {
+      "path": "source-ncurses-6.6-1-ncurses_ncurses-6.6.tar.gz_ncurses-6.6_COPYING",
+      "sha256": "708999f95527e1ffa670c6fce288c6c600cb477dd04afcc1171422b3dd4ee226",
+      "source": "https://repo.msys2.org/msys/sources/ncurses-6.6-1.src.tar.zst#ncurses/ncurses-6.6.tar.gz!ncurses-6.6/COPYING",
+      "component": "ncurses",
+      "version": "ncurses-6.6-1.src.tar.zst",
+      "platforms": [
+        "win32/x64",
+        "win32/arm64"
+      ]
+    },
+    {
+      "path": "source-ncurses-6.6-1-ncurses_ncurses-6.6.tar.gz_ncurses-6.6_package_debian-mingw_copyright",
+      "sha256": "0371fd27cc0e7613c6abbf0aed476934ddb0948d9d360b3e5f9424202d6ff1ee",
+      "source": "https://repo.msys2.org/msys/sources/ncurses-6.6-1.src.tar.zst#ncurses/ncurses-6.6.tar.gz!ncurses-6.6/package/debian-mingw/copyright",
+      "component": "ncurses",
+      "version": "ncurses-6.6-1.src.tar.zst",
+      "platforms": [
+        "win32/x64",
+        "win32/arm64"
+      ]
+    },
+    {
+      "path": "source-ncurses-6.6-1-ncurses_ncurses-6.6.tar.gz_ncurses-6.6_package_debian-mingw64_copyright",
+      "sha256": "0371fd27cc0e7613c6abbf0aed476934ddb0948d9d360b3e5f9424202d6ff1ee",
+      "source": "https://repo.msys2.org/msys/sources/ncurses-6.6-1.src.tar.zst#ncurses/ncurses-6.6.tar.gz!ncurses-6.6/package/debian-mingw64/copyright",
+      "component": "ncurses",
+      "version": "ncurses-6.6-1.src.tar.zst",
+      "platforms": [
+        "win32/x64",
+        "win32/arm64"
+      ]
+    },
+    {
+      "path": "source-ncurses-6.6-1-ncurses_ncurses-6.6.tar.gz_ncurses-6.6_package_debian_copyright",
+      "sha256": "0371fd27cc0e7613c6abbf0aed476934ddb0948d9d360b3e5f9424202d6ff1ee",
+      "source": "https://repo.msys2.org/msys/sources/ncurses-6.6-1.src.tar.zst#ncurses/ncurses-6.6.tar.gz!ncurses-6.6/package/debian/copyright",
+      "component": "ncurses",
+      "version": "ncurses-6.6-1.src.tar.zst",
+      "platforms": [
+        "win32/x64",
+        "win32/arm64"
+      ]
+    },
+    {
+      "path": "source-dash-0.5.13.1-1-dash_dash-0.5.13.1.tar.gz_dash-0.5.13.1_COPYING",
+      "sha256": "254a7894923ff62e69184a991dcbccae97edee58a1105e8efbe78caf10595d72",
+      "source": "https://repo.msys2.org/msys/sources/dash-0.5.13.1-1.src.tar.zst#dash/dash-0.5.13.1.tar.gz!dash-0.5.13.1/COPYING",
+      "component": "dash",
+      "version": "dash-0.5.13.1-1.src.tar.zst",
+      "platforms": [
+        "win32/x64",
+        "win32/arm64"
+      ]
+    },
+    {
+      "path": "source-zlib-1.3.1-1-zlib_zlib-1.3.1.tar.xz_zlib-1.3.1_LICENSE",
+      "sha256": "845efc77857d485d91fb3e0b884aaa929368c717ae8186b66fe1ed2495753243",
+      "source": "https://repo.msys2.org/msys/sources/zlib-1.3.1-1.src.tar.zst#zlib/zlib-1.3.1.tar.xz!zlib-1.3.1/LICENSE",
+      "component": "zlib",
+      "version": "zlib-1.3.1-1.src.tar.zst",
+      "platforms": [
+        "win32/x64",
+        "win32/arm64"
+      ]
+    },
+    {
+      "path": "source-zlib-1.3.1-1-zlib_zlib-1.3.1.tar.xz_zlib-1.3.1_contrib_dotzlib_LICENSE_1_0.txt",
+      "sha256": "36266a8fd073568394cb81cdb2b124f7fdae2c64c1a7ed09db34b4d22efa2951",
+      "source": "https://repo.msys2.org/msys/sources/zlib-1.3.1-1.src.tar.zst#zlib/zlib-1.3.1.tar.xz!zlib-1.3.1/contrib/dotzlib/LICENSE_1_0.txt",
+      "component": "zlib",
+      "version": "zlib-1.3.1-1.src.tar.zst",
+      "platforms": [
+        "win32/x64",
+        "win32/arm64"
+      ]
+    },
+    {
+      "path": "source-mingw-w64-llvm-21.1.8-1-mingw-w64-llvm_clang-21.1.8.src.tar.xz_clang-21.1.8.src_LICENSE.TXT",
+      "sha256": "ebcd9bbf783a73d05c53ba4d586b8d5813dcdf3bbec50265860ccc885e606f47",
+      "source": "https://repo.msys2.org/mingw/sources/mingw-w64-llvm-21.1.8-1.src.tar.zst#mingw-w64-llvm/clang-21.1.8.src.tar.xz!clang-21.1.8.src/LICENSE.TXT",
+      "component": "mingw-w64-clang-aarch64-libc++, mingw-w64-clang-aarch64-libunwind",
+      "version": "mingw-w64-llvm-21.1.8-1.src.tar.zst",
+      "platforms": [
+        "win32/x64",
+        "win32/arm64"
+      ]
+    },
+    {
+      "path": "source-mingw-w64-llvm-21.1.8-1-mingw-w64-llvm_clang-tools-extra-21.1.8.src.tar.xz_clang-tools-extra-21.1.8.src_LICENSE.TXT",
+      "sha256": "ebcd9bbf783a73d05c53ba4d586b8d5813dcdf3bbec50265860ccc885e606f47",
+      "source": "https://repo.msys2.org/mingw/sources/mingw-w64-llvm-21.1.8-1.src.tar.zst#mingw-w64-llvm/clang-tools-extra-21.1.8.src.tar.xz!clang-tools-extra-21.1.8.src/LICENSE.TXT",
+      "component": "mingw-w64-clang-aarch64-libc++, mingw-w64-clang-aarch64-libunwind",
+      "version": "mingw-w64-llvm-21.1.8-1.src.tar.zst",
+      "platforms": [
+        "win32/x64",
+        "win32/arm64"
+      ]
+    },
+    {
+      "path": "source-mingw-w64-llvm-21.1.8-1-mingw-w64-llvm_clang-tools-extra-21.1.8.src.tar.xz_clang-tools-extra-21.1.8.src_clang-tidy_cert_LICENSE.TXT",
+      "sha256": "d8e09a37202601346ed9f3962c843cf60d985570111602399a9b845c44a654ba",
+      "source": "https://repo.msys2.org/mingw/sources/mingw-w64-llvm-21.1.8-1.src.tar.zst#mingw-w64-llvm/clang-tools-extra-21.1.8.src.tar.xz!clang-tools-extra-21.1.8.src/clang-tidy/cert/LICENSE.TXT",
+      "component": "mingw-w64-clang-aarch64-libc++, mingw-w64-clang-aarch64-libunwind",
+      "version": "mingw-w64-llvm-21.1.8-1.src.tar.zst",
+      "platforms": [
+        "win32/x64",
+        "win32/arm64"
+      ]
+    },
+    {
+      "path": "source-mingw-w64-llvm-21.1.8-1-mingw-w64-llvm_clang-tools-extra-21.1.8.src.tar.xz_clang-tools-extra-21.1.8.src_clang-tidy_hicpp_LICENSE.TXT",
+      "sha256": "271b9c47cbf07475b8012f708fe08a348821261d66795daefed400e9238db379",
+      "source": "https://repo.msys2.org/mingw/sources/mingw-w64-llvm-21.1.8-1.src.tar.zst#mingw-w64-llvm/clang-tools-extra-21.1.8.src.tar.xz!clang-tools-extra-21.1.8.src/clang-tidy/hicpp/LICENSE.TXT",
+      "component": "mingw-w64-clang-aarch64-libc++, mingw-w64-clang-aarch64-libunwind",
+      "version": "mingw-w64-llvm-21.1.8-1.src.tar.zst",
+      "platforms": [
+        "win32/x64",
+        "win32/arm64"
+      ]
+    },
+    {
+      "path": "source-mingw-w64-llvm-21.1.8-1-mingw-w64-llvm_compiler-rt-21.1.8.src.tar.xz_compiler-rt-21.1.8.src_LICENSE.TXT",
+      "sha256": "1a8f1058753f1ba890de984e48f0242a3a5c29a6a8f2ed9fd813f36985387e8d",
+      "source": "https://repo.msys2.org/mingw/sources/mingw-w64-llvm-21.1.8-1.src.tar.zst#mingw-w64-llvm/compiler-rt-21.1.8.src.tar.xz!compiler-rt-21.1.8.src/LICENSE.TXT",
+      "component": "mingw-w64-clang-aarch64-libc++, mingw-w64-clang-aarch64-libunwind",
+      "version": "mingw-w64-llvm-21.1.8-1.src.tar.zst",
+      "platforms": [
+        "win32/x64",
+        "win32/arm64"
+      ]
+    },
+    {
+      "path": "source-mingw-w64-llvm-21.1.8-1-mingw-w64-llvm_lld-21.1.8.src.tar.xz_lld-21.1.8.src_LICENSE.TXT",
+      "sha256": "f7891568956e34643eb6a0db1462db30820d40d7266e2a78063f2fe233ece5a0",
+      "source": "https://repo.msys2.org/mingw/sources/mingw-w64-llvm-21.1.8-1.src.tar.zst#mingw-w64-llvm/lld-21.1.8.src.tar.xz!lld-21.1.8.src/LICENSE.TXT",
+      "component": "mingw-w64-clang-aarch64-libc++, mingw-w64-clang-aarch64-libunwind",
+      "version": "mingw-w64-llvm-21.1.8-1.src.tar.zst",
+      "platforms": [
+        "win32/x64",
+        "win32/arm64"
+      ]
+    },
+    {
+      "path": "source-mingw-w64-llvm-21.1.8-1-mingw-w64-llvm_llvm-21.1.8.src.tar.xz_llvm-21.1.8.src_LICENSE.TXT",
+      "sha256": "8d85c1057d742e597985c7d4e6320b015a9139385cff4cbae06ffc0ebe89afee",
+      "source": "https://repo.msys2.org/mingw/sources/mingw-w64-llvm-21.1.8-1.src.tar.zst#mingw-w64-llvm/llvm-21.1.8.src.tar.xz!llvm-21.1.8.src/LICENSE.TXT",
+      "component": "mingw-w64-clang-aarch64-libc++, mingw-w64-clang-aarch64-libunwind",
+      "version": "mingw-w64-llvm-21.1.8-1.src.tar.zst",
+      "platforms": [
+        "win32/x64",
+        "win32/arm64"
+      ]
+    },
+    {
+      "path": "source-mingw-w64-llvm-21.1.8-1-mingw-w64-llvm_llvm-21.1.8.src.tar.xz_llvm-21.1.8.src_lib_Support_COPYRIGHT.regex",
+      "sha256": "0424e57d4303164dc59a8509c20dae0518b853692e5c2b0e98b11816fdbc97c7",
+      "source": "https://repo.msys2.org/mingw/sources/mingw-w64-llvm-21.1.8-1.src.tar.zst#mingw-w64-llvm/llvm-21.1.8.src.tar.xz!llvm-21.1.8.src/lib/Support/COPYRIGHT.regex",
+      "component": "mingw-w64-clang-aarch64-libc++, mingw-w64-clang-aarch64-libunwind",
+      "version": "mingw-w64-llvm-21.1.8-1.src.tar.zst",
+      "platforms": [
+        "win32/x64",
+        "win32/arm64"
+      ]
+    },
+    {
+      "path": "source-mingw-w64-llvm-21.1.8-1-mingw-w64-llvm_llvm-21.1.8.src.tar.xz_llvm-21.1.8.src_test_YAMLParser_LICENSE.txt",
+      "sha256": "d0d8b09800a45cd982e9568fc7669d9c1a4c330e275a821bbe24d54366d16fe9",
+      "source": "https://repo.msys2.org/mingw/sources/mingw-w64-llvm-21.1.8-1.src.tar.zst#mingw-w64-llvm/llvm-21.1.8.src.tar.xz!llvm-21.1.8.src/test/YAMLParser/LICENSE.txt",
+      "component": "mingw-w64-clang-aarch64-libc++, mingw-w64-clang-aarch64-libunwind",
+      "version": "mingw-w64-llvm-21.1.8-1.src.tar.zst",
+      "platforms": [
+        "win32/x64",
+        "win32/arm64"
+      ]
+    },
+    {
+      "path": "source-mingw-w64-llvm-21.1.8-1-mingw-w64-llvm_llvm-21.1.8.src.tar.xz_llvm-21.1.8.src_utils_lit_LICENSE.TXT",
+      "sha256": "8d85c1057d742e597985c7d4e6320b015a9139385cff4cbae06ffc0ebe89afee",
+      "source": "https://repo.msys2.org/mingw/sources/mingw-w64-llvm-21.1.8-1.src.tar.zst#mingw-w64-llvm/llvm-21.1.8.src.tar.xz!llvm-21.1.8.src/utils/lit/LICENSE.TXT",
+      "component": "mingw-w64-clang-aarch64-libc++, mingw-w64-clang-aarch64-libunwind",
+      "version": "mingw-w64-llvm-21.1.8-1.src.tar.zst",
+      "platforms": [
+        "win32/x64",
+        "win32/arm64"
+      ]
+    },
+    {
+      "path": "source-mingw-w64-llvm-21.1.8-1-mingw-w64-llvm_third-party-21.1.8.src.tar.xz_third-party-21.1.8.src_benchmark_LICENSE",
+      "sha256": "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30",
+      "source": "https://repo.msys2.org/mingw/sources/mingw-w64-llvm-21.1.8-1.src.tar.zst#mingw-w64-llvm/third-party-21.1.8.src.tar.xz!third-party-21.1.8.src/benchmark/LICENSE",
+      "component": "mingw-w64-clang-aarch64-libc++, mingw-w64-clang-aarch64-libunwind",
+      "version": "mingw-w64-llvm-21.1.8-1.src.tar.zst",
+      "platforms": [
+        "win32/x64",
+        "win32/arm64"
+      ]
+    },
+    {
+      "path": "source-mingw-w64-llvm-21.1.8-1-mingw-w64-llvm_third-party-21.1.8.src.tar.xz_third-party-21.1.8.src_unittest_googlemock_LICENSE.txt",
+      "sha256": "9702de7e4117a8e2b20dafab11ffda58c198aede066406496bef670d40a22138",
+      "source": "https://repo.msys2.org/mingw/sources/mingw-w64-llvm-21.1.8-1.src.tar.zst#mingw-w64-llvm/third-party-21.1.8.src.tar.xz!third-party-21.1.8.src/unittest/googlemock/LICENSE.txt",
+      "component": "mingw-w64-clang-aarch64-libc++, mingw-w64-clang-aarch64-libunwind",
+      "version": "mingw-w64-llvm-21.1.8-1.src.tar.zst",
+      "platforms": [
+        "win32/x64",
+        "win32/arm64"
+      ]
+    },
+    {
+      "path": "source-mingw-w64-llvm-21.1.8-1-mingw-w64-llvm_third-party-21.1.8.src.tar.xz_third-party-21.1.8.src_unittest_googletest_LICENSE.TXT",
+      "sha256": "9702de7e4117a8e2b20dafab11ffda58c198aede066406496bef670d40a22138",
+      "source": "https://repo.msys2.org/mingw/sources/mingw-w64-llvm-21.1.8-1.src.tar.zst#mingw-w64-llvm/third-party-21.1.8.src.tar.xz!third-party-21.1.8.src/unittest/googletest/LICENSE.TXT",
+      "component": "mingw-w64-clang-aarch64-libc++, mingw-w64-clang-aarch64-libunwind",
+      "version": "mingw-w64-llvm-21.1.8-1.src.tar.zst",
+      "platforms": [
+        "win32/x64",
+        "win32/arm64"
+      ]
+    },
+    {
+      "path": "supplement-msys2-runtime-3.6.6-1-cygwin-3.6.6_COPYING",
+      "sha256": "231f7edcc7352d7734a96eef0b8030f77982678c516876fcb81e25b32d68564c",
+      "source": "https://github.com/git-for-windows/pacman-repo/releases/download/2026-01-15T22-34-40.508011800Z/msys2-runtime-3.6.6-1.src.tar.gz#cygwin-3.6.6/COPYING",
+      "component": "msys2-runtime",
+      "version": "msys2-runtime-3.6.6-1.src.tar.gz",
+      "platforms": [
+        "win32/x64",
+        "win32/arm64"
+      ]
+    },
+    {
+      "path": "supplement-msys2-runtime-3.6.6-1-cygwin-3.6.6_COPYING.LIB",
+      "sha256": "a9bdde5616ecdd1e980b44f360600ee8783b1f99b8cc83a2beb163a0a390e861",
+      "source": "https://github.com/git-for-windows/pacman-repo/releases/download/2026-01-15T22-34-40.508011800Z/msys2-runtime-3.6.6-1.src.tar.gz#cygwin-3.6.6/COPYING.LIB",
+      "component": "msys2-runtime",
+      "version": "msys2-runtime-3.6.6-1.src.tar.gz",
+      "platforms": [
+        "win32/x64",
+        "win32/arm64"
+      ]
+    },
+    {
+      "path": "supplement-msys2-runtime-3.6.6-1-cygwin-3.6.6_COPYING.LIBGLOSS",
+      "sha256": "bdaffd5fff30cb5fc7a239a4fa0b95f703590f7b3813ca7f4e76ff46437aeb81",
+      "source": "https://github.com/git-for-windows/pacman-repo/releases/download/2026-01-15T22-34-40.508011800Z/msys2-runtime-3.6.6-1.src.tar.gz#cygwin-3.6.6/COPYING.LIBGLOSS",
+      "component": "msys2-runtime",
+      "version": "msys2-runtime-3.6.6-1.src.tar.gz",
+      "platforms": [
+        "win32/x64",
+        "win32/arm64"
+      ]
+    },
+    {
+      "path": "supplement-msys2-runtime-3.6.6-1-cygwin-3.6.6_COPYING.NEWLIB",
+      "sha256": "fcfb5ec69b6ab52676dcc4dab7cf4338c8000ef97812dadd35b8592a640a8419",
+      "source": "https://github.com/git-for-windows/pacman-repo/releases/download/2026-01-15T22-34-40.508011800Z/msys2-runtime-3.6.6-1.src.tar.gz#cygwin-3.6.6/COPYING.NEWLIB",
+      "component": "msys2-runtime",
+      "version": "msys2-runtime-3.6.6-1.src.tar.gz",
+      "platforms": [
+        "win32/x64",
+        "win32/arm64"
+      ]
+    },
+    {
+      "path": "supplement-msys2-runtime-3.6.6-1-cygwin-3.6.6_include_COPYING",
+      "sha256": "231f7edcc7352d7734a96eef0b8030f77982678c516876fcb81e25b32d68564c",
+      "source": "https://github.com/git-for-windows/pacman-repo/releases/download/2026-01-15T22-34-40.508011800Z/msys2-runtime-3.6.6-1.src.tar.gz#cygwin-3.6.6/include/COPYING",
+      "component": "msys2-runtime",
+      "version": "msys2-runtime-3.6.6-1.src.tar.gz",
+      "platforms": [
+        "win32/x64",
+        "win32/arm64"
+      ]
+    },
+    {
+      "path": "supplement-msys2-runtime-3.6.6-1-cygwin-3.6.6_newlib_libc_posix_COPYRIGHT",
+      "sha256": "b4f217294d6910b752eb4d85c1bf1540c475911efaf4b6f86227149d2bc69efe",
+      "source": "https://github.com/git-for-windows/pacman-repo/releases/download/2026-01-15T22-34-40.508011800Z/msys2-runtime-3.6.6-1.src.tar.gz#cygwin-3.6.6/newlib/libc/posix/COPYRIGHT",
+      "component": "msys2-runtime",
+      "version": "msys2-runtime-3.6.6-1.src.tar.gz",
+      "platforms": [
+        "win32/x64",
+        "win32/arm64"
+      ]
+    },
+    {
+      "path": "supplement-msys2-runtime-3.6.6-1-cygwin-3.6.6_winsup_COPYING",
+      "sha256": "8ceb4b9ee5adedde47b31e975c1d90c73ad27b6b165a1dcd80c7c545eb65b903",
+      "source": "https://github.com/git-for-windows/pacman-repo/releases/download/2026-01-15T22-34-40.508011800Z/msys2-runtime-3.6.6-1.src.tar.gz#cygwin-3.6.6/winsup/COPYING",
+      "component": "msys2-runtime",
+      "version": "msys2-runtime-3.6.6-1.src.tar.gz",
+      "platforms": [
+        "win32/x64",
+        "win32/arm64"
+      ]
+    },
+    {
+      "path": "supplement-msys2-runtime-3.6.6-1-cygwin-3.6.6_winsup_COPYING.LIB",
+      "sha256": "da7eabb7bafdf7d3ae5e9f223aa5bdc1eece45ac569dc21b3b037520b4464768",
+      "source": "https://github.com/git-for-windows/pacman-repo/releases/download/2026-01-15T22-34-40.508011800Z/msys2-runtime-3.6.6-1.src.tar.gz#cygwin-3.6.6/winsup/COPYING.LIB",
+      "component": "msys2-runtime",
+      "version": "msys2-runtime-3.6.6-1.src.tar.gz",
+      "platforms": [
+        "win32/x64",
+        "win32/arm64"
+      ]
+    },
+    {
+      "path": "supplement-msys2-runtime-3.6.6-1-cygwin-3.6.6_winsup_cygwin_regex_COPYRIGHT",
+      "sha256": "3be175b44ed4ee963d61a34296b3ec8517d82322e9ee77bf365d29d454a497d4",
+      "source": "https://github.com/git-for-windows/pacman-repo/releases/download/2026-01-15T22-34-40.508011800Z/msys2-runtime-3.6.6-1.src.tar.gz#cygwin-3.6.6/winsup/cygwin/regex/COPYRIGHT",
+      "component": "msys2-runtime",
+      "version": "msys2-runtime-3.6.6-1.src.tar.gz",
+      "platforms": [
+        "win32/x64",
+        "win32/arm64"
+      ]
+    },
+    {
+      "path": "supplement-msys2-runtime-3.6.6-1-cygwin-3.6.6_winsup_utils_COPYING.dumper",
+      "sha256": "231f7edcc7352d7734a96eef0b8030f77982678c516876fcb81e25b32d68564c",
+      "source": "https://github.com/git-for-windows/pacman-repo/releases/download/2026-01-15T22-34-40.508011800Z/msys2-runtime-3.6.6-1.src.tar.gz#cygwin-3.6.6/winsup/utils/COPYING.dumper",
+      "component": "msys2-runtime",
+      "version": "msys2-runtime-3.6.6-1.src.tar.gz",
+      "platforms": [
+        "win32/x64",
+        "win32/arm64"
+      ]
+    },
+    {
+      "path": "supplement-rebase-4.5.0-5-rebase-4-5-0_COPYING",
+      "sha256": "dcc100d4161cc0b7177545ab6e47216f84857cda3843847c792a25289852dcaa",
+      "source": "https://repo.msys2.org/msys/sources/rebase-4.5.0-5.src.tar.zst#rebase-4-5-0/COPYING",
+      "component": "rebase",
+      "version": "rebase-4.5.0-5.src.tar.zst",
+      "platforms": [
+        "win32/x64",
+        "win32/arm64"
+      ]
+    },
+    {
+      "path": "supplement-mingw-w64-winpthreads-13.0.0.r488.g3fedac280-2-3fedac28018c447ccdd9519c9d556340dfa1c87e_COPYING",
+      "sha256": "99a69660981156c21336fdb5661f89341b013c94e4bf9e1c7467b4745718397f",
+      "source": "https://repo.msys2.org/mingw/sources/mingw-w64-winpthreads-13.0.0.r488.g3fedac280-2.src.tar.zst#3fedac28018c447ccdd9519c9d556340dfa1c87e/COPYING",
+      "component": "mingw-w64-x86_64-libwinpthread",
+      "version": "mingw-w64-winpthreads-13.0.0.r488.g3fedac280-2.src.tar.zst",
+      "platforms": [
+        "win32/x64",
+        "win32/arm64"
+      ]
+    },
+    {
+      "path": "supplement-mingw-w64-winpthreads-13.0.0.r488.g3fedac280-2-3fedac28018c447ccdd9519c9d556340dfa1c87e_COPYING.MinGW-w64-runtime_COPYING.MinGW-w64-runtime.txt",
+      "sha256": "1db8da07b436c68833c0673ffee3d9fcb2526047f3820b81661865dfedc79a1f",
+      "source": "https://repo.msys2.org/mingw/sources/mingw-w64-winpthreads-13.0.0.r488.g3fedac280-2.src.tar.zst#3fedac28018c447ccdd9519c9d556340dfa1c87e/COPYING.MinGW-w64-runtime/COPYING.MinGW-w64-runtime.txt",
+      "component": "mingw-w64-x86_64-libwinpthread",
+      "version": "mingw-w64-winpthreads-13.0.0.r488.g3fedac280-2.src.tar.zst",
+      "platforms": [
+        "win32/x64",
+        "win32/arm64"
+      ]
+    },
+    {
+      "path": "supplement-mingw-w64-winpthreads-13.0.0.r488.g3fedac280-2-3fedac28018c447ccdd9519c9d556340dfa1c87e_COPYING.MinGW-w64_COPYING.MinGW-w64.txt",
+      "sha256": "f38e6194bd3bfa1b654f118e5acefe0aead437bbe669eee43957ccc65a7127f1",
+      "source": "https://repo.msys2.org/mingw/sources/mingw-w64-winpthreads-13.0.0.r488.g3fedac280-2.src.tar.zst#3fedac28018c447ccdd9519c9d556340dfa1c87e/COPYING.MinGW-w64/COPYING.MinGW-w64.txt",
+      "component": "mingw-w64-x86_64-libwinpthread",
+      "version": "mingw-w64-winpthreads-13.0.0.r488.g3fedac280-2.src.tar.zst",
+      "platforms": [
+        "win32/x64",
+        "win32/arm64"
+      ]
+    },
+    {
+      "path": "supplement-mingw-w64-winpthreads-13.0.0.r488.g3fedac280-2-3fedac28018c447ccdd9519c9d556340dfa1c87e_mingw-w64-libraries_winpthreads_COPYING",
+      "sha256": "63263614cdd29f2f93cba85e992f041b31f9fc7b4033692f31269489a8a1b177",
+      "source": "https://repo.msys2.org/mingw/sources/mingw-w64-winpthreads-13.0.0.r488.g3fedac280-2.src.tar.zst#3fedac28018c447ccdd9519c9d556340dfa1c87e/mingw-w64-libraries/winpthreads/COPYING",
+      "component": "mingw-w64-x86_64-libwinpthread",
+      "version": "mingw-w64-winpthreads-13.0.0.r488.g3fedac280-2.src.tar.zst",
+      "platforms": [
+        "win32/x64",
+        "win32/arm64"
+      ]
+    },
+    {
+      "path": "supplement-gcc-15.2.0-1-gcc-15.2.0_COPYING.RUNTIME",
+      "sha256": "9d6b43ce4d8de0c878bf16b54d8e7a10d9bd42b75178153e3af6a815bdc90f74",
+      "source": "https://repo.msys2.org/msys/sources/gcc-15.2.0-1.src.tar.zst#gcc-15.2.0/COPYING.RUNTIME",
+      "component": "gcc-libs",
+      "version": "gcc-15.2.0-1.src.tar.zst",
+      "platforms": [
+        "win32/x64",
+        "win32/arm64"
+      ]
+    },
+    {
+      "path": "supplement-gcc-15.2.0-1-gcc-15.2.0_COPYING3",
+      "sha256": "8ceb4b9ee5adedde47b31e975c1d90c73ad27b6b165a1dcd80c7c545eb65b903",
+      "source": "https://repo.msys2.org/msys/sources/gcc-15.2.0-1.src.tar.zst#gcc-15.2.0/COPYING3",
+      "component": "gcc-libs",
+      "version": "gcc-15.2.0-1.src.tar.zst",
+      "platforms": [
+        "win32/x64",
+        "win32/arm64"
+      ]
+    },
+    {
+      "path": "supplement-gcc-15.2.0-1-gcc-15.2.0_COPYING.LIB",
+      "sha256": "a9bdde5616ecdd1e980b44f360600ee8783b1f99b8cc83a2beb163a0a390e861",
+      "source": "https://repo.msys2.org/msys/sources/gcc-15.2.0-1.src.tar.zst#gcc-15.2.0/COPYING.LIB",
+      "component": "gcc-libs",
+      "version": "gcc-15.2.0-1.src.tar.zst",
+      "platforms": [
+        "win32/x64",
+        "win32/arm64"
+      ]
+    },
+    {
+      "path": "supplement-gcc-15.2.0-1-gcc-15.2.0_COPYING3.LIB",
+      "sha256": "a853c2ffec17057872340eee242ae4d96cbf2b520ae27d903e1b2fef1a5f9d1c",
+      "source": "https://repo.msys2.org/msys/sources/gcc-15.2.0-1.src.tar.zst#gcc-15.2.0/COPYING3.LIB",
+      "component": "gcc-libs",
+      "version": "gcc-15.2.0-1.src.tar.zst",
+      "platforms": [
+        "win32/x64",
+        "win32/arm64"
+      ]
+    },
+    {
+      "path": "supplement-gcc-15.2.0-1-gcc-15.2.0_COPYING",
+      "sha256": "231f7edcc7352d7734a96eef0b8030f77982678c516876fcb81e25b32d68564c",
+      "source": "https://repo.msys2.org/msys/sources/gcc-15.2.0-1.src.tar.zst#gcc-15.2.0/COPYING",
+      "component": "gcc-libs",
+      "version": "gcc-15.2.0-1.src.tar.zst",
+      "platforms": [
+        "win32/x64",
+        "win32/arm64"
+      ]
+    },
+    {
+      "path": "supplement-mingw-w64-gcc-15.2.0-11-gcc-15.2.0_COPYING.RUNTIME",
+      "sha256": "9d6b43ce4d8de0c878bf16b54d8e7a10d9bd42b75178153e3af6a815bdc90f74",
+      "source": "https://repo.msys2.org/mingw/sources/mingw-w64-gcc-15.2.0-11.src.tar.zst#gcc-15.2.0/COPYING.RUNTIME",
+      "component": "mingw-w64-x86_64-gcc-libs",
+      "version": "mingw-w64-gcc-15.2.0-11.src.tar.zst",
+      "platforms": [
+        "win32/x64",
+        "win32/arm64"
+      ]
+    },
+    {
+      "path": "supplement-mingw-w64-gcc-15.2.0-11-gcc-15.2.0_COPYING3",
+      "sha256": "8ceb4b9ee5adedde47b31e975c1d90c73ad27b6b165a1dcd80c7c545eb65b903",
+      "source": "https://repo.msys2.org/mingw/sources/mingw-w64-gcc-15.2.0-11.src.tar.zst#gcc-15.2.0/COPYING3",
+      "component": "mingw-w64-x86_64-gcc-libs",
+      "version": "mingw-w64-gcc-15.2.0-11.src.tar.zst",
+      "platforms": [
+        "win32/x64",
+        "win32/arm64"
+      ]
+    },
+    {
+      "path": "supplement-mingw-w64-gcc-15.2.0-11-gcc-15.2.0_COPYING.LIB",
+      "sha256": "a9bdde5616ecdd1e980b44f360600ee8783b1f99b8cc83a2beb163a0a390e861",
+      "source": "https://repo.msys2.org/mingw/sources/mingw-w64-gcc-15.2.0-11.src.tar.zst#gcc-15.2.0/COPYING.LIB",
+      "component": "mingw-w64-x86_64-gcc-libs",
+      "version": "mingw-w64-gcc-15.2.0-11.src.tar.zst",
+      "platforms": [
+        "win32/x64",
+        "win32/arm64"
+      ]
+    },
+    {
+      "path": "supplement-mingw-w64-gcc-15.2.0-11-gcc-15.2.0_COPYING3.LIB",
+      "sha256": "a853c2ffec17057872340eee242ae4d96cbf2b520ae27d903e1b2fef1a5f9d1c",
+      "source": "https://repo.msys2.org/mingw/sources/mingw-w64-gcc-15.2.0-11.src.tar.zst#gcc-15.2.0/COPYING3.LIB",
+      "component": "mingw-w64-x86_64-gcc-libs",
+      "version": "mingw-w64-gcc-15.2.0-11.src.tar.zst",
+      "platforms": [
+        "win32/x64",
+        "win32/arm64"
+      ]
+    },
+    {
+      "path": "supplement-mingw-w64-gcc-15.2.0-11-gcc-15.2.0_COPYING",
+      "sha256": "231f7edcc7352d7734a96eef0b8030f77982678c516876fcb81e25b32d68564c",
+      "source": "https://repo.msys2.org/mingw/sources/mingw-w64-gcc-15.2.0-11.src.tar.zst#gcc-15.2.0/COPYING",
+      "component": "mingw-w64-x86_64-gcc-libs",
+      "version": "mingw-w64-gcc-15.2.0-11.src.tar.zst",
+      "platforms": [
+        "win32/x64",
+        "win32/arm64"
+      ]
+    },
+    {
+      "path": "mozilla-ca-2026-07-16-SOURCE-NOTICE.txt",
+      "sha256": "820ea8d6babdc394e7804771b4c77dbbb6b3e6bb9596c01463e4d06912b3347e",
+      "source": "https://raw.githubusercontent.com/mozilla-firefox/firefox/4acf6f0d6ccb0f7008080e0d91b15258c4c6686c/security/nss/lib/ckfw/builtins/certdata.txt",
+      "component": "Mozilla CA store",
+      "version": "2026-07-16",
+      "platforms": [
+        "linux-arm64"
+      ]
+    },
+    {
+      "path": "filesystem-CC0-1.0.txt",
+      "sha256": "a2010f343487d3f7618affe54f789f5487602331c0a8d03f49e9a7c547cf0499",
+      "source": "https://creativecommons.org/publicdomain/zero/1.0/legalcode.txt",
+      "component": "MSYS2 filesystem shell/config files carrying CC0 headers",
+      "version": "2025.05.08-2",
+      "platforms": [
+        "windows-x64",
+        "windows-arm64"
+      ]
+    }
+  ],
+  "remaining": [],
+  "excludedComponents": [
+    "Git Credential Manager and its optional dependencies"
+  ],
+  "scope": "Notice text collection only for Git runtime with optional GCM omitted. Original upstream non-GCM notice directories and in-file copyright headers must also be retained. Corresponding source delivery, source availability notices, and final package inspection remain separate gates."
+}

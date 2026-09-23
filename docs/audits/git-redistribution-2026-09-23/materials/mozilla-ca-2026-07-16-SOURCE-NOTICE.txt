@@ -1,0 +1,16 @@
+#
+# This Source Code Form is subject to the terms of the Mozilla Public
+# License, v. 2.0. If a copy of the MPL was not distributed with this
+# file, You can obtain one at http://mozilla.org/MPL/2.0/.
+
+#
+# certdata.txt
+#
+# This file contains the object definitions for the certs and other
+# information "built into" NSS.
+#
+# Object definitions:
+#
+#    Certificates
+#
+#  -- Attribute --               -- type --          -- value --

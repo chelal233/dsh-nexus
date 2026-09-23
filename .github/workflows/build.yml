@@ -217,3 +217,29 @@ jobs:
           path: target/release-assets/${{ matrix.target }}/*
           if-no-files-found: error
           retention-days: 14
+
+  git-sources:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+        with:
+          node-version: '24.20.0'
+          package-manager-cache: false
+      - name: Check Git material clearance
+        id: git-license
+        run: node .github/scripts/check-git-redistribution.mjs
+      - name: Verify and package corresponding source
+        if: steps.git-license.outputs.cleared == 'true'
+        run: |
+          node --test apps/nexus-launcher/tests/git-source-materials.test.mjs .github/scripts/verify-release-assets.test.mjs
+          node apps/nexus-launcher/desktop/scripts/prepare-git-sources.mjs
+      - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        if: steps.git-license.outputs.cleared == 'true'
+        with:
+          name: release-git-sources
+          path: target/git-source-assets/*
+          if-no-files-found: error
+          retention-days: 14

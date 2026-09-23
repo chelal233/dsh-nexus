@@ -1,0 +1,946 @@
+[
+  {
+    "target": "windows-x64",
+    "file": "Atlassian.Bitbucket.dll",
+    "product": "Atlassian.Bitbucket",
+    "productVersion": "2.9.0+194ba290ce533465310d50f811684ab180536ae7",
+    "fileVersion": "2.9.0.0",
+    "sha256": "d03ac1bb85265ed202cd47e3ef862f4ec7d4e23f4d9ca63202f75e5c6d0b26d8"
+  },
+  {
+    "target": "windows-x64",
+    "file": "av_libglesv2.dll",
+    "product": "ANGLE libGLESv2 Dynamic Link Library",
+    "productVersion": "2.1.22045 git hash: 4a177dd16290",
+    "fileVersion": "2.1.22045 git hash: 4a177dd16290",
+    "sha256": "619e19597f7305b1deed66e6320dcc779a4e81101fefac0118c7a0a6f106c350"
+  },
+  {
+    "target": "windows-x64",
+    "file": "Avalonia.Base.dll",
+    "product": "Avalonia",
+    "productVersion": "11.1.3+45a2d36e3214ac4b3623940ba728b2503de5c668",
+    "fileVersion": "11.1.3.0",
+    "sha256": "392c2b56b7e07e637dfb75782676722b534e51e2e7fdf648847748accfe8d9f0"
+  },
+  {
+    "target": "windows-x64",
+    "file": "Avalonia.Controls.dll",
+    "product": "Avalonia",
+    "productVersion": "11.1.3+45a2d36e3214ac4b3623940ba728b2503de5c668",
+    "fileVersion": "11.1.3.0",
+    "sha256": "8c738676cba16b540da1f0ffe3e90a7e60ea1b557763093785add052f2f0e096"
+  },
+  {
+    "target": "windows-x64",
+    "file": "Avalonia.DesignerSupport.dll",
+    "product": "Avalonia",
+    "productVersion": "0.7.0+45a2d36e3214ac4b3623940ba728b2503de5c668",
+    "fileVersion": "0.7.0.0",
+    "sha256": "385a4549ce261e31f905db7c9ac21f6c397b10873ec29a68473d55139ff3c37c"
+  },
+  {
+    "target": "windows-x64",
+    "file": "Avalonia.Dialogs.dll",
+    "product": "Avalonia",
+    "productVersion": "11.1.3+45a2d36e3214ac4b3623940ba728b2503de5c668",
+    "fileVersion": "11.1.3.0",
+    "sha256": "660c8c15560314b54ecfe73c3287f837a2dfd02ed128f17fa50a74b09a40c6b7"
+  },
+  {
+    "target": "windows-x64",
+    "file": "Avalonia.dll",
+    "product": "Avalonia",
+    "productVersion": "11.1.3+45a2d36e3214ac4b3623940ba728b2503de5c668",
+    "fileVersion": "11.1.3.0",
+    "sha256": "9ea0559b46f6fa746e6de4cd05349f6b4d48efc387af469fb73917d540784d84"
+  },
+  {
+    "target": "windows-x64",
+    "file": "Avalonia.Markup.dll",
+    "product": "Avalonia",
+    "productVersion": "11.1.3+45a2d36e3214ac4b3623940ba728b2503de5c668",
+    "fileVersion": "11.1.3.0",
+    "sha256": "ac255cb78ab548689cb62933b155035105444f34a5b0ef5ebd3542a95988cea1"
+  },
+  {
+    "target": "windows-x64",
+    "file": "Avalonia.Markup.Xaml.dll",
+    "product": "Avalonia",
+    "productVersion": "11.1.3+45a2d36e3214ac4b3623940ba728b2503de5c668",
+    "fileVersion": "11.1.3.0",
+    "sha256": "91ddf6050fb74d6a44eea6f863c376824090cc8568fd8af84da5e7455f05f891"
+  },
+  {
+    "target": "windows-x64",
+    "file": "Avalonia.Metal.dll",
+    "product": "Avalonia",
+    "productVersion": "11.1.3+45a2d36e3214ac4b3623940ba728b2503de5c668",
+    "fileVersion": "11.1.3.0",
+    "sha256": "153deb3c0fe47c044dd46e855ca1368ff376bfb3f8719c63457a8c39fb9bf2db"
+  },
+  {
+    "target": "windows-x64",
+    "file": "Avalonia.MicroCom.dll",
+    "product": "Avalonia",
+    "productVersion": "11.1.3+45a2d36e3214ac4b3623940ba728b2503de5c668",
+    "fileVersion": "11.1.3.0",
+    "sha256": "bc018651648d1ef3da247cef78d5a9d27cb05146c635c193f42bff147a58dd39"
+  },
+  {
+    "target": "windows-x64",
+    "file": "Avalonia.OpenGL.dll",
+    "product": "Avalonia",
+    "productVersion": "11.1.3+45a2d36e3214ac4b3623940ba728b2503de5c668",
+    "fileVersion": "11.1.3.0",
+    "sha256": "40480a32e90e6ad337aa1e69787bd3cd15830416f8b99e2c44fdc634ab3451bf"
+  },
+  {
+    "target": "windows-x64",
+    "file": "Avalonia.Remote.Protocol.dll",
+    "product": "Avalonia",
+    "productVersion": "11.1.3+45a2d36e3214ac4b3623940ba728b2503de5c668",
+    "fileVersion": "11.1.3.0",
+    "sha256": "3d493f4597d67e8dfe135be0f3b110d47f752150d355c5afd26b2c0fe683e3ca"
+  },
+  {
+    "target": "windows-x64",
+    "file": "Avalonia.Skia.dll",
+    "product": "Avalonia",
+    "productVersion": "11.1.3+45a2d36e3214ac4b3623940ba728b2503de5c668",
+    "fileVersion": "11.1.3.0",
+    "sha256": "63349f9586d7442885658fec139d2f49b8b7cc9168dfb8863b0d8afca9cc93db"
+  },
+  {
+    "target": "windows-x64",
+    "file": "Avalonia.Themes.Fluent.dll",
+    "product": "Avalonia",
+    "productVersion": "11.1.3+45a2d36e3214ac4b3623940ba728b2503de5c668",
+    "fileVersion": "11.1.3.0",
+    "sha256": "680fe2b42c264de4636ec6d43b4ffa35eed06d57b1b2d563706f8ad29a0bc315"
+  },
+  {
+    "target": "windows-x64",
+    "file": "Avalonia.Vulkan.dll",
+    "product": "Avalonia",
+    "productVersion": "11.1.3+45a2d36e3214ac4b3623940ba728b2503de5c668",
+    "fileVersion": "11.1.3.0",
+    "sha256": "482db3fb63b96f7a398d9b613299d0339321fe9c5c3777170ae3121c3ecd41b5"
+  },
+  {
+    "target": "windows-x64",
+    "file": "Avalonia.Win32.dll",
+    "product": "Avalonia",
+    "productVersion": "11.1.3+45a2d36e3214ac4b3623940ba728b2503de5c668",
+    "fileVersion": "11.1.3.0",
+    "sha256": "88acade75fe12b98320bbb8f689709b7e56f0a0bf100a8b7dff348feeb9cbd90"
+  },
+  {
+    "target": "windows-x64",
+    "file": "gcmcore.dll",
+    "product": "gcmcore",
+    "productVersion": "2.9.0+194ba290ce533465310d50f811684ab180536ae7",
+    "fileVersion": "2.9.0.0",
+    "sha256": "96ab6d247b7ef299ef19e568e5bea6de530d59f8b9722d893c656cafa7690db3"
+  },
+  {
+    "target": "windows-x64",
+    "file": "git-credential-manager.exe",
+    "product": "git-credential-manager",
+    "productVersion": "2.9.0+194ba290ce533465310d50f811684ab180536ae7",
+    "fileVersion": "2.9.0.0",
+    "sha256": "593dfd29885443e70255cdf4038988f831d939218aea950e32f2a356ac3b00f5"
+  },
+  {
+    "target": "windows-x64",
+    "file": "GitHub.dll",
+    "product": "GitHub",
+    "productVersion": "2.9.0+194ba290ce533465310d50f811684ab180536ae7",
+    "fileVersion": "2.9.0.0",
+    "sha256": "73c1a5f230c0a385f1a2869a32240197ab63b8397c2f78b15bb0e3ed95dd0009"
+  },
+  {
+    "target": "windows-x64",
+    "file": "GitLab.dll",
+    "product": "GitLab",
+    "productVersion": "2.9.0+194ba290ce533465310d50f811684ab180536ae7",
+    "fileVersion": "2.9.0.0",
+    "sha256": "11c203b995828bcb95a4949886a717933323ef63e40154f13fd179ca22443503"
+  },
+  {
+    "target": "windows-x64",
+    "file": "HarfBuzzSharp.dll",
+    "product": "HarfBuzzSharp",
+    "productVersion": "7.3.0.2-7af1d0840a381c0ce7ef2877454a88dbb2949686",
+    "fileVersion": "7.3.0.2",
+    "sha256": "70f931c39b6ef652da09c6a8cb3827581b71da8bd8bb5e92e0f3f411571829f9"
+  },
+  {
+    "target": "windows-x64",
+    "file": "libcrypto-3-x64.dll",
+    "product": "The OpenSSL Toolkit",
+    "productVersion": "3.5.5",
+    "fileVersion": "3.5.5",
+    "sha256": "bcf29fafe56248c4a20aa721f496243ff3fdd21624d297d6d4d2d227e8a5b576"
+  },
+  {
+    "target": "windows-x64",
+    "file": "libcurl-4.dll",
+    "product": "The curl library",
+    "productVersion": "8.18.0",
+    "fileVersion": "8.18.0",
+    "sha256": "0aff5e000c080274ff41cd2f9c58736886792e9a912ba94e4d8a4a1c3bd66ddf"
+  },
+  {
+    "target": "windows-x64",
+    "file": "libcurl-openssl-4.dll",
+    "product": "The curl library",
+    "productVersion": "8.18.0",
+    "fileVersion": "8.18.0",
+    "sha256": "1ffaf780c8be1618024f919449fd46f61deac4b742d0ca653288b36e1f0e0d1d"
+  },
+  {
+    "target": "windows-x64",
+    "file": "libHarfBuzzSharp.dll",
+    "product": null,
+    "productVersion": null,
+    "fileVersion": null,
+    "sha256": "1732b538093aaeb30bd64ad98ff332d42e771e262de597d750b429af31bbf417"
+  },
+  {
+    "target": "windows-x64",
+    "file": "libiconv-2.dll",
+    "product": "libiconv: character set conversion library",
+    "productVersion": "1.18",
+    "fileVersion": "1.18",
+    "sha256": "ff31fa811f9c07cc7fdaa68c9e8bca3a7b4fdf6e0a079a58175ea58ba139c7ae"
+  },
+  {
+    "target": "windows-x64",
+    "file": "libintl-8.dll",
+    "product": "GNU libintl: accessing NLS message catalogs",
+    "productVersion": "1.0",
+    "fileVersion": "1.0",
+    "sha256": "0537c3dd2378218508ebe3cc416d72a99ee2d24ae1c5525e23458f32544ef861"
+  },
+  {
+    "target": "windows-x64",
+    "file": "libnghttp2-14.dll",
+    "product": "NGHTTP2.",
+    "productVersion": "1.68.0.0 (MSVC release)",
+    "fileVersion": "1.68.0.0 (MSVC release)",
+    "sha256": "de07491c946e10a16d23d1e1f9aad872f6db8d58934cc658ca17f69e441b79fd"
+  },
+  {
+    "target": "windows-x64",
+    "file": "libSkiaSharp.dll",
+    "product": null,
+    "productVersion": null,
+    "fileVersion": null,
+    "sha256": "ff8d668624fc67df43333ceb2e9a5a03cb02da06a1081eb78ab05ec4132fcf6b"
+  },
+  {
+    "target": "windows-x64",
+    "file": "libssh2-1.dll",
+    "product": "The libssh2 library",
+    "productVersion": "1.11.1",
+    "fileVersion": "1.11.1",
+    "sha256": "ee7fe3e749859334c99e9261689481dd879811122598d22585421f95d29fc7ae"
+  },
+  {
+    "target": "windows-x64",
+    "file": "libssl-3-x64.dll",
+    "product": "The OpenSSL Toolkit",
+    "productVersion": "3.5.5",
+    "fileVersion": "3.5.5",
+    "sha256": "732dd876b63f3b68e1a8076cb71e2e52c9e04164cd92a4f306c00728f9b8cc51"
+  },
+  {
+    "target": "windows-x64",
+    "file": "libunistring-5.dll",
+    "product": "GNU libunistring: Unicode string library",
+    "productVersion": "1.3",
+    "fileVersion": "1.3",
+    "sha256": "70813b4aaa82f8b0999d8c2fdd4c49c6d31035f17325f5f138f39f7273449adf"
+  },
+  {
+    "target": "windows-x64",
+    "file": "MicroCom.Runtime.dll",
+    "product": "MicroCom",
+    "productVersion": "0.11.0",
+    "fileVersion": "0.11.0.0",
+    "sha256": "0d55f1e0708318e06616b7e8d03c125a184de0e44eb2d4f52727f02b6efbec05"
+  },
+  {
+    "target": "windows-x64",
+    "file": "Microsoft.AzureRepos.dll",
+    "product": "Microsoft.AzureRepos",
+    "productVersion": "2.9.0+194ba290ce533465310d50f811684ab180536ae7",
+    "fileVersion": "2.9.0.0",
+    "sha256": "4aced14747f4593be95e99b201b5c97a9e4ea76624ed905554795d235f0a977a"
+  },
+  {
+    "target": "windows-x64",
+    "file": "Microsoft.Bcl.AsyncInterfaces.dll",
+    "product": "Microsoft® .NET",
+    "productVersion": "8.0.0+5535e31a712343a63f5d7d796cd874e563e5ac14",
+    "fileVersion": "8.0.23.53103",
+    "sha256": "ad14fdae478ec07ebaee5371c54960c51216d0f210d1c496a0804766a6b827ac"
+  },
+  {
+    "target": "windows-x64",
+    "file": "Microsoft.Identity.Client.Broker.dll",
+    "product": "Microsoft Authentication Library Broker",
+    "productVersion": "4.84.2+bad7cae331c1d9e699ca2150a5fecb108ea54916",
+    "fileVersion": "4.84.2.0",
+    "sha256": "52e5ccfcb00d9b39e05d140f27f8b7bea7f03b7493358c2008b1fedd69e6ae4d"
+  },
+  {
+    "target": "windows-x64",
+    "file": "Microsoft.Identity.Client.dll",
+    "product": "Microsoft Authentication Library",
+    "productVersion": "4.84.2+bad7cae331c1d9e699ca2150a5fecb108ea54916",
+    "fileVersion": "4.84.2.0",
+    "sha256": "568535d2e71c8bf2549633f390ee5a0b00d1a335e2059199fff2e3c6b157fb3f"
+  },
+  {
+    "target": "windows-x64",
+    "file": "Microsoft.Identity.Client.Extensions.Msal.dll",
+    "product": "Microsoft Authentication Library",
+    "productVersion": "4.84.2+bad7cae331c1d9e699ca2150a5fecb108ea54916",
+    "fileVersion": "4.84.2.0",
+    "sha256": "248ffb23f827d2ee9a20020efcb9af2363ab0cc69ac41becbf97067242d1d88a"
+  },
+  {
+    "target": "windows-x64",
+    "file": "Microsoft.Identity.Client.NativeInterop.dll",
+    "product": "Microsoft.Identity.Client.NativeInterop",
+    "productVersion": "0.20.6+ddd579d61e24a3f6495458c0899672d7644e637c",
+    "fileVersion": "0.20.6.0",
+    "sha256": "ae60888ac537fcb2b08d9f6cd2a805fcfd3cf63286679ae63ea885d1f089607a"
+  },
+  {
+    "target": "windows-x64",
+    "file": "Microsoft.IdentityModel.Abstractions.dll",
+    "product": "Microsoft IdentityModel",
+    "productVersion": "8.14.0+c8f7d87bcda35557a68f6cb9c55856a2ee733856",
+    "fileVersion": "8.14.0.60815",
+    "sha256": "b0175480115d48909ee2e62e19e4dff8043780fc270e3e2c8ecb0670eede7fe0"
+  },
+  {
+    "target": "windows-x64",
+    "file": "msalruntime.dll",
+    "product": "",
+    "productVersion": "",
+    "fileVersion": "",
+    "sha256": "f1d1ddf6b32dbea8c4a0495746c1fc07871914d67222dae4575d32528a87c1cc"
+  },
+  {
+    "target": "windows-x64",
+    "file": "SkiaSharp.dll",
+    "product": "SkiaSharp",
+    "productVersion": "2.88.8.0-7af1d0840a381c0ce7ef2877454a88dbb2949686",
+    "fileVersion": "2.88.8.0",
+    "sha256": "615a83216632ae4890b3e796778c7141bc6302edcade6d4dc4a78b7dfcf5853b"
+  },
+  {
+    "target": "windows-x64",
+    "file": "System.Buffers.dll",
+    "product": "Microsoft® .NET Framework",
+    "productVersion": "4.6.28619.01 @BuiltBy: dlab14-DDVSOWINAGE069 @Branch: release/2.1 @SrcCode: https://github.com/dotnet/corefx/tree/7601f4f6225089ffb291dc7d58293c7bbf5c5d4f",
+    "fileVersion": "4.6.28619.01",
+    "sha256": "9b030d59d63c05adace41feaae2acead329340d29fa1d6b44636004921788f63"
+  },
+  {
+    "target": "windows-x64",
+    "file": "System.CommandLine.dll",
+    "product": "System.CommandLine",
+    "productVersion": "2.0.0-beta4.22272.1+209b724a3c843253d3071e8348c353b297b0b8b5",
+    "fileVersion": "2.0.22.27201",
+    "sha256": "8e8f736f4af5bc99d65066cf63d4e32123bdee0487e415e4dfffe8a326034def"
+  },
+  {
+    "target": "windows-x64",
+    "file": "System.ComponentModel.Annotations.dll",
+    "product": "Microsoft® .NET Framework",
+    "productVersion": "4.6.26515.06 @BuiltBy: dlab-DDVSOWINAGE059 @Branch: release/2.1 @SrcCode: https://github.com/dotnet/corefx/tree/30ab651fcb4354552bd4891619a0bdd81e0ebdbf",
+    "fileVersion": "4.6.26515.06",
+    "sha256": "de85ecb2aade2402d84cecd726f53a16544975c5bced0f976d3409799b973a84"
+  },
+  {
+    "target": "windows-x64",
+    "file": "System.Diagnostics.DiagnosticSource.dll",
+    "product": "Microsoft® .NET",
+    "productVersion": "6.0.15+5edef4b20babd4c3ddac7460e536f86fd0f2d724",
+    "fileVersion": "6.0.1523.11507",
+    "sha256": "7947fd101dfeed137fae6f2cf60cbb2e796e281a58ba008b6876773f043c8ca8"
+  },
+  {
+    "target": "windows-x64",
+    "file": "System.Formats.Asn1.dll",
+    "product": "Microsoft® .NET",
+    "productVersion": "8.0.7+2aade6beb02ea367fd97c4070a4198802fe61c03",
+    "fileVersion": "8.0.724.31311",
+    "sha256": "08a7d7f4b2ba67544c9825d61c6d91e3766f54f5e0b0153b0d1aa0963b875f8d"
+  },
+  {
+    "target": "windows-x64",
+    "file": "System.IO.FileSystem.AccessControl.dll",
+    "product": "Microsoft® .NET",
+    "productVersion": "5.0.0+cf258a14b70ad9069470a108f13765e0e5988f51",
+    "fileVersion": "5.0.20.51904",
+    "sha256": "07fdfc38ae85acc9de5623283a9d1398db7892bff35adcf9306b081cbe20e7a8"
+  },
+  {
+    "target": "windows-x64",
+    "file": "System.Memory.dll",
+    "product": "Microsoft® .NET Framework",
+    "productVersion": "4.6.31308.01 @BuiltBy: cloudtest-841353dfc000000 @Branch: release/2.1-MSRC @SrcCode: https://github.com/dotnet/corefx/tree/32b491939fbd125f304031c35038b1e14b4e3958",
+    "fileVersion": "4.6.31308.01",
+    "sha256": "948c3e0f9f5a4d6c4f25547a642e59ff7ba7a65cabe1f0abfa1eeaa077c70e52"
+  },
+  {
+    "target": "windows-x64",
+    "file": "System.Numerics.Vectors.dll",
+    "product": "Microsoft® .NET Framework",
+    "productVersion": "4.6.26515.06 @BuiltBy: dlab-DDVSOWINAGE059 @Branch: release/2.1 @SrcCode: https://github.com/dotnet/corefx/tree/30ab651fcb4354552bd4891619a0bdd81e0ebdbf",
+    "fileVersion": "4.6.26515.06",
+    "sha256": "551dbffba34954023de72fd717ae9a434ca2418d5417627ccf040a0917bb8de8"
+  },
+  {
+    "target": "windows-x64",
+    "file": "System.Runtime.CompilerServices.Unsafe.dll",
+    "product": "Microsoft® .NET",
+    "productVersion": "6.0.0+4822e3c3aa77eb82b2fb33c9321f923cf11ddde6",
+    "fileVersion": "6.0.21.52210",
+    "sha256": "bd17d5fb3757afa224cb08a3c9aea423a5a5300ee0e55ae81d24f74b3ca58ea2"
+  },
+  {
+    "target": "windows-x64",
+    "file": "System.Security.AccessControl.dll",
+    "product": "Microsoft® .NET",
+    "productVersion": "5.0.0+cf258a14b70ad9069470a108f13765e0e5988f51",
+    "fileVersion": "5.0.20.51904",
+    "sha256": "aef3a462702c2c812e1dda556ac07e66e9f962d698ca833cf88402e4b2ab871f"
+  },
+  {
+    "target": "windows-x64",
+    "file": "System.Security.Cryptography.ProtectedData.dll",
+    "product": "Microsoft® .NET Framework",
+    "productVersion": "4.6.26515.06 @BuiltBy: dlab-DDVSOWINAGE059 @Branch: release/2.1 @SrcCode: https://github.com/dotnet/corefx/tree/30ab651fcb4354552bd4891619a0bdd81e0ebdbf",
+    "fileVersion": "4.6.26515.06",
+    "sha256": "00fe403549fe78dd2b46559ff7faa93c3a1673d62dfa494052f335f66a8ff354"
+  },
+  {
+    "target": "windows-x64",
+    "file": "System.Security.Principal.Windows.dll",
+    "product": "Microsoft® .NET",
+    "productVersion": "5.0.0+cf258a14b70ad9069470a108f13765e0e5988f51",
+    "fileVersion": "5.0.20.51904",
+    "sha256": "d7bf314479447eb8dc267416673c5b5d654503678677679a8a77942abe612fa1"
+  },
+  {
+    "target": "windows-x64",
+    "file": "System.Text.Encodings.Web.dll",
+    "product": "Microsoft® .NET",
+    "productVersion": "8.0.0+5535e31a712343a63f5d7d796cd874e563e5ac14",
+    "fileVersion": "8.0.23.53103",
+    "sha256": "7661f169c06130f86d9ed8b9d647d4d91b3dd097dbd19314bb6992a9c3e9072f"
+  },
+  {
+    "target": "windows-x64",
+    "file": "System.Text.Json.dll",
+    "product": "Microsoft® .NET",
+    "productVersion": "8.0.10+81cabf2857a01351e5ab578947c7403a5b128ad1",
+    "fileVersion": "8.0.1024.46610",
+    "sha256": "d1bc1fb5a49ff10963b5cb9b9060d7bd7ba3e4688cf2f5f4605ee5c79209f3ce"
+  },
+  {
+    "target": "windows-x64",
+    "file": "System.Threading.Tasks.Extensions.dll",
+    "product": "Microsoft® .NET Framework",
+    "productVersion": "4.6.28619.01 @BuiltBy: dlab14-DDVSOWINAGE069 @Branch: release/2.1 @SrcCode: https://github.com/dotnet/corefx/tree/7601f4f6225089ffb291dc7d58293c7bbf5c5d4f",
+    "fileVersion": "4.6.28619.01",
+    "sha256": "cb2a9e3866282eb10b389139e32a8daa2772526a8346c89889fe620297262455"
+  },
+  {
+    "target": "windows-x64",
+    "file": "System.ValueTuple.dll",
+    "product": "Microsoft® .NET Framework",
+    "productVersion": "4.6.26515.06 @BuiltBy: dlab-DDVSOWINAGE059 @Branch: release/2.1 @SrcCode: https://github.com/dotnet/corefx/tree/30ab651fcb4354552bd4891619a0bdd81e0ebdbf",
+    "fileVersion": "4.6.26515.06",
+    "sha256": "c826148e98910e22085b7b7d0550ec4d79ebdfd20da90f44c0d61654ed06ccaf"
+  },
+  {
+    "target": "windows-arm64",
+    "file": "Atlassian.Bitbucket.dll",
+    "product": "Atlassian.Bitbucket",
+    "productVersion": "2.9.0+194ba290ce533465310d50f811684ab180536ae7",
+    "fileVersion": "2.9.0.0",
+    "sha256": "cfc1e46d2124e1720aa5977a5d1aac12eea0cf68a1647f5f8ce140125f41778f"
+  },
+  {
+    "target": "windows-arm64",
+    "file": "av_libglesv2.dll",
+    "product": "ANGLE libGLESv2 Dynamic Link Library",
+    "productVersion": "2.1.22045 git hash: 4a177dd16290",
+    "fileVersion": "2.1.22045 git hash: 4a177dd16290",
+    "sha256": "a0ef356379f63cef6f87c5179e5ed0ba44a8b48d2fe64f97fc674708bcbcd48c"
+  },
+  {
+    "target": "windows-arm64",
+    "file": "Avalonia.Base.dll",
+    "product": "Avalonia",
+    "productVersion": "11.1.3+45a2d36e3214ac4b3623940ba728b2503de5c668",
+    "fileVersion": "11.1.3.0",
+    "sha256": "1f418eb8e816755f6a339c40619bf65ee314472becbeb8721580173e7358ba41"
+  },
+  {
+    "target": "windows-arm64",
+    "file": "Avalonia.Controls.dll",
+    "product": "Avalonia",
+    "productVersion": "11.1.3+45a2d36e3214ac4b3623940ba728b2503de5c668",
+    "fileVersion": "11.1.3.0",
+    "sha256": "cd90bdf134d3cb7d511f434c2ddcac87dbbbfac9852d8b215d0d6d0740477a9e"
+  },
+  {
+    "target": "windows-arm64",
+    "file": "Avalonia.DesignerSupport.dll",
+    "product": "Avalonia",
+    "productVersion": "0.7.0+45a2d36e3214ac4b3623940ba728b2503de5c668",
+    "fileVersion": "0.7.0.0",
+    "sha256": "d637949b5be4736e52888d9fa9566185b84fe7599a69feffa06c09dcd5cb6d91"
+  },
+  {
+    "target": "windows-arm64",
+    "file": "Avalonia.Dialogs.dll",
+    "product": "Avalonia",
+    "productVersion": "11.1.3+45a2d36e3214ac4b3623940ba728b2503de5c668",
+    "fileVersion": "11.1.3.0",
+    "sha256": "496b0f849885fba15ab31cd0700f99bc51dcbfb307b48f2c25e014aee545bc76"
+  },
+  {
+    "target": "windows-arm64",
+    "file": "Avalonia.dll",
+    "product": "Avalonia",
+    "productVersion": "11.1.3+45a2d36e3214ac4b3623940ba728b2503de5c668",
+    "fileVersion": "11.1.3.0",
+    "sha256": "7bef47ce6e62d0b15d80e47a0836bf0a65020602b97a159927d6544e14513ce2"
+  },
+  {
+    "target": "windows-arm64",
+    "file": "Avalonia.Markup.dll",
+    "product": "Avalonia",
+    "productVersion": "11.1.3+45a2d36e3214ac4b3623940ba728b2503de5c668",
+    "fileVersion": "11.1.3.0",
+    "sha256": "1e4e034a8c93e83c51c04cc421439152c8d5c8466cb93edcc26b9d7d2da40118"
+  },
+  {
+    "target": "windows-arm64",
+    "file": "Avalonia.Markup.Xaml.dll",
+    "product": "Avalonia",
+    "productVersion": "11.1.3+45a2d36e3214ac4b3623940ba728b2503de5c668",
+    "fileVersion": "11.1.3.0",
+    "sha256": "afca3d54e864dffb4111cca15ddb0d8429371afce025f9d48fba3fecb3a0d6aa"
+  },
+  {
+    "target": "windows-arm64",
+    "file": "Avalonia.Metal.dll",
+    "product": "Avalonia",
+    "productVersion": "11.1.3+45a2d36e3214ac4b3623940ba728b2503de5c668",
+    "fileVersion": "11.1.3.0",
+    "sha256": "da1adc2fa6ac8962e39b6c56af7c8a3d7b408e1ce7a04a4d492006d2085d5968"
+  },
+  {
+    "target": "windows-arm64",
+    "file": "Avalonia.MicroCom.dll",
+    "product": "Avalonia",
+    "productVersion": "11.1.3+45a2d36e3214ac4b3623940ba728b2503de5c668",
+    "fileVersion": "11.1.3.0",
+    "sha256": "28e39e8785595e84bd6a1e1bbf94b97f3c74f57764548413d9ed292b077d9096"
+  },
+  {
+    "target": "windows-arm64",
+    "file": "Avalonia.OpenGL.dll",
+    "product": "Avalonia",
+    "productVersion": "11.1.3+45a2d36e3214ac4b3623940ba728b2503de5c668",
+    "fileVersion": "11.1.3.0",
+    "sha256": "337e3ffcac34ecffab7564d501089a77b8ff9dea21473a3aa75ec310a56dee2b"
+  },
+  {
+    "target": "windows-arm64",
+    "file": "Avalonia.Remote.Protocol.dll",
+    "product": "Avalonia",
+    "productVersion": "11.1.3+45a2d36e3214ac4b3623940ba728b2503de5c668",
+    "fileVersion": "11.1.3.0",
+    "sha256": "7beeb848a5f6108582f9cc6f8c1c903c13df71f772926461c7931077a6e82fc3"
+  },
+  {
+    "target": "windows-arm64",
+    "file": "Avalonia.Skia.dll",
+    "product": "Avalonia",
+    "productVersion": "11.1.3+45a2d36e3214ac4b3623940ba728b2503de5c668",
+    "fileVersion": "11.1.3.0",
+    "sha256": "b9962cab62b70d65cfc66efe4422eec0f7c65584506e074c67508f168617a406"
+  },
+  {
+    "target": "windows-arm64",
+    "file": "Avalonia.Themes.Fluent.dll",
+    "product": "Avalonia",
+    "productVersion": "11.1.3+45a2d36e3214ac4b3623940ba728b2503de5c668",
+    "fileVersion": "11.1.3.0",
+    "sha256": "f41d6456df94a975b8a7c3acc8e177539be9fb26d485d63d56da5d5a8dabf76b"
+  },
+  {
+    "target": "windows-arm64",
+    "file": "Avalonia.Vulkan.dll",
+    "product": "Avalonia",
+    "productVersion": "11.1.3+45a2d36e3214ac4b3623940ba728b2503de5c668",
+    "fileVersion": "11.1.3.0",
+    "sha256": "14b82381fe7004f70f81cb28f4e8ec74dd9e79f159e13b46d2966f72bc97e696"
+  },
+  {
+    "target": "windows-arm64",
+    "file": "Avalonia.Win32.dll",
+    "product": "Avalonia",
+    "productVersion": "11.1.3+45a2d36e3214ac4b3623940ba728b2503de5c668",
+    "fileVersion": "11.1.3.0",
+    "sha256": "764dc4b276f4222a81db3d07d1546bb655b88ca760cfb7f07a3f7b54c92cc9b4"
+  },
+  {
+    "target": "windows-arm64",
+    "file": "gcmcore.dll",
+    "product": "gcmcore",
+    "productVersion": "2.9.0+194ba290ce533465310d50f811684ab180536ae7",
+    "fileVersion": "2.9.0.0",
+    "sha256": "cfb90b8e3dd9ad9b78f6171f0fd49a5bd010f6f98ba108a94a9b2eeed3f4752b"
+  },
+  {
+    "target": "windows-arm64",
+    "file": "git-credential-manager.exe",
+    "product": "git-credential-manager",
+    "productVersion": "2.9.0+194ba290ce533465310d50f811684ab180536ae7",
+    "fileVersion": "2.9.0.0",
+    "sha256": "d598e18094ea582d06fb2ef88b1a2a91a41471a77e33c380742960f8cb2e042e"
+  },
+  {
+    "target": "windows-arm64",
+    "file": "GitHub.dll",
+    "product": "GitHub",
+    "productVersion": "2.9.0+194ba290ce533465310d50f811684ab180536ae7",
+    "fileVersion": "2.9.0.0",
+    "sha256": "af0c2176e8f734d1ef9a1c288b8278970b5c7fc81fd1aa5f834ae95e07e528d2"
+  },
+  {
+    "target": "windows-arm64",
+    "file": "GitLab.dll",
+    "product": "GitLab",
+    "productVersion": "2.9.0+194ba290ce533465310d50f811684ab180536ae7",
+    "fileVersion": "2.9.0.0",
+    "sha256": "8a66b85d1529243927dad2233e89af19ee794727ac6dd8a4ec66b8d4b19fcea8"
+  },
+  {
+    "target": "windows-arm64",
+    "file": "HarfBuzzSharp.dll",
+    "product": "HarfBuzzSharp",
+    "productVersion": "7.3.0.2-7af1d0840a381c0ce7ef2877454a88dbb2949686",
+    "fileVersion": "7.3.0.2",
+    "sha256": "7f88bda3a5d8f4df2b2e9596d1b78dadc74853f8714af3c2d4ba069257a335fa"
+  },
+  {
+    "target": "windows-arm64",
+    "file": "libcrypto-3.dll",
+    "product": "The OpenSSL Toolkit",
+    "productVersion": "3.5.5",
+    "fileVersion": "3.5.5",
+    "sha256": "8d349010a8a529bde01289fcfb028f5c4c61aa472d2942b2e09618ecbcfbd85e"
+  },
+  {
+    "target": "windows-arm64",
+    "file": "libcurl-4.dll",
+    "product": "The curl library",
+    "productVersion": "8.18.0",
+    "fileVersion": "8.18.0",
+    "sha256": "28a6ee21f43a99fdf7ddc6a0ce53aa111e873369d5d3e3decd0872ed99dd974d"
+  },
+  {
+    "target": "windows-arm64",
+    "file": "libcurl-openssl-4.dll",
+    "product": "The curl library",
+    "productVersion": "8.18.0",
+    "fileVersion": "8.18.0",
+    "sha256": "a789b7084a3de3d43d21413d5c2f7b7832ed1a9c7da69c342ab976c496a21b05"
+  },
+  {
+    "target": "windows-arm64",
+    "file": "libHarfBuzzSharp.dll",
+    "product": null,
+    "productVersion": null,
+    "fileVersion": null,
+    "sha256": "892939bae9ebafdb73932e9fefdf6ba4bbf73f0ab5bffc1464a8905fc8b508ff"
+  },
+  {
+    "target": "windows-arm64",
+    "file": "libiconv-2.dll",
+    "product": "libiconv: character set conversion library",
+    "productVersion": "1.18",
+    "fileVersion": "1.18",
+    "sha256": "1f9104b198c7e0082423deeaa27743b8e11f1e9ef771b43156c0e731a5af8850"
+  },
+  {
+    "target": "windows-arm64",
+    "file": "libintl-8.dll",
+    "product": "GNU libintl: accessing NLS message catalogs",
+    "productVersion": "1.0",
+    "fileVersion": "1.0",
+    "sha256": "31db0d0e7780cf28dca1309a894cb775b2ab130c4ba777c546a206970ca47320"
+  },
+  {
+    "target": "windows-arm64",
+    "file": "libnghttp2-14.dll",
+    "product": "NGHTTP2.",
+    "productVersion": "1.68.0.0 (MSVC release)",
+    "fileVersion": "1.68.0.0 (MSVC release)",
+    "sha256": "d095323de8f08a91178c5e7ef578827d3b77f8e42cbd8395f3d27ea72b36a4b9"
+  },
+  {
+    "target": "windows-arm64",
+    "file": "libSkiaSharp.dll",
+    "product": null,
+    "productVersion": null,
+    "fileVersion": null,
+    "sha256": "b21f5678f8b78e40f3953979753c8b51813fd1ec609c36c636e662a9a7555cd0"
+  },
+  {
+    "target": "windows-arm64",
+    "file": "libssh2-1.dll",
+    "product": "The libssh2 library",
+    "productVersion": "1.11.1",
+    "fileVersion": "1.11.1",
+    "sha256": "8a8ce51fc45b2e4dcd9b48ec79ccc7ed11dda68d713c54ca466600a041151a1c"
+  },
+  {
+    "target": "windows-arm64",
+    "file": "libssl-3.dll",
+    "product": "The OpenSSL Toolkit",
+    "productVersion": "3.5.5",
+    "fileVersion": "3.5.5",
+    "sha256": "9b63d991dd656badc2fbd05333732535bccacafc321d6fe432875ce147243f04"
+  },
+  {
+    "target": "windows-arm64",
+    "file": "libunistring-5.dll",
+    "product": "GNU libunistring: Unicode string library",
+    "productVersion": "1.3",
+    "fileVersion": "1.3",
+    "sha256": "57b8683ebef6a86c46ffd1d0e691079d9002b14244bbded122d50c3257361b78"
+  },
+  {
+    "target": "windows-arm64",
+    "file": "MicroCom.Runtime.dll",
+    "product": "MicroCom",
+    "productVersion": "0.11.0",
+    "fileVersion": "0.11.0.0",
+    "sha256": "0212708bd80c369439acc9374c56c63c67948395d9b5548917e5df2dda548c4e"
+  },
+  {
+    "target": "windows-arm64",
+    "file": "Microsoft.AzureRepos.dll",
+    "product": "Microsoft.AzureRepos",
+    "productVersion": "2.9.0+194ba290ce533465310d50f811684ab180536ae7",
+    "fileVersion": "2.9.0.0",
+    "sha256": "a8a4784116048892fb58ddf9d8c780cfdcce7eff99b30688f40bdd0357302e5a"
+  },
+  {
+    "target": "windows-arm64",
+    "file": "Microsoft.Bcl.AsyncInterfaces.dll",
+    "product": "Microsoft® .NET",
+    "productVersion": "8.0.0+5535e31a712343a63f5d7d796cd874e563e5ac14",
+    "fileVersion": "8.0.23.53103",
+    "sha256": "2e17bf0f53a92497cf86a848b13ec027ec024431df93b4162fc53202161467c0"
+  },
+  {
+    "target": "windows-arm64",
+    "file": "Microsoft.Identity.Client.Broker.dll",
+    "product": "Microsoft Authentication Library Broker",
+    "productVersion": "4.84.2+bad7cae331c1d9e699ca2150a5fecb108ea54916",
+    "fileVersion": "4.84.2.0",
+    "sha256": "bc38318bf9408d91183311fb67f558e0f1ea880d008bdee9ad204ea77122ccd3"
+  },
+  {
+    "target": "windows-arm64",
+    "file": "Microsoft.Identity.Client.dll",
+    "product": "Microsoft Authentication Library",
+    "productVersion": "4.84.2+bad7cae331c1d9e699ca2150a5fecb108ea54916",
+    "fileVersion": "4.84.2.0",
+    "sha256": "480e8c9dbba19da3c9387f345670bbd44faa37bf7089c2e68e5e979cf325ba5e"
+  },
+  {
+    "target": "windows-arm64",
+    "file": "Microsoft.Identity.Client.Extensions.Msal.dll",
+    "product": "Microsoft Authentication Library",
+    "productVersion": "4.84.2+bad7cae331c1d9e699ca2150a5fecb108ea54916",
+    "fileVersion": "4.84.2.0",
+    "sha256": "f031fa94b7e7a1309943058089484ef80e85ceafa1405271f40cca098a6c13ff"
+  },
+  {
+    "target": "windows-arm64",
+    "file": "Microsoft.Identity.Client.NativeInterop.dll",
+    "product": "Microsoft.Identity.Client.NativeInterop",
+    "productVersion": "0.20.6+ddd579d61e24a3f6495458c0899672d7644e637c",
+    "fileVersion": "0.20.6.0",
+    "sha256": "62593bcf5c92507685ad3d58703a1e4cbe6820028c04e491b3d605b4b1a7e427"
+  },
+  {
+    "target": "windows-arm64",
+    "file": "Microsoft.IdentityModel.Abstractions.dll",
+    "product": "Microsoft IdentityModel",
+    "productVersion": "8.14.0+c8f7d87bcda35557a68f6cb9c55856a2ee733856",
+    "fileVersion": "8.14.0.60815",
+    "sha256": "550d4c26a59b5c2e112c493852586b73be442cdd9c7a463130af35486004e227"
+  },
+  {
+    "target": "windows-arm64",
+    "file": "msalruntime_arm64.dll",
+    "product": "",
+    "productVersion": "",
+    "fileVersion": "",
+    "sha256": "cb0580196cad48232d7d1356a386a3b0c9a5a94d6c4435282a0779ddf733ac39"
+  },
+  {
+    "target": "windows-arm64",
+    "file": "SkiaSharp.dll",
+    "product": "SkiaSharp",
+    "productVersion": "2.88.8.0-7af1d0840a381c0ce7ef2877454a88dbb2949686",
+    "fileVersion": "2.88.8.0",
+    "sha256": "4e9d81315316fd3e75c31902c7e6a7b33993b607062881089498a933c399d9e7"
+  },
+  {
+    "target": "windows-arm64",
+    "file": "System.Buffers.dll",
+    "product": "Microsoft® .NET Framework",
+    "productVersion": "4.6.28619.01 @BuiltBy: dlab14-DDVSOWINAGE069 @Branch: release/2.1 @SrcCode: https://github.com/dotnet/corefx/tree/7601f4f6225089ffb291dc7d58293c7bbf5c5d4f",
+    "fileVersion": "4.6.28619.01",
+    "sha256": "b7511615c2d07ca2ba24182cf788ab5042ace1c088c5a6d8db21fbae9323862d"
+  },
+  {
+    "target": "windows-arm64",
+    "file": "System.CommandLine.dll",
+    "product": "System.CommandLine",
+    "productVersion": "2.0.0-beta4.22272.1+209b724a3c843253d3071e8348c353b297b0b8b5",
+    "fileVersion": "2.0.22.27201",
+    "sha256": "361d6f6fcc7929fbc3c8029b267a25855b1fa7c83781e4a3fb30ec699ab30eac"
+  },
+  {
+    "target": "windows-arm64",
+    "file": "System.ComponentModel.Annotations.dll",
+    "product": "Microsoft® .NET Framework",
+    "productVersion": "4.6.26515.06 @BuiltBy: dlab-DDVSOWINAGE059 @Branch: release/2.1 @SrcCode: https://github.com/dotnet/corefx/tree/30ab651fcb4354552bd4891619a0bdd81e0ebdbf",
+    "fileVersion": "4.6.26515.06",
+    "sha256": "61cb72f967f09a79b2224f82f50dba8ba9e7a5327309bd62ad4b22f7b771dd08"
+  },
+  {
+    "target": "windows-arm64",
+    "file": "System.Diagnostics.DiagnosticSource.dll",
+    "product": "Microsoft® .NET",
+    "productVersion": "6.0.15+5edef4b20babd4c3ddac7460e536f86fd0f2d724",
+    "fileVersion": "6.0.1523.11507",
+    "sha256": "9ff947587e7e5374b3f515ef5e603d515a1effc124c4496bccda203fd7231665"
+  },
+  {
+    "target": "windows-arm64",
+    "file": "System.Formats.Asn1.dll",
+    "product": "Microsoft® .NET",
+    "productVersion": "8.0.7+2aade6beb02ea367fd97c4070a4198802fe61c03",
+    "fileVersion": "8.0.724.31311",
+    "sha256": "4d66596a427ed993ef0caf34754fbd193064fdb265babe02caeecf95817ae9d6"
+  },
+  {
+    "target": "windows-arm64",
+    "file": "System.IO.FileSystem.AccessControl.dll",
+    "product": "Microsoft® .NET",
+    "productVersion": "5.0.0+cf258a14b70ad9069470a108f13765e0e5988f51",
+    "fileVersion": "5.0.20.51904",
+    "sha256": "f71662168750c8a9a8d20d754d7ab7ee8cfea33125a1a822e04ce343c2026197"
+  },
+  {
+    "target": "windows-arm64",
+    "file": "System.Memory.dll",
+    "product": "Microsoft® .NET Framework",
+    "productVersion": "4.6.31308.01 @BuiltBy: cloudtest-841353dfc000000 @Branch: release/2.1-MSRC @SrcCode: https://github.com/dotnet/corefx/tree/32b491939fbd125f304031c35038b1e14b4e3958",
+    "fileVersion": "4.6.31308.01",
+    "sha256": "cbac8beadd8547d9aaf1cb10cea5e20c1558c48c0054862e3764abbb158863e6"
+  },
+  {
+    "target": "windows-arm64",
+    "file": "System.Numerics.Vectors.dll",
+    "product": "Microsoft® .NET Framework",
+    "productVersion": "4.6.26515.06 @BuiltBy: dlab-DDVSOWINAGE059 @Branch: release/2.1 @SrcCode: https://github.com/dotnet/corefx/tree/30ab651fcb4354552bd4891619a0bdd81e0ebdbf",
+    "fileVersion": "4.6.26515.06",
+    "sha256": "8afacb88998958c099539c4f77e88cc207f09f21b2384d128f3672827be343b1"
+  },
+  {
+    "target": "windows-arm64",
+    "file": "System.Runtime.CompilerServices.Unsafe.dll",
+    "product": "Microsoft® .NET",
+    "productVersion": "6.0.0+4822e3c3aa77eb82b2fb33c9321f923cf11ddde6",
+    "fileVersion": "6.0.21.52210",
+    "sha256": "327627225259edee29c9ffcd16aafdf3ccf9b38eb1c8b6bde5ba5390ea9aa90f"
+  },
+  {
+    "target": "windows-arm64",
+    "file": "System.Security.AccessControl.dll",
+    "product": "Microsoft® .NET",
+    "productVersion": "5.0.0+cf258a14b70ad9069470a108f13765e0e5988f51",
+    "fileVersion": "5.0.20.51904",
+    "sha256": "4f1abd4b8f8df15223ec0646854983161db970c4f0449c88c85bbbc8613154bc"
+  },
+  {
+    "target": "windows-arm64",
+    "file": "System.Security.Cryptography.ProtectedData.dll",
+    "product": "Microsoft® .NET Framework",
+    "productVersion": "4.6.26515.06 @BuiltBy: dlab-DDVSOWINAGE059 @Branch: release/2.1 @SrcCode: https://github.com/dotnet/corefx/tree/30ab651fcb4354552bd4891619a0bdd81e0ebdbf",
+    "fileVersion": "4.6.26515.06",
+    "sha256": "da5a1fcefc936af8e9208211837de2e05d6befb0389ae619214b4bfc3b9582a2"
+  },
+  {
+    "target": "windows-arm64",
+    "file": "System.Security.Principal.Windows.dll",
+    "product": "Microsoft® .NET",
+    "productVersion": "5.0.0+cf258a14b70ad9069470a108f13765e0e5988f51",
+    "fileVersion": "5.0.20.51904",
+    "sha256": "dfd97c848b8837dd7302b877ac00ea1d971b83b284c7122be8a896d5f2e647f8"
+  },
+  {
+    "target": "windows-arm64",
+    "file": "System.Text.Encodings.Web.dll",
+    "product": "Microsoft® .NET",
+    "productVersion": "8.0.0+5535e31a712343a63f5d7d796cd874e563e5ac14",
+    "fileVersion": "8.0.23.53103",
+    "sha256": "166fdc5724c91c00277f5c49aa2f8e0d80563207d70396e4b80f8f0e879290d9"
+  },
+  {
+    "target": "windows-arm64",
+    "file": "System.Text.Json.dll",
+    "product": "Microsoft® .NET",
+    "productVersion": "8.0.10+81cabf2857a01351e5ab578947c7403a5b128ad1",
+    "fileVersion": "8.0.1024.46610",
+    "sha256": "4b97f8b6398c05bf187d567b3839086030d4603b3341293a6e47bcdbce40863f"
+  },
+  {
+    "target": "windows-arm64",
+    "file": "System.Threading.Tasks.Extensions.dll",
+    "product": "Microsoft® .NET Framework",
+    "productVersion": "4.6.28619.01 @BuiltBy: dlab14-DDVSOWINAGE069 @Branch: release/2.1 @SrcCode: https://github.com/dotnet/corefx/tree/7601f4f6225089ffb291dc7d58293c7bbf5c5d4f",
+    "fileVersion": "4.6.28619.01",
+    "sha256": "fc49b72937c4190707dc1cdeac9cab647feb7f995b2eeb66c62342ef07db9d8b"
+  },
+  {
+    "target": "windows-arm64",
+    "file": "System.ValueTuple.dll",
+    "product": "Microsoft® .NET Framework",
+    "productVersion": "4.6.26515.06 @BuiltBy: dlab-DDVSOWINAGE059 @Branch: release/2.1 @SrcCode: https://github.com/dotnet/corefx/tree/30ab651fcb4354552bd4891619a0bdd81e0ebdbf",
+    "fileVersion": "4.6.26515.06",
+    "sha256": "4288d63f590fa111f30de6d4b6ff3243bfa89f45ecc36b5bac8612cc5bb9bf9d"
+  }
+]
