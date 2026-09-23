@@ -51,7 +51,7 @@ export function verifyReleaseAssets(directory, tag, commit, sourceManifest = JSO
     });
     assert.deepEqual(build.files.map(f => path.extname(f.name)).sort(), extensions.concat('.yml').sort());
     for (const file of build.files) {
-      assert.equal(file.name, path.extname(file.name) === '.yml' ? updateChannelFile(spec) : `${basename}${path.extname(file.name)}`);
+      assert.equal(file.name, path.extname(file.name) === '.yml' ? updateChannelFile(spec) : `${basename}${path.extname(file.name) === ".zip" ? "_portable" : ""}${path.extname(file.name)}`);
       assert.ok(!/[\\/\r\n]/.test(file.name));
       assert.match(file.sha256, /^[a-f0-9]{64}$/);
       const actual = fileDigest(takeFile(file.name));

@@ -3,7 +3,7 @@ const { contextBridge, ipcRenderer } = require('electron');
 const commands = new Set(['harness_desktop_capability', 'harness_desktop_status', 'harness_desktop_start', 'harness_desktop_stop', 'startup_status', 'retry_startup', 'proxy_request', 'build_identity',
   'choose_local_path', 'set_native_locale', 'set_native_notifications', 'update_tray',
   'export_startup_diagnostics', 'autostart_status', 'autostart_set', 'agent_log_set',
-  'notify', 'notification_test', 'update_status', 'update_check', 'update_download', 'update_settings', 'update_install', 'update_release_notes', 'harness_desktop_restart']);
+  'notify', 'open_github', 'notification_test', 'update_status', 'update_check', 'update_download', 'update_settings', 'update_install', 'update_release_notes', 'harness_desktop_restart']);
 const events = new Set(['nexus-native-error', 'nexus-tray-action', 'nexus-update']);
 contextBridge.exposeInMainWorld('nexusDesktop', Object.freeze({
   systemLanguages: JSON.parse(process.argv.find(arg => arg.startsWith('--nexus-system-languages='))?.slice('--nexus-system-languages='.length) || '[]'),

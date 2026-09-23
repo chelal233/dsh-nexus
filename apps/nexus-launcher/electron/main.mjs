@@ -4,7 +4,7 @@ import { readFileSync, writeFileSync, renameSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { RustBridge } from './bridge.mjs';
-import { harnessUrl, trustedFrame, validateRequest, nativeEditAction } from './policy.mjs';
+import { harnessUrl, githubUrl, trustedFrame, validateRequest, nativeEditAction } from './policy.mjs';
 import { DesktopUpdater, saveUpdateSettings } from './updater.mjs';
 import { EventCursor, settings as notificationSettings, shouldNotify, notificationContent, taskFocused } from './notifications.mjs';
 import { HarnessDesktop, desktopActive, readDesktopState } from './harness-desktop.mjs';
@@ -343,6 +343,7 @@ async function run() {
         case 'autostart_status': value = app.getLoginItemSettings().openAtLogin; break;
         case 'autostart_set': app.setLoginItemSettings({ openAtLogin: args.enabled === true }); break;
         case 'update_status': value = updater.state; break;
+        case 'open_github': await shell.openExternal(githubUrl(args.url).href); break;
         case 'update_release_notes': {
           const version = updater.state.version;
           if (!version || !/^[0-9]+\.[0-9]+\.[0-9]+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/.test(version)) throw new Error('No update version available');

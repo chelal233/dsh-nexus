@@ -23,7 +23,7 @@ for (const kind of spec.bundles) {
   const entries = (await readdir(directory, { withFileTypes: true })).filter(e => e.isFile() && e.name.endsWith(extension));
   if (entries.length !== count) throw new Error(`Expected ${count} ${kind} packages; found ${entries.length}`);
   for (const entry of entries) {
-    const name = `${basename}${extension}`;
+    const name = `${basename}${extension === ".zip" ? "_portable" : ""}${extension}`;
     const bytes = await readFile(path.join(directory, entry.name));
     files.push({ name, sha256: createHash('sha256').update(bytes).digest('hex') });
     await copyFile(path.join(directory, entry.name), path.join(destination, name));

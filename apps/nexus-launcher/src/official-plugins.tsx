@@ -1,3 +1,4 @@
+import { invoke } from "./desktop";
 import { useEffect, useRef, useState } from "react";
 import { PuzzlePiece } from "@phosphor-icons/react";
 import { proxyRequest } from "./agent-bridge";
@@ -81,6 +82,13 @@ export function OfficialPlugins({
   const [data, setData] = useState<Reply>();
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
+  const openRepository = (event: React.MouseEvent<HTMLAnchorElement>) => {
+    if (!window.nexusDesktop) return;
+    event.preventDefault();
+    void invoke("open_github", { url: event.currentTarget.href }).catch((cause) =>
+      setError(errorMessage(cause)),
+    );
+  };
   const [notice, setNotice] = useState("");
   const [selected, setSelected] = useState<string>();
   const [add, setAdd] = useState(false);
@@ -228,6 +236,7 @@ export function OfficialPlugins({
             {pluginRepository(row.repository) && (
               <a
                 href={pluginRepository(row.repository)}
+                onClick={openRepository}
                 target="_blank"
                 rel="noopener noreferrer"
                 aria-label={`${title(row)} GitHub`}
@@ -297,6 +306,7 @@ export function OfficialPlugins({
             <p>
               <a
                 href={pluginRepository(opened.repository)}
+                onClick={openRepository}
                 target="_blank"
                 rel="noopener noreferrer"
               >

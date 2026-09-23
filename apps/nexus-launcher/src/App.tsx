@@ -987,7 +987,7 @@ function App() {
         <aside className="sidebar" aria-label={t("Nexus modules")}>
           <div className="brand-lockup">
             <div className="brand-mark" aria-hidden="true">
-              <RocketLaunch size={20} weight="fill" />
+              <img src="./nexus-whale.png" alt="" width={34} height={34} />
             </div>
             <div className="brand-copy">
               <strong>{t("NEXUS")}</strong>

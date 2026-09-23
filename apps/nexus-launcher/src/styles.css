@@ -3222,3 +3222,30 @@ body,
 .official-plugin-title .plugin-issue-label {
   font-weight: 600;
 }
+
+.brand-mark {
+  border: 0;
+  background: transparent;
+}
+.brand-mark img {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+}
+.collapsible-panel > summary {
+  cursor: pointer;
+  list-style: none;
+}
+.collapsible-panel > summary::-webkit-details-marker {
+  display: none;
+}
+.collapsible-panel > summary::after {
+  content: "▸";
+  margin-left: auto;
+}
+.collapsible-panel[open] > summary::after {
+  content: "▾";
+}
+.collapsible-panel:not([open]) > summary {
+  margin-bottom: 0;
+}

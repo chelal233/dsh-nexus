@@ -513,7 +513,11 @@ export function LiveLogRetention({ value }: { value: JsonObject | null }) {
   );
 }
 
-export function DiagnosticsView({ snapshot, busyAction, runAction, refresh, embedded }: ViewProps) {
+export function DiagnosticBundlesPanel({
+  snapshot,
+  busyAction,
+  runAction,
+}: Pick<ViewProps, "snapshot" | "busyAction" | "runAction">) {
   const { locale, t } = useI18n();
   const items = arrayValue(snapshot.diagnostics, "bundles");
   const controlsDisabled = busyAction !== null || snapshot.startup?.available !== true;
@@ -523,6 +527,101 @@ export function DiagnosticsView({ snapshot, busyAction, runAction, refresh, embe
       bundle,
       ...(file ? { file } : {}),
     });
+  return (
+    <Panel collapsible title={t("Diagnostic bundles")} icon={<TerminalWindow size={18} />}>
+      <p>
+        {t(
+          "The exported JSON is one portable file containing the redacted diagnostic context and logs.",
+        )}
+      </p>
+      {arrayValue(snapshot.diagnostics, "warnings").map((item, index) => (
+        <p className="form-error" role="alert" key={index}>
+          {stringValue(item, "bundle_id")}:{" "}
+          {t(
+            stringValue(item, "reason") ||
+              "Unreadable or unsupported diagnostic record was preserved",
+          )}
+        </p>
+      ))}
+      <div className="panel-toolbar">
+        <span className="toolbar-count">{t("{count} bundles", { count: items.length })}</span>
+        <ActionButton
+          tone="primary"
+          disabled={busyAction !== null}
+          onClick={() =>
+            void runAction(t("Export diagnostics"), "/v1/diagnostics", {
+              action: "export",
+              note: t("Native launcher collection"),
+            })
+          }
+        >
+          <TerminalWindow size={16} />
+          {t("Export diagnostics")}
+        </ActionButton>
+      </div>
+      {!items.length ? (
+        <EmptyState
+          title={t("No diagnostic bundles")}
+          detail={t("Collect a bounded bundle when a runtime issue needs review.")}
+        />
+      ) : (
+        items.map((item) => {
+          const bundle = asObject(item),
+            id = stringValue(bundle, "id") || "";
+          return (
+            <details key={id} className="diagnostic-bundle">
+              <summary>
+                {id} · {t("{count} files", { count: arrayValue(bundle, "files").length })} ·{" "}
+                {formatTimestamp(
+                  numberValue(bundle, "created_at_unix"),
+                  t("Not available"),
+                  locale,
+                )}
+              </summary>
+              <p className="field-help">{stringValue(bundle, "directory")}</p>
+              <div className="button-row">
+                <ActionButton disabled={controlsDisabled || !id} onClick={() => open(id)}>
+                  {t("Open file location")}
+                </ActionButton>
+                <ActionButton
+                  disabled={controlsDisabled || !id}
+                  onClick={() => open(id, "diagnostics.json")}
+                >
+                  {t("Open bundle manifest")}
+                </ActionButton>
+              </div>
+              <DataList
+                items={arrayValue(bundle, "files")}
+                emptyTitle={t("No files collected")}
+                emptyDetail={t("Open bundle manifest")}
+                render={(file) => {
+                  const name = stringValue(file, "name") || "";
+                  return (
+                    <>
+                      <div>
+                        <strong>{name}</strong>
+                        <span>{numberValue(file, "bytes")} B</span>
+                      </div>
+                      <ActionButton
+                        disabled={controlsDisabled || !id || !name}
+                        onClick={() => open(id, name)}
+                      >
+                        {t("Open file")}
+                      </ActionButton>
+                    </>
+                  );
+                }}
+              />
+            </details>
+          );
+        })
+      )}
+    </Panel>
+  );
+}
+
+export function DiagnosticsView({ snapshot, busyAction, runAction, refresh, embedded }: ViewProps) {
+  const { t } = useI18n();
   return (
     <>
       {!embedded && (
@@ -534,95 +633,8 @@ export function DiagnosticsView({ snapshot, busyAction, runAction, refresh, embe
           )}
         />
       )}
-      <Panel title={t("Diagnostic bundles")} icon={<TerminalWindow size={18} />}>
-        <p>
-          {t(
-            "The exported JSON is one portable file containing the redacted diagnostic context and logs.",
-          )}
-        </p>
-        {arrayValue(snapshot.diagnostics, "warnings").map((item, index) => (
-          <p className="form-error" role="alert" key={index}>
-            {stringValue(item, "bundle_id")}:{" "}
-            {t(
-              stringValue(item, "reason") ||
-                "Unreadable or unsupported diagnostic record was preserved",
-            )}
-          </p>
-        ))}
-        <div className="panel-toolbar">
-          <span className="toolbar-count">{t("{count} bundles", { count: items.length })}</span>
-          <ActionButton
-            tone="primary"
-            disabled={busyAction !== null}
-            onClick={() =>
-              void runAction(t("Export diagnostics"), "/v1/diagnostics", {
-                action: "export",
-                note: t("Native launcher collection"),
-              })
-            }
-          >
-            <TerminalWindow size={16} />
-            {t("Export diagnostics")}
-          </ActionButton>
-        </div>
-        {!items.length ? (
-          <EmptyState
-            title={t("No diagnostic bundles")}
-            detail={t("Collect a bounded bundle when a runtime issue needs review.")}
-          />
-        ) : (
-          items.map((item) => {
-            const bundle = asObject(item),
-              id = stringValue(bundle, "id") || "";
-            return (
-              <details key={id} className="diagnostic-bundle">
-                <summary>
-                  {id} · {t("{count} files", { count: arrayValue(bundle, "files").length })} ·{" "}
-                  {formatTimestamp(
-                    numberValue(bundle, "created_at_unix"),
-                    t("Not available"),
-                    locale,
-                  )}
-                </summary>
-                <p className="field-help">{stringValue(bundle, "directory")}</p>
-                <div className="button-row">
-                  <ActionButton disabled={controlsDisabled || !id} onClick={() => open(id)}>
-                    {t("Open file location")}
-                  </ActionButton>
-                  <ActionButton
-                    disabled={controlsDisabled || !id}
-                    onClick={() => open(id, "diagnostics.json")}
-                  >
-                    {t("Open bundle manifest")}
-                  </ActionButton>
-                </div>
-                <DataList
-                  items={arrayValue(bundle, "files")}
-                  emptyTitle={t("No files collected")}
-                  emptyDetail={t("Open bundle manifest")}
-                  render={(file) => {
-                    const name = stringValue(file, "name") || "";
-                    return (
-                      <>
-                        <div>
-                          <strong>{name}</strong>
-                          <span>{numberValue(file, "bytes")} B</span>
-                        </div>
-                        <ActionButton
-                          disabled={controlsDisabled || !id || !name}
-                          onClick={() => open(id, name)}
-                        >
-                          {t("Open file")}
-                        </ActionButton>
-                      </>
-                    );
-                  }}
-                />
-              </details>
-            );
-          })
-        )}
-      </Panel>
+
+      {!embedded && <DiagnosticBundlesPanel {...{ snapshot, busyAction, runAction, refresh }} />}
       <RequestHistory
         busy={busyAction !== null}
         dataRootId={stringValue(snapshot.startup, "data_root_id") || ""}

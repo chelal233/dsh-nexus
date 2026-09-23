@@ -1,5 +1,14 @@
 # Changelog
 
+## 1.0.1 — 2026-09-23
+
+- Adopt the transparent Whale Station Master icon across the window, tray, packages and sidebar.
+- Move diagnostic bundles beside local dependencies and offline profile repair. Bundles and offline repair are collapsible without clearing form state.
+- Remove duplicate plugin management embedded in Maintenance, while preserving Built-in plugins and Configuration and plugins.
+- Fix plugin repository links that did not open in Electron. A restricted desktop bridge opens HTTPS GitHub links and rejects other schemes, domains and credential-bearing URLs.
+- Move Native integration above Release identity and Launch configuration explained below Help.
+- Add `_portable.zip` to Windows/macOS ZIP attachment names, preserving installer names. Update collection, checksum and provenance checks accordingly. The filename does not imply storing user data beside the executable.
+
 ## 1.0.0 — 2026-09-23
 
 ### User-visible changes and fixes

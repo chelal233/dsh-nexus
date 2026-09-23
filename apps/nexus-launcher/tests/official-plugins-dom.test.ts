@@ -18,14 +18,16 @@ test("official plugin controls honor upstream protection and operate while Harne
   try {
     const {OfficialPlugins}=await loader.loadModule("/src/App.tsx");
     const {I18nProvider}=await loader.loadModule("/src/i18n.ts");
-    const calls:any[]=[];
+    const calls:any[]=[]; const openedUrls:string[]=[];
     const bundles=[{name:"official-optional",optional:true,installed:false,enabled:false,removable:false,rows:[]},{name:"third-party",version:"1.2.3",repository:"git+https://github.com/example/plugin.git",meta:{error:"Invalid plugin icon"},optional:false,installed:true,enabled:true,removable:true,rows:[]},{name:"protected",optional:false,installed:true,enabled:true,removable:false,readOnlyReason:"management-required",rows:[]}];
-    mockIPC((_command,args:any)=>{const body=typeof args.body==="string"?JSON.parse(args.body):args.body;calls.push(body);return {profile:"web",bundles,result:body?.action==="disable"?{application:"restart-required"}:null};});
+    mockIPC((_command,args:any)=>{if(_command==="open_github"){openedUrls.push(args.url);return {};}const body=typeof args.body==="string"?JSON.parse(args.body):args.body;calls.push(body);return {profile:"web",bundles,result:body?.action==="disable"?{application:"restart-required"}:null};});
     const props={profile:"web",snapshot:{profiles:{active_profile:"desktop"},recovery:{harness:{state:"stopped"}}},busyAction:null,refresh:async()=>{}};
     await React.act(async()=>root.render(React.createElement(I18nProvider,{initialLocale:"en"},React.createElement(OfficialPlugins,props))));
     assert.ok(document.body.textContent?.includes("v1.2.3"));
     assert.ok(document.body.textContent?.includes("Metadata warning"));
     assert.equal(document.querySelector('a[aria-label="third-party GitHub"]')?.getAttribute('href'), "https://github.com/example/plugin");
+    await React.act(async()=>document.querySelector<HTMLAnchorElement>('a[aria-label="third-party GitHub"]')!.click());
+    assert.deepEqual(openedUrls,["https://github.com/example/plugin"]);
     await React.act(async()=>[...document.querySelectorAll<HTMLButtonElement>('button.official-plugin-title')].find(x=>x.textContent?.includes("third-party"))!.click());
     assert.ok(document.body.textContent?.includes("Invalid plugin icon"));
     assert.ok([...document.querySelectorAll('button')].some(x=>x.textContent==="Remove"));

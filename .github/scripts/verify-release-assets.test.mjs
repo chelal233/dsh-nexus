@@ -28,7 +28,7 @@ test('release gate requires all tested targets, exact provenance and unmodified 
       const basename = `dsh-nexus_0.1.2_${names[target]}`;
       const channel = `latest-${target.startsWith('aarch64') ? 'arm64' : 'x64'}${target.includes('apple') ? '-mac' : target.includes('linux') ? '-linux-arm64' : ''}.yml`;
       const files = extensions.concat('.yml').map(ext => {
-        const name = ext === '.yml' ? channel : `${basename}${ext}`;
+        const name = ext === '.yml' ? channel : `${basename}${ext === ".zip" ? "_portable" : ""}${ext}`;
         writeFileSync(path.join(dir, name), 'test installer');
         return { name, sha256: createHash('sha256').update('test installer').digest('hex') };
       });

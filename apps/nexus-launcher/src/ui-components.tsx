@@ -510,11 +510,25 @@ export function Panel({
   title,
   icon,
   children,
+  collapsible = false,
 }: {
   title: string;
   icon: React.ReactNode;
   children: React.ReactNode;
+  collapsible?: boolean;
 }) {
+  if (collapsible)
+    return (
+      <details className="panel collapsible-panel">
+        <summary className="panel-header">
+          <span className="panel-title">
+            {icon}
+            <h2>{title}</h2>
+          </span>
+        </summary>
+        {children}
+      </details>
+    );
   return (
     <section className="panel">
       <div className="panel-header">

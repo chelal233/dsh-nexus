@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { harnessUrl, trustedFrame, validateRequest } from '../electron/policy.mjs';
+import { harnessUrl, githubUrl, trustedFrame, validateRequest } from '../electron/policy.mjs';
 
 test('Harness navigation accepts loopback metadata only', () => {
   for (const url of ['http://127.0.0.1:1234/?token=abc', 'http://[::1]:1234/']) assert.ok(harnessUrl(url));
@@ -40,4 +40,10 @@ test('sandbox preload forwards every permitted desktop command and rejects unkno
   assert.equal(forwarded.length,commands.size);
   assert.ok(forwarded.every(call=>call.channel==='nexus:command'));
   await assert.rejects(bridge.invoke('exec',{}),/Unknown desktop command/);
+});
+
+test('GitHub external links accept HTTPS GitHub only', () => {
+  assert.equal(githubUrl('https://github.com/example/plugin').href, 'https://github.com/example/plugin');
+  for (const url of ['file:///tmp/x', 'javascript:alert(1)', 'http://github.com/a/b', 'https://github.com.evil/a/b', 'https://a:b@github.com/a/b', 'https://github.com:444/a/b']) assert.throws(() => githubUrl(url));
+  validateRequest('open_github', { url: 'https://github.com/example/plugin' });
 });

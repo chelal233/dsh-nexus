@@ -1682,7 +1682,6 @@ export function SettingsView({
         </HarnessPreferencesPanel>
       </section>
       <section className="settings-section settings-group" id="settings-runtime">
-        <LaunchInputsPanel snapshot={snapshot} />
         <Panel title={t("Runtime settings")} icon={<Cpu size={18} />}>
           <p className="field-help">
             {t(
@@ -1839,87 +1838,6 @@ export function SettingsView({
         </Panel>
       </section>
       <section className="settings-section settings-group" id="settings-application">
-        <Panel title={t("Release identity")} icon={<Info size={18} />}>
-          <dl className="detail-list">
-            <div>
-              <dt>{t("Version")}</dt>
-              <dd>{stringValue(buildIdentity, "version") || t("Not available")}</dd>
-            </div>
-            <div>
-              <dt>{t("Build")}</dt>
-              <dd>
-                <code>{stringValue(buildIdentity, "buildId") || t("Not available")}</code>
-              </dd>
-            </div>
-            <div>
-              <dt>{t("Bundled runtime")}</dt>
-              <dd>
-                Node {stringValue(buildIdentity, "node") || "—"} / npm{" "}
-                {stringValue(buildIdentity, "npm") || "—"} / pnpm{" "}
-                {stringValue(buildIdentity, "pnpm") || "—"}
-              </dd>
-            </div>
-          </dl>
-        </Panel>
-        <Panel title={t("Help")} icon={<TerminalWindow size={18} />}>
-          <div className="integration-list">
-            <div>
-              <CheckCircle size={18} />
-              <span>{t("Upstream documentation")}</span>
-              <a
-                href="https://github.com/deepseek-ai/deepseek-harness"
-                target="_blank"
-                rel="noreferrer"
-              >
-                github.com/deepseek-ai/deepseek-harness
-              </a>
-            </div>
-            <div>
-              <CheckCircle size={18} />
-              <span>{t("Diagnostics and logs")}</span>
-              <span>
-                {t("Runtime logs and diagnostic bundles are collected on the Diagnostics page.")}
-              </span>
-            </div>
-            <div>
-              <Gear size={18} />
-              <span>{t("Agent log level")}</span>
-              <select
-                className="form-input"
-                aria-label={t("Agent log level")}
-                value={logLevel}
-                onChange={(event) => {
-                  setNativeSettingsError("");
-                  setLogLevel(event.target.value);
-                }}
-              >
-                <option value="error">{t("Error")}</option>
-                <option value="warn">{t("Warning")}</option>
-                <option value="info">{t("Information")}</option>
-                <option value="debug">{t("Debug")}</option>
-                <option value="trace">{t("Trace")}</option>
-              </select>
-            </div>
-          </div>
-          <p className="field-help">{t("The log level applies the next time the Agent starts.")}</p>
-          <details>
-            <summary>{t("Harness fails to start")}</summary>
-            <p className="field-help">
-              {t(
-                "Open the startup log from the Overview or Diagnostics page. Plugin mismatches are expected across versions; use Recovery to remove the affected plugin or restore a healthy snapshot.",
-              )}
-            </p>
-          </details>
-          <details>
-            <summary>{t("Node, pnpm, or Git is missing")}</summary>
-            <p className="field-help">
-              {t(
-                "Nexus defaults to its complete bundled runtime. Explicit paths in Runtime settings take priority; system discovery is only used without a bundle.",
-              )}
-            </p>
-          </details>
-        </Panel>
-
         <Panel title={t("Native integration")} icon={<Bell size={18} />}>
           <div className="integration-list">
             {desktopUpdate && (
@@ -2025,6 +1943,87 @@ export function SettingsView({
             </p>
           )}
         </Panel>
+        <Panel title={t("Release identity")} icon={<Info size={18} />}>
+          <dl className="detail-list">
+            <div>
+              <dt>{t("Version")}</dt>
+              <dd>{stringValue(buildIdentity, "version") || t("Not available")}</dd>
+            </div>
+            <div>
+              <dt>{t("Build")}</dt>
+              <dd>
+                <code>{stringValue(buildIdentity, "buildId") || t("Not available")}</code>
+              </dd>
+            </div>
+            <div>
+              <dt>{t("Bundled runtime")}</dt>
+              <dd>
+                Node {stringValue(buildIdentity, "node") || "—"} / npm{" "}
+                {stringValue(buildIdentity, "npm") || "—"} / pnpm{" "}
+                {stringValue(buildIdentity, "pnpm") || "—"}
+              </dd>
+            </div>
+          </dl>
+        </Panel>
+        <Panel title={t("Help")} icon={<TerminalWindow size={18} />}>
+          <div className="integration-list">
+            <div>
+              <CheckCircle size={18} />
+              <span>{t("Upstream documentation")}</span>
+              <a
+                href="https://github.com/deepseek-ai/deepseek-harness"
+                target="_blank"
+                rel="noreferrer"
+              >
+                github.com/deepseek-ai/deepseek-harness
+              </a>
+            </div>
+            <div>
+              <CheckCircle size={18} />
+              <span>{t("Diagnostics and logs")}</span>
+              <span>
+                {t("Runtime logs and diagnostic bundles are collected on the Diagnostics page.")}
+              </span>
+            </div>
+            <div>
+              <Gear size={18} />
+              <span>{t("Agent log level")}</span>
+              <select
+                className="form-input"
+                aria-label={t("Agent log level")}
+                value={logLevel}
+                onChange={(event) => {
+                  setNativeSettingsError("");
+                  setLogLevel(event.target.value);
+                }}
+              >
+                <option value="error">{t("Error")}</option>
+                <option value="warn">{t("Warning")}</option>
+                <option value="info">{t("Information")}</option>
+                <option value="debug">{t("Debug")}</option>
+                <option value="trace">{t("Trace")}</option>
+              </select>
+            </div>
+          </div>
+          <p className="field-help">{t("The log level applies the next time the Agent starts.")}</p>
+          <details>
+            <summary>{t("Harness fails to start")}</summary>
+            <p className="field-help">
+              {t(
+                "Open the startup log from the Overview or Diagnostics page. Plugin mismatches are expected across versions; use Recovery to remove the affected plugin or restore a healthy snapshot.",
+              )}
+            </p>
+          </details>
+          <details>
+            <summary>{t("Node, pnpm, or Git is missing")}</summary>
+            <p className="field-help">
+              {t(
+                "Nexus defaults to its complete bundled runtime. Explicit paths in Runtime settings take priority; system discovery is only used without a bundle.",
+              )}
+            </p>
+          </details>
+        </Panel>
+        <LaunchInputsPanel snapshot={snapshot} />
       </section>
     </>
   );

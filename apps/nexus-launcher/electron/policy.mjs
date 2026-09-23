@@ -3,7 +3,7 @@ export const commands = new Set([
   'choose_local_path', 'set_native_locale', 'set_native_notifications',
   'update_tray', 'export_startup_diagnostics', 'autostart_status', 'autostart_set',
   'agent_log_set', 'notify', 'update_status', 'update_check', 'update_download', 'update_settings', 'update_install',
-  'notification_test', 'update_release_notes', 'harness_desktop_restart',
+  'open_github', 'notification_test', 'update_release_notes', 'harness_desktop_restart',
 ]);
 export const events = new Set(['nexus-native-error', 'nexus-tray-action', 'nexus-update']);
 
@@ -11,6 +11,12 @@ export function harnessUrl(raw) {
   const url = new URL(raw);
   if (url.protocol !== 'http:' || !['127.0.0.1', '[::1]', 'localhost'].includes(url.hostname)
       || url.username || url.password || !url.port) throw new Error('Invalid local Harness URL');
+  return url;
+}
+
+export function githubUrl(raw) {
+  const url = new URL(raw);
+  if (url.protocol !== 'https:' || url.hostname !== 'github.com' || url.username || url.password || url.port) throw new Error('Invalid GitHub URL');
   return url;
 }
 

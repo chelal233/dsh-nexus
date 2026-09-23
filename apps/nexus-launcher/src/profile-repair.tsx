@@ -6,7 +6,6 @@ import { confirmAction } from "./confirmation";
 import { errorMessage } from "./display-format";
 import { useI18n } from "./i18n";
 import type { ViewProps } from "./app-types";
-import { OfficialPlugins } from "./official-plugins";
 import { asObject } from "./json-values";
 type File = { file: string; content: string | null; fingerprint: string; error?: string };
 type Report = {
@@ -100,7 +99,11 @@ export function OfflineProfileRepair(props: ViewProps) {
   };
   return (
     <section>
-      <Panel title={text("Offline profile repair", "离线配置档修复")} icon={<Wrench size={20} />}>
+      <Panel
+        collapsible
+        title={text("Offline profile repair", "离线配置档修复")}
+        icon={<Wrench size={20} />}
+      >
         <p>
           {text(
             "Repair an existing profile without selecting or starting it. Invalid configuration remains visible. Recovery points restore configuration files, not removed plugin packages or conversations.",
@@ -235,8 +238,8 @@ export function OfflineProfileRepair(props: ViewProps) {
             </details>
             <p>
               {text(
-                "For missing packages, inspect Local Harness dependencies above. For plugin errors, use the official controls below; do not disable plugins based only on missing service names.",
-                "缺包请使用上方的本地依赖检查；插件错误请使用下方官方管理，不应仅凭缺失服务名称判断要禁用哪个插件。",
+                "For missing packages, inspect Local Harness dependencies above. For plugin errors, use Configuration and plugins; do not disable plugins based only on missing service names.",
+                "缺包请使用上方的本地依赖检查；插件错误请前往“配置与插件”管理，不应仅凭缺失服务名称判断要禁用哪个插件。",
               )}
             </p>
             {props.openWorkbench && (
@@ -247,12 +250,6 @@ export function OfflineProfileRepair(props: ViewProps) {
           </>
         )}
       </Panel>
-      {target &&
-        !report?.files.some((item) => item.error) &&
-        report &&
-        asObject(props.snapshot.profiles).official_plugin_management === true && (
-          <OfficialPlugins {...props} profile={target} key={target} />
-        )}
     </section>
   );
 }

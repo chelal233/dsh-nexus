@@ -1,7 +1,12 @@
 import { OfflineProfileRepair } from "../profile-repair";
 import { type ViewProps, type JsonObject } from "../app-types";
 import { PageIntro, Panel, ActionButton, StatusPill, DataList } from "../ui-components";
-import { DiagnosticsView, RecoveryRecordWizard, LiveLogRetention } from "./recovery";
+import {
+  DiagnosticsView,
+  DiagnosticBundlesPanel,
+  RecoveryRecordWizard,
+  LiveLogRetention,
+} from "./recovery";
 import {
   stringValue,
   harnessRuntimeValue,
@@ -38,6 +43,7 @@ export function MaintenanceView(props: ViewProps & { activity?: React.ReactNode 
       <DiagnosticsView {...props} embedded />
       <DependencyRepairPanel {...props} />
       <OfflineProfileRepair {...props} />
+      <DiagnosticBundlesPanel {...props} />
       <CanaryPanel {...props} />
       <RecoveryRecordWizard
         disabled={props.busyAction !== null || props.snapshot.startup?.available !== true}
