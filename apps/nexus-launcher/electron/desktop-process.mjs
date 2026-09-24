@@ -17,7 +17,16 @@ export async function stopDesktopChild(child) {
     const signal = value => { try { process.kill(group, value); return true; } catch (error) { if (error.code === 'ESRCH') return false; throw error; } };
     if (!signal('SIGTERM')) return;
     const started = Date.now(); let forced = false;
-    while (signal(0)) {
+    while (true) {
+      try { if (!signal(0)) return; }
+      catch (error) {
+        // Darwin may report EPERM while only unreaped zombies remain in an
+        // owned group. After an accepted TERM, wait only; never escalate a
+        // denied probe into another signal or treat denial as successful stop.
+        if (process.platform !== 'darwin' || error.code !== 'EPERM' || Date.now() - started >= 10000) throw error;
+        await new Promise(resolve => setTimeout(resolve, 50));
+        continue;
+      }
       if (!forced && Date.now() - started >= 750) { signal('SIGKILL'); forced = true; }
       if (Date.now() - started >= 10000) throw new Error('desktop_stop_timeout');
       await new Promise(resolve => setTimeout(resolve, 50));
