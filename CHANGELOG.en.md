@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.0.2 — 2026-09-24
+
+- Protect official runtime files from package-manager traversal of source links during Desktop plugin installation. Detach official source projections in the Profile while preserving configuration and external plugin links.
+- Open legacy settings.yaml or the new Profile configuration according to the selected Harness settings interface, including compiled artifacts; report unknown layouts explicitly.
+- Restore current secrets by unique entry id rather than array position, preventing credential misassignment after configuration reordering. Reject missing or ambiguous identities before writing.
+- Add regression coverage for V3/V4 live session notifications, migrated configuration recovery and plugin write boundaries.
+
 ## 1.0.1 — 2026-09-23
 
 - Adopt the transparent Whale Station Master icon across the window, tray, packages and sidebar.

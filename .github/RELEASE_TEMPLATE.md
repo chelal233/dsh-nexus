@@ -1,27 +1,23 @@
-# Nexus Launcher 1.0.1
+# Nexus Launcher 1.0.2
 
 ## 中文
 
-- 采用透明“鲸鱼站长”作为统一图标，覆盖窗口、托盘、安装包与侧栏。
-- 维护页诊断包移至本地依赖和离线配置档修复附近；诊断包与离线修复支持折叠，折叠不清空当前表单。
-- 移除维护页重复嵌入的插件管理，保留独立“内置插件”和“配置与插件”入口。
-- 修复插件仓库链接在 Electron 中点击无反应：通过受限的桌面接口打开 HTTPS GitHub 链接，拒绝其他协议、域名及带凭据地址。
-- 设置页“原生集成”移至“安装包身份”上方，“启动配置说明”移至“帮助”下方。
-- Windows/macOS ZIP 附件增加 `_portable.zip` 后缀，安装包名称不变；同步更新产物收集、摘要和来源校验规则。此命名不表示用户数据改存程序目录。
+- 修复官方 Desktop 安装插件时包管理器可能沿源码链接修改官方运行文件的问题；安装前解除 Profile 中的官方源码投影，保留配置和外部插件链接。
+- 打开设置按所选 Harness 的设置接口选择旧版 settings.yaml 或新版 Profile 配置；支持编译产物检测，未知接口明确报错。
+- 快照恢复按唯一条目 id 回填当前密钥，避免配置列表重排后密钥错配；身份缺失或歧义时在写入前拒绝恢复。
+- 增加 V3/V4 实时会话通知、迁移后配置恢复及插件写入边界的回归覆盖。
 
-### 已知限制
+### 验收边界
 
-本次未改变 Harness 数据存储或运行时优先级（显式路径优先，否则内置）。Git/SSH/LFS 与对应源码仍随发行提供，不捆绑 GCM。历史会话管理 JSON 错误仍属于未复现问题，未宣称已修复。自动测试及 CI 安装包检查不代替所有系统真机安装升级验收；本地 unsigned 验收不代表生产代码签名。原 1.0.0 下载附件保持不变。
+未自动升级 Harness 或修改第三方插件。已核对 0.1.7-rc.1 关键接口，但不宣称所有第三方插件兼容或新版真实会话迁移已全面验收。程序仍保留官方源码启动与共享运行时结构。Git/SSH/LFS 和对应源码继续提供，不捆绑 GCM；离线转发请保留源码配套。运行时仍为显式路径优先，否则内置。本地 unsigned 验收不代表生产代码签名，CI 不代替所有真机安装升级验收。旧版公开附件保持不变。
 
 ## English
 
-- Adopt the transparent Whale Station Master icon across the window, tray, packages and sidebar.
-- Move diagnostic bundles beside local dependencies and offline profile repair. Bundles and offline repair are collapsible without clearing form state.
-- Remove duplicate plugin management embedded in Maintenance, while preserving Built-in plugins and Configuration and plugins.
-- Fix plugin repository links that did not open in Electron. A restricted desktop bridge opens HTTPS GitHub links and rejects other schemes, domains and credential-bearing URLs.
-- Move Native integration above Release identity and Launch configuration explained below Help.
-- Add `_portable.zip` to Windows/macOS ZIP attachment names, preserving installer names. Update collection, checksum and provenance checks accordingly. The filename does not imply storing user data beside the executable.
+- Protect official runtime files from package-manager traversal of source links during Desktop plugin installation. Detach official source projections in the Profile while preserving configuration and external plugin links.
+- Open legacy settings.yaml or the new Profile configuration according to the selected Harness settings interface, including compiled artifacts; report unknown layouts explicitly.
+- Restore current secrets by unique entry id rather than array position, preventing credential misassignment after configuration reordering. Reject missing or ambiguous identities before writing.
+- Add regression coverage for V3/V4 live session notifications, migrated configuration recovery and plugin write boundaries.
 
-### Known limits
+### Acceptance limits
 
-Harness data storage and runtime priority (explicit paths, otherwise bundled) are unchanged. Git/SSH/LFS and corresponding source remain provided, without GCM. The historical session-manager JSON error remains unreproduced, not claimed fixed. Automated and CI package checks do not replace installation/upgrade acceptance on every device; local unsigned acceptance is not production code signing. Existing 1.0.0 downloads remain unchanged.
+Harness is not automatically upgraded and third-party plugins are unchanged. Key 0.1.7-rc.1 interfaces were reviewed; full third-party compatibility and real-session migration are not claimed. Official source-mode startup and shared runtimes remain. Git/SSH/LFS and corresponding source are provided without GCM; retain source companions when redistributing offline. Explicit runtime paths retain priority over bundled tools. Local unsigned acceptance is not production signing, and CI is not installation/upgrade acceptance on every device. Existing public downloads remain unchanged.

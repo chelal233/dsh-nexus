@@ -563,10 +563,10 @@ pub(crate) fn merge_current_secrets(
             let mut current_clone = current.clone();
             let mut current_sensitive = Vec::new();
             redact_yaml(&mut current_clone, &mut Vec::new(), &mut current_sensitive)?;
-            let paths = redaction_union(snapshot_redacted_paths, &current_sensitive)?;
-            for pointer in paths {
-                if let Some(secret) = get_yaml_pointer(&current, &pointer)? {
-                    insert_yaml_pointer(&mut desired, &pointer, secret.clone())?;
+            for pointer in &current_sensitive {
+                if let Some(secret) = get_yaml_pointer(&current, pointer)? {
+                    let target = remap_yaml_secret(&current, &desired, pointer)?;
+                    insert_yaml_pointer(&mut desired, &target, secret.clone())?;
                 }
             }
             if snapshot_redacted_paths.is_empty() && current_sensitive.is_empty() {
@@ -849,6 +849,44 @@ fn get_yaml_pointer<'a>(value: &'a YamlValue, pointer: &str) -> Result<Option<&'
         });
     }
     Ok(Some(current))
+}
+
+// Sequence positions are not identities. Refuse ambiguous/missing IDs rather
+// than move a credential to another plugin (including nested sequences).
+fn remap_yaml_secret(source: &YamlValue, target: &YamlValue, pointer: &str) -> Result<String> {
+    let mut source = source;
+    let mut target = target;
+    let mut result = Vec::new();
+    let segments = decode_pointer(pointer)?;
+    let invalid = || SnapshotError::StructuredData {
+        path: pointer.to_owned(),
+        message: "cannot preserve secret: sequence identity is missing, ambiguous or changed".to_owned(),
+    };
+    for (position, segment) in segments.iter().enumerate() {
+        let last = position + 1 == segments.len();
+        match (source, target) {
+            (YamlValue::Mapping(a), YamlValue::Mapping(b)) => {
+                result.push(segment.clone());
+                if last { break; }
+                let key = YamlValue::String(segment.clone());
+                source = a.get(&key).ok_or_else(&invalid)?;
+                target = b.get(&key).ok_or_else(&invalid)?;
+            }
+            (YamlValue::Sequence(a), YamlValue::Sequence(b)) => {
+                let i = segment.parse::<usize>().map_err(|_| invalid())?;
+                let item = a.get(i).ok_or_else(&invalid)?;
+                let id = item.get("id").and_then(YamlValue::as_str).filter(|s| !s.is_empty()).ok_or_else(&invalid)?;
+                let same = |v: &&YamlValue| v.get("id").and_then(YamlValue::as_str) == Some(id);
+                if a.iter().filter(same).count() != 1 || b.iter().filter(same).count() != 1 { return Err(invalid()); }
+                let j = b.iter().position(|v| v.get("id").and_then(YamlValue::as_str) == Some(id)).ok_or_else(&invalid)?;
+                result.push(j.to_string());
+                source = item;
+                target = &b[j];
+            }
+            _ => return Err(invalid()),
+        }
+    }
+    Ok(encode_pointer(&result))
 }
 
 fn insert_yaml_pointer(value: &mut YamlValue, pointer: &str, secret: YamlValue) -> Result<()> {

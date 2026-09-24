@@ -937,3 +937,60 @@ fn tree_contains(root: &Path, needle: &[u8]) -> bool {
     }
     false
 }
+
+#[test]
+fn profile_settings_restore_preserves_secrets_and_v4_sessions() {
+    let fixture = Fixture::new();
+    fs::rename(fixture.home.join("settings.yaml"), fixture.home.join("settings.yaml.imported")).unwrap();
+    let patch = fixture.profile.join("cordis.patch.yml");
+    write(&patch, "- id: custom-provider\n  config:\n    apiKey: DUMMY-OLD-SECRET\n    enabled: true\n");
+    let session = fixture.home.join("sessions/synthetic/session.v4.jsonl.zstd");
+    write(&session, "opaque-v4-user-session");
+    let manifest = fixture.capture_healthy();
+    assert!(!tree_contains(&fixture.data, b"DUMMY-OLD-SECRET"));
+    write(&patch, "- id: custom-provider\n  config:\n    apiKey: DUMMY-CURRENT-SECRET\n    enabled: false\n");
+    let ticket = fixture.store.prepare_restore(&manifest.snapshot_id).unwrap();
+    fixture.store.apply_restore(&ticket).unwrap();
+    let restored = fs::read_to_string(&patch).unwrap();
+    assert!(restored.contains("enabled: true"));
+    assert!(restored.contains("DUMMY-CURRENT-SECRET"));
+    assert!(!restored.contains("DUMMY-OLD-SECRET"));
+    assert!(!fixture.home.join("settings.yaml").exists());
+    assert!(fixture.home.join("settings.yaml.imported").exists());
+    assert_eq!(fs::read_to_string(session).unwrap(), "opaque-v4-user-session");
+    fixture.store.commit_restore(&ticket).unwrap();
+}
+
+#[test]
+fn profile_secret_restore_matches_ids_after_reorder() {
+    let f = Fixture::new();
+    let patch = f.profile.join("cordis.patch.yml");
+    write(&patch, "- id: A\n  config: {apiKey: OLD-A}\n- id: B\n  config: {apiKey: OLD-B}\n");
+    let manifest = f.capture_healthy();
+    write(&patch, "- id: B\n  config: {apiKey: CURRENT-B}\n- id: A\n  config: {apiKey: CURRENT-A}\n");
+    let ticket = f.store.prepare_restore(&manifest.snapshot_id).unwrap();
+    f.store.apply_restore(&ticket).unwrap();
+    let value: serde_yaml_ng::Value = serde_yaml_ng::from_str(&fs::read_to_string(patch).unwrap()).unwrap();
+    assert_eq!(value[0]["id"].as_str(), Some("A"));
+    assert_eq!(value[0]["config"]["apiKey"].as_str(), Some("CURRENT-A"));
+    assert_eq!(value[1]["id"].as_str(), Some("B"));
+    assert_eq!(value[1]["config"]["apiKey"].as_str(), Some("CURRENT-B"));
+    f.store.commit_restore(&ticket).unwrap();
+}
+
+#[test]
+fn profile_secret_restore_rejects_ambiguous_or_missing_identity_before_writing() {
+    for current in [
+        "- id: A\n  config: {apiKey: ONE}\n- id: A\n  config: {apiKey: TWO}\n",
+        "- id: B\n  config: {apiKey: ONE}\n",
+        "- config: {apiKey: ONE}\n",
+    ] {
+        let f = Fixture::new();
+        let patch = f.profile.join("cordis.patch.yml");
+        write(&patch, "- id: A\n  config: {apiKey: OLD}\n");
+        let manifest = f.capture_healthy();
+        write(&patch, current);
+        assert!(f.store.prepare_restore(&manifest.snapshot_id).is_err());
+        assert_eq!(fs::read_to_string(patch).unwrap(), current);
+    }
+}

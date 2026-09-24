@@ -7,6 +7,7 @@ import { desktopKitMatchesSource, legacyElectronEntry, portableHostEntry } from 
 import { stopDesktopChild } from './desktop-process.mjs';
 import { desktopSourceView } from './desktop-paths.mjs';
 import { checkDesktopProfile, renameDesktopState } from './desktop-startup-audit.mjs';
+import { prepareDesktopPnpm } from './harness-desktop-pnpm.mjs';
 
 const recipe = JSON.parse(fs.readFileSync(process.argv[2], 'utf8'));
 const startedAt = Date.now();
@@ -92,6 +93,7 @@ try {
   const electron = shared ? recipe.electronExecutable : portable ? path.join(recipe.userData, 'runtime', `host-${kit.hostArchiveSha256}`, portableHostEntry(kit.platform))
     : kit.schema === 1 ? path.join(recipe.kit, 'electron', legacyElectronEntry()) : path.join(recipe.userData, 'runtime', `electron-${kit.electronArchiveSha256}`, legacyElectronEntry());
   const desktopEnv = { ...env, DSH_HOME: recipe.home, DSH_DESKTOP_OPEN_DEVTOOLS: '0' };
+  desktopEnv.DSH_DESKTOP_PNPM_ENTRY = prepareDesktopPnpm(recipe);
   delete desktopEnv.ELECTRON_RUN_AS_NODE;
   tail = ''; report({ stage: 'launch', childPid: undefined, detail: '' });
   const launchApp = path.join(desktopSourceView(recipe.source), 'apps/desktop');

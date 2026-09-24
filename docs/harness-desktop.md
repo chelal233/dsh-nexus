@@ -55,3 +55,15 @@ Web 正常启动在已验证的 Harness 0.1.6-alpha.2 中直接观察正式实�
 ## 第三方插件市场的配置来源
 
 本地核对发现，dshmarket 1.39.0 识别的是另一套 Desktop 的 `desktopProfiles` 接口。Harness 官方 0.1.6-alpha.2 未提供该接口，且 Host 不携带 `--profile` 命令行参数，市场会回退读取 `web`，包括已安装列表和包操作。因此市场中的“已安装”不能证明该插件正在 Desktop 加载。官方 Desktop 仍读取 `profiles/desktop/package.json`；可在 Nexus 对应配置档的插件清单核对。上游已在 [dshmarket 1.52.0](https://github.com/dsh-market/dsh-market/releases/tag/v1.52.0) 修复配置识别及 Desktop 包操作；Nexus 首次安装市场时固定使用该版本。已有旧版不会自动升级，请通过明确指定 desktop 配置的管理入口更新，不要用读错配置的旧市场更新。Nexus 不会据此修改用户插件或伪造第三方宿主接口。
+
+## 多版本兼容与写入边界
+
+Nexus 按所选 Harness 的接口能力适配，不将第三方插件的版本范围作为整个 Harness 的支持范围。旧版本保持原处理路径；新版本接口不能用扩大版本白名单代替验证。
+
+- 程序文件和官方运行时由 Nexus 的版本安装、校验与修复流程维护。插件包管理仅拥有所选 Profile；官方 Desktop 调用 pnpm 前解除指向官方源码目录的包链接，包括私有 fallback 链接，禁止递归删除链接目标。配置和外部插件链接保留。该保护不等于给任意第三方插件建立操作系统沙箱。
+- 离线压缩资源是可核验的分发材料；展开后的运行时可共享。当前官方源码启动模式仍需要准备运行目录，本次没有把它替换成另一套打包架构，也不把缓存当作用户数据。
+- 旧设置服务使用 `settings.yaml`；0.1.7 的 Profile 设置服务使用 `profiles/<profile>/cordis.patch.yml`。打开设置依据所选运行时的编译产物或源码中的设置接口决定，无法确认时明确报错，不依据全局 `.imported` 标记猜测版本。Nexus 不主动执行上游首次导入，也不将迁移后的配置自动反向转换给旧版。
+- 快照继续使用原有格式，同时覆盖旧设置与 Profile patch。迁移后的快照恢复按列表条目的唯一 id 回填当前密钥，身份缺失或歧义时拒绝写入，不恢复历史密钥；不改动 `settings.yaml.imported` 或会话日志。升级前快照与旧运行时应配套保留，以支持回退。
+- Nexus 通知订阅 `session/event`，不调用同步历史读取接口，不直接解析 V3/V4 文件，也不绑定 `agent/session-start`。会话格式迁移由所选 Harness 处理。
+
+0.1.7-rc.1 已完成上述关键接口源码核对及 Nexus 本地回归；这不代表新版完整 Desktop 启动、真实旧会话迁移或所有第三方插件已验收。运行时锁与用户正在使用的 Harness 不因这项适配自动升级。

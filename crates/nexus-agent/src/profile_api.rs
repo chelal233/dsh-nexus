@@ -819,7 +819,17 @@ async fn profile_open_path(state: AppState, command: ProfileCommand) -> axum::re
             }
             (path, true)
         }
-        "settings" => (dsh_home.join("settings.yaml"), false),
+        "settings" => {
+            let source = match source_context::resolve(&state.paths, &state.releases) {
+                Ok(source) => source,
+                Err(error) => return data_error_response(error, "settings_source_unavailable"),
+            };
+            let path = match crate::preference_capabilities::settings_document(source.root.as_deref(), &dsh_home, &profile) {
+                Ok(path) => path,
+                Err(error) => return data_error_response(error, "settings_path_invalid"),
+            };
+            (path, false)
+        },
         "profile_dir" => (profile_dir.clone(), true),
         "profile_patch" => (profile_dir.join("cordis.patch.yml"), false),
         "plugin_manifest" => (profile_dir.join("package.json"), false),

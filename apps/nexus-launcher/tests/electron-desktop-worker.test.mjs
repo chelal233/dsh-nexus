@@ -26,6 +26,7 @@ test('failed preparation stop retains ownership until retry and never starts Des
   // platform stop execution and runtime discovery with isolated fixtures.
   put('harness-desktop-worker.mjs', fs.readFileSync(new URL('../electron/harness-desktop-worker.mjs', import.meta.url)));
   put('desktop-startup-audit.mjs', fs.readFileSync(new URL('../electron/desktop-startup-audit.mjs', import.meta.url)));
+  put('harness-desktop-pnpm.mjs', fs.readFileSync(new URL('../electron/harness-desktop-pnpm.mjs', import.meta.url)));
   put('harness-desktop.mjs', "export const desktopCapability = source => ({app: source});");
   put('desktop-runtime.mjs', "export const desktopKitMatchesSource=()=>true; export const legacyElectronEntry=()=>''; export const portableHostEntry=()=>'';");
   put('desktop-paths.mjs', 'export const desktopSourceView = source => source;');
@@ -88,6 +89,7 @@ test('official Desktop worker opens a visible Windows window', { skip: process.p
   };
   put('harness-desktop-worker.mjs', fs.readFileSync(new URL('../electron/harness-desktop-worker.mjs', import.meta.url)));
   put('desktop-startup-audit.mjs', fs.readFileSync(new URL('../electron/desktop-startup-audit.mjs', import.meta.url)));
+  put('harness-desktop-pnpm.mjs', fs.readFileSync(new URL('../electron/harness-desktop-pnpm.mjs', import.meta.url)));
   put('harness-desktop.mjs', 'export const desktopCapability = source => ({app:source});');
   put('desktop-runtime.mjs', "export const desktopKitMatchesSource=()=>true; export const legacyElectronEntry=()=>''; export const portableHostEntry=()=>'';");
   put('desktop-paths.mjs', 'export const desktopSourceView=source=>source;');

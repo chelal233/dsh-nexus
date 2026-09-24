@@ -92,3 +92,20 @@ test('page presence requires same origin, stays bounded, and clears on blur or e
   for (let i = 0; i < 70; i++) await post({ page: `page-${i}`, session: 's1', focused: true });
   assert.equal(views.size, 64); assert.ok(changed > 0);
 });
+
+test('V3 and V4 session notifications use live events without synchronous history access', () => {
+  for (const version of [3, 4]) {
+    const events = [];
+    const tracker = createTracker(e => events.push(e));
+    const current = { header: { id: `v${version}`, version, origin: 'user' } };
+    for (const key of ['snapshotEvents', 'eventAt', 'ownEvents', 'events']) {
+      Object.defineProperty(current, key, { get() { throw Error(`obsolete history access: ${key}`); } });
+    }
+    tracker.event(current, { type: 'turn/start', data: { turn: 1 } });
+    tracker.event(current, { type: 'turn/end', data: { turn: 1, reason: { kind: 'completed' } } });
+    assert.equal(events.length, 1);
+    assert.equal(events[0].session, `v${version}`);
+    assert.equal(events[0].kind, 'completed');
+    tracker.dispose();
+  }
+});

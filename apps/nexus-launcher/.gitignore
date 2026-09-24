@@ -4,3 +4,6 @@ electron-dist/
 
 .build-*.log
 .test-*.log
+
+# Local packaging verification outputs
+electron-dist-*/

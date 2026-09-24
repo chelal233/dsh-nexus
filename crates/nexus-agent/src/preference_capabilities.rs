@@ -47,6 +47,31 @@ pub(crate) fn resolve(root: Option<&Path>, home: &Path, profile: &str, preferenc
     Ok(evidence.capabilities)
 }
 
+// Resolve against the selected artifact, never a global migration marker: old
+// and new Harness releases may coexist against different profiles.
+pub(crate) fn settings_document(root: Option<&Path>, home: &Path, profile: &str) -> io::Result<std::path::PathBuf> {
+    nexus_core::validate_profile_name(profile)?;
+    let root = root.ok_or_else(|| unsupported("Cannot determine settings layout without a selected Harness artifact"))?;
+    let read = |relative: &str| -> io::Result<String> {
+        let bytes = nexus_core::read_regular_file_bounded(&root.join(relative), 512 * 1024)?;
+        bytes.map(String::from_utf8).transpose().map_err(io::Error::other).map(Option::unwrap_or_default)
+    };
+    // Built-only external distributions are supported too. Unknown is not legacy.
+    for relative in ["packages/settings/settings/lib/index.js", "packages/settings/settings/src/index.ts"] {
+        let text = read(relative)?;
+        if text.contains("configEditor.documentPath") {
+            return Ok(home.join("profiles").join(profile).join("cordis.patch.yml"));
+        }
+    }
+    for relative in ["packages/settings/settings-file/lib/index.js", "packages/settings/settings-file/src/index.ts"] {
+        let text = read(relative)?;
+        if text.contains("settings.yaml") && text.contains("documentPath") {
+            return Ok(home.join("settings.yaml"));
+        }
+    }
+    Err(unsupported("Unknown Harness settings layout; open the profile directory or use Harness settings"))
+}
+
 fn artifact_contains(root: &Path, relative: &str, token: &str) -> bool {
     nexus_core::read_regular_file_bounded(&root.join(relative), 512 * 1024)
         .ok().flatten().and_then(|bytes| String::from_utf8(bytes).ok())
@@ -308,5 +333,30 @@ mod tests {
         assert!(validate_launch(&spec, &p, Some(&f.0.join("slot"))).is_err());
         spec.args = vec!["{release_root}/apps/cli/lib/bin.js".into()];
         assert!(validate_launch(&spec, &p, Some(&f.0.join("slot"))).is_ok());
+    }
+}
+
+#[cfg(test)]
+mod settings_document_tests {
+    use super::*;
+    #[test]
+    fn selected_artifact_controls_settings_path_without_migrating_data() {
+        let base = std::env::temp_dir().join(format!("nexus-settings-{}", nexus_core::new_instance_id()));
+        let source = base.join("packages/settings/settings/src");
+        fs::create_dir_all(&source).unwrap();
+        let home = base.join("home");
+        assert!(settings_document(Some(&base), &home, "web").is_err());
+        let legacy = base.join("packages/settings/settings-file/lib");
+        fs::create_dir_all(&legacy).unwrap();
+        fs::write(legacy.join("index.js"), "get documentPath() { return 'settings.yaml' }").unwrap();
+        assert_eq!(settings_document(Some(&base), &home, "desktop").unwrap(), home.join("settings.yaml"));
+        let built = base.join("packages/settings/settings/lib");
+        fs::create_dir_all(&built).unwrap();
+        fs::write(built.join("index.js"), "get documentPath(){return this.ownerContext.configEditor.documentPath}").unwrap();
+        assert_eq!(settings_document(Some(&base), &home, "desktop").unwrap(), home.join("profiles/desktop/cordis.patch.yml"));
+        assert!(settings_document(None, &home, "web").is_err());
+        assert!(settings_document(Some(&base), &home, "../escape").is_err());
+        assert!(!home.exists());
+        fs::remove_dir_all(base).unwrap();
     }
 }
