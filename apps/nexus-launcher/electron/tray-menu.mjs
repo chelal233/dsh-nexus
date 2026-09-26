@@ -39,7 +39,7 @@ export function trayEntries({ text, web = {}, desktop = {}, supported = false, b
       ...(web.startup_id ? [item('cancel-startup','Cancel startup','取消启动',canCancelStartup&&!nativeActive)] : []),
     ]},
     ...(supported||nativeActive ? [{id:'desktop-group',label:text('Official Desktop','官方桌面版'),submenu:[
-      item('desktop','Open Desktop','打开桌面端',!busy&&!nativeActive&&!webActive&&supported),
+      item('desktop','Open Desktop','打开桌面端',!busy&&(!nativeActive||(desktop.phase==='launched'&&desktop.canShowWindow))&&!webActive&&supported),
       item('desktop-restart','Restart Desktop','重启桌面端',!busy&&desktop.phase==='launched'&&!webActive&&supported),
       item('desktop-stop',desktop.phase==='preparing'?'Cancel startup':'Stop Desktop',desktop.phase==='preparing'?'取消启动':'中止桌面端',(!busy||canStopDesktop)&&nativeActive&&desktop.phase!=='stopping'),
     ]}] : []),

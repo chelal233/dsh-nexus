@@ -1,5 +1,12 @@
 # Changelog
 
+
+## 1.0.3 — 2026-09-26
+
+- Fix bundled macOS/Linux Node bin/npm, bin/npx and available Corepack entry points. They now launch from the correct package directory after packaging dereferences symbolic links, preventing npm_probe_failed and the resulting unavailable pnpm status when bin/node is selected. Old build caches are regenerated; installed applications need an update to receive the fix.
+- Open Desktop can restore an existing background desktop window without restarting its tasks. The running host advertises support; older independent hosts retain their existing controls.
+- Clarify that closing a window may leave Desktop running. Stop Desktop before switching modes or changing data. Compatibility with older and newer Harness interfaces remains; user Harness installations are not upgraded automatically.
+
 ## 1.0.2 — 2026-09-24
 
 - Protect official runtime files from package-manager traversal of source links during Desktop plugin installation. Detach official source projections in the Profile while preserving configuration and external plugin links.

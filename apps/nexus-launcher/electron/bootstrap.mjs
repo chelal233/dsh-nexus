@@ -33,6 +33,9 @@ if (!recipeFile) {
     const { ipcMain } = await import('electron');
     process.env.DSH_DESKTOP_DIAGNOSTIC_FILE = `${startupEvidenceFile(recipe)}.error`;
     installDesktopStartupAudit({ app, ipcMain, recipe });
+    const { installDesktopWindowControl } = await import('./desktop-window.mjs');
+    const { BrowserWindow } = await import('electron');
+    installDesktopWindowControl({ app, BrowserWindow, recipe });
     await import(pathToFileURL(path.join(officialApp, 'lib/main.js')).href);
   } catch (error) {
     console.error(error);

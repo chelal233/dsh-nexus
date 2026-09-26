@@ -167,6 +167,15 @@ async function stageNode() {
         await writeFile(path.join(nodeDir, name), '#!/bin/sh\nHERE=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)\nexec "$HERE/node" "$HERE/node_modules/npm/bin/' + name + '-cli.js" "$@"\n');
         await chmod(path.join(nodeDir, name), 0o755);
       }
+      // Dereferencing distribution links moves JS entry files away from their
+      // relative imports. Replace every public bin entry with a relocatable
+      // Node wrapper; do not rely on the caller's PATH or system Node.
+      for (const [name, entry] of Object.entries({ npm: 'npm/bin/npm-cli.js', npx: 'npm/bin/npx-cli.js', corepack: 'corepack/dist/corepack.js', pnpm: 'corepack/dist/pnpm.js', pnpx: 'corepack/dist/pnpx.js', yarn: 'corepack/dist/yarn.js', yarnpkg: 'corepack/dist/yarnpkg.js' })) {
+        const target = path.join(nodeDir, 'lib/node_modules', entry);
+        if (!['npm', 'npx'].includes(name) && !(await access(target).then(() => true, () => false))) continue;
+        await writeFile(path.join(nodeDir, 'bin', name), '#!/bin/sh\nHERE=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)\nexec "$HERE/node" "$HERE/../lib/node_modules/' + entry + '" "$@"\n');
+        await chmod(path.join(nodeDir, 'bin', name), 0o755);
+      }
       await chmod(path.join(nodeDir, "node"), 0o755);
     }
   } finally {
@@ -314,6 +323,12 @@ async function isUpToDate(manifestFile) {
       if (stagedSha !== pinnedNodeSha) return false;
     } else if (manifest.node?.sha256 && stagedSha !== manifest.node.sha256) {
       return false;
+    }
+    if (!windows) {
+      for (const name of ['npm', 'npx']) {
+        const shim = await readFile(path.join(resourceRuntime, 'node/bin', name), 'utf8');
+        if (!shim.includes('$HERE/../lib/node_modules/npm/bin/' + name + '-cli.js')) return false;
+      }
     }
     if (!manifest.node?.npmVersion || !manifest.node?.archiveSha256) return false;
     const npm = JSON.parse(await readFile(path.join(resourceRuntime, "node/node_modules/npm/package.json"), "utf8"));

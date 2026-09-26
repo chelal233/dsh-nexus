@@ -7,6 +7,7 @@ import type { Snapshot } from "../app-types";
 import { diagnoseStartup } from "../../../../crates/nexus-agent/src/startup-diagnosis.mjs";
 
 type DesktopState = {
+  canShowWindow?: boolean;
   phase: "idle" | "preparing" | "launched" | "stopping" | "stopped" | "failed";
   stage?: string;
   operationId?: string;
@@ -175,7 +176,8 @@ export function HarnessDesktopPanel({
     stopped: "Open your workspace in the official desktop app.",
     stopping: "Stopping Desktop and its background processes.",
     preparing: "Preparing local files. This may take a moment.",
-    launched: "Continue in the desktop window. Close it to switch modes.",
+    launched:
+      "Desktop may keep running after its window closes. Stop Desktop before switching modes.",
     failed: "Desktop did not start. Check the error and try again.",
   };
   const failure =
@@ -306,6 +308,11 @@ export function HarnessDesktopPanel({
       <div className="button-row">
         {state.phase === "launched" && !starting && (
           <>
+            {state.canShowWindow && (
+              <ActionButton disabled={busy || stopping || starting} onClick={() => void launch()}>
+                {t("Open Desktop")}
+              </ActionButton>
+            )}
             <ActionButton disabled={busy || stopping} onClick={() => void restart()}>
               <ArrowsClockwise size={16} />
               {t("Restart")}

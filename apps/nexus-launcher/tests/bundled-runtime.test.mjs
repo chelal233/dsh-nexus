@@ -101,3 +101,16 @@ test('nested bundled pnpm honors an explicitly selected Node executable', () => 
     assert.equal(result.status, 0, result.stdout + result.stderr);
   } finally { rmSync(fixture, { recursive: true, force: true }); }
 });
+
+// Both layouts can be selected explicitly by users. Test the actual executable
+// siblings, not only npm-cli.js (which bypasses the broken distribution link).
+test('Unix distribution bin npm and npx remain relocatable', { skip: process.platform === 'win32' }, () => {
+  const runtime = process.env.NEXUS_TEST_RUNTIME_DIR || fileURLToPath(new URL('../desktop/resources/runtime/', import.meta.url));
+  const bin = path.join(runtime, 'node/bin');
+  for (const name of ['npm', 'npx']) {
+    const result = spawnSync(path.join(bin, name), ['--version'], { env: { ...process.env, PATH: '/usr/bin:/bin' }, encoding: 'utf8', timeout: 30000 });
+    assert.ifError(result.error);
+    assert.equal(result.status, 0, result.stdout + result.stderr);
+    assert.match(result.stdout.trim(), /^\d+\.\d+\.\d+/);
+  }
+});

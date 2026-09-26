@@ -139,14 +139,15 @@ const english: Record<string, string> = {
   "Desktop settings": "Desktop settings",
   "Managed in the official window": "Managed in the official window",
 
+  "Open Desktop": "Open Desktop",
   "Browser profile": "Browser profile",
   "Version and source": "Version and source",
   "Open your workspace in the official desktop app.":
     "Open your workspace in the official desktop app.",
   "Preparing local files. This may take a moment.":
     "Preparing local files. This may take a moment.",
-  "Continue in the desktop window. Close it to switch modes.":
-    "Continue in the desktop window. Close it to switch modes.",
+  "Desktop may keep running after its window closes. Stop Desktop before switching modes.":
+    "Desktop may keep running after its window closes. Stop Desktop before switching modes.",
   "Desktop did not start. Check the error and try again.":
     "Desktop did not start. Check the error and try again.",
 
@@ -2208,10 +2209,11 @@ const chinese: Record<string, string> = {
 
   "Browser profile": "浏览器配置",
   "Version and source": "版本与来源",
+  "Open Desktop": "打开桌面端",
   "Open your workspace in the official desktop app.": "在官方桌面窗口中打开工作区。",
   "Preparing local files. This may take a moment.": "正在准备本地文件，请稍候。",
-  "Continue in the desktop window. Close it to switch modes.":
-    "请在桌面窗口中继续，关闭窗口后可切换打开方式。",
+  "Desktop may keep running after its window closes. Stop Desktop before switching modes.":
+    "关闭窗口后桌面端可能仍在后台运行。切换模式前请中止桌面端。",
   "Desktop did not start. Check the error and try again.": "桌面端未能启动，请查看错误后重试。",
 
   "desktop_install_incomplete":

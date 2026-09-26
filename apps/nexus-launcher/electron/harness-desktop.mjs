@@ -36,6 +36,11 @@ export function readDesktopState(file, isAlive = alive) {
   try { state = JSON.parse(fs.readFileSync(file, 'utf8')); }
   catch (error) { if (error.code === 'ENOENT') return { phase: 'idle' }; throw error; }
   if (['launched', 'failed', 'stopped'].includes(state.phase) && /^[a-f0-9-]{36}$/.test(state.operationId ?? '')) {
+    state.canShowWindow = false;
+    try {
+      const control = JSON.parse(fs.readFileSync(path.join(path.dirname(file), `show-${state.operationId}.json.capability`), 'utf8'));
+      state.canShowWindow = state.phase === 'launched' && control.operationId === state.operationId && control.pid === state.childPid;
+    } catch {}
     const evidence = path.join(path.dirname(file), `startup-${state.operationId}.json`);
     state.audit = { state: 'checking' };
     try {
@@ -172,7 +177,36 @@ export class HarnessDesktop {
   }
   async start() {
     if (this.restarting || this.stopPromise) throw new Error('desktop_already_active');
+    if (this.status().phase === 'launched') {
+      this.showPromise ??= this.showWindow().finally(() => { this.showPromise = undefined; });
+      return this.showPromise;
+    }
     return this.startOperation();
+  }
+
+  async showWindow() {
+    const state = this.status();
+    if (!state.canShowWindow || !/^[a-f0-9-]{36}$/.test(state.operationId ?? '')) throw new Error('desktop_window_unsupported');
+    const requestId = randomUUID();
+    const file = path.join(this.directory, `show-${state.operationId}.json`);
+    const temporary = `${file}.${requestId}.tmp`;
+    try {
+      fs.writeFileSync(temporary, JSON.stringify({ operationId: state.operationId, requestId, expiresAt: Date.now() + 5000 }), { mode: 0o600 });
+      fs.renameSync(temporary, file);
+      const deadline = Date.now() + 5000;
+      while (Date.now() < deadline) {
+        await new Promise(resolve => setTimeout(resolve, 100));
+        const next = this.status();
+        if (next.operationId !== state.operationId || next.phase !== 'launched') throw new Error('desktop_window_changed');
+        let reply;
+        try { reply = JSON.parse(fs.readFileSync(`${file}.ack`, 'utf8')); } catch (error) { if (error.code !== 'ENOENT') throw error; }
+        if (reply?.requestId === requestId && reply.operationId === state.operationId) {
+          if (reply.error) throw new Error(reply.error);
+          return next;
+        }
+      }
+      throw new Error('desktop_window_timeout');
+    } finally { fs.rmSync(temporary, { force: true }); }
   }
 
   async observeStartupFailure(operationId, release, config, generation) {
