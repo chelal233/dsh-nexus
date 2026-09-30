@@ -36,4 +36,4 @@ Entry points are `src/App.tsx`, `electron/main.mjs`, and `electron/preload.cjs`;
 
 ## Platform resources
 
-Build Desktop resources on their native platform after `prepare:runtime`, before release manifests. The Electron version in package.json must match `desktop/desktop-runtime-lock.json` (currently 44.0.0). Unsupported Desktop targets produce an explicit marker and retain Web mode; do not download at first user launch. Linux ARM64 helpers use the glibc 2.28 baseline and vendored OpenSSL; follow the native CI toolchain, including Perl/make. This is a build-time requirement, not an end-user toolchain dependency.
+Build Desktop resources on their native platform after `prepare:runtime`, before release manifests. The Electron version in package.json must match `desktop/desktop-runtime-lock.json` (currently 44.0.0). Unsupported Desktop targets produce an explicit marker and retain Web mode; do not download at first user launch. Linux x64/ARM64 helpers use the glibc 2.28 baseline and vendored OpenSSL; follow the native CI toolchain, including Perl/make. This is a build-time requirement, not an end-user toolchain dependency.

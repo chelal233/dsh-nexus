@@ -51,6 +51,13 @@ targets['aarch64-unknown-linux-gnu'] = {
   bundles: ['AppImage', 'deb', 'rpm'],
 };
 
+targets['x86_64-unknown-linux-gnu'] = {
+  platform: 'linux', arch: 'x64', nodeVersion: '24.20.0',
+  archive: 'linux-x64.tar.gz',
+  sha256: '855d581f8a4eb1a8117e3426de25fe02770592febcfb31369aee1ffbfee9e8ec',
+  bundles: ['AppImage', 'deb', 'rpm'],
+};
+
 export const updateChannelFile = spec => `latest-${spec.arch}${spec.platform === 'darwin' ? '-mac' : spec.platform === 'linux' ? '-linux' + (spec.arch === 'x64' ? '' : '-' + spec.arch) : ''}.yml`;
 
 export function selectPlatform(target, platform = process.platform, arch = process.arch) {

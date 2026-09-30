@@ -24,7 +24,8 @@
         "win32/arm64",
         "darwin/x64",
         "darwin/arm64",
-        "linux/arm64"
+        "linux/arm64",
+        "linux/x64"
       ]
     },
     {
@@ -38,7 +39,8 @@
       "platforms": [
         "darwin/x64",
         "darwin/arm64",
-        "linux/arm64"
+        "linux/arm64",
+        "linux/x64"
       ]
     },
     {
@@ -816,7 +818,8 @@
         "win32/arm64",
         "darwin/x64",
         "darwin/arm64",
-        "linux/arm64"
+        "linux/arm64",
+        "linux/x64"
       ],
       "components": [
         "github.com/hashicorp/go-uuid v1.0.2 (MPL-2.0)"
@@ -832,7 +835,8 @@
         "win32/arm64",
         "darwin/x64",
         "darwin/arm64",
-        "linux/arm64"
+        "linux/arm64",
+        "linux/x64"
       ],
       "components": [
         "Git LFS v3.7.1"
@@ -844,7 +848,8 @@
     {
       "file": "mozilla-certdata-4acf6f0d.txt",
       "platforms": [
-        "linux/arm64"
+        "linux/arm64",
+        "linux/x64"
       ],
       "size": 1330761,
       "url": "https://raw.githubusercontent.com/mozilla-firefox/firefox/4acf6f0d6ccb0f7008080e0d91b15258c4c6686c/security/nss/lib/ckfw/builtins/certdata.txt",
@@ -856,7 +861,8 @@
     {
       "file": "curl-mk-ca-bundle-84c5dcdb.pl",
       "platforms": [
-        "linux/arm64"
+        "linux/arm64",
+        "linux/x64"
       ],
       "size": 24884,
       "url": "https://raw.githubusercontent.com/curl/curl/84c5dcdb05202d3260b4631c2fa842123f87b362/scripts/mk-ca-bundle.pl",

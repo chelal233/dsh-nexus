@@ -3,13 +3,13 @@
 [English](github-release.en.md)
 
 
-当前使用 Electron，发行矩阵为 Windows x64/ARM64、macOS x64/ARM64 和 Linux ARM64。平台支持范围必须取 Harness 与 Electron 的交集。
+当前使用 Electron，发行矩阵为 Windows x64/ARM64、macOS x64/ARM64 和 Linux x64/ARM64。固定的 Harness 0.1.6-alpha.2 未提供 Linux Desktop 运行时；两个 Linux 架构保留 Web 模式，不宣称支持该版本的官方 Desktop。
 
 ## 两个工作流
 
 `Desktop build`：前端/Rust/Electron 检查 → 目标架构辅助程序与运行时 → 许可和资源清单 → 打包 → 安装/解压冒烟 → 收集附件。
 
-`Publish release`：在 `v*` 标签上运行，要求标签等于 `v<package version>`；复用同一提交、完整成功的五目标构建，否则运行构建矩阵。验证附件后生成签名校验清单，创建草稿、上传，全部成功后公开为预发布版。
+`Publish release`：在 `v*` 标签上运行，要求标签等于 `v<package version>`；复用同一提交、完整成功的六目标构建，否则运行构建矩阵。验证附件后生成签名校验清单，创建草稿、上传，全部成功后公开为预发布版。
 
 源码推送、tag 创建、构建通过、Release 公开是四种不同状态。已有草稿时不要盲目重跑创建步骤；先检查附件。不要移动已发布 tag 或拿其他提交的包补充该版本。
 
@@ -29,8 +29,8 @@
 1. 同步根 Cargo.toml、Cargo.lock 中 Nexus 包版本和 Launcher package.json；更新双语变更记录。
 2. 在匹配目标的原生平台构建，确认依赖锁文件、运行时摘要和许可材料。
 3. 执行工作流规定的测试和安装/解压检查；另行记录真实用户交互验收。
-4. 检查 EXE/DMG、ZIP、架构更新 YAML、`_build.json`、逐架构 SHA256 文件齐全；检查包内 `resources/app-update.yml`。
-5. 确认同一提交的五目标成功，再推送版本标签。查看发布任务和 Release，不把普通构建成功当成发布完成。
+4. 检查 EXE/DMG、ZIP，以及 Linux AppImage/DEB/RPM、架构更新 YAML、`_build.json`、逐架构 SHA256 文件齐全；检查包内 `resources/app-update.yml`。
+5. 确认同一提交的六目标成功，再推送版本标签。查看发布任务和 Release，不把普通构建成功当成发布完成。
 
 ## 本地打包
 
@@ -44,7 +44,7 @@ pnpm electron:build
 
 ## 附件与校验
 
-文件名：`dsh-nexus_<version>_<windows|macos|linux>_<x64|arm64>.<exe|dmg|zip|AppImage|deb|rpm>`。当前五目标完整 Release 有 26 个构建附件，加聚合 SHA256 清单、签名和证书，共 29 个附件。签名方法见[安全说明](../SECURITY.md)。
+文件名：`dsh-nexus_<version>_<windows|macos|linux>_<x64|arm64>.<exe|dmg|zip|AppImage|deb|rpm>`。六目标构建共 32 个平台附件，另有 3 个 Git 源码伴随附件；加聚合 SHA256 清单、签名和证书，完整 Release 共 38 个附件。签名方法见[安全说明](../SECURITY.md)。
 
 Windows：`Get-FileHash <文件> -Algorithm SHA256`。macOS：`shasum -a 256 -c <架构>_SHA256SUMS.txt`。自动校验脚本 `.github/scripts/verify-release-assets.mjs` 核对版本、提交、目标与摘要。
 

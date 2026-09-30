@@ -1,8 +1,12 @@
 #!/bin/bash
-# Runs only in the disposable, native ARM64 build container from build.yml.
+# Runs only in the disposable, matching native build container from build.yml.
 set -euo pipefail
-test "$(uname -m)" = aarch64
-test "$CARGO_BUILD_TARGET" = aarch64-unknown-linux-gnu
+case "$CARGO_BUILD_TARGET" in
+  x86_64-unknown-linux-gnu) machine=x86_64 ;;
+  aarch64-unknown-linux-gnu) machine=aarch64 ;;
+  *) echo "Unsupported Linux target: $CARGO_BUILD_TARGET" >&2; exit 1 ;;
+esac
+test "$(uname -m)" = "$machine"
 dnf install -y ca-certificates curl git perl-core make
 curl --proto '=https' --tlsv1.2 -fsSL https://sh.rustup.rs -o /tmp/nexus-rustup.sh
 sh /tmp/nexus-rustup.sh -y --profile minimal --default-toolchain 1.98.0

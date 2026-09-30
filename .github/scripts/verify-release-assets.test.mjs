@@ -15,6 +15,7 @@ test('release gate requires all tested targets, exact provenance and unmodified 
     'x86_64-apple-darwin': ['.dmg', '.zip'],
     'aarch64-apple-darwin': ['.dmg', '.zip'],
     'aarch64-unknown-linux-gnu': ['.AppImage', '.deb', '.rpm'],
+    'x86_64-unknown-linux-gnu': ['.AppImage', '.deb', '.rpm'],
   };
   const names = {
     'x86_64-pc-windows-msvc': 'windows_x64',
@@ -22,11 +23,12 @@ test('release gate requires all tested targets, exact provenance and unmodified 
     'x86_64-apple-darwin': 'macos_x64',
     'aarch64-apple-darwin': 'macos_arm64',
     'aarch64-unknown-linux-gnu': 'linux_arm64',
+    'x86_64-unknown-linux-gnu': 'linux_x64',
   };
   try {
     for (const [target, extensions] of Object.entries(targets)) {
       const basename = `dsh-nexus_0.1.2_${names[target]}`;
-      const channel = `latest-${target.startsWith('aarch64') ? 'arm64' : 'x64'}${target.includes('apple') ? '-mac' : target.includes('linux') ? '-linux-arm64' : ''}.yml`;
+      const channel = `latest-${target.startsWith('aarch64') ? 'arm64' : 'x64'}${target.includes('apple') ? '-mac' : target.includes('linux') ? '-linux' + (target.startsWith('aarch64') ? '-arm64' : '') : ''}.yml`;
       const files = extensions.concat('.yml').map(ext => {
         const name = ext === '.yml' ? channel : `${basename}${ext === ".zip" ? "_portable" : ""}${ext}`;
         writeFileSync(path.join(dir, name), 'test installer');
@@ -42,7 +44,7 @@ test('release gate requires all tested targets, exact provenance and unmodified 
     writeFileSync(path.join(dir, `${sourceBase}.tar`), 'test sources');
     writeFileSync(path.join(dir, `${sourceBase}_build.json`), JSON.stringify({version:'0.1.2',commit,file:`${sourceBase}.tar`,sha256:sourceHash,sources:sources.files}));
     writeFileSync(path.join(dir, `${sourceBase}_SHA256SUMS.txt`), `${sourceHash}  ${sourceBase}.tar\n`);
-    assert.equal(verifyReleaseAssets(dir, 'v0.1.2', commit).length, 29);
+    assert.equal(verifyReleaseAssets(dir, 'v0.1.2', commit).length, 35);
     writeFileSync(path.join(dir, `${sourceBase}.tar`), 'changed sources');
     assert.throws(() => verifyReleaseAssets(dir, 'v0.1.2', commit), /source companion hash mismatch/);
     writeFileSync(path.join(dir, `${sourceBase}.tar`), 'test sources');

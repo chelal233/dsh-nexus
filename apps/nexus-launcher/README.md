@@ -36,4 +36,4 @@ pnpm dev
 
 ## 平台资源
 
-在对应原生平台构建 Desktop 资源，顺序为 `prepare:runtime` → `prepare:desktop` → 发布清单。package.json 的 Electron 版本须与 `desktop/desktop-runtime-lock.json` 一致（当前 44.0.0）。不支持 Desktop 的目标生成明确标记并保留 Web，不得把下载推迟到用户首次启动。Linux ARM64 辅助程序采用 glibc 2.28 基线及静态 OpenSSL，按原生 CI 准备包括 Perl/make 的编译工具；这是构建环境要求，不是用户安装要求。
+在对应原生平台构建 Desktop 资源，顺序为 `prepare:runtime` → `prepare:desktop` → 发布清单。package.json 的 Electron 版本须与 `desktop/desktop-runtime-lock.json` 一致（当前 44.0.0）。不支持 Desktop 的目标生成明确标记并保留 Web，不得把下载推迟到用户首次启动。Linux x64/ARM64 辅助程序采用 glibc 2.28 基线及静态 OpenSSL，按原生 CI 准备包括 Perl/make 的编译工具；这是构建环境要求，不是用户安装要求。

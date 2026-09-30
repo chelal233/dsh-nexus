@@ -3544,5 +3544,36 @@
         "matches": true
       }
     ]
+  },
+  {
+    "target": "ubuntu-x64",
+    "url": "https://github.com/git-ecosystem/git-credential-manager/releases/download/v2.9.0/gcm-linux-x64-2.9.0.tar.gz",
+    "sha256": "194b6524a34551a93f9f0a965e9cce910b3c3e79233af1f30bb93414ee194910",
+    "files": [
+      {
+        "name": "NOTICE",
+        "sha256": "f573f5d21d5d8a054aad1ffcbe0165391a4d93a5aa3e23c3db0752759adfd50c",
+        "present": true,
+        "matches": true
+      },
+      {
+        "name": "git-credential-manager",
+        "sha256": "10e81cec39c86bd66b9623b427ee369b25b30abe93d579ecba6804ff7d624ee1",
+        "present": true,
+        "matches": true
+      },
+      {
+        "name": "libHarfBuzzSharp.so",
+        "sha256": "95fad4b704332ff1a9d7e137ab5d1849b8711099be61fd5d264afe0562b306a2",
+        "present": true,
+        "matches": true
+      },
+      {
+        "name": "libSkiaSharp.so",
+        "sha256": "a009dee86e037173654eb19b91365e7d545814b7f632240049596c04342fcf02",
+        "present": true,
+        "matches": true
+      }
+    ]
   }
 ]

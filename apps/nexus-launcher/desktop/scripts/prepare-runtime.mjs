@@ -292,7 +292,7 @@ async function stageGit() {
   await cp(license, path.join(resourceRuntime, "git/NEXUS-Git-COPYING.txt"));
   excludeGitCredentialManager(path.join(resourceRuntime, "git"), JSON.parse(await readFile(path.join(repositoryRoot, "docs/audits/git-redistribution-2026-09-23/materials/gcm-official-file-boundary.json"), "utf8")), spec);
   stageGitNotices(path.join(repositoryRoot, "docs/audits/git-redistribution-2026-09-23/materials"), path.join(resourceRuntime, "git/NEXUS-NOTICES"));
-  if (spec.platform === "linux") verifyLinuxGitAbi(path.join(resourceRuntime,"git"));
+  if (spec.platform === "linux") verifyLinuxGitAbi(path.join(resourceRuntime,"git"), spec.arch);
   const binary = path.join(resourceRuntime, dist.entry);
   const version = execFileSync(binary, ["--version"], { encoding: "utf8" }).trim();
   if (!version.startsWith("git version 2.53.0")) throw new Error(`Unexpected bundled Git: ${version}`);
@@ -314,7 +314,7 @@ async function isUpToDate(manifestFile) {
     const notices = verifyGitNotices(path.join(resourceRuntime, "git/NEXUS-NOTICES"));
     const expectedNotices = JSON.parse(await readFile(path.join(repositoryRoot, "docs/audits/git-redistribution-2026-09-23/materials/manifest.json"), "utf8"));
     if (JSON.stringify(notices) !== JSON.stringify(expectedNotices)) return false;
-    if (spec.platform === "linux") verifyLinuxGitAbi(path.join(resourceRuntime,"git"));
+    if (spec.platform === "linux") verifyLinuxGitAbi(path.join(resourceRuntime,"git"), spec.arch);
     // The staged binary must still match the out-of-band anchor (pinned) or
     // at least the checksum recorded at staging time; a corrupted or
     // tampered resources/runtime falls through to a fresh verified staging.

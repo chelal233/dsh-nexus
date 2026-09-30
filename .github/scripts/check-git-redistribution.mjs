@@ -5,7 +5,7 @@ import {gitDistribution, verifyGitNotices} from '../../apps/nexus-launcher/deskt
 import {validateSources} from '../../apps/nexus-launcher/desktop/scripts/prepare-git-sources.mjs';
 export function cleared(inventory) {
   if (!Array.isArray(inventory)) return false;
-  return [['win32','x64'],['win32','arm64'],['darwin','x64'],['darwin','arm64'],['linux','arm64']].every(([platform,arch])=>{
+  return [['win32','x64'],['win32','arm64'],['darwin','x64'],['darwin','arm64'],['linux','arm64'],['linux','x64']].every(([platform,arch])=>{
     const expected=gitDistribution({platform,arch});
     const entries=inventory.filter(entry=>entry.archive===expected.archive);
     return entries.length===1 && entries[0].sha256===expected.sha256 && entries[0].publicRedistributionReady===true;

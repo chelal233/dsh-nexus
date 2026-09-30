@@ -8,6 +8,7 @@ const distributions = {
   "win32/arm64": ["windows-arm64", "1abbeb3a2ce06e9b80e75bb888dce959b6c73bdb11ccc670a01a71d64f4422a5"],
   "darwin/x64": ["macOS-x64", "ae6686718aa34f4140424db16b92a47dcffd6d1f312eb8b5f3b267f7404e2680"],
   "darwin/arm64": ["macOS-arm64", "f9dc64635a5b62fbd7ad95db73268bbb8912255ac516d65d37bf7af22fcb8ffe"],
+  "linux/x64": ["ubuntu-x64", "cca76aa31ad9e835e771ee7f55b73934777fbd8d16757a10d307ba06de860901"],
   "linux/arm64": ["ubuntu-arm64", "a161f45af4626bb7e0c688854bd4a9aee47cc514bca404cff0a5e3536ef1c0af"],
 };
 export function gitDistribution({ platform, arch }) {
@@ -21,7 +22,9 @@ export function gitDistribution({ platform, arch }) {
 
 // Portable Git has a higher ABI floor than the Rust executables. Check every
 // ELF helper/library, not just git --version on the build machine.
-export function verifyLinuxGitAbi(root) {
+export function verifyLinuxGitAbi(root, arch) {
+  const machine = { x64: 62, arm64: 183 }[arch];
+  if (!machine) throw new Error('Unsupported Linux Git architecture: ' + arch);
   let count=0;
   const visit=directory=>{
     for(const entry of readdirSync(directory,{withFileTypes:true})) {
@@ -32,7 +35,7 @@ export function verifyLinuxGitAbi(root) {
       const bytes=readFileSync(file);
       if(bytes.length<20 || bytes.subarray(0,4).toString('hex')!=='7f454c46')continue;
       count++;
-      if(bytes[5]!==1 || bytes.readUInt16LE(18)!==183)throw new Error(`Git runtime is not ARM64 ELF: ${file}`);
+      if(bytes[4]!==2 || bytes[5]!==1 || bytes.readUInt16LE(18)!==machine)throw new Error(`Git runtime is not ${arch} ELF: ${file}`);
       for(const match of bytes.toString('latin1').matchAll(/GLIBC_(\d+)\.(\d+)/g)) {
         if(Number(match[1])>2 || Number(match[1])===2&&Number(match[2])>34)throw new Error(`Git helper exceeds glibc 2.34: ${file} ${match[0]}`);
       }
@@ -74,8 +77,8 @@ export function stageGitNotices(materials, destination) {
 
 // Remove only independently matched optional GCM files from a freshly staged tree.
 export function excludeGitCredentialManager(root, boundary, { platform, arch }) {
-  if (platform === 'linux') return 0;
-  const target = `${platform === 'win32' ? 'windows' : 'macOS'}-${arch}`;
+  if (platform === 'linux' && arch === 'arm64') return 0;
+  const target = `${platform === 'win32' ? 'windows' : platform === 'linux' ? 'ubuntu' : 'macOS'}-${arch}`;
   const record = boundary.find(item => item.target === target);
   if (!record || !Array.isArray(record.files)) throw new Error(`Missing GCM exclusion evidence: ${target}`);
   const base = platform === 'win32' ? `${arch === 'arm64' ? 'clangarm64' : 'mingw64'}/bin` : 'libexec/git-core';
@@ -102,8 +105,8 @@ export function excludeGitCredentialManager(root, boundary, { platform, arch }) 
 }
 
 export function gitCredentialManagerExcluded(root, boundary, {platform, arch}) {
-  if (platform === 'linux') return true;
-  const record = boundary.find(item => item.target === `${platform === 'win32' ? 'windows' : 'macOS'}-${arch}`);
+  if (platform === 'linux' && arch === 'arm64') return true;
+  const record = boundary.find(item => item.target === `${platform === 'win32' ? 'windows' : platform === 'linux' ? 'ubuntu' : 'macOS'}-${arch}`);
   if (!record?.files?.length) return false;
   const base = platform === 'win32' ? `${arch === 'arm64' ? 'clangarm64' : 'mingw64'}/bin` : 'libexec/git-core';
   if (record.files.some(item => item.present && item.matches && item.name !== 'NOTICE' && existsSync(path.join(root, base, item.name)))) return false;

@@ -3,13 +3,13 @@
 [简体中文](github-release.md)
 
 
-The current Electron matrix covers Windows x64/ARM64, macOS x64/ARM64 and Linux ARM64. Supported targets must be supported by both Harness and Electron.
+The current Electron matrix covers Windows x64/ARM64, macOS x64/ARM64 and Linux x64/ARM64. The pinned Harness 0.1.6-alpha.2 has no Linux Desktop runtime; both Linux architectures retain Web mode without claiming official Desktop support for that version.
 
 ## Two workflows
 
 `Desktop build`: frontend/Rust/Electron checks, target-native helpers and runtimes, notices and resource manifests, packaging, installed/extracted smoke checks, then artifact collection.
 
-`Publish release`: runs for `v*` tags and requires `v<package version>`. It reuses a complete successful five-target build of the same commit, or runs the build matrix. It verifies artifacts, signs the checksum manifest, creates a draft, uploads assets, and publishes a prerelease only after success.
+`Publish release`: runs for `v*` tags and requires `v<package version>`. It reuses a complete successful six-target build of the same commit, or runs the build matrix. It verifies artifacts, signs the checksum manifest, creates a draft, uploads assets, and publishes a prerelease only after success.
 
 Pushing source, creating a tag, passing builds, and publishing a Release are distinct states. Do not blindly rerun draft creation when one already exists. Do not move published tags or attach artifacts from a different commit.
 
@@ -29,8 +29,8 @@ Every version must update `CHANGELOG.md`, `CHANGELOG.en.md` and `.github/RELEASE
 1. Align Nexus versions in root Cargo.toml, Cargo.lock, and Launcher package.json; update both changelogs.
 2. Build natively on each matching target; verify lockfiles, runtime digests, and notices.
 3. Complete workflow tests and install/extract checks; record real user-interaction acceptance separately.
-4. Check installer/DMG, ZIP, architecture update YAML, build metadata, and per-target checksums. Confirm `resources/app-update.yml` exists in packages.
-5. Confirm all five targets succeeded for the same commit, then push the version tag. Inspect the publish run and Release rather than treating build success as publication.
+4. Check installer/DMG, ZIP, Linux AppImage/DEB/RPM, architecture update YAML, build metadata, and per-target checksums. Confirm `resources/app-update.yml` exists in packages.
+5. Confirm all six targets succeeded for the same commit, then push the version tag. Inspect the publish run and Release rather than treating build success as publication.
 
 ## Local packaging
 
@@ -44,7 +44,7 @@ Outputs are in `apps/nexus-launcher/electron-dist`. Explicitly set `NEXUS_UNSIGN
 
 ## Assets and verification
 
-Names follow `dsh-nexus_<version>_<windows|macos|linux>_<x64|arm64>.<exe|dmg|zip|AppImage|deb|rpm>`. The current complete matrix produces 26 build assets plus the aggregate checksum manifest, signature, and certificate: 29 Release assets. See [security](../SECURITY.en.md) for signature verification.
+Names follow `dsh-nexus_<version>_<windows|macos|linux>_<x64|arm64>.<exe|dmg|zip|AppImage|deb|rpm>`. The six-target matrix produces 32 platform assets and 3 Git source companion assets; adding the aggregate checksum manifest, signature, and certificate gives 38 Release assets. See [security](../SECURITY.en.md) for signature verification.
 
 Windows: `Get-FileHash <file> -Algorithm SHA256`. macOS: `shasum -a 256 -c <architecture>_SHA256SUMS.txt`. `.github/scripts/verify-release-assets.mjs` verifies versions, commits, targets, and hashes.
 

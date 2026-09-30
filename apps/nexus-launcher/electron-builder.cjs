@@ -5,8 +5,8 @@ if (devDependencies.electron !== desktopRuntime.electronVersion ||
   throw new Error('Nexus Electron must match the pinned official Harness Desktop runtime. Update both pins and reinstall before packaging.');
 }
 const platform = ({ win32: 'windows', darwin: 'macos', linux: 'linux' })[process.platform];
-if (!['win32', 'darwin', 'linux'].includes(process.platform) || !['x64', 'arm64'].includes(process.arch) || (process.platform === 'linux' && process.arch !== 'arm64')) {
-  throw new Error('Electron release supports Windows/macOS x64 and ARM64, and Linux ARM64');
+if (!['win32', 'darwin', 'linux'].includes(process.platform) || !['x64', 'arm64'].includes(process.arch)) {
+  throw new Error('Electron release supports Windows, macOS and Linux x64 and ARM64');
 }
 // electron-builder 26.15's 7z auto-filters can silently lose PE files in the
 // bundled NSIS decoder. BCJ is supported on both Windows targets (#9983).

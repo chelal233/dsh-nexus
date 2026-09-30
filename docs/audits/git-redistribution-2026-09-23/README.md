@@ -44,3 +44,9 @@ Windows x64 Git/LFS/SSH executables and public HTTPS access passed. macOS and Wi
 可选 GCM 的微软依赖存在未确认的再分发授权，因此按用户选择不捆绑该助手；本记录不对上游作侵权认定。
 
 An optional Microsoft dependency of GCM had unresolved redistribution authorization, so the helper is omitted as requested. This record makes no infringement finding against upstream.
+
+## Linux x64 extension (2026-09-30)
+
+Linux x64 的固定 dugite 归档摘要已核验，并与官方 GCM 2.9.0 归档逐文件匹配：排除 git-credential-manager、libSkiaSharp.so、libHarfBuzzSharp.so 三个文件，保留 NOTICE、Git、LFS 和证书。处理后 158 个 ELF 文件满足 x86_64 架构及 glibc 2.34 上限；原有 213 份通知核验通过，已有源码材料扩展平台映射。此项记录覆盖静态归档及处理范围；原生运行、最终安装包和公开附件由新增 Linux x64 CI 分别核验。
+
+The pinned Linux x64 dugite archive was hash-verified against its release digest. Exact matching with the official GCM 2.9.0 archive identifies three excluded files: git-credential-manager, libSkiaSharp.so and libHarfBuzzSharp.so. NOTICE, Git, LFS and certificates remain intact. All 158 retained ELF files match x86_64 and the glibc 2.34 ceiling; 213 existing notices verify successfully, and existing source materials now include the Linux x64 platform mapping. This records static archive processing; native execution, final packages and downloadable assets require the new Linux x64 CI checks.
