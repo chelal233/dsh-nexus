@@ -201,7 +201,7 @@ test('Mac login-shell hosts reject unpreserved explicit addresses while old host
   assert.throws(() => desktopPreferenceEnvironment(preferences, options), /desktop_login_shell_override_unsupported/);
   assert.throws(() => desktopPreferenceEnvironment({ search_base_url: preferences.search_base_url }, options), /desktop_login_shell_override_unsupported/);
   assert.equal(desktopPreferenceEnvironment(preferences, { ...options, platform: 'win32' }).DEEPSEEK_BASE_URL, preferences.deepseek_base_url);
-  assert.equal(desktopPreferenceEnvironment({ agents_home: '/home/agents' }, options).DSH_AGENTS_HOME, '/home/agents');
+  assert.equal(desktopPreferenceEnvironment({ agents_home: '/home/fixture/agents' }, options).DSH_AGENTS_HOME, '/home/fixture/agents');
   fs.writeFileSync(file, 'unknown future merge contract');
   assert.throws(() => desktopPreferenceEnvironment(preferences, options), /desktop_login_shell_override_unsupported/);
   fs.writeFileSync(file, reader.replace("'DSH_',", "'DEEPSEEK_', 'DSH_',"));
