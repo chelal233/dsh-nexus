@@ -8,7 +8,7 @@ import { selectDesktopKit, desktopRuntimeLock } from './desktop-runtime.mjs';
 
 // Common upstream environment settings apply to both launch surfaces. Web CLI
 // flags and SDK-only settings are intentionally not sent to the desktop profile.
-export function desktopPreferenceEnvironment(preferences = {}) {
+export function desktopPreferenceEnvironment(preferences = {}, { source, platform = process.platform } = {}) {
   preferences ??= {};
   const result = {};
   for (const [field, key] of Object.entries({
@@ -22,6 +22,21 @@ export function desktopPreferenceEnvironment(preferences = {}) {
   }
   if (typeof preferences.telemetry_disabled === 'boolean')
     result.DSH_TELEMETRY_DISABLED = preferences.telemetry_disabled ? '1' : '';
+  // New POSIX hosts merge login-shell values over inherited DEEPSEEK_* defaults.
+  // Keep unsupported explicit overrides visible; never rewrite the user's profile.
+  const addresses = ['DEEPSEEK_BASE_URL', 'DEEPSEEK_SEARCH_BASE_URL'].filter(key => key in result);
+  if (platform === 'darwin' && source && addresses.length) {
+    for (const relative of ['src/login-shell-environment.ts', 'lib/main.js']) {
+      let text;
+      try { text = fs.readFileSync(path.join(source, 'apps/desktop', relative), 'utf8'); }
+      catch (error) { if (error.code === 'ENOENT') continue; throw error; }
+      if (relative === 'lib/main.js' && !text.includes('DSH_DESKTOP_LOGIN_SHELL_TIMEOUT_MS')) continue;
+      const declaration = /LAUNCHER_OWNED_PREFIXES\s*=\s*\[([^\]]+)\]/.exec(text)?.[1] ?? '';
+      const prefixes = [...declaration.matchAll(/['"]([^'"]+)['"]/g)].map(match => match[1]);
+      if (addresses.some(key => !prefixes.some(prefix => key.startsWith(prefix)))) throw Error('desktop_login_shell_override_unsupported');
+      break;
+    }
+  }
   return result;
 }
 
@@ -266,6 +281,7 @@ export class HarnessDesktop {
 
       if (this.cancelRequested) throw new Error('desktop_start_cancelled');
       const { version } = desktopCapability(source);
+      const preferenceEnvironment = desktopPreferenceEnvironment(config.harness_preferences, { source });
       const kit = selectDesktopKit(this.resources, config);
       const home = config.harness_preferences?.home || process.env.DSH_HOME || path.join(os.homedir(), '.dsh');
       if (!path.isAbsolute(home)) throw new Error('desktop_invalid_home');
@@ -289,7 +305,7 @@ export class HarnessDesktop {
       const worker = fileURLToPath(new URL('./harness-desktop-worker.mjs', import.meta.url)).replace(/app\.asar([\\/])/, 'app.asar.unpacked$1');
       const child = spawn(this.executable, [worker, recipe], {
         detached: true, stdio: 'ignore', windowsHide: true,
-        env: { ...process.env, ...startup.runtime_environment, ...desktopPreferenceEnvironment(config.harness_preferences), ELECTRON_RUN_AS_NODE: '1' },
+        env: { ...process.env, ...startup.runtime_environment, ...preferenceEnvironment, ELECTRON_RUN_AS_NODE: '1' },
       });
       await new Promise((resolve, reject) => { child.once('spawn', resolve); child.once('error', reject); });
       child.unref();

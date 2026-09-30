@@ -35,6 +35,8 @@ test('failed preparation stop retains ownership until retry and never starts Des
   put('node_modules/electron/package.json', JSON.stringify({ version: 'fixture' }));
   put('kit/manifest.json', JSON.stringify({ schema: 3, electronVersion: 'fixture', lockSha256: 'lock' }));
   put('apps/desktop/.keep', '');
+  put('scripts/desktop-build-paths.mjs', "import path from 'node:path';export const resolveDesktopTargetBuildPaths=()=>({runtime:path.join(import.meta.dirname,'../runtime')});");
+  put('runtime/primary-runtime/.keep', '');
   const desktop = put('desktop.mjs', "import fs from 'node:fs';fs.writeFileSync(new URL('./desktop-started',import.meta.url),'unexpected');");
   put('prepare-harness-desktop.mjs', `import fs from 'node:fs';import path from 'node:path';
     const root=process.argv[2], cache=process.argv[4];
@@ -98,6 +100,8 @@ test('official Desktop worker opens a visible Windows window', { skip: process.p
   put('node_modules/electron/package.json', JSON.stringify({version:'fixture'}));
   put('kit/manifest.json', JSON.stringify({schema:3,electronVersion:'fixture',lockSha256:'lock'}));
   put('apps/desktop/.keep', '');
+  put('scripts/desktop-build-paths.mjs', "import path from 'node:path';export const resolveDesktopTargetBuildPaths=()=>({runtime:path.join(import.meta.dirname,'../runtime')});");
+  put('runtime/primary-runtime/.keep', '');
   put('prepare-harness-desktop.mjs', '');
   const app = put('official.cjs', `const {app,BrowserWindow}=require('electron');
     app.whenReady().then(()=>{new BrowserWindow({show:true,title:'Nexus visibility regression'});});`);

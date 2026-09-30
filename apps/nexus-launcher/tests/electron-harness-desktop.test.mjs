@@ -191,3 +191,21 @@ test('Desktop recovery cancels when its final launch reads a different configura
     assert.equal(desktop.busy,false);
   }
 });
+
+test('Mac login-shell hosts reject unpreserved explicit addresses while old hosts and Windows remain compatible', t => {
+  const { root, put } = fixture(t), preferences = { deepseek_base_url: 'https://nexus.example', search_base_url: 'https://search.example' };
+  const options = { source: root, platform: 'darwin' };
+  assert.equal(desktopPreferenceEnvironment(preferences, options).DEEPSEEK_BASE_URL, preferences.deepseek_base_url);
+  const reader = "const LAUNCHER_OWNED_PREFIXES = ['DSH_', 'ELECTRON_']; const setting = 'DSH_DESKTOP_LOGIN_SHELL_TIMEOUT_MS';";
+  const file = put('apps/desktop/src/login-shell-environment.ts', reader);
+  assert.throws(() => desktopPreferenceEnvironment(preferences, options), /desktop_login_shell_override_unsupported/);
+  assert.throws(() => desktopPreferenceEnvironment({ search_base_url: preferences.search_base_url }, options), /desktop_login_shell_override_unsupported/);
+  assert.equal(desktopPreferenceEnvironment(preferences, { ...options, platform: 'win32' }).DEEPSEEK_BASE_URL, preferences.deepseek_base_url);
+  assert.equal(desktopPreferenceEnvironment({ agents_home: '/home/agents' }, options).DSH_AGENTS_HOME, '/home/agents');
+  fs.writeFileSync(file, 'unknown future merge contract');
+  assert.throws(() => desktopPreferenceEnvironment(preferences, options), /desktop_login_shell_override_unsupported/);
+  fs.writeFileSync(file, reader.replace("'DSH_',", "'DEEPSEEK_', 'DSH_',"));
+  assert.equal(desktopPreferenceEnvironment(preferences, options).DEEPSEEK_BASE_URL, preferences.deepseek_base_url);
+  fs.unlinkSync(file);put('apps/desktop/lib/main.js', reader);
+  assert.throws(() => desktopPreferenceEnvironment(preferences, options), /desktop_login_shell_override_unsupported/);
+});

@@ -57,3 +57,43 @@ test('real upstream Cordis publishes selected visible content and bounded snapsh
     fs.rmSync(root, { recursive: true, force: true });
   }
 });
+
+test('real upstream job registry drives notifications through its selected completion API', { skip: !process.env.NEXUS_TEST_DSH_ROOT }, async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'nexus-real-job-test-'));
+  const file = path.join(root, 'events.json');
+  const oldFile = process.env.NEXUS_NOTIFICATION_FILE, oldRun = process.env.NEXUS_NOTIFICATION_RUN;
+  process.env.NEXUS_NOTIFICATION_FILE = file; process.env.NEXUS_NOTIFICATION_RUN = 'real-job-contract';
+  let notification, registry, controller;
+  try {
+    const require = createRequire(path.join(process.env.NEXUS_TEST_DSH_ROOT, 'apps/cli/package.json'));
+    const { Context } = await import(pathToFileURL(require.resolve('@deepseek-ai/cordis')).href);
+    const { default: LocalJobs } = await import(pathToFileURL(require.resolve('@deepseek-ai/dsh-jobs-local')).href);
+    const ctx = new Context();
+    registry = ctx.plugin(LocalJobs);
+    controller = ctx.plugin({ apply(c) {
+      c.inject(['jobs'], c => c.effect(() => c.jobs.attachController('Nexus notification regression')));
+    } });
+    notification = ctx.plugin(plugin);
+    await new Promise(resolve => setTimeout(resolve, 100));
+    assert.ok(JSON.parse(fs.readFileSync(file)).capabilities.includes('jobs'));
+    let complete;
+    const id = ctx.get('jobs').start({ kind: 'bash', label: 'Isolated registry completion', run: () => ({
+      cancel() {}, done: new Promise(resolve => { complete = resolve; }),
+    }) });
+    complete({ status: 'completed' });
+    await new Promise(resolve => setTimeout(resolve, 50));
+    const data = JSON.parse(fs.readFileSync(file));
+    assert.deepEqual(data.events.map(e => [e.kind, e.body]), [['job-completed', 'Isolated registry completion']]);
+    assert.equal(ctx.get('jobs').get(id).status, 'completed');
+    await notification.dispose(); notification = undefined;
+    const before = fs.readFileSync(file, 'utf8');
+    ctx.get('jobs').start({ kind: 'bash', label: 'Disposed observer', run: () => ({ cancel() {}, done: Promise.resolve({status:'failed'}) }) });
+    await new Promise(resolve => setTimeout(resolve, 50));
+    assert.equal(fs.readFileSync(file, 'utf8'), before);
+  } finally {
+    await notification?.dispose(); await controller?.dispose(); await registry?.dispose();
+    if (oldFile === undefined) delete process.env.NEXUS_NOTIFICATION_FILE; else process.env.NEXUS_NOTIFICATION_FILE = oldFile;
+    if (oldRun === undefined) delete process.env.NEXUS_NOTIFICATION_RUN; else process.env.NEXUS_NOTIFICATION_RUN = oldRun;
+    await fs.promises.rm(root, { recursive: true, force: true });
+  }
+});

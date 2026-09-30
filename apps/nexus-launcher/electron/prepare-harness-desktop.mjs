@@ -25,7 +25,9 @@ if (process.argv[6] === 'portable-host') await preparePortableHost(kit, cache);
 const pnpm = JSON.parse(fs.readFileSync(path.join(app, 'node_modules/pnpm/package.json'), 'utf8'));
 if (!desktopKitMatchesSource(root, kitRoot) ||
     kit.electronVersion !== require('electron/package.json').version || kit.pnpmVersion !== pnpm.version) throw Error('desktop_runtime_incompatible');
-const { resolveDesktopTargetBuildPaths } = await load('scripts/desktop-build-paths.mjs');
+const { resolveDesktopTargetBuildPaths, resolveDesktopBuildTarget } = await load('scripts/desktop-build-paths.mjs');
+// Use the upstream target resolver; older Harness versions need no target option.
+const target = typeof resolveDesktopBuildTarget === 'function' ? resolveDesktopBuildTarget() : undefined;
 const paths = resolveDesktopTargetBuildPaths();
 fs.mkdirSync(paths.runtime, { recursive: true });
 stage('runtime');
@@ -70,6 +72,7 @@ const projectDir = path.join(app, '.desktop-build/development/project');
 const dependencyDir = path.join(root, 'node_modules/.pnpm/node_modules');
 const hash = createHash('sha256');
 hash.update(root); hash.update(digest(path.join(kitRoot, 'manifest.json')));
+hash.update(JSON.stringify({ target }));
 for (const file of ['package.json', 'scripts/development-project.ts', 'src/project-manager.ts', 'src/runtime-tree.ts', 'src/host-protocol.ts']) hash.update(fs.readFileSync(path.join(app, file)));
 for (const name of fs.readdirSync(dependencyDir).filter(name => name !== '.bin').sort()) {
   const names = name.startsWith('@') ? fs.readdirSync(path.join(dependencyDir, name)).sort().map(child => `${name}/${child}`) : [name];
@@ -99,7 +102,7 @@ function projectIdentity() {
 let cached = false;
 try { const saved = JSON.parse(fs.readFileSync(projectStamp)); cached = saved.fingerprint === fingerprint && JSON.stringify(saved.files) === JSON.stringify(projectIdentity()); } catch {}
 if (!cached) {
-  prepareDevelopmentProject({ projectDir, cliDir: path.join(root, 'apps/cli'), hostDir: path.join(root, 'apps/desktop-host'), dependencyDir,
+  prepareDevelopmentProject({ projectDir, cliDir: path.join(root, 'apps/cli'), hostDir: path.join(root, 'apps/desktop-host'), dependencyDir, ...(target === undefined ? {} : { target }),
     release: { schemaVersion: 1, version: metadata.version, hostProtocolVersion: DESKTOP_HOST_PROTOCOL_VERSION, nodeVersion, pnpmVersion: pnpm.version } });
   fs.writeFileSync(projectStamp, JSON.stringify({ fingerprint, files: projectIdentity() }));
 }

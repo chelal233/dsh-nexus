@@ -112,7 +112,8 @@ export function createTracker(send, later = setTimeout, cancel = clearTimeout, t
       }
     },
     job(job, session) {
-      if (job.status === 'completed' || job.status === 'failed') emit(`job-${job.status}`, session ?? job.ownerSession ?? '', job.id,
+      if (session?.header?.origin === 'subagent') return;
+      if (job.status === 'completed' || job.status === 'failed') emit(`job-${job.status}`, session ?? job.owner ?? job.ownerSession ?? '', job.id,
         [preview(job.label, 250) || preview(job.id, 100), preview(job.detail)].filter(Boolean).join(' — '));
     },
     dispose() { for (const key of pending.keys()) clear(key); turns.clear(); titles.clear(); },
@@ -157,9 +158,17 @@ export function apply(ctx) {
     return () => { stop(); tracker.dispose(); capabilities.splice(capabilities.indexOf('sessions'), 1); publish(); };
   }));
   ctx.inject(['jobs'], c => c.effect(() => {
-    if (typeof c.jobs.onJobDone !== 'function') return;
+    let stop;
+    if (typeof c.jobs.events?.subscribe === 'function') {
+      stop = c.jobs.events.subscribe({ owners: 'scope' }, event => {
+        // rc.2 publishes all lifecycle events; an awaited result is already delivered.
+        if (event.type === 'settled' && event.cause === 'producer' && event.awaited === false)
+          tracker.job(event.job, c.get('sessions')?.get?.(event.job.owner));
+      });
+    } else if (typeof c.jobs.onJobDone === 'function') {
+      stop = c.jobs.onJobDone((job, owner) => tracker.job(job, c.get('sessions')?.get?.(job.ownerSession ?? owner?.id)));
+    } else return;
     capabilities.push('jobs'); publish();
-    const stop = c.jobs.onJobDone((job, owner) => tracker.job(job, ctx.get('sessions')?.get?.(job.ownerSession ?? owner?.id)));
     return () => { stop(); capabilities.splice(capabilities.indexOf('jobs'), 1); publish(); };
   }));
   ctx.effect(() => () => { disposed = true; tracker.dispose(); });

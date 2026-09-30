@@ -37,7 +37,7 @@ export function desktopAuditSupported(source) {
   try {
     const read = file => fs.readFileSync(path.join(source, file), 'utf8');
     return read('apps/desktop/src/ipc.ts').includes("'dsh-desktop:boot-failed'") &&
-      read('packages/client/web/src/boot-client.ts').includes('assertEntriesActive(ctx)') &&
+      /\bassertEntriesActive\(ctx(?:,\s*options\.modules)?\)/.test(read('packages/client/web/src/boot-client.ts')) &&
       read('packages/client/web/src/boot.ts').includes('await mountClient(ctx, this.container)') &&
       read('packages/client/web/src/boot-page.ts').includes('this.root.dataset.dshBoot');
   } catch { return false; }

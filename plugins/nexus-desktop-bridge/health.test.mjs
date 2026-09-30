@@ -95,7 +95,7 @@ test('differential audit against the selected upstream assertEntriesActive imple
   for (const state of [undefined, 0, 1, 2, 3, 4, 5]) {
     const ctx = context([row('example', state, { absent: null })]);
     let failed = false;
-    try { exports.assertEntriesActive(ctx); } catch { failed = true; }
+    try { exports.assertEntriesActive(ctx, { importError: () => undefined }); } catch { failed = true; }
     assert.equal(bridge.inspectClient(ctx).state === 'blocked', failed, `upstream state ${state}`);
   }
 });

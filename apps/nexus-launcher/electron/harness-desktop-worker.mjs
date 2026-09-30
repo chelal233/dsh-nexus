@@ -94,6 +94,10 @@ try {
     : kit.schema === 1 ? path.join(recipe.kit, 'electron', legacyElectronEntry()) : path.join(recipe.userData, 'runtime', `electron-${kit.electronArchiveSha256}`, legacyElectronEntry());
   const desktopEnv = { ...env, DSH_HOME: recipe.home, DSH_DESKTOP_OPEN_DEVTOOLS: '0' };
   desktopEnv.DSH_DESKTOP_PNPM_ENTRY = prepareDesktopPnpm(recipe);
+  // Match the target prepared above, including older Harness path resolvers.
+  const { resolveDesktopTargetBuildPaths } = await import(pathToFileURL(path.join(app, 'scripts/desktop-build-paths.mjs')).href);
+  desktopEnv.DSH_DESKTOP_PRIMARY_RUNTIME_DIR = path.join(resolveDesktopTargetBuildPaths(env).runtime, 'primary-runtime');
+  if (!fs.statSync(desktopEnv.DSH_DESKTOP_PRIMARY_RUNTIME_DIR).isDirectory()) throw new Error('desktop_primary_runtime_missing');
   delete desktopEnv.ELECTRON_RUN_AS_NODE;
   tail = ''; report({ stage: 'launch', childPid: undefined, detail: '' });
   const launchApp = path.join(desktopSourceView(recipe.source), 'apps/desktop');

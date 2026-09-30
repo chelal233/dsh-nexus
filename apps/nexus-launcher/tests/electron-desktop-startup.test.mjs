@@ -1,5 +1,5 @@
 import test from 'node:test';import assert from 'node:assert/strict';import fs from 'node:fs';import path from 'node:path';import os from 'node:os';import {EventEmitter} from 'node:events';import {randomUUID} from 'node:crypto';
-import {checkDesktopProfile,installDesktopStartupAudit,startupEvidenceFile} from '../electron/desktop-startup-audit.mjs';
+import {checkDesktopProfile,desktopAuditSupported,installDesktopStartupAudit,startupEvidenceFile} from '../electron/desktop-startup-audit.mjs';
 function fixture(t, clock={value:0}){const root=fs.mkdtempSync(path.join(os.tmpdir(),'nexus-desktop-audit-'));t.after(()=>fs.rmSync(root,{recursive:true,force:true}));const put=(p,s)=>{fs.mkdirSync(path.dirname(path.join(root,p)),{recursive:true});fs.writeFileSync(path.join(root,p),s);};
 put('apps/desktop/src/ipc.ts',"'dsh-desktop:boot-failed'");put('packages/client/web/src/boot-client.ts','assertEntriesActive(ctx)');put('packages/client/web/src/boot.ts','await mountClient(ctx, this.container)');put('packages/client/web/src/boot-page.ts','this.root.dataset.dshBoot');
 const recipe={source:root,stateFile:path.join(root,'state.json'),operationId:randomUUID()};const app=new EventEmitter(),handlers=new Map();let tick;const ipcMain={handle:(channel,callback)=>handlers.set(channel,callback)};
@@ -12,3 +12,14 @@ test('validated upstream client failure remains visible and a later mount cannot
 test('untrusted frame cannot supply startup evidence',async t=>{const f=fixture(t);f.ipcMain.handle('dsh-desktop:boot-failed',()=>{throw Error('rejected');});await assert.rejects(f.handlers.get('dsh-desktop:boot-failed')({...f.event,senderFrame:{}},'forged'));assert.equal(f.state().state,'checking');});
 
 test('a stalled renderer query still reaches unverified timeout',async t=>{const clock={value:0},f=fixture(t,clock);f.ipcMain.handle('dsh-desktop:boot',()=>({}));await f.handlers.get('dsh-desktop:boot')(f.event);f.event.sender.executeJavaScript=()=>new Promise(()=>{});void f.tick();clock.value=91000;await f.tick();assert.equal(f.state().state,'unverified');});
+
+test('startup observation accepts the new upstream activation audit without dropping the mount gate', t => {
+  const f=fixture(t);
+  f.put('packages/client/web/src/boot-client.ts','await loader.await(); assertEntriesActive(ctx, options.modules)');
+  assert.equal(desktopAuditSupported(f.root),true);
+  f.put('packages/client/web/src/boot.ts','mountClient(ctx, this.container)');
+  assert.equal(desktopAuditSupported(f.root),false);
+  f.put('packages/client/web/src/boot.ts','await mountClient(ctx, this.container)');
+  f.put('packages/client/web/src/boot-client.ts','assertEntriesActive(someOtherContext)');
+  assert.equal(desktopAuditSupported(f.root),false);
+});

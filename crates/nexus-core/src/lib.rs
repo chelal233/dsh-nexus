@@ -3548,6 +3548,9 @@ pub fn redact_diagnostics_payload(payload: &[u8]) -> (Vec<u8>, bool) {
     if let Ok(mut value @ (serde_json::Value::Object(_) | serde_json::Value::Array(_))) = serde_json::from_str::<serde_json::Value>(text) {
         let changed = redact_diagnostic_json(&mut value);
         if changed { return (serde_json::to_vec_pretty(&value).unwrap_or_else(|_| b"[REDACTED]".to_vec()), true); }
+        // Valid JSON must not fall through to line-based redaction: a harmless
+        // string such as a token-meter package name can otherwise destroy its syntax.
+        return (payload.to_vec(), false);
     }
     redact_diagnostic_text(text)
 }
@@ -5048,6 +5051,33 @@ mod tests {
         assert!(!canary.contains("CANARY_SECRET"));
         assert!(bundle.files.iter().any(|f| f.name == "run/checkpoint-restore.json"));
         let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn diagnostics_preserves_compatibility_json_with_token_package_names() {
+        let report = serde_json::json!({"status":"passed", "declarations":[{
+            "dependency":"@deepseek-ai/dsh-token-meter", "status":"mismatch",
+            "required":">=0.1.6-alpha.2 <0.1.7", "actual":"0.2.0-rc.2"
+        }]});
+        for value in [report.clone(), serde_json::json!([report])] {
+            let original = serde_json::to_vec_pretty(&value).unwrap();
+            let (bytes, changed) = super::redact_diagnostics_payload(&original);
+            assert_eq!(serde_json::from_slice::<serde_json::Value>(&bytes).unwrap(), value);
+            assert!(!changed);
+            assert_eq!(bytes, original);
+        }
+    }
+
+    #[test]
+    fn diagnostics_redacts_secrets_without_losing_package_names() {
+        let value = serde_json::json!({"dependency":"@deepseek-ai/dsh-token-meter",
+            "credentials":{"api_key":"PRIVATE_VALUE"}, "message":"Authorization: Bearer PRIVATE_TOKEN"});
+        let (bytes, changed) = super::redact_diagnostics_payload(&serde_json::to_vec(&value).unwrap());
+        assert!(changed);
+        let redacted: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(redacted["dependency"], value["dependency"]);
+        let text = String::from_utf8(bytes).unwrap();
+        assert!(!text.contains("PRIVATE_VALUE") && !text.contains("PRIVATE_TOKEN"));
     }
 
     #[test]
