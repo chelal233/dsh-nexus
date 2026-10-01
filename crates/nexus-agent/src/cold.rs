@@ -120,6 +120,20 @@ impl ColdCoordinator {
         APPROVED_UPSTREAM
     }
 
+    async fn release_settled_owner(&self, operation_id: &str) {
+        // Keep the identity check and flag update under the same gate as begin
+        // and retry, so a late completion cannot release a successor's owner.
+        let _gate = self.gate.lock().await;
+        if self.load().ok().flatten().is_some_and(|operation| {
+            operation.operation_id == operation_id
+                && operation.owner_quiescent
+                && (operation.phase.is_terminal()
+                    || operation.phase == ColdOperationPhase::AwaitingConfirmation)
+        }) {
+            self.owner_active.store(false, Ordering::Release);
+        }
+    }
+
     pub(crate) fn try_acquire_maintenance(&self) -> io::Result<tokio::sync::OwnedMutexGuard<()>> {
         let guard = Arc::clone(&self.gate).try_lock_owned()
             .map_err(|_| io::Error::new(io::ErrorKind::ResourceBusy, "cold operation is busy"))?;
@@ -726,14 +740,7 @@ pub(crate) async fn prepare(state: AppState, operation_id: String) {
     if let Err(error) = result {
         let _ = settle_failure(&state, &operation_id, error).await;
     }
-    if state.cold.load().ok().flatten().is_some_and(|operation| {
-        operation.operation_id == operation_id
-            && operation.owner_quiescent
-            && (operation.phase.is_terminal()
-                || operation.phase == ColdOperationPhase::AwaitingConfirmation)
-    }) {
-        state.cold.owner_active.store(false, Ordering::Release);
-    }
+    state.cold.release_settled_owner(&operation_id).await;
 }
 
 async fn prepare_inner(state: &AppState, operation_id: &str) -> io::Result<()> {
@@ -1018,7 +1025,7 @@ pub(crate) async fn initialize_selected_release(
     if let Err(error) = &result {
         let _ = settle_failure(state, &operation.operation_id, io::Error::new(error.kind(), error.to_string())).await;
     }
-    state.cold.owner_active.store(false, Ordering::Release);
+    state.cold.release_settled_owner(&operation.operation_id).await;
     result
 }
 
@@ -2836,6 +2843,45 @@ while ($true) {{ Start-Sleep -Seconds 1 }}"#, child.display())).unwrap();
         let cancelled = coordinator.cancel(&operation.operation_id).await.unwrap();
         assert_eq!(cancelled.phase, ColdOperationPhase::Cancelling);
         let _ = fs::remove_dir_all(root);
+    }
+
+    #[tokio::test]
+    async fn late_owner_completion_cannot_release_a_successor() {
+        let root = std::env::temp_dir().join(format!("nexus-cold-owner-{}", unix_time_nanos_for_update()));
+        let coordinator = ColdCoordinator::new(NexusPaths::from_root(root.clone()));
+        let mut previous = coordinator.begin("v1.2.3".into(), RuntimeSource::Official, RuntimeInstallMode::Portable).await.unwrap();
+        previous.phase = ColdOperationPhase::Failed;
+        previous.owner_quiescent = true;
+        coordinator.write(&previous).unwrap();
+
+        let gate = coordinator.gate.lock().await;
+        let completion = {
+            let coordinator = coordinator.clone();
+            let id = previous.operation_id.clone();
+            tokio::spawn(async move { coordinator.release_settled_owner(&id).await })
+        };
+        tokio::task::yield_now().await;
+        assert!(!completion.is_finished(), "owner completion must wait for the operation gate");
+        assert!(coordinator.owner_active.load(Ordering::Acquire));
+        drop(gate);
+        completion.await.unwrap();
+        assert!(!coordinator.owner_active.load(Ordering::Acquire));
+
+        let mut successor = coordinator.begin("v1.2.4".into(), RuntimeSource::Official, RuntimeInstallMode::Portable).await.unwrap();
+        coordinator.release_settled_owner(&previous.operation_id).await;
+        assert!(coordinator.owner_active.load(Ordering::Acquire), "a stale task must not release a new operation");
+        coordinator.release_settled_owner(&successor.operation_id).await;
+        assert!(coordinator.owner_active.load(Ordering::Acquire), "a running operation retains its owner");
+        successor.phase = ColdOperationPhase::Failed;
+        coordinator.write(&successor).unwrap();
+        coordinator.release_settled_owner(&successor.operation_id).await;
+        assert!(coordinator.owner_active.load(Ordering::Acquire), "an unsettled child retains its owner");
+        successor.phase = ColdOperationPhase::AwaitingConfirmation;
+        successor.owner_quiescent = true;
+        coordinator.write(&successor).unwrap();
+        coordinator.release_settled_owner(&successor.operation_id).await;
+        assert!(!coordinator.owner_active.load(Ordering::Acquire));
+        fs::remove_dir_all(root).unwrap();
     }
 
     #[tokio::test]
