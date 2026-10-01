@@ -77,7 +77,7 @@ fn complete_runtime(state: &AppState) -> io::Result<PathBuf> {
     let runtime = crate::runtime::prefer_bundled_runtime(config.runtime.unwrap_or_default(), nexus_core::bundled_runtime_dir().as_deref());
     let pinned = runtime.node.as_ref();
     let root = if let Some(pin) = pinned {
-        pin.path.parent().and_then(Path::parent).map(Path::to_path_buf)
+        portable_runtime_root(&pin.path)
     } else { nexus_core::bundled_runtime_dir() }.ok_or_else(|| io::Error::other("No complete portable runtime is available"))?;
     validate_runtime_root(&root)?;
     if let Some(pin) = runtime.pnpm.as_ref() {
@@ -88,8 +88,27 @@ fn complete_runtime(state: &AppState) -> io::Result<PathBuf> {
     fs::canonicalize(root)
 }
 
+fn portable_runtime_root(node: &Path) -> Option<PathBuf> {
+    let parent = node.parent()?;
+    let node_directory = if parent.file_name().is_some_and(|name| name == "bin")
+        && parent.parent()?.file_name().is_some_and(|name| name == "node") {
+        parent.parent()?
+    } else { parent };
+    node_directory.parent().map(Path::to_path_buf)
+}
+
+fn portable_node_entry(root: &Path) -> io::Result<&'static str> {
+    match fs::symlink_metadata(root.join(nexus_core::PORTABLE_NODE_EXECUTABLE)) {
+        Ok(metadata) if metadata.is_file() && !nexus_core::path_is_reparse(&metadata) => Ok(nexus_core::PORTABLE_NODE_EXECUTABLE),
+        Ok(_) => Err(io::Error::other("Portable Node entry must be an ordinary file")),
+        // Accept old verified offline archives with only the flat Unix layout.
+        Err(error) if !cfg!(windows) && error.kind() == io::ErrorKind::NotFound => Ok("node/node"),
+        Err(error) => Err(error),
+    }
+}
+
 fn validate_runtime_root(root: &Path) -> io::Result<PathBuf> {
-    for relative in [if cfg!(windows) { "node/node.exe" } else { "node/node" }, if cfg!(windows) { "node/npm.cmd" } else { "node/npm" }, "node/node_modules/npm/bin/npm-cli.js", "pnpm/bin/pnpm.cjs"] {
+    for relative in [portable_node_entry(root)?, if cfg!(windows) { "node/npm.cmd" } else { "node/npm" }, "node/node_modules/npm/bin/npm-cli.js", "pnpm/bin/pnpm.cjs"] {
         let metadata = fs::symlink_metadata(root.join(relative))?;
         if !metadata.is_file() || nexus_core::path_is_reparse(&metadata) { return Err(io::Error::other("Offline packaging requires a complete portable Node/npm/pnpm runtime")); }
     }
@@ -226,8 +245,10 @@ async fn publish_verified_import(state: &AppState, mut operation: ColdOperation,
     let runtime_root = state.paths.runtimes_dir.join(&runtime_id);
     if fs::symlink_metadata(&runtime_root).is_ok() { return Err(io::Error::other("Offline runtime destination already exists")); }
     let mut config = state.config.load()?;
-    if base { config.runtime = Some(RuntimeConfig {
-        node: Some(RuntimePin { path: runtime_root.join(if cfg!(windows) { "node/node.exe" } else { "node/node" }), ownership: RuntimeOwnership::Nexus }),
+    if base {
+    let node_entry = portable_node_entry(&candidate.join("payload/runtime"))?;
+    config.runtime = Some(RuntimeConfig {
+        node: Some(RuntimePin { path: runtime_root.join(node_entry), ownership: RuntimeOwnership::Nexus }),
         pnpm: Some(RuntimePin { path: runtime_root.join("pnpm/bin/pnpm.cjs"), ownership: RuntimeOwnership::Nexus }),
         git: candidate.join("payload/runtime").join(if cfg!(windows) { "git/cmd/git.exe" } else { "git/bin/git" }).is_file().then(|| RuntimePin {
             path: runtime_root.join(if cfg!(windows) { "git/cmd/git.exe" } else { "git/bin/git" }), ownership: RuntimeOwnership::Nexus,
@@ -235,7 +256,7 @@ async fn publish_verified_import(state: &AppState, mut operation: ColdOperation,
         ..RuntimeConfig::default()
     });
     config.harness = Some(HarnessLaunchSpec {
-        mode: HarnessLaunchMode::Node, program: runtime_root.join(if cfg!(windows) { "node/node.exe" } else { "node/node" }),
+        mode: HarnessLaunchMode::Node, program: runtime_root.join(node_entry),
         args: vec!["{release_root}\\apps/cli/lib/bin.js".into(), "--profile".into(), "{profile}".into()],
         working_dir: Some("{release_root}".into()), readiness_url: None, readiness_timeout_secs: None, readiness_token_required: false,
     });
@@ -358,6 +379,37 @@ mod tests {
         assert!(super::OFFLINE_TIMEOUT >= std::time::Duration::from_secs(1800));
     }
     use super::*;
+
+    #[test]
+    fn portable_runtime_roots_preserve_standard_and_legacy_layouts() {
+        let root = PathBuf::from("fixture/runtime");
+        for entry in ["node/bin/node", "node/node", "node/node.exe"] {
+            assert_eq!(portable_runtime_root(&root.join(entry)), Some(root.clone()));
+        }
+        let state = crate::switch_ownership_tests::switch_test_state("offline-node-layout");
+        let root = state.paths.runtimes_dir.join("portable-runtime");
+        let entries = if cfg!(windows) { vec!["node/node.exe"] } else { vec!["node/node", "node/bin/node"] };
+        for entry in entries {
+            for file in [entry, if cfg!(windows) { "node/npm.cmd" } else { "node/npm" }, "node/node_modules/npm/bin/npm-cli.js", "pnpm/bin/pnpm.cjs"] {
+                let file = root.join(file);
+                fs::create_dir_all(file.parent().unwrap()).unwrap();
+                fs::write(file, "fixture").unwrap();
+            }
+            let mut config = state.config.load().unwrap();
+            config.runtime = Some(RuntimeConfig {
+                node: Some(RuntimePin { path: root.join(entry), ownership: RuntimeOwnership::Nexus }),
+                pnpm: Some(RuntimePin { path: root.join("pnpm/bin/pnpm.cjs"), ownership: RuntimeOwnership::Nexus }),
+                ..RuntimeConfig::default()
+            });
+            state.config.write(&config).unwrap();
+            assert_eq!(complete_runtime(&state).unwrap(), fs::canonicalize(&root).unwrap());
+            assert_eq!(portable_node_entry(&root).unwrap(), entry);
+        }
+        fs::remove_file(root.join(nexus_core::PORTABLE_NODE_EXECUTABLE)).unwrap();
+        fs::create_dir(root.join(nexus_core::PORTABLE_NODE_EXECUTABLE)).unwrap();
+        assert!(portable_node_entry(&root).is_err(), "a damaged preferred entry cannot fall back");
+        fs::remove_dir_all(&state.paths.root).unwrap();
+    }
 
     #[tokio::test]
     async fn runtime_import_requires_rollback_before_environment_merge_but_data_only_does_not() {

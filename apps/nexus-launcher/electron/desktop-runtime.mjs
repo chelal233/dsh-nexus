@@ -124,8 +124,11 @@ export function prepareDesktopElectron(directory, cache) {
 
 export function selectDesktopKit(resources, config) {
   const node = config.runtime?.node;
+  const parent = typeof node?.path === 'string' ? path.dirname(node.path) : undefined;
+  const runtime = parent && path.basename(parent) === 'bin' && path.basename(path.dirname(parent)) === 'node'
+    ? path.dirname(path.dirname(parent)) : parent && path.dirname(parent);
   const imported = node?.ownership === 'nexus' && typeof node.path === 'string'
-    ? path.join(path.dirname(path.dirname(node.path)), 'desktop') : undefined;
+    ? path.join(runtime, 'desktop') : undefined;
   const candidates = [imported, path.join(resources, 'runtime/desktop')].filter(Boolean);
   const directory = candidates.find(item => fs.existsSync(path.join(item, 'manifest.json')));
   if (!directory) throw new Error('desktop_runtime_missing');

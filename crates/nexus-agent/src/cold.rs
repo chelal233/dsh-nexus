@@ -142,7 +142,7 @@ impl ColdCoordinator {
         if let Err(error) = self.prune_uninstalled_history() {
             tracing::warn!(%error, "Could not clear obsolete installation history; record retained");
         }
-        crate::process_recovery::reconcile(&self.paths.run_dir.join("owned-processes"))?;
+        crate::process_recovery::reconcile_run_directory(&self.paths.run_dir)?;
         self.recover_publication()?;
         let Some(mut operation) = self.load()? else {
             return Ok(());
@@ -622,7 +622,7 @@ impl ColdCoordinator {
             cleanup_error: None,
         };
         self.write(&operation)?;
-        let token = CancellationToken::default();
+        let token = CancellationToken::default().with_process_registry(self.paths.run_dir.join("owned-processes"));
         *self.cancellation.lock().await = Some((operation_id, token));
         self.owner_active.store(true, Ordering::Release);
         Ok(operation)
@@ -635,7 +635,7 @@ impl ColdCoordinator {
                 return token.clone();
             }
         }
-        let token = CancellationToken::default();
+        let token = CancellationToken::default().with_process_registry(self.paths.run_dir.join("owned-processes"));
         *current = Some((operation_id.to_owned(), token.clone()));
         token
     }
@@ -665,7 +665,7 @@ impl ColdCoordinator {
             if operation.cleanup_pending && !operation.owner_quiescent {
                 // Reconcile ownership before retrying residue; never delete a
                 // lock or treat an Agent restart as proof that children exited.
-                crate::process_recovery::reconcile(&self.paths.run_dir.join("owned-processes"))?;
+                crate::process_recovery::reconcile_run_directory(&self.paths.run_dir)?;
                 if operation.process_owner_version != 1 {
                     crate::process_recovery::require_legacy_reboot(&self.paths.root.join("cold-operation.json"))?;
                 }
@@ -684,6 +684,9 @@ impl ColdCoordinator {
                 }
                 operation.updated_at_unix = Some(unix_time_seconds());
                 self.write(&operation)?;
+            }
+            if operation.owner_quiescent {
+                self.owner_active.store(false, Ordering::Release);
             }
             return Ok(operation);
         }
@@ -2804,25 +2807,33 @@ while ($true) {{ Start-Sleep -Seconds 1 }}"#, child.display())).unwrap();
 
     #[tokio::test]
     async fn terminal_cleanup_retry_reconciles_leases_before_removing_candidate() {
+        for nested in [false, true] {
         let root = std::env::temp_dir().join(format!("nexus-cold-retry-{}", unix_time_nanos_for_update()));
         let coordinator = ColdCoordinator::new(NexusPaths::from_root(root.clone()));
         let mut operation = coordinator.begin("v1.2.3".into(), RuntimeSource::Official, RuntimeInstallMode::Portable).await.unwrap();
         operation.phase = ColdOperationPhase::Failed; operation.cleanup_pending = true; operation.owner_quiescent = false;
-        coordinator.owner_active.store(false, Ordering::Release);
+        assert!(coordinator.owner_active.load(Ordering::Acquire), "prepare's unsettled owner must stay active");
+        assert_eq!(coordinator.token(&operation.operation_id).await.process_registry(), Some(coordinator.paths.run_dir.join("owned-processes").as_path()));
         fs::create_dir_all(&operation.candidate).unwrap();
         fs::write(Path::new(&operation.candidate).join("owned-residue"), b"fixture").unwrap();
         coordinator.write(&operation).unwrap();
-        let owner = crate::process_recovery::Owner::create(&coordinator.paths.run_dir.join("owned-processes"), None).unwrap();
+        let registry = if nested { coordinator.paths.run_dir.join("embedded-git-123/owned-processes") }
+            else { coordinator.paths.run_dir.join("owned-processes") };
+        fs::create_dir_all(registry.parent().unwrap()).unwrap();
+        let owner = crate::process_recovery::Owner::create(&registry, None).unwrap();
         assert!(coordinator.cancel("stale").await.is_err());
         assert!(coordinator.cancel(&operation.operation_id).await.is_err(), "live lease must prevent cleanup");
         assert!(Path::new(&operation.candidate).exists());
+        assert!(coordinator.owner_active.load(Ordering::Acquire));
         drop(owner);
         let recovered = coordinator.cancel(&operation.operation_id).await.unwrap();
         assert!(recovered.owner_quiescent); assert!(!recovered.cleanup_pending);
         assert_eq!(recovered.phase, ColdOperationPhase::Failed);
+        assert!(!coordinator.owner_active.load(Ordering::Acquire));
         assert!(!Path::new(&operation.candidate).exists());
         coordinator.begin("v1.2.4".into(), RuntimeSource::Official, RuntimeInstallMode::Portable).await.unwrap();
         fs::remove_dir_all(root).unwrap();
+        }
     }
 }
 

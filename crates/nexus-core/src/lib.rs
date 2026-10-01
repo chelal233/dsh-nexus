@@ -392,11 +392,14 @@ impl RuntimePin {
     }
 }
 
+/// Keep the Unix distribution layout so native builders find ../include/node.
+pub const PORTABLE_NODE_EXECUTABLE: &str = if cfg!(windows) { "node/node.exe" } else { "node/bin/node" };
+
 /// Explicit pins win; otherwise select the complete bundled toolchain.
 pub fn select_runtime(mut runtime: RuntimeConfig, root: Option<&Path>) -> RuntimeConfig {
     if let Some(root) = root {
         for (pin, relative) in [
-            (&mut runtime.node, if cfg!(windows) { "node/node.exe" } else { "node/node" }),
+            (&mut runtime.node, PORTABLE_NODE_EXECUTABLE),
             (&mut runtime.pnpm, "pnpm/bin/pnpm.cjs"),
             (&mut runtime.git, if cfg!(windows) { "git/cmd/git.exe" } else { "git/bin/git" }),
         ] {
@@ -409,7 +412,7 @@ pub fn select_runtime(mut runtime: RuntimeConfig, root: Option<&Path>) -> Runtim
     }
     if let Some(root) = root {
         runtime.node.get_or_insert_with(|| RuntimePin {
-            path: root.join("node").join(if cfg!(windows) { "node.exe" } else { "node" }),
+            path: root.join(PORTABLE_NODE_EXECUTABLE),
             ownership: RuntimeOwnership::Bundled,
         });
         runtime.pnpm.get_or_insert_with(|| RuntimePin {

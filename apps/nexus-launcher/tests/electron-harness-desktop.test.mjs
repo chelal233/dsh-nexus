@@ -21,6 +21,15 @@ test('Desktop status distinguishes dead workers, live orphans, and finished nati
   fs.writeFileSync(file, JSON.stringify({ phase: 'stopped', pid: 10 }));
   assert.equal(readDesktopState(file, () => false).phase, 'stopped');
 });
+test('imported Desktop kit follows both standard and legacy Node layouts', t => {
+  const { root, put } = fixture(t);
+  put('runtime/desktop/manifest.json', '{}');
+  const kit = path.join(root, 'runtime/desktop');
+  for (const entry of ['node/bin/node', 'node/node', 'node/node.exe']) {
+    assert.equal(selectDesktopKit('missing', { runtime: { node: { ownership: 'nexus', path: path.join(root, 'runtime', entry) } } }), kit);
+  }
+  assert.throws(() => selectDesktopKit('missing', { runtime: { node: { ownership: 'system', path: path.join(root, 'runtime/node/bin/node') } } }), /missing/);
+});
 test('managed source rejects traversal and source redirects outside release storage', t => {
   const { root, put } = fixture(t);
   put('releases/selected/package.json', '{}'); put('elsewhere/package.json', '{}');

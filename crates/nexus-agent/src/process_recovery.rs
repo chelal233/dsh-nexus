@@ -249,9 +249,44 @@ pub(crate) fn require_legacy_reboot(record: &Path) -> io::Result<()> {
 
 /// A live lease covers queued workers and the process creation boundary, while
 /// the durable Job/group covers descendants after the original owner has died.
+pub(crate) fn reconcile_run_directory(run_dir: &Path) -> io::Result<()> {
+    let metadata = match fs::symlink_metadata(run_dir) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(()),
+        Err(error) => return Err(error),
+    };
+    if !metadata.is_dir() || nexus_core::path_is_reparse(&metadata) {
+        return Err(io::Error::other("Process recovery directory is not a plain directory"));
+    }
+    reconcile(&run_dir.join("owned-processes"))?;
+    // Older embedded workers registered beside their private request files.
+    // Check only that known, one-level layout; never follow redirected paths.
+    for (index, entry) in fs::read_dir(run_dir)?.enumerate() {
+        if index >= 16_384 { return Err(io::Error::other("Process recovery directory limit exceeded")); }
+        let entry = entry?;
+        let name = entry.file_name(); let name = name.to_string_lossy();
+        let Some(nonce) = name.strip_prefix("embedded-git-") else { continue; };
+        if nonce.is_empty() || nonce.len() > 39 || !nonce.bytes().all(|byte| byte.is_ascii_digit()) {
+            return Err(io::Error::other("Invalid embedded Git ownership directory; preserved"));
+        }
+        let metadata = fs::symlink_metadata(entry.path())?;
+        if !metadata.is_dir() || nexus_core::path_is_reparse(&metadata) {
+            return Err(io::Error::other("Embedded Git ownership directory is not a plain directory; preserved"));
+        }
+        reconcile(&entry.path().join("owned-processes"))?;
+    }
+    Ok(())
+}
+
 pub(crate) fn reconcile(path: &Path) -> io::Result<()> {
-    if !path.try_exists()? { return Ok(()); }
-    directory(path)?;
+    let metadata = match fs::symlink_metadata(path) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(()),
+        Err(error) => return Err(error),
+    };
+    if !metadata.is_dir() || nexus_core::path_is_reparse(&metadata) {
+        return Err(io::Error::other("Process ownership directory is not a plain directory"));
+    }
     let mut entries = 0;
     for entry in fs::read_dir(path)? {
         let entry = entry?; let name = entry.file_name(); let name = name.to_string_lossy();
@@ -292,6 +327,33 @@ mod tests {
     fn fixture() -> PathBuf {
         let path = std::env::temp_dir().join(format!("nexus-process-recovery-{}", nexus_core::unix_time_nanos_for_update()));
         fs::create_dir(&path).unwrap(); path
+    }
+
+    #[test]
+    fn recovery_preserves_invalid_embedded_registry_paths() {
+        let root = fixture();
+        let invalid = root.join("embedded-git-not-a-nonce");
+        fs::create_dir(&invalid).unwrap();
+        assert!(reconcile_run_directory(&root).is_err());
+        fs::remove_dir(invalid).unwrap();
+        let not_directory = root.join("embedded-git-123");
+        fs::write(&not_directory, b"preserve").unwrap();
+        assert!(reconcile_run_directory(&root).is_err());
+        assert_eq!(fs::read(&not_directory).unwrap(), b"preserve");
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn recovery_never_follows_embedded_or_registry_symlinks() {
+        use std::os::unix::fs::symlink;
+        let root = fixture(); let target = fixture();
+        symlink(&target, root.join("embedded-git-123")).unwrap();
+        assert!(reconcile_run_directory(&root).is_err());
+        fs::remove_file(root.join("embedded-git-123")).unwrap();
+        symlink(target.join("missing"), root.join("owned-processes")).unwrap();
+        assert!(reconcile_run_directory(&root).is_err());
+        fs::remove_dir_all(root).unwrap(); fs::remove_dir_all(target).unwrap();
     }
 
     fn proc_stat(pid: u32, group: i32, state: char, threads: usize) -> String {

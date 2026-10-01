@@ -635,7 +635,7 @@ mod host_guard_tests {
 }
 
 fn ensure_checkpoint_process_quiescent(paths: &nexus_core::NexusPaths, journal: &CheckpointRestoreJournal) -> io::Result<()> {
-    process_recovery::reconcile(&paths.run_dir.join("owned-processes"))?;
+    process_recovery::reconcile_run_directory(&paths.run_dir)?;
     if journal.process_owner_version > 1 { return Err(io::Error::other("Unsupported checkpoint process ownership protocol; journal retained")); }
     if journal.process_owner_version == 0 && journal.intent.snapshot.is_some() && journal.phase == CheckpointRestorePhase::Prepared {
         process_recovery::require_legacy_reboot(&paths.run_dir.join("checkpoint-restore.json"))?;

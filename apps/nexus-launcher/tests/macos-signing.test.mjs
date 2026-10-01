@@ -21,10 +21,11 @@ test('macOS signing refreshes resource hashes before sealing the app and preserv
   const root=fs.mkdtempSync(path.join(os.tmpdir(),'nexus-signing-'));
   t.after(()=>fs.rmSync(root,{recursive:true,force:true}));
   const app=path.join(root,'Nexus Launcher.app'),resources=path.join(app,'Contents/Resources');
-  fs.mkdirSync(path.join(resources,'runtime/node'),{recursive:true});fs.mkdirSync(path.join(resources,'notices'));
+  fs.mkdirSync(path.join(resources,'runtime/node/bin'),{recursive:true});fs.mkdirSync(path.join(resources,'notices'));
   const names=['nexus-agent','nexus-launcher','nexusctl','nexus-desktop-bridge','runtime','notices'];
   for(const name of names.slice(0,4))fs.writeFileSync(path.join(resources,name),'unsigned binary');
-  const node=path.join(resources,'runtime/node/node');fs.writeFileSync(node,'unsigned node');
+  const node=path.join(resources,'runtime/node/bin/node');fs.writeFileSync(node,'unsigned node');
+  fs.writeFileSync(path.join(resources,'runtime/node/node'),'legacy flat entry');
   const runtime={node:{sha256:'original',version:'24.20.0',npmVersion:'11.19.0'},pnpm:{version:'11.7.0'},target:'aarch64-apple-darwin'};
   fs.writeFileSync(path.join(resources,'runtime/manifest.json'),JSON.stringify(runtime));
   const manifest={schemaVersion:1,version:'fixture',buildId:'fixture',createdAt:'fixture',commit:'fixture',dirty:false,node:'fixture',npm:'fixture',pnpm:'fixture',runtime,files:await inventoryResources(resources,names)};

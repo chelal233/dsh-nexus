@@ -1649,7 +1649,7 @@ mod tests {
     fn stopped_profile_operations_resolve_unpinned_bundled_node_and_pnpm() {
         let (root, paths, _, _) = plugin_fixture();
         let bundle = root.join("shipped/runtime");
-        let node = bundle.join(if cfg!(windows) { "node/node.exe" } else { "node/node" });
+        let node = bundle.join(nexus_core::PORTABLE_NODE_EXECUTABLE);
         let pnpm = bundle.join("pnpm/bin/pnpm.cjs");
         fs::create_dir_all(node.parent().unwrap()).unwrap();
         fs::create_dir_all(pnpm.parent().unwrap()).unwrap();

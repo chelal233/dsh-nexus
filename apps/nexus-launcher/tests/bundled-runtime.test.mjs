@@ -13,7 +13,7 @@ for (const systemRootKey of (process.platform === 'win32' ? ['SystemRoot', 'SYST
 }, () => {
   const runtime = process.env.NEXUS_TEST_RUNTIME_DIR
     || fileURLToPath(new URL('../desktop/resources/runtime/', import.meta.url));
-  const node = path.join(runtime, process.platform === 'win32' ? 'node/node.exe' : 'node/node');
+  const node = path.join(runtime, process.platform === 'win32' ? 'node/node.exe' : 'node/bin/node');
   const pnpm = path.join(runtime, 'pnpm/bin/pnpm.cjs');
   const fixture = mkdtempSync(path.join(tmpdir(), 'nexus runtime 用户 '));
   const env = Object.fromEntries(Object.entries(process.env).filter(([key]) =>
@@ -38,6 +38,7 @@ for (const systemRootKey of (process.platform === 'win32' ? ['SystemRoot', 'SYST
       const fs = require('node:fs');
       const assert = require('node:assert/strict');
       assert.equal(fs.realpathSync(process.execPath).toLowerCase(), fs.realpathSync(process.env.EXPECTED_NODE).toLowerCase());
+      if (process.platform !== 'win32') assert.ok(fs.statSync(require('node:path').resolve(require('node:path').dirname(process.execPath), '../include/node/node_api.h')).isFile(), 'native builds require paired Node-API headers');
       fs.appendFileSync('result.txt', process.argv[2] + '\\n');
     `);
     const result = spawnSync(node, [pnpm, 'run', 'build'], {

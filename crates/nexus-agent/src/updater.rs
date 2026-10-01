@@ -218,7 +218,7 @@ impl UpdateExecutor {
         let guard = Arc::clone(&self.gate)
             .try_lock_owned()
             .map_err(|_| UpdateExecutorError::AlreadyRunning)?;
-        crate::process_recovery::reconcile(&self.paths.run_dir.join("owned-processes")).map_err(UpdateExecutorError::Persistence)?;
+        crate::process_recovery::reconcile_run_directory(&self.paths.run_dir).map_err(UpdateExecutorError::Persistence)?;
         self.recover_install_unattached().map_err(UpdateExecutorError::Persistence)?;
         if self.install_operation().map_err(UpdateExecutorError::Persistence)?
             .is_some_and(|operation| !operation.owner_quiescent || operation.cleanup_pending) {
@@ -1404,7 +1404,7 @@ def	refs/tags/v0.9.0^{}
 
 fn recovered_install_owner(paths: &NexusPaths, name: Option<&str>, version: u32) -> io::Result<bool> {
     if version > 1 { return Err(io::Error::other("Unsupported installation process ownership protocol; record retained")); }
-    crate::process_recovery::reconcile(&paths.run_dir.join("owned-processes"))?;
+    crate::process_recovery::reconcile_run_directory(&paths.run_dir)?;
     #[cfg(windows)] {
         if let Some(name) = name { return crate::dsh::named_operation_job_is_empty(name); }
         if version == 0 { crate::process_recovery::require_legacy_reboot(&paths.root.join("install-operation.json"))?; }

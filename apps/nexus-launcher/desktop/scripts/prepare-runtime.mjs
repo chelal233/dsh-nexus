@@ -33,7 +33,7 @@ const cacheRoot = path.join(repositoryRoot, "target", "bundled-runtime-cache");
 
 const spec = selectPlatform(process.env.CARGO_BUILD_TARGET);
 const windows = spec.platform === "win32";
-const nodeName = windows ? "node.exe" : "node";
+const nodeName = windows ? "node.exe" : "bin/node";
 const nodeVersion = process.env.NEXUS_BUNDLED_NODE_VERSION || spec.nodeVersion;
 const pnpmVersion = process.env.NEXUS_BUNDLED_PNPM_VERSION || "11.7.0";
 const nodeMirror = (process.env.NEXUS_NODE_DIST_MIRROR || "https://nodejs.org/dist").replace(/\/$/, "");
@@ -159,8 +159,8 @@ async function stageNode() {
     const extracted = path.join(extractDir, archiveName.replace(/\.(zip|tar\.gz)$/, ""));
     await cp(extracted, nodeDir, { recursive: true, dereference: true });
     if (!windows) {
-      // Normalize to the existing Nexus layout; retain the distribution's
-      // licenses and resolve links before the no-symlink resource inventory.
+      // Keep the old flat entry for existing consumers; new launches use the
+      // standard bin/node so native builders find ../include/node headers.
       await cp(path.join(extracted, "bin/node"), path.join(nodeDir, "node"));
       await cp(path.join(extracted, "lib/node_modules"), path.join(nodeDir, "node_modules"), { recursive: true, dereference: true });
       for (const name of ["npm", "npx"]) {
@@ -182,6 +182,7 @@ async function stageNode() {
     await rm(extractDir, { recursive: true, force: true });
   }
   const target = path.join(nodeDir, nodeName);
+  if (!windows) await access(path.join(nodeDir, "include/node/node_api.h"));
   const binarySha = await sha256(target);
   if (execFileSync(target, ["-p", "process.arch"], { encoding: "utf8" }).trim() !== spec.arch) throw new Error("Bundled Node architecture disagrees with target");
   if (pinnedNodeSha && binarySha !== pinnedNodeSha) throw new Error("Bundled node.exe checksum mismatch");
@@ -260,7 +261,7 @@ async function stagePnpm() {
     if (windows) await writeFile(path.join(target, "bin/pnpm.cmd"),
       '@ECHO OFF\r\nIF DEFINED NEXUS_RUNTIME_NODE (\r\n  "%NEXUS_RUNTIME_NODE%" "%~dp0pnpm.cjs" %*\r\n) ELSE (\r\n  "%~dp0..\\..\\node\\node.exe" "%~dp0pnpm.cjs" %*\r\n)\r\n');
     if (!windows) {
-      await writeFile(path.join(target, "bin/pnpm"), '#!/bin/sh\nHERE=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)\nexec "${NEXUS_RUNTIME_NODE:-$HERE/../../node/node}" "$HERE/pnpm.cjs" "$@"\n');
+      await writeFile(path.join(target, "bin/pnpm"), '#!/bin/sh\nHERE=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)\nexec "${NEXUS_RUNTIME_NODE:-$HERE/../../node/bin/node}" "$HERE/pnpm.cjs" "$@"\n');
       await chmod(path.join(target, "bin/pnpm"), 0o755);
     }
   } finally {
@@ -325,6 +326,7 @@ async function isUpToDate(manifestFile) {
       return false;
     }
     if (!windows) {
+      await access(path.join(resourceRuntime, 'node/include/node/node_api.h'));
       for (const name of ['npm', 'npx']) {
         const shim = await readFile(path.join(resourceRuntime, 'node/bin', name), 'utf8');
         if (!shim.includes('$HERE/../lib/node_modules/npm/bin/' + name + '-cli.js')) return false;
@@ -339,6 +341,7 @@ async function isUpToDate(manifestFile) {
     await access(path.join(resourceRuntime, "pnpm", "bin", "pnpm.cjs"));
     const shim = await readFile(path.join(resourceRuntime, "pnpm", "bin", windows ? "pnpm.cmd" : "pnpm"), "utf8");
     if (!shim.includes("NEXUS_RUNTIME_NODE")) return false;
+    if (!windows && !shim.includes('$HERE/../../node/bin/node')) return false;
     return true;
   } catch {
     return false;

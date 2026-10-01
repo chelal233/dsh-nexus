@@ -847,7 +847,7 @@ async fn observe_tool_until(
     unavailable_status(name, first_failure)
 }
 
-/// Bundled layout: `<runtime>/node/node.exe` (official distribution root)
+/// Bundled layout: `<runtime>/node/node.exe` or `<runtime>/node/bin/node`.
 /// and the full pnpm package tree at `<runtime>/pnpm/` whose entry run by
 /// the bundled Node is `<runtime>/pnpm/bin/pnpm.cjs` — never via Corepack.
 fn bundled_candidates(
@@ -863,17 +863,16 @@ fn bundled_candidates(
     if Instant::now() >= deadline {
         return Vec::new();
     }
-    let node_root = root.join("node");
-    let node_executable = if cfg!(windows) { "node.exe" } else { "node" };
+    let node = root.join(nexus_core::PORTABLE_NODE_EXECUTABLE);
     match name {
-        "node" => canonical_file(&node_root.join(node_executable))
+        "node" => canonical_file(&node)
             .map(|path| vec![(path, None)])
             .unwrap_or_default(),
         "pnpm" => {
             // The bundled pnpm is a Node script; without the bundled Node it
             // cannot run, so report it missing instead of a confusing
             // direct-execution probe failure.
-            let Some(node) = canonical_file(&node_root.join(node_executable)) else {
+            let Some(node) = canonical_file(&node) else {
                 return Vec::new();
             };
             let entry = root.join("pnpm").join("bin").join("pnpm.cjs");
@@ -1844,7 +1843,7 @@ mod tests {
         assert!(bundled_candidates("pnpm", Some(&runtime), deadline).is_empty());
         assert!(bundled_candidates("node", None, deadline).is_empty());
 
-        let node = write_version_fixture(&runtime.join("node"), "node", "v24.1.0");
+        let node = write_version_fixture(runtime.join(nexus_core::PORTABLE_NODE_EXECUTABLE).parent().unwrap(), "node", "v24.1.0");
         let node = fs::canonicalize(node).expect("bundled node canonicalizes");
         let pnpm_entry = runtime.join("pnpm").join("bin").join("pnpm.cjs");
         fs::create_dir_all(runtime.join("pnpm").join("bin")).expect("bundled pnpm dir creates");
@@ -1866,6 +1865,7 @@ mod tests {
         let root = fixture_root("bundled-selection");
         let selected = prefer_bundled_runtime(RuntimeConfig::default(), Some(&root));
         assert_eq!(selected.node.as_ref().unwrap().ownership, RuntimeOwnership::Bundled);
+        assert_eq!(selected.node.as_ref().unwrap().path, root.join(nexus_core::PORTABLE_NODE_EXECUTABLE));
         assert_eq!(selected.pnpm.as_ref().unwrap().ownership, RuntimeOwnership::Bundled);
         assert_eq!(selected.git.as_ref().unwrap().ownership, RuntimeOwnership::Bundled);
         let custom = nexus_core::RuntimePin {
@@ -1878,7 +1878,7 @@ mod tests {
         assert_eq!(selected.node, Some(custom));
         assert_eq!(selected.pnpm.unwrap().path, root.join("pnpm/bin/pnpm.cjs"));
         assert_eq!(prefer_bundled_runtime(RuntimeConfig::default(), None), RuntimeConfig::default());
-        assert_eq!(prefer_bundled_runtime(RuntimeConfig::default(), Some(&root.join("absent"))).node.unwrap().path, root.join("absent").join(if cfg!(windows) {"node/node.exe"} else {"node/node"}));
+        assert_eq!(prefer_bundled_runtime(RuntimeConfig::default(), Some(&root.join("absent"))).node.unwrap().path, root.join("absent").join(nexus_core::PORTABLE_NODE_EXECUTABLE));
         let _ = fs::remove_dir_all(root);
     }
 
@@ -1900,7 +1900,7 @@ mod tests {
         replace_runtime_settings(&mut document, None);
         let mut next = document.harness.clone().unwrap();
         runtime_for_launch(&mut next, RuntimeConfig::default(), Some(&root));
-        assert_eq!(next.program, root.join(if cfg!(windows) { "node/node.exe" } else { "node/node" }));
+        assert_eq!(next.program, root.join(nexus_core::PORTABLE_NODE_EXECUTABLE));
         let independent = root.join("independent/node.exe");
         document.harness.as_mut().unwrap().program = independent.clone();
         replace_runtime_settings(&mut document, Some(RuntimeConfig { node: Some(new), ..RuntimeConfig::default() }));
@@ -1923,7 +1923,7 @@ mod tests {
         let mut spec = nexus_core::HarnessLaunchSpec::new(old_node);
         spec.mode = nexus_protocol::HarnessLaunchMode::Node;
         let runtime = runtime_for_launch(&mut spec, configured.clone(), Some(&current));
-        assert_eq!(spec.program, current.join(if cfg!(windows) { "node/node.exe" } else { "node/node" }));
+        assert_eq!(spec.program, current.join(nexus_core::PORTABLE_NODE_EXECUTABLE));
         assert_eq!(runtime.node.as_ref().unwrap().path, spec.program);
         assert_eq!(runtime.node.as_ref().unwrap().ownership, RuntimeOwnership::Bundled);
         assert_eq!(runtime.pnpm.unwrap().path, current.join("pnpm/bin/pnpm.cjs"));

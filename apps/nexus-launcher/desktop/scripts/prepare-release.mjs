@@ -70,7 +70,7 @@ export function verifyIdentity(manifest, identity, manifestSha256) {
 }
 
 export function verifyRuntimeVersions(resources, runtime) {
-  const node = path.join(resources, "runtime/node", process.platform === "win32" ? "node.exe" : "node");
+  const node = path.join(resources, "runtime/node", process.platform === "win32" ? "node.exe" : "bin/node");
   const run = args => execFileSync(node, args, { cwd: resources, encoding: "utf8", windowsHide: true, timeout: 15000 }).trim();
   const spec = selectPlatform(process.env.CARGO_BUILD_TARGET);
   if (runtime.target !== spec.target || run(["-p", "process.arch"]) !== spec.arch) throw new Error("Runtime target architecture mismatch");

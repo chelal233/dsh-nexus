@@ -25,7 +25,7 @@ export async function signMacApplication(options, { sign = defaultSign, codesign
   await sign(options);
   const runtimeFile = path.join(resources, 'runtime/manifest.json');
   const runtime = JSON.parse(await readFile(runtimeFile));
-  runtime.node.sha256 = sha(await readFile(path.join(resources, 'runtime/node/node')));
+  runtime.node.sha256 = sha(await readFile(path.join(resources, 'runtime/node/bin/node')));
   await writeFile(runtimeFile, JSON.stringify(runtime, null, 2) + '\n');
   manifest.runtime = runtime;
   manifest.files = await inventoryResources(resources, ['nexus-agent', 'nexus-launcher', 'nexusctl', 'nexus-desktop-bridge', 'runtime', 'notices']);

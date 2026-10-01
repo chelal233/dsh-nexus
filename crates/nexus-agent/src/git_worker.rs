@@ -236,7 +236,9 @@ async fn run(operation: Operation, directory: &Path, duration: Duration, cancell
     write_json_atomic(directory, &input, &Request { operation, output: output.clone() })?;
     let mut command = Command::new(std::env::current_exe()?);
     command.arg("--git-worker").arg(&input).stdin(Stdio::null()).stdout(Stdio::null());
-    let result = crate::cold::run_owned_command(command, "embedded Git", duration, directory, cancellation).await;
+    let cancellation = cancellation.with_process_registry(cancellation.process_registry().map(Path::to_owned)
+        .unwrap_or_else(|| parent.join("owned-processes")));
+    let result = crate::cold::run_owned_command(command, "embedded Git", duration, directory, &cancellation).await;
     if result.as_ref().err().is_some_and(|error| !crate::cold::command_owner_quiescent(error)) { return result.map(|_| serde_json::Value::Null); }
     let data = if result.is_ok() { read_bounded(&output, 1024 * 1024) } else { Ok(Vec::new()) };
     let _ = fs::remove_file(input); let _ = fs::remove_file(output);
