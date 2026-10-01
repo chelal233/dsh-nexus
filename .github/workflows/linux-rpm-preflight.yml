@@ -1,0 +1,50 @@
+name: Linux RPM environment preflight
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: linux-rpm-environment-preflight
+  cancel-in-progress: false
+
+jobs:
+  fedora:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 25
+    env:
+      QA_TEMP: ${{ github.workspace }}/.codex-temp/linux-rpm-acceptance
+      QA_EVIDENCE: ${{ github.workspace }}/.codex-artifacts/linux-rpm-acceptance
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - name: Check approved storage envelope before downloads
+        run: bash .github/scripts/linux-rpm-preflight.sh capacity
+      - name: Receive intact frozen QA artifact
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          artifact-ids: '11149572256'
+          run-id: '36834335424'
+          github-token: ${{ github.token }}
+          path: ${{ env.QA_TEMP }}/incoming
+          skip-decompress: true
+          digest-mismatch: error
+      - name: Verify original ZIP, RPM and build provenance
+        run: bash .github/scripts/linux-rpm-preflight.sh verify
+      - name: Install original RPM and probe ordinary sandboxed GUI environment
+        run: bash .github/scripts/linux-rpm-preflight.sh environment
+      - name: Record owned cleanup and storage
+        if: always()
+        run: bash .github/scripts/linux-rpm-preflight.sh finish
+      - name: Deliver small preflight evidence
+        if: always()
+        uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5
+        with:
+          name: linux-rpm-preflight-${{ github.run_id }}
+          path: ${{ env.QA_EVIDENCE }}
+          if-no-files-found: error
+          retention-days: 14
