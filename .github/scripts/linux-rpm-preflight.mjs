@@ -120,6 +120,10 @@ let web;
 async function failureEvidence() {
   // Only this disposable QA environment and children owned by this test.
   const diagnostic = { phase: report.phase, children: [], profiles: [] };
+  const capture = start('/usr/bin/xwd', ['-root', '-silent', '-out', `${evidence}/failure-display.xwd`]);
+  await Promise.race([capture.qaClose, delay(5000)]);
+  if (!capture.qaClosed) capture.kill('SIGTERM');
+  diagnostic.displayCapture = { pid: capture.pid, closed: capture.qaClosed, exitCode: capture.exitCode, signalCode: capture.signalCode };
   for (const child of children) {
     const entry = { pid: child.pid, program: child.qaProgram, args: child.qaArgs, exitCode: child.exitCode, signalCode: child.signalCode };
     try {
@@ -151,6 +155,26 @@ async function failureEvidence() {
       } finally { await file.close(); }
     } catch (error) { diagnostic.browserCommandReadError = error.code ?? error.message; }
   }
+  diagnostic.browserPolicies = [];
+  const policyKeys = ['RemoteDebuggingAllowed', 'DeveloperToolsAvailability', 'UserDataDir'];
+  for (const directory of ['/etc/chromium/policies/managed', '/etc/chromium/policies/recommended']) {
+    let names;
+    try { names = await readdir(directory); }
+    catch (error) { diagnostic.browserPolicies.push({ directory, readError: error.code ?? error.message }); continue; }
+    assert.ok(names.length <= 32, 'Unexpected policy inventory in disposable container');
+    for (const name of names.filter(n => n.endsWith('.json'))) {
+      const file = await open(path.join(directory, name), 'r');
+      try {
+        assert.ok((await file.stat()).size <= 32768, 'Oversized QA policy file');
+        const value = JSON.parse(await file.readFile('utf8'));
+        diagnostic.browserPolicies.push({ file: path.join(directory, name), configuredKeys: Object.keys(value), relevantValues: Object.fromEntries(policyKeys.filter(k => Object.hasOwn(value, k)).map(k => [k, value[k]])) });
+      } finally { await file.close(); }
+    }
+  }
+  try {
+    const value = JSON.parse(await readFile(`${root}/browser/Local State`, 'utf8'));
+    diagnostic.browserLocalStateDevTools = Object.fromEntries(['remote_debugging_allowed', 'remote_debugging_enabled', 'availability'].filter(k => Object.hasOwn(value.devtools ?? {}, k)).map(k => [k, value.devtools[k]]));
+  } catch (error) { diagnostic.browserLocalStateReadError = error.code ?? error.message; }
   for (const [name, channel] of [['browser', web], ['electron', desktop]]) {
     if (!channel) continue;
     try {
@@ -202,7 +226,7 @@ try {
   report.checks.push('CDP-identified installed Electron renderers have zero effective capabilities, NoNewPrivs and additional Seccomp-BPF filters beyond the container baseline');
   await writeFile(`${root}/browser-fixture.html`, '<!doctype html><title>Normal browser prerequisite</title><p id="marker">nexus-qa-browser-preflight</p>');
   assert.ok(process.env.NEXUS_QA_BROWSER?.startsWith('/usr/'));
-  browser = start(process.env.NEXUS_QA_BROWSER, [`--user-data-dir=${root}/browser`, '--remote-debugging-port=0', `file://${root}/browser-fixture.html`]);
+  browser = start(process.env.NEXUS_QA_BROWSER, [`--user-data-dir=${root}/browser`, '--remote-debugging-port=0', '--enable-logging=stderr', `file://${root}/browser-fixture.html`]);
   web = await connect(browser, `${root}/browser`, 'browser');
   report.phase = 'browser: fixture text';
   assert.equal(await web.evaluate('document.querySelector("#marker")?.textContent'), 'nexus-qa-browser-preflight');

@@ -150,6 +150,8 @@ with zipfile.ZipFile(archive) as package:
             assert sha.hexdigest() == '049021576157dc97e253d9ba0c9e33e423feb090eb378d3550f40031a055d023'
         verified.append({'name': entry.filename, 'bytes': entry.file_size, 'sha256': sha.hexdigest()})
 (evidence / 'original-bytes.json').write_text(json.dumps({'result':'PASS','scope':'original ZIP and selected immutable RPM content/source, not native installation','artifactId':11149572256,'zipSha256':digest,'build':build,'files':verified}, indent=2))
+# This current-run duplicate is no longer needed; preserve the verified RPM.
+archive.unlink()
 PY
     ;;
   environment)
@@ -187,11 +189,15 @@ PY
       fi
       dnf -y --setopt=cachedir=/qa/dnf-cache install \
         "$rpm_file" \
-        xorg-x11-server-Xvfb xorg-x11-xauth chromium procps-ng util-linux shadow-utils
+        xorg-x11-server-Xvfb xorg-x11-xauth xwd chromium procps-ng util-linux shadow-utils \
+        gcc gcc-c++ glibc-devel make python3 cmake
       rpm -q --qf "%{NAME} %{EPOCHNUM}:%{VERSION}-%{RELEASE}.%{ARCH}\n" "$package" > /evidence/installed-nevra.txt
       cmp /evidence/expected-nevra.txt /evidence/installed-nevra.txt
       rpm -qf "/opt/Nexus Launcher/nexus-launcher" > /evidence/installed-owner.txt
       rpm -V "$package" > /evidence/installed-verification.txt
+      rpm -q --qf "%{NAME} %{VERSION}-%{RELEASE}.%{ARCH} source=%{SOURCERPM}\n" chromium > /evidence/browser-package.txt
+      # Only the explicit package cache for this run, no host/user cache.
+      dnf --setopt=cachedir=/qa/dnf-cache clean all
       useradd -u 1000 -d /qa/test/home -M nexusqa
       mkdir -p /evidence/gui
       chown -R 1000:1000 /qa/test /evidence/gui
