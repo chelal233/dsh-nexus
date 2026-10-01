@@ -129,8 +129,10 @@ pub(crate) fn process_group_is_quiescent(group: i32) -> io::Result<bool> {
     #[cfg(target_os = "linux")]
     {
         // Do not use a hidden or foreign PID namespace as proof of quiescence.
-        let own = read_linux_stat(&Path::new("/proc/self/stat"), std::process::id())?;
-        if own.pid != std::process::id() { return Err(io::Error::other("Foreign proc PID namespace")); }
+        read_linux_stat(Path::new("/proc/self/stat"), std::process::id())?;
+        let status = nexus_core::read_regular_file_bounded(Path::new("/proc/self/status"), 64 * 1024)?
+            .ok_or_else(|| io::Error::other("Missing proc namespace identity"))?;
+        matching_proc_namespace(std::str::from_utf8(&status).map_err(io::Error::other)?, std::process::id())?;
         let mounts = fs::read_to_string("/proc/self/mountinfo")?;
         let mount = mounts.lines().find(|line| line.split_whitespace().nth(4) == Some("/proc"))
             .ok_or_else(|| io::Error::other("Cannot establish complete proc visibility"))?;
@@ -153,6 +155,17 @@ pub(crate) fn process_group_is_quiescent(group: i32) -> io::Result<bool> {
 
 #[cfg(any(target_os = "linux", test))]
 struct LinuxStat { pid: u32, group: i32, state: u8, threads: usize, started: u64 }
+
+#[cfg(any(target_os = "linux", test))]
+fn matching_proc_namespace(status: &str, pid: u32) -> io::Result<()> {
+    // NSpid begins at the namespace of this proc mount. A hierarchy means the
+    // mount sees ancestor IDs, even if their numeric value happens to coincide.
+    let mut rows = status.lines().filter_map(|line| line.strip_prefix("NSpid:"));
+    let ids: Vec<_> = rows.next().ok_or_else(|| io::Error::other("Unknown proc PID namespace"))?
+        .split_whitespace().map(str::parse::<u32>).collect::<Result<_, _>>().map_err(io::Error::other)?;
+    if rows.next().is_some() || ids != [pid] { return Err(io::Error::other("Foreign proc PID namespace")); }
+    Ok(())
+}
 
 #[cfg(any(target_os = "linux", test))]
 fn read_linux_stat(path: &Path, expected: u32) -> io::Result<LinuxStat> {
@@ -320,6 +333,13 @@ mod tests {
         fs::remove_file(root.join("21/stat")).unwrap();
         assert!(linux_dead_group_snapshot(&root, 20).is_err());
         fs::remove_dir_all(root).unwrap();
+    }
+    #[test]
+    fn proc_namespace_hierarchy_cannot_be_confused_by_equal_numeric_pids() {
+        matching_proc_namespace("Name: fixture\nNSpid:\t500\n", 500).unwrap();
+        for status in ["NSpid:\t500 500\n", "NSpid:\t501\n", "NSpid:\tbad\n", "NSpid:\n", "Name: fixture\n", "NSpid:\t500\nNSpid:\t500\n"] {
+            assert!(matching_proc_namespace(status, 500).is_err(), "{status}");
+        }
     }
 
     #[test]
