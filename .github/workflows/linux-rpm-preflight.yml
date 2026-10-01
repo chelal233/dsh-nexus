@@ -13,7 +13,7 @@ concurrency:
 
 jobs:
   fedora:
-    runs-on: ubuntu-22.04
+    runs-on: ubuntu-26.04
     timeout-minutes: 25
     env:
       QA_TEMP: ${{ github.workspace }}/.codex-temp/linux-rpm-acceptance

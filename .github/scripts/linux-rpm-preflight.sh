@@ -24,7 +24,7 @@ guard_paths
 engine=(sudo env "HOME=$temporary/engine-home" "TMPDIR=$temporary/engine-tmp"
   "XDG_RUNTIME_DIR=$temporary/engine-run" podman
   --root "$temporary/engine-storage" --runroot "$temporary/engine-run"
-  --tmpdir "$temporary/engine-tmp" --cni-config-dir "$temporary/engine-net" --events-backend file)
+  --tmpdir "$temporary/engine-tmp" --network-config-dir "$temporary/engine-net" --events-backend file)
 
 within_budget() {
   local occupied delivered total free floor volume
@@ -138,7 +138,6 @@ PY
   environment)
     test -f "$evidence/original-bytes.json"
     command -v podman
-    command -v slirp4netns
     mkdir -p "$temporary/engine-home" "$temporary/engine-tmp" "$temporary/engine-run" \
       "$temporary/test/home" "$temporary/test/tmp" "$temporary/dnf-cache" "$temporary/engine-net"
     printf '{"auths":{}}\n' > "$temporary/engine-home/auth.json"
@@ -146,10 +145,20 @@ PY
     uname -a > "$evidence/runner-kernel.txt"
     cat /etc/os-release > "$evidence/runner-os.txt"
     "${engine[@]}" version > "$evidence/podman-version.txt"
+    # Podman 3.x/4.9 reject workspace-contained runroot paths over 50 chars.
+    # Use the supported runner's preinstalled version containing upstream's
+    # path fix, not aliases outside the workspace or security configuration.
+    version=$(podman version --format '{{.Client.Version}}')
+    python3 - "$version" <<'PY'
+import sys
+parts = sys.argv[1].split('.')
+if tuple(map(int, parts[:2])) < (5, 7):
+    raise SystemExit('Preinstalled Podman5.7+ required for workspace-contained runroot')
+PY
     "${engine[@]}" info > "$evidence/podman-info.txt"
     run_bounded pull "${engine[@]}" pull --authfile "$temporary/engine-home/auth.json" "$image"
     "${engine[@]}" image inspect "$image" > "$evidence/fedora-image.json"
-    run_bounded install-and-gui "${engine[@]}" run --name "$container" --network slirp4netns \
+    run_bounded install-and-gui "${engine[@]}" run --name "$container" --network bridge \
       -v "$workspace/.github/scripts:/source:ro" -v "$temporary/verified:/qa/verified:ro" \
       -v "$temporary/test:/qa/test" -v "$temporary/dnf-cache:/qa/dnf-cache" -v "$evidence:/evidence" \
       -e GITHUB_ACTIONS=true "$image" bash -euo pipefail -c '
