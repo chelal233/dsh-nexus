@@ -26,10 +26,27 @@ engine=(sudo env "HOME=$temporary/engine-home" "TMPDIR=$temporary/engine-tmp"
   --root "$temporary/engine-storage" --runroot "$temporary/engine-run"
   --tmpdir "$temporary/engine-tmp" --network-config-dir "$temporary/engine-net" --events-backend file)
 
+measure_root() {
+  local root before after measured
+  root=$1
+  test -d "$root" && test ! -L "$root" || return 2
+  before=$(sudo stat -c '%d:%i' -- "$root") || return 2
+  # Package managers replace temporary directory entries during transactions.
+  # GNU find ignores only entries disappearing between readdir and stat; other
+  # traversal failures still abort the operation. Count physical blocks once
+  # per inode, without following symlinks or traversing engine overlay mounts.
+  measured=$(sudo find "$root" -xdev -ignore_readdir_race -printf '%D %i %b\n' |
+    awk -v root_inode="$before" '!seen[$1 ":" $2]++ { blocks += $3 } END { if (!seen[root_inode]) exit 1; printf "%.0f\n", blocks * 512 }') || return 2
+  test -d "$root" && test ! -L "$root" || return 2
+  after=$(sudo stat -c '%d:%i' -- "$root") || return 2
+  test "$before" = "$after" && [[ "$measured" =~ ^[0-9]+$ ]] || return 2
+  printf '%s\n' "$measured"
+}
+
 within_budget() {
   local occupied delivered total free floor volume
-  occupied=$(sudo du -sx -B1 "$temporary" | cut -f1) || return 2
-  delivered=$(sudo du -sx -B1 "$evidence" | cut -f1) || return 2
+  occupied=$(measure_root "$temporary") || return 2
+  delivered=$(measure_root "$evidence") || return 2
   volume=$(df -B1 --output=size,avail "$workspace" | tail -1) || return 2
   read -r total free <<< "$volume" || return 2
   [[ "$occupied $delivered $total $free" =~ ^[0-9]+\ [0-9]+\ [0-9]+\ [0-9]+$ ]] || return 2
