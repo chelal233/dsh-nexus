@@ -662,7 +662,14 @@ impl ConsoleController {
             desired_agent_running: state.desired_agent_running,
             agent_api: health
                 .as_ref()
-                .map(|_| format!("http://127.0.0.1:{}", self.options.config.port)),
+                .map(|_| {
+                    self.runtime
+                        .client()
+                        .base_url()
+                        .as_str()
+                        .trim_end_matches('/')
+                        .to_owned()
+                }),
             console_url: format!("http://127.0.0.1:{}/", self.options.console_port),
             data_root: self.paths.root.display().to_string(),
             data_root_id: self.data_root_id.clone(),
@@ -1917,6 +1924,106 @@ mod tests {
         // stable for scripts.
         assert_eq!(DEFAULT_WAIT_SECS, 20);
         assert_eq!(DEFAULT_STOP_WAIT_SECS, 15);
+    }
+
+    #[tokio::test]
+    async fn console_status_routes_report_the_verified_discovery_endpoint() {
+        let root = std::env::temp_dir().join(format!(
+            "nexus-console-discovered-port-{}-{}",
+            process::id(),
+            unix_time_nanos()
+        ));
+        let paths = NexusPaths::from_root(root.clone());
+        paths.ensure_directories().unwrap();
+        let data_root_id = data_root_identity(&paths).unwrap();
+        let health = HealthResponse::healthy(data_root_id.clone(), "discovered-agent".to_owned());
+        let agent_listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).await.unwrap();
+        let actual_port = agent_listener.local_addr().unwrap().port();
+        let unused_listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).await.unwrap();
+        let configured_port = unused_listener.local_addr().unwrap().port();
+        assert_ne!(actual_port, configured_port);
+        drop(unused_listener);
+        paths
+            .publish_agent_discovery(&nexus_core::AgentDiscoveryRecord {
+                port: actual_port,
+                instance_id: health.instance_id.clone(),
+                data_root_id: data_root_id.clone(),
+                pid: process::id(),
+                updated_at_unix: unix_time_seconds(),
+            })
+            .unwrap();
+        let agent = Router::new().route(
+            "/v1/health",
+            get(move || {
+                let health = health.clone();
+                async move { Json(health) }
+            }),
+        );
+        let agent_server =
+            tokio::spawn(async move { axum::serve(agent_listener, agent).await.unwrap() });
+        let config = NexusConfig {
+            data_dir: Some(root.clone()),
+            port: configured_port,
+        };
+        let controller = ConsoleController::new(
+            Options {
+                command: LauncherCommand::Api,
+                config: config.clone(),
+                agent_program: None,
+                console_port: DEFAULT_CONSOLE_PORT,
+                wait_secs: DEFAULT_WAIT_SECS,
+                json: false,
+                launcher_instance_id: "discovered-console".to_owned(),
+                launcher_capability: Some("a".repeat(64)),
+            },
+            paths,
+            AgentRuntime::new(config, None).unwrap(),
+        )
+        .unwrap();
+        let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).await.unwrap();
+        let console_port = listener.local_addr().unwrap().port();
+        let app = build_api_router(controller);
+        let console_server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        let client = Client::builder()
+            .timeout(Duration::from_secs(5))
+            .build()
+            .unwrap();
+        for (method, route) in [
+            (reqwest::Method::GET, "/launcher/status"),
+            (reqwest::Method::GET, "/launcher/agent"),
+            (reqwest::Method::POST, "/launcher/agent"),
+        ] {
+            let mut request = client
+                .request(
+                    method.clone(),
+                    format!("http://127.0.0.1:{console_port}{route}"),
+                )
+                .header(LAUNCHER_DATA_ROOT_HEADER, &data_root_id)
+                .header(LAUNCHER_INSTANCE_HEADER, "discovered-console")
+                .header(LAUNCHER_CAPABILITY_HEADER, "a".repeat(64));
+            if method == reqwest::Method::POST {
+                request = request.json(&json!({ "action": "status" }));
+            }
+            let status = request
+                .send()
+                .await
+                .unwrap()
+                .error_for_status()
+                .unwrap()
+                .json::<ConsoleStatus>()
+                .await
+                .unwrap();
+            assert!(status.running);
+            assert_eq!(
+                status.agent_api,
+                Some(format!("http://127.0.0.1:{actual_port}"))
+            );
+        }
+        console_server.abort();
+        agent_server.abort();
+        let _ = console_server.await;
+        let _ = agent_server.await;
+        let _ = fs::remove_dir_all(root);
     }
 
     #[test]
