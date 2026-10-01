@@ -982,9 +982,9 @@ pub(crate) async fn initialize_selected_release(
     let release = state.releases.load()?.find(id).cloned()
         .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "Selected release disappeared"))?;
     let configured = config.runtime.clone().unwrap_or_default();
-    let plan = crate::runtime_plan::plan_candidate_release(&root,
+    let plan = crate::runtime_plan::plan_registered_release(&state.releases, &state.config,
         RuntimePlanRequest { release_id: id.into(), source: configured.source, mode: configured.mode },
-        &state.config, &crate::runtime::RuntimeRequestContext::production()).await?;
+        &crate::runtime::RuntimeRequestContext::production()).await?;
     if !plan.suggested_actions.iter().all(|action| matches!(action.action, RuntimePlanActionKind::UsePinned | RuntimePlanActionKind::UseExisting)) {
         return Err(io::Error::other("Configure the required runtime before selecting this release"));
     }
@@ -1759,6 +1759,39 @@ fn remove_directory_entry(path: &Path) -> io::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn first_selection_plans_registered_slot_without_weakening_candidate_boundary() {
+        let state = crate::switch_ownership_tests::switch_test_state("prepared-first-selection");
+        let candidate = state.paths.downloads_dir.join("prepared");
+        fs::create_dir_all(candidate.join("apps/cli/lib")).unwrap();
+        fs::write(candidate.join("package.json"), br#"{"engines":{"node":">=24.0.0"},"packageManager":"pnpm@11.7.0"}"#).unwrap();
+        fs::write(candidate.join("apps/cli/package.json"), br#"{"engines":{"node":">=24.0.0"}}"#).unwrap();
+        fs::write(candidate.join("apps/cli/lib/bin.js"), b"fixture").unwrap();
+        state.releases.register_prepared(&candidate, "prepared", "v-test", None, None).unwrap();
+        let slot = state.releases.release_root("prepared").unwrap();
+        assert!(!candidate.exists());
+        let mut config = state.config.load().unwrap();
+        let missing = state.paths.runtimes_dir.join("missing");
+        config.runtime = Some(RuntimeConfig {
+            node: Some(nexus_core::RuntimePin { path: missing.join("node"), ownership: RuntimeOwnership::Nexus }),
+            pnpm: Some(nexus_core::RuntimePin { path: missing.join("pnpm.cjs"), ownership: RuntimeOwnership::Nexus }),
+            git: Some(nexus_core::RuntimePin { path: missing.join("git"), ownership: RuntimeOwnership::Nexus }),
+            ..RuntimeConfig::default()
+        });
+        state.config.write(&config).unwrap();
+        let before = state.releases.load().unwrap();
+        let request = RuntimePlanRequest { release_id: "prepared".into(), source: RuntimeSource::Official, mode: RuntimeInstallMode::Portable };
+        let error = crate::runtime_plan::plan_candidate_release(&slot, request, &state.config,
+            &crate::runtime::RuntimeRequestContext::production()).await.unwrap_err();
+        assert!(error.to_string().contains("below Nexus downloads"));
+        let error = initialize_selected_release(&state, "prepared", None).await.unwrap_err();
+        assert_eq!(error.to_string(), "Configure the required runtime before selecting this release");
+        assert_eq!(state.config.load().unwrap(), config);
+        assert_eq!(state.releases.load().unwrap(), before);
+        assert!(!state.cold.intent_path().exists());
+        fs::remove_dir_all(&state.paths.root).unwrap();
+    }
 
     #[tokio::test]
     async fn interrupted_operation_recovery_guidance_matches_operation_kind() {
