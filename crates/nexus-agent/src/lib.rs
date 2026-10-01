@@ -157,6 +157,7 @@ struct AppState {
     supervisor: HarnessSupervisor,
     snapshots: snapshots::SnapshotCoordinator,
     harness_sync: Arc<Mutex<()>>,
+    release_tags_gate: Arc<Mutex<()>>,
     maintenance_preview: Arc<std::sync::Mutex<MaintenancePreviewScan>>,
     crash_capture_run: Arc<Mutex<CrashCapture>>,
     timeout_capture_run: Arc<Mutex<CrashCapture>>,
@@ -359,6 +360,7 @@ pub async fn run_with_instance_id(
         supervisor: supervisor.clone(),
         snapshots,
         harness_sync: Arc::new(Mutex::new(())),
+        release_tags_gate: Arc::new(Mutex::new(())),
         maintenance_preview: Arc::new(std::sync::Mutex::new(
             crate::MaintenancePreviewScan::default(),
         )),
@@ -2050,6 +2052,10 @@ async fn runtime_status_for_paths(paths: &nexus_core::NexusPaths) -> axum::respo
 }
 
 async fn release_tags(State(state): State<AppState>) -> axum::response::Response {
+    let permit = match state.release_tags_gate.clone().try_lock_owned() {
+        Ok(permit) => permit,
+        Err(_) => return api_error_response(StatusCode::CONFLICT, "tag_list_busy", "A tag refresh is already running; wait for it to finish"),
+    };
     let spec = match load_update_spec(&state.paths) {
         Ok(Some(spec)) => spec,
         Ok(None) => UpdateSpec {
@@ -2064,7 +2070,8 @@ async fn release_tags(State(state): State<AppState>) -> axum::response::Response
         },
         Err(error) => return data_error_response(error, "update_spec_unavailable"),
     };
-    let command_timeout = std::time::Duration::from_secs(spec.timeout_secs.unwrap_or(120));
+    let command_timeout = std::time::Duration::from_secs(spec.timeout_secs.unwrap_or(nexus_protocol::RELEASE_TAG_COMMAND_TIMEOUT_SECS)
+        .clamp(1, nexus_protocol::RELEASE_TAG_COMMAND_TIMEOUT_SECS));
     let runtime = match cold::resolved_runtime_config(&state).await {
         Ok(runtime) => runtime,
         Err(error) => return data_error_response(error, "runtime_selection_failed"),
@@ -2073,20 +2080,25 @@ async fn release_tags(State(state): State<AppState>) -> axum::response::Response
         Ok(external) => external,
         Err(error) => return data_error_response(error, "runtime_selection_failed"),
     };
-    match git_worker::list_tags(
-        &spec.source,
-        &state.paths.run_dir,
-        command_timeout,
-        external,
-    )
-    .await
-    {
+    struct CancelOnDrop(nexus_core::CancellationToken);
+    impl Drop for CancelOnDrop { fn drop(&mut self) { self.0.cancel(); } }
+    let cancellation = nexus_core::CancellationToken::default();
+    let _cancel = CancelOnDrop(cancellation.clone());
+    let source = spec.source.clone();
+    // The worker retains the gate through shutdown even if the HTTP client
+    // disconnects. Dropping the request signals cancellation, never a new owner.
+    let worker = tokio::spawn(async move {
+        let _permit = permit;
+        git_worker::list_tags(&source, &state.paths.run_dir, command_timeout, external, &cancellation).await
+    });
+    let result = worker.await.unwrap_or_else(|error| Err(io::Error::other(error)));
+    match result {
         Ok(tags) => (
             StatusCode::OK,
             Json(TagListResponse::new(spec.source.clone(), tags)),
         )
             .into_response(),
-        Err(error) => data_error_response(io::Error::other(error.to_string()), "tag_list_failed"),
+        Err(error) => data_error_response(error, "tag_list_failed"),
     }
 }
 

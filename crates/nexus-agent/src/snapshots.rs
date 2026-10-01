@@ -410,7 +410,15 @@ fn build_store(paths: NexusPaths, dsh_home: PathBuf, profile: String) -> io::Res
 }
 
 fn snapshot_error(error: nexus_snapshots::SnapshotError) -> io::Error {
-    io::Error::other(error.to_string())
+    use nexus_snapshots::SnapshotError;
+    let kind = match &error {
+        SnapshotError::NotFound(_) => io::ErrorKind::NotFound,
+        SnapshotError::InvalidIdentifier(_) | SnapshotError::InvalidProfileName(_) => io::ErrorKind::InvalidInput,
+        SnapshotError::InvalidManifest(_) => io::ErrorKind::InvalidData,
+        SnapshotError::Io { source, .. } => source.kind(),
+        _ => io::ErrorKind::Other,
+    };
+    io::Error::new(kind, error)
 }
 
 fn summary_payload(summary: &SnapshotSummary) -> SnapshotSummaryPayload {

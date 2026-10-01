@@ -394,6 +394,9 @@ impl AgentClient {
             } else { None }
         } else { None };
         if method == Method::GET && path == "/v1/preflight" { request=request.timeout(Duration::from_secs(45)); }
+        if method == Method::GET && path == "/v1/releases/tags" {
+            request = request.timeout(Duration::from_secs(nexus_protocol::RELEASE_TAG_REQUEST_TIMEOUT_SECS));
+        }
         if method == Method::POST && path == "/v1/plugin-manager" { request=request.timeout(Duration::from_secs(930)); }
         if compatibility_mutation { request = request.timeout(Duration::from_secs(660)); }
         if offline_preview { request = request.timeout(OFFLINE_PREVIEW_TIMEOUT); }
@@ -1507,6 +1510,19 @@ mod tests {
         });
         let response:Value=client.request_json(Method::POST,"/v1/updates",Some(br#"{"action":"offline_inspect"}"#.to_vec())).await.unwrap();
         assert_eq!(response["preview"],true);server.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn tag_refresh_waits_beyond_the_default_request_timeout() {
+        let listener = TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0)).await.unwrap();
+        let client = AgentClient::new(listener.local_addr().unwrap().port()).unwrap();
+        let server = tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.unwrap(); let mut bytes = [0; 4096]; socket.read(&mut bytes).await.unwrap();
+            sleep(DEFAULT_REQUEST_TIMEOUT + Duration::from_secs(1)).await;
+            write_json_response(&mut socket, "200 OK", &serde_json::json!({"tags":["v-fixture"]})).await;
+        });
+        let response: Value = client.request_json(Method::GET, "/v1/releases/tags", None).await.unwrap();
+        assert_eq!(response["tags"][0], "v-fixture"); server.await.unwrap();
     }
 
     #[tokio::test]

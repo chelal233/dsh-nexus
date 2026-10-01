@@ -31,8 +31,9 @@ test('release gate requires all tested targets, exact provenance and unmodified 
       const channel = `latest-${target.startsWith('aarch64') ? 'arm64' : 'x64'}${target.includes('apple') ? '-mac' : target.includes('linux') ? '-linux' + (target.startsWith('aarch64') ? '-arm64' : '') : ''}.yml`;
       const files = extensions.concat('.yml').map(ext => {
         const name = ext === '.yml' ? channel : `${basename}${ext === ".zip" ? "_portable" : ""}${ext}`;
-        writeFileSync(path.join(dir, name), 'test installer');
-        return { name, sha256: createHash('sha256').update('test installer').digest('hex') };
+        const bytes = ext === '.yml' ? `version: 0.1.2\nfiles:\n${extensions.map(e => `  - url: ${basename}${e === '.zip' ? '_portable' : ''}${e}\n    sha512: fixture\n`).join('')}` : 'test installer';
+        writeFileSync(path.join(dir, name), bytes);
+        return { name, sha256: createHash('sha256').update(bytes).digest('hex') };
       });
       writeFileSync(path.join(dir, `${basename}_build.json`), JSON.stringify({ target, version: '0.1.2', commit,
         buildId: 'test', automatedChecks: 'passed', installedPackageSmoke: 'passed-on-ci-runner', files }));

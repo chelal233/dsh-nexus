@@ -642,6 +642,32 @@ async fn checkpoint_capture_progress_get_does_not_wait_for_capture_owner() {
     let _ = fs::remove_dir_all(root);
 }
 
+#[tokio::test]
+async fn checkpoint_user_errors_are_typed_and_leave_profile_content_unchanged() {
+    let (state, root) = content_test_state("checkpoint-user-errors");
+    use nexus_protocol::{CheckpointAction, CheckpointCommand};
+    let home = root.join("dsh-home");
+    let before = fs::read(home.join("profiles/demo/package.json")).unwrap();
+    for action in [CheckpointAction::Detail, CheckpointAction::Inspect, CheckpointAction::Restore] {
+        let response = super::checkpoint_api::checkpoint_control(State(state.clone()), Json(CheckpointCommand { action, id: Some("missing".into()), note: None })).await;
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+        let payload: serde_json::Value = serde_json::from_slice(&axum::body::to_bytes(response.into_body(), 16384).await.unwrap()).unwrap();
+        assert_eq!(payload["code"], "snapshot_not_found");
+        assert_eq!(payload["kind"], "not_found");
+    }
+    for note in [String::new(), "x".repeat(129), "line\nbreak".into()] {
+        let response = super::checkpoint_api::checkpoint_create(state.clone(), Some(note)).await;
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        let payload: serde_json::Value = serde_json::from_slice(&axum::body::to_bytes(response.into_body(), 16384).await.unwrap()).unwrap();
+        assert_eq!(payload["code"], "checkpoint_label_invalid");
+    }
+    let permit = state.release_tags_gate.clone().lock_owned().await;
+    let response = super::release_tags(State(state.clone())).await;
+    assert_eq!(response.status(), StatusCode::CONFLICT); drop(permit);
+    assert_eq!(before, fs::read(home.join("profiles/demo/package.json")).unwrap());
+    fs::remove_dir_all(root).unwrap();
+}
+
 fn content_test_state(label: &str) -> (AppState, PathBuf) {
     let root = std::env::temp_dir().join(format!(
         "nexus-agent-content-{label}-{}-{}",
@@ -703,6 +729,7 @@ fn content_test_state(label: &str) -> (AppState, PathBuf) {
             supervisor,
             snapshots: snapshots::SnapshotCoordinator::new(paths.clone(), Ok(dsh_home.clone())),
             harness_sync: Arc::new(Mutex::new(())),
+            release_tags_gate: Arc::new(Mutex::new(())),
             maintenance_preview: Arc::new(std::sync::Mutex::new(
                 crate::MaintenancePreviewScan::default(),
             )),
@@ -2194,6 +2221,7 @@ async fn checkpoint_restore_survives_cancellation_serializes_start_and_rolls_bac
         supervisor: supervisor.clone(),
         snapshots: snapshots::SnapshotCoordinator::new(paths.clone(), Ok(dsh_home.clone())),
         harness_sync: Arc::new(Mutex::new(())),
+        release_tags_gate: Arc::new(Mutex::new(())),
         maintenance_preview: Arc::new(std::sync::Mutex::new(
             crate::MaintenancePreviewScan::default(),
         )),

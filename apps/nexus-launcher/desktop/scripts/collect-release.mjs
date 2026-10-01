@@ -2,7 +2,7 @@ import { createHash } from 'node:crypto';
 import { copyFile, mkdir, readdir, readFile, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { bundleFormats, releaseBasename, selectPlatform, updateChannelFile } from './release-platform.mjs';
+import { bundleFormats, collectedUpdateChannel, releaseBasename, selectPlatform, updateChannelFile } from './release-platform.mjs';
 
 const app = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
 const root = path.resolve(app, '../..');
@@ -17,6 +17,7 @@ const destination = path.join(root, 'target/release-assets', spec.target);
 await mkdir(destination, { recursive: true });
 if ((await readdir(destination)).length) throw new Error('Release output must be empty; use a new build directory');
 const files = [];
+const packageNames = new Map();
 for (const kind of spec.bundles) {
   const { extension, count } = bundleFormats[kind];
   const directory = source;
@@ -26,13 +27,14 @@ for (const kind of spec.bundles) {
     const name = `${basename}${extension === ".zip" ? "_portable" : ""}${extension}`;
     const bytes = await readFile(path.join(directory, entry.name));
     files.push({ name, sha256: createHash('sha256').update(bytes).digest('hex') });
+    packageNames.set(entry.name, name);
     await copyFile(path.join(directory, entry.name), path.join(destination, name));
   }
 }
 const channelName = updateChannelFile(spec);
-const channelBytes = await readFile(path.join(source, channelName));
+const channelBytes = Buffer.from(collectedUpdateChannel(await readFile(path.join(source, channelName), 'utf8'), packageNames));
 files.push({ name: channelName, sha256: createHash('sha256').update(channelBytes).digest('hex') });
-await copyFile(path.join(source, channelName), path.join(destination, channelName));
+await writeFile(path.join(destination, channelName), channelBytes);
 if (process.env.NEXUS_PACKAGE_SMOKE_PASSED !== '1') throw new Error('Installed package smoke must pass before collection');
 await writeFile(path.join(destination, `${basename}_SHA256SUMS.txt`), files.map(f => `${f.sha256}  ${f.name}\n`).join(''));
 await writeFile(path.join(destination, `${basename}_build.json`), JSON.stringify({

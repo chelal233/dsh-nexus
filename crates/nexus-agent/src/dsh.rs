@@ -1151,21 +1151,7 @@ fn terminate_tree(tree: &mut OwnedProcessTree) -> io::Result<()> {
 fn tree_is_empty(tree: &OwnedProcessTree) -> io::Result<bool> {
     let pid = i32::try_from(tree.child.id())
         .map_err(|_| io::Error::other("child process ID exceeds i32"))?;
-    let result = unsafe { libc::kill(-pid, 0) };
-    if result == 0 {
-        Ok(false)
-    } else {
-        let error = io::Error::last_os_error();
-        if error.raw_os_error() == Some(libc::ESRCH) {
-            Ok(true)
-        } else if cfg!(target_os = "macos") && error.raw_os_error() == Some(libc::EPERM) {
-            // A zombie-only group may be temporarily unsignalable on Darwin.
-            // Preserve ownership until the group actually disappears.
-            Ok(false)
-        } else {
-            Err(error)
-        }
-    }
+    crate::process_recovery::process_group_is_quiescent(pid)
 }
 
 #[cfg(windows)]

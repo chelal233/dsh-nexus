@@ -112,7 +112,94 @@ fn group_is_empty(path: &Path) -> io::Result<bool> {
         .ok_or_else(|| io::Error::other("Missing process group identity; preserved"))?;
     let group: i32 = std::str::from_utf8(&bytes).map_err(io::Error::other)?.trim().parse().map_err(io::Error::other)?;
     if group < 0 { return Err(io::Error::other("Invalid process group identity; preserved")); }
-    Ok(group == 0 || unsafe { libc::kill(-group, 0) } == -1 && io::Error::last_os_error().raw_os_error() == Some(libc::ESRCH))
+    if group == 0 { return Ok(true); }
+    process_group_is_quiescent(group)
+}
+
+#[cfg(unix)]
+pub(crate) fn process_group_is_quiescent(group: i32) -> io::Result<bool> {
+    if group <= 0 { return Err(io::Error::other("Invalid owned process group")); }
+    if unsafe { libc::kill(-group, 0) } != 0 {
+        let error = io::Error::last_os_error();
+        if error.raw_os_error() == Some(libc::ESRCH) { return Ok(true); }
+        #[cfg(target_os = "macos")]
+        if error.raw_os_error() == Some(libc::EPERM) { return Ok(false); }
+        return Err(error);
+    }
+    #[cfg(target_os = "linux")]
+    {
+        // Do not use a hidden or foreign PID namespace as proof of quiescence.
+        let own = read_linux_stat(&Path::new("/proc/self/stat"), std::process::id())?;
+        if own.pid != std::process::id() { return Err(io::Error::other("Foreign proc PID namespace")); }
+        let mounts = fs::read_to_string("/proc/self/mountinfo")?;
+        let mount = mounts.lines().find(|line| line.split_whitespace().nth(4) == Some("/proc"))
+            .ok_or_else(|| io::Error::other("Cannot establish complete proc visibility"))?;
+        if mount.split_whitespace().nth(3) != Some("/") || mount.split_once(" - ").and_then(|(_, tail)| tail.split_whitespace().next()) != Some("proc") {
+            return Err(io::Error::other("Incomplete or substituted proc mount"));
+        }
+        if mount.split_whitespace().flat_map(|part| part.split(','))
+            .any(|option| option.starts_with("hidepid=") && option != "hidepid=0") {
+            return Err(io::Error::other("Hidden proc processes cannot prove quiescence"));
+        }
+        let Some(first) = linux_dead_group_snapshot(Path::new("/proc"), group)? else { return Ok(false); };
+        let Some(second) = linux_dead_group_snapshot(Path::new("/proc"), group)? else { return Ok(false); };
+        if first.is_empty() || first != second { return Ok(false); }
+        // Every member and thread is terminal; zombies cannot fork or resume.
+        Ok(true)
+    }
+    #[cfg(not(target_os = "linux"))]
+    Ok(false)
+}
+
+#[cfg(any(target_os = "linux", test))]
+struct LinuxStat { pid: u32, group: i32, state: u8, threads: usize, started: u64 }
+
+#[cfg(any(target_os = "linux", test))]
+fn read_linux_stat(path: &Path, expected: u32) -> io::Result<LinuxStat> {
+    let bytes = nexus_core::read_regular_file_bounded(path, 16 * 1024)?
+        .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "Process disappeared"))?;
+    let text = std::str::from_utf8(&bytes).map_err(io::Error::other)?;
+    // comm may itself contain spaces and parentheses.
+    let (head, tail) = text.rsplit_once(')').ok_or_else(|| io::Error::other("Invalid proc stat"))?;
+    let pid: u32 = head.split_once('(').ok_or_else(|| io::Error::other("Invalid proc pid"))?.0.trim().parse().map_err(io::Error::other)?;
+    if pid != expected { return Err(io::Error::other("Process identity changed during inspection")); }
+    let fields: Vec<_> = tail.split_whitespace().collect();
+    if fields.len() < 20 || fields[0].len() != 1 { return Err(io::Error::other("Incomplete proc stat")); }
+    Ok(LinuxStat { pid, state: fields[0].as_bytes()[0], group: fields[2].parse().map_err(io::Error::other)?,
+        threads: fields[17].parse().map_err(io::Error::other)?, started: fields[19].parse().map_err(io::Error::other)? })
+}
+
+#[cfg(any(target_os = "linux", test))]
+fn linux_dead_group_snapshot(root: &Path, group: i32) -> io::Result<Option<Vec<(u32, u64)>>> {
+    let mut snapshot = Vec::new(); let mut processes = 0;
+    for entry in fs::read_dir(root)? {
+        let entry = entry?;
+        let Some(pid) = entry.file_name().to_str().and_then(|name| name.parse::<u32>().ok()) else { continue; };
+        processes += 1;
+        if processes > 16384 { return Err(io::Error::other("Incomplete process enumeration")); }
+        let info = match read_linux_stat(&entry.path().join("stat"), pid) {
+            Ok(info) => info,
+            Err(error) if error.kind() == io::ErrorKind::NotFound && !entry.path().try_exists()? => continue,
+            Err(error) => return Err(error),
+        };
+        if info.group != group { continue; }
+        if info.state != b'Z' { return Ok(None); }
+        let mut count = 0; let mut leader = false;
+        for task in fs::read_dir(entry.path().join("task"))? {
+            let task = task?;
+            let tid: u32 = task.file_name().to_str().ok_or_else(|| io::Error::other("Invalid thread identity"))?
+                .parse().map_err(io::Error::other)?;
+            count += 1;
+            if count > 4096 { return Err(io::Error::other("Incomplete thread enumeration")); }
+            let thread = read_linux_stat(&task.path().join("stat"), tid)?;
+            if thread.group != group || thread.state != b'Z' { return Ok(None); }
+            if tid == pid { leader = true; if thread.started != info.started { return Ok(None); } }
+            snapshot.push((thread.pid, thread.started));
+        }
+        if !leader || count != info.threads { return Err(io::Error::other("Incomplete process thread inspection")); }
+    }
+    snapshot.sort_unstable();
+    Ok(Some(snapshot))
 }
 
 fn remove_if_present(path: &Path) -> io::Result<()> {
@@ -192,6 +279,47 @@ mod tests {
     fn fixture() -> PathBuf {
         let path = std::env::temp_dir().join(format!("nexus-process-recovery-{}", nexus_core::unix_time_nanos_for_update()));
         fs::create_dir(&path).unwrap(); path
+    }
+
+    fn proc_stat(pid: u32, group: i32, state: char, threads: usize) -> String {
+        let mut fields = vec!["0".to_owned(); 20];
+        fields[0] = state.to_string(); fields[2] = group.to_string();
+        fields[17] = threads.to_string(); fields[19] = "12345".into();
+        format!("{pid} (name with ) parentheses) {}", fields.join(" "))
+    }
+    fn proc_member(root: &Path, pid: u32, group: i32, state: char) {
+        let directory = root.join(pid.to_string());
+        fs::create_dir_all(directory.join(format!("task/{pid}"))).unwrap();
+        let stat = proc_stat(pid, group, state, 1);
+        fs::write(directory.join("stat"), &stat).unwrap();
+        fs::write(directory.join(format!("task/{pid}/stat")), stat).unwrap();
+    }
+    #[test]
+    fn zombie_inventory_checks_every_member_and_thread() {
+        let root = fixture();
+        proc_member(&root, 21, 20, 'Z'); proc_member(&root, 31, 30, 'S');
+        assert_eq!(linux_dead_group_snapshot(&root, 20).unwrap(), Some(vec![(21, 12345)]));
+        proc_member(&root, 22, 20, 'S');
+        assert!(linux_dead_group_snapshot(&root, 20).unwrap().is_none());
+        fs::remove_dir_all(root.join("22")).unwrap();
+        fs::write(root.join("21/stat"), proc_stat(21, 20, 'Z', 2)).unwrap();
+        fs::create_dir_all(root.join("21/task/23")).unwrap();
+        fs::write(root.join("21/task/23/stat"), proc_stat(23, 20, 'S', 2)).unwrap();
+        assert!(linux_dead_group_snapshot(&root, 20).unwrap().is_none(), "zombie leader cannot hide a live thread");
+        fs::remove_dir_all(root).unwrap();
+    }
+    #[test]
+    fn incomplete_or_changed_proc_identity_cannot_release_ownership() {
+        let root = fixture(); proc_member(&root, 21, 20, 'Z');
+        fs::write(root.join("21/stat"), proc_stat(21, 20, 'Z', 2)).unwrap();
+        assert!(linux_dead_group_snapshot(&root, 20).is_err());
+        fs::write(root.join("21/stat"), proc_stat(99, 20, 'Z', 1)).unwrap();
+        assert!(linux_dead_group_snapshot(&root, 20).is_err());
+        fs::write(root.join("21/stat"), "21 (incomplete) Z").unwrap();
+        assert!(linux_dead_group_snapshot(&root, 20).is_err());
+        fs::remove_file(root.join("21/stat")).unwrap();
+        assert!(linux_dead_group_snapshot(&root, 20).is_err());
+        fs::remove_dir_all(root).unwrap();
     }
 
     #[test]

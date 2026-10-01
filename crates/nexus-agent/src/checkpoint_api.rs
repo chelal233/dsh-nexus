@@ -174,6 +174,9 @@ pub(super) async fn checkpoint_create(
     state: AppState,
     note: Option<String>,
 ) -> axum::response::Response {
+    if note.as_ref().is_some_and(|note| note.is_empty() || note.len() > 128 || note.chars().any(char::is_control)) {
+        return api_error_response(StatusCode::BAD_REQUEST, "checkpoint_label_invalid", "Checkpoint label must be non-empty, free of control characters, and at most 128 bytes");
+    }
     let lifecycle = state.supervisor.acquire_lifecycle().await;
     if let Err(response) = ensure_checkpoint_mutation_ready(&state).await {
         return response;
@@ -276,17 +279,22 @@ async fn checkpoint_snapshot_read(
     match action {
         CheckpointAction::Detail => match state.snapshots.detail(profile, snapshot_id).await {
             Ok(detail) => (StatusCode::OK, Json(detail)).into_response(),
-            Err(error) => data_error_response(error, "snapshot_detail_failed"),
+            Err(error) => snapshot_read_error(error, "snapshot_detail_failed"),
         },
         CheckpointAction::Inspect => match state.snapshots.inspect(profile, snapshot_id).await {
             Ok(inspection) => (StatusCode::OK, Json(inspection)).into_response(),
-            Err(error) => data_error_response(error, "snapshot_inspect_failed"),
+            Err(error) => snapshot_read_error(error, "snapshot_inspect_failed"),
         },
         _ => data_error_response(
             io::Error::new(io::ErrorKind::InvalidInput, "invalid snapshot read action"),
             "checkpoint_invalid",
         ),
     }
+}
+
+fn snapshot_read_error(error: io::Error, fallback: &str) -> axum::response::Response {
+    let code = if error.kind() == io::ErrorKind::NotFound { "snapshot_not_found" } else { fallback };
+    data_error_response(error, code)
 }
 
 /// Resolve a restore request whose id names a healthy-start snapshot rather

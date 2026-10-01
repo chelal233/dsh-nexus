@@ -36,6 +36,7 @@ pub enum SnapshotError {
     Io { context: String, source: io::Error },
     InvalidProfileName(String),
     InvalidIdentifier(String),
+    NotFound(String),
     InvalidPath(String),
     UnsafePath(String),
     Oversized { path: String, size: u64, limit: u64 },
@@ -63,6 +64,7 @@ impl fmt::Display for SnapshotError {
             Self::Io { context, source } => write!(formatter, "{context}: {source}"),
             Self::InvalidProfileName(name) => write!(formatter, "invalid profile name: {name}"),
             Self::InvalidIdentifier(id) => write!(formatter, "invalid snapshot identifier: {id}"),
+            Self::NotFound(id) => write!(formatter, "snapshot not found: {id}"),
             Self::InvalidPath(path) => write!(formatter, "snapshot path is not allowed: {path}"),
             Self::UnsafePath(path) => write!(formatter, "unsafe filesystem path: {path}"),
             Self::Oversized { path, size, limit } => {
@@ -937,9 +939,7 @@ impl SnapshotStore {
                 }
             }
         }
-        Err(SnapshotError::InvalidIdentifier(format!(
-            "snapshot not found: {snapshot_id}"
-        )))
+        Err(SnapshotError::NotFound(snapshot_id.to_owned()))
     }
 
     pub(crate) fn snapshot_directory(&self, snapshot_id: &str) -> Result<PathBuf> {

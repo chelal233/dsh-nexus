@@ -1,6 +1,16 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { releaseBasename, selectPlatform, targets, updateChannelFile } from '../desktop/scripts/release-platform.mjs';
+import { collectedUpdateChannel, releaseBasename, selectPlatform, targets, updateChannelFile } from '../desktop/scripts/release-platform.mjs';
+
+test('collection rewrites every Linux channel reference to the delivered package name', () => {
+  const source = `version: 1.0.3\nfiles:\n  - url: old_aarch64.rpm\n    sha512: SAME-RPM-HASH\n    size: 175193761\n  - url: 'old_arm64.AppImage'\n    sha512: SAME-APP-HASH\npath: old_arm64.AppImage\nsha512: SAME-APP-HASH\n`;
+  const names = new Map([['old_aarch64.rpm', 'dsh-nexus_1.0.3_linux_arm64.rpm'], ['old_arm64.AppImage', 'dsh-nexus_1.0.3_linux_arm64.AppImage']]);
+  const rewritten = collectedUpdateChannel(source, names);
+  assert.equal(rewritten, source.replaceAll('old_aarch64.rpm', names.get('old_aarch64.rpm')).replaceAll("'old_arm64.AppImage'", names.get('old_arm64.AppImage')).replaceAll('old_arm64.AppImage', names.get('old_arm64.AppImage')));
+  assert.throws(() => collectedUpdateChannel(source, new Map()), /Unknown update asset/);
+  assert.throws(() => collectedUpdateChannel('files:\n  - url: https://elsewhere.invalid/pkg.rpm\n', names), /Unknown update asset/);
+  assert.throws(() => collectedUpdateChannel('version: 1.0.3\n', names), /no package references/);
+});
 
 test('all products select their native Node archive and packaging format', () => {
   for (const [target, spec] of Object.entries(targets)) {

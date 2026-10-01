@@ -617,7 +617,7 @@ impl UpdateExecutor {
         let clone = tokio::spawn(async move {
             crate::git_worker::clone_candidate(&clone_spec.source, &clone_spec.ref_name, &clone_candidate,
                 &clone_directory, clone_spec.timeout(), &clone_cancellation,
-                Some(crate::git_worker::ExternalGit { program: clone_spec.git_program.clone(), prefix: Vec::new() })).await
+                Some(crate::git_worker::ExternalGit { program: clone_spec.git_program.clone(), prefix: Vec::new(), environment: Vec::new() })).await
         });
         #[cfg(test)]
         if let Some(gate) = self.command_gate.lock().await.take() {

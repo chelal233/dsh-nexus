@@ -16,10 +16,11 @@ enum Operation {
 struct Request { operation: Operation, output: PathBuf }
 
 #[derive(Clone)]
-pub(crate) struct ExternalGit { pub program: PathBuf, pub prefix: Vec<OsString> }
+pub(crate) struct ExternalGit { pub program: PathBuf, pub prefix: Vec<OsString>, pub environment: Vec<(OsString, OsString)> }
 pub(crate) fn selected_external(runtime: &nexus_core::RuntimeConfig) -> io::Result<Option<ExternalGit>> {
-    Ok(nexus_core::resolve_runtime_command(runtime, "git")?
-        .map(|command| ExternalGit { program: command.program, prefix: command.prefix_args }))
+    let Some(command) = nexus_core::resolve_runtime_command(runtime, "git")? else { return Ok(None); };
+    Ok(Some(ExternalGit { program: command.program, prefix: command.prefix_args,
+        environment: nexus_core::build_runtime_child_env(runtime, std::env::var_os("PATH").as_deref())? }))
 }
 
 async fn external_run(operation: &Operation, external: &ExternalGit, directory: &Path, duration: Duration, cancellation: &CancellationToken) -> io::Result<serde_json::Value> {
@@ -27,7 +28,7 @@ async fn external_run(operation: &Operation, external: &ExternalGit, directory: 
     let output = directory.join(format!("system-git-{}.stdout", nexus_core::unix_time_nanos_for_update()));
     let file = fs::OpenOptions::new().write(true).create_new(true).open(&output)?;
     let mut command = Command::new(&external.program);
-    command.args(&external.prefix).stdin(Stdio::null());
+    command.args(&external.prefix).envs(external.environment.iter().cloned()).stdin(Stdio::null());
     match operation {
         Operation::Tags { source } => { command.args(["ls-remote", "--tags", source]); },
         Operation::Clone { source, reference, candidate, .. } => { command.args(["-c", "core.longpaths=true", "clone", "--no-tags", "--depth", "1", "--branch", reference, source]).arg(candidate); },
@@ -246,12 +247,10 @@ async fn run(operation: Operation, directory: &Path, duration: Duration, cancell
     serde_json::from_slice(&data).map_err(io::Error::other)
 }
 
-pub(crate) async fn list_tags(source: &str, directory: &Path, duration: Duration, external: Option<ExternalGit>) -> io::Result<Vec<String>> {
+pub(crate) async fn list_tags(source: &str, directory: &Path, duration: Duration, external: Option<ExternalGit>, cancellation: &CancellationToken) -> io::Result<Vec<String>> {
     validate_source(source)?;
     let source = source.to_owned(); let directory = directory.to_owned();
-    tokio::spawn(async move {
-        serde_json::from_value(run_preferred(Operation::Tags { source }, &directory, duration, &CancellationToken::default(), external).await?).map_err(io::Error::other)
-    }).await.map_err(io::Error::other)?
+    serde_json::from_value(run_preferred(Operation::Tags { source }, &directory, duration, cancellation, external).await?).map_err(io::Error::other)
 }
 pub(crate) async fn clone_candidate(source: &str, reference: &str, candidate: &Path, directory: &Path, duration: Duration, cancellation: &CancellationToken, external: Option<ExternalGit>) -> io::Result<()> {
     validate_source(source)?; validate_update_ref(reference)?;
@@ -270,6 +269,48 @@ mod tests {
     fn root(label: &str) -> PathBuf {
         let root = std::env::temp_dir().join(format!("nexus-git-{label}-{}", nexus_core::unix_time_nanos_for_update()));
         fs::create_dir_all(&root).unwrap(); root
+    }
+    #[test]
+    fn selected_git_environment_keeps_helper_ownership_explicit() {
+        use nexus_core::{RuntimeConfig, RuntimePin};
+        use nexus_protocol::RuntimeOwnership;
+        let root = root("environment");
+        let git = root.join(if cfg!(windows) { "git/bin/git.exe" } else { "git/bin/git" });
+        fs::create_dir_all(git.parent().unwrap()).unwrap(); fs::write(&git, b"fixture").unwrap();
+        let mut runtime = RuntimeConfig { git: Some(RuntimePin { path: git.clone(), ownership: RuntimeOwnership::Bundled }), ..RuntimeConfig::default() };
+        let external = selected_external(&runtime).unwrap().unwrap();
+        let exec = external.environment.iter().find(|(key, _)| key == "GIT_EXEC_PATH").unwrap();
+        assert!(Path::new(&exec.1).ends_with("libexec/git-core"));
+        let path = &external.environment.iter().find(|(key, _)| key == "PATH").unwrap().1;
+        assert_eq!(std::env::split_paths(path).next().unwrap(), git.parent().unwrap());
+        runtime.git.as_mut().unwrap().ownership = RuntimeOwnership::System;
+        assert!(!selected_external(&runtime).unwrap().unwrap().environment.iter().any(|(key, _)| key == "GIT_EXEC_PATH"));
+        fs::remove_dir_all(root).unwrap();
+    }
+    #[tokio::test]
+    async fn external_git_receives_child_environment_and_settles_output() {
+        let root = root("child-environment");
+        let external = ExternalGit { program: "node".into(), prefix: vec!["-e".into(),
+            "if(process.env.NEXUS_GIT_ENV_TEST!=='paired-helper')process.exit(19);console.log('0123456789012345678901234567890123456789ab\\trefs/tags/v-fixture')".into()],
+            environment: vec![("NEXUS_GIT_ENV_TEST".into(), "paired-helper".into())] };
+        let tags = external_run(&Operation::Tags { source: "https://example.invalid/repo".into() }, &external, &root, Duration::from_secs(10), &CancellationToken::default()).await.unwrap();
+        assert_eq!(tags, serde_json::json!(["v-fixture"]));
+        crate::process_recovery::reconcile(&root.join("owned-processes")).unwrap();
+        fs::remove_dir_all(root).unwrap();
+    }
+    #[tokio::test]
+    async fn cancelled_tag_worker_settles_before_a_following_refresh() {
+        let root = root("tag-cancel");
+        let cancellation = CancellationToken::default();
+        let trigger = cancellation.clone();
+        let external = ExternalGit { program: "node".into(), prefix: vec!["-e".into(), "setInterval(()=>{},1000)".into()], environment: Vec::new() };
+        let cancel = tokio::spawn(async move { tokio::time::sleep(Duration::from_millis(200)).await; trigger.cancel(); });
+        let result = list_tags("https://example.invalid/repo", &root, Duration::from_secs(10), Some(external), &cancellation).await;
+        assert_eq!(result.unwrap_err().kind(), io::ErrorKind::Interrupted); cancel.await.unwrap();
+        crate::process_recovery::reconcile(&root.join("owned-processes")).unwrap();
+        let external = ExternalGit { program: "node".into(), prefix: vec!["-e".into(), "console.log('0123456789012345678901234567890123456789ab\\trefs/tags/v-next')".into()], environment: Vec::new() };
+        assert_eq!(list_tags("https://example.invalid/repo", &root, Duration::from_secs(10), Some(external), &CancellationToken::default()).await.unwrap(), ["v-next"]);
+        fs::remove_dir_all(root).unwrap();
     }
     #[test]
     fn automatic_proxy_uses_repository_proxy_without_external_git() {
@@ -348,7 +389,7 @@ mod tests {
         let root = root("timeout");
         let script = root.join("sleep.cmd");
         fs::write(&script, "@echo off\r\nping -n 8 127.0.0.1 >nul\r\n").unwrap();
-        let external = ExternalGit { program: PathBuf::from("cmd.exe"), prefix: vec!["/D".into(), "/C".into(), script.into_os_string()] };
+        let external = ExternalGit { program: PathBuf::from("cmd.exe"), prefix: vec!["/D".into(), "/C".into(), script.into_os_string()], environment: Vec::new() };
         let result = run_preferred(Operation::Tags { source: "https://example.invalid/repo".into() },
             &root, Duration::from_millis(150), &CancellationToken::default(), Some(external)).await;
         assert_eq!(result.unwrap_err().kind(), io::ErrorKind::TimedOut);

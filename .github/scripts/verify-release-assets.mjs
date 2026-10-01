@@ -3,7 +3,7 @@ import { createHash } from 'node:crypto';
 import { readdirSync, readFileSync, openSync, readSync, closeSync } from 'node:fs';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
-import { bundleFormats, releaseBasename, targets, updateChannelFile } from '../../apps/nexus-launcher/desktop/scripts/release-platform.mjs';
+import { bundleFormats, collectedUpdateChannel, releaseBasename, targets, updateChannelFile } from '../../apps/nexus-launcher/desktop/scripts/release-platform.mjs';
 
 export function verifyReleaseAssets(directory, tag, commit, sourceManifest = JSON.parse(readFileSync(new URL('../../docs/audits/git-redistribution-2026-09-23/source-materials.json', import.meta.url)))) {
   assert.match(commit, /^[a-f0-9]{40}$/);
@@ -50,12 +50,15 @@ export function verifyReleaseAssets(directory, tag, commit, sourceManifest = JSO
       return Array(count).fill(extension);
     });
     assert.deepEqual(build.files.map(f => path.extname(f.name)).sort(), extensions.concat('.yml').sort());
+    const packageNames = new Map(build.files.filter(f => path.extname(f.name) !== '.yml').map(f => [f.name, f.name]));
     for (const file of build.files) {
       assert.equal(file.name, path.extname(file.name) === '.yml' ? updateChannelFile(spec) : `${basename}${path.extname(file.name) === ".zip" ? "_portable" : ""}${path.extname(file.name)}`);
       assert.ok(!/[\\/\r\n]/.test(file.name));
       assert.match(file.sha256, /^[a-f0-9]{64}$/);
-      const actual = fileDigest(takeFile(file.name));
+      const asset = takeFile(file.name);
+      const actual = fileDigest(asset);
       assert.equal(actual, file.sha256, `Hash mismatch: ${file.name}`);
+      if (path.extname(file.name) === '.yml') collectedUpdateChannel(readFileSync(asset, 'utf8'), packageNames);
     }
     assert.equal(take(checksums).toString('utf8').replaceAll('\r\n', '\n'),
       build.files.map(f => `${f.sha256}  ${f.name}\n`).join(''));

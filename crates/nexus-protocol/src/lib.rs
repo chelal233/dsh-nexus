@@ -16,6 +16,11 @@ pub fn decode_json<T: DeserializeOwned>(bytes: &[u8]) -> Result<T, serde_json::E
 /// The first stable HTTP API namespace exposed by Nexus Agent.
 pub const API_VERSION: &str = "v1";
 
+/// A tag refresh has a separate bounded budget from builds and downloads.
+/// Leave transport time for process-tree shutdown and response authentication.
+pub const RELEASE_TAG_COMMAND_TIMEOUT_SECS: u64 = 60;
+pub const RELEASE_TAG_REQUEST_TIMEOUT_SECS: u64 = 75;
+
 /// Version of the explicit Harness launch wire contract. A Node payload uses
 /// `entry` plus additional `args`; older Agents that do not advertise this
 /// field are not safe targets for a Node configuration write.

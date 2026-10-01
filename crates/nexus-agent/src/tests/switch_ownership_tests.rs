@@ -88,6 +88,7 @@ pub(crate) fn switch_test_state(label: &str) -> AppState {
             )),
         ),
         harness_sync: Arc::new(Mutex::new(())),
+        release_tags_gate: Arc::new(Mutex::new(())),
         maintenance_preview: Arc::new(std::sync::Mutex::new(
             crate::MaintenancePreviewScan::default(),
         )),

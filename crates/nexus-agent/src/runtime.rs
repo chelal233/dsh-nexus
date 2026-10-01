@@ -500,7 +500,13 @@ fn prepare_npm_probe_command(runtime: &RuntimeConfig, config: &ProbeConfig) -> R
     let npm_entry = if cfg!(windows) {
         parent.join("node_modules/npm/bin/npm-cli.js")
     } else {
-        fs::canonicalize(&npm).map_err(|_| "npm_missing")?
+        // Packaged Unix npm is a shell wrapper. Probe its paired JS entry with
+        // the selected Node, while retaining ordinary symlinked installations.
+        [parent.join("node_modules/npm/bin/npm-cli.js"),
+            parent.join("../lib/node_modules/npm/bin/npm-cli.js")]
+            .into_iter().find_map(|path| canonical_file(&path))
+            .or_else(|| canonical_file(&npm).filter(|path| path.extension().is_some_and(|ext| ext == "js")))
+            .ok_or("npm_missing")?
     };
     let npm_entry = canonical_file(&npm_entry).ok_or("npm_missing")?;
     let cwd = config.probe_cwd.as_deref().filter(|path| is_safe_probe_cwd(path))
@@ -1946,6 +1952,26 @@ mod tests {
         };
         assert_eq!(prepare_npm_probe_command(&runtime, &config_for(&root, None)).unwrap_err(), "npm_missing");
         let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn npm_probe_selects_paired_js_instead_of_unix_shell_wrapper() {
+        let root = fixture_root("paired-npm-js");
+        for layout in ["node_modules/npm/bin/npm-cli.js", "../lib/node_modules/npm/bin/npm-cli.js"] {
+            let bin = root.join(if layout.starts_with("../") { "distribution/bin" } else { "normalized" });
+            let node = write_version_fixture(&bin, "node", "v24.1.0");
+            fs::write(bin.join(if cfg!(windows) { "npm.cmd" } else { "npm" }), "#!/bin/sh\nexit 99\n").unwrap();
+            let entry = bin.join(layout);
+            fs::create_dir_all(entry.parent().unwrap()).unwrap();
+            fs::write(&entry, "console.log('11.19.0')").unwrap();
+            if cfg!(windows) && layout.starts_with("../") { continue; }
+            let runtime = RuntimeConfig { node: Some(nexus_core::RuntimePin { path: node, ownership: RuntimeOwnership::System }), ..RuntimeConfig::default() };
+            let command = prepare_npm_probe_command(&runtime, &config_for(&root, None)).unwrap();
+            let args: Vec<_> = command.as_std().get_args().collect();
+            let expected = display_path(&fs::canonicalize(entry).unwrap());
+            assert_eq!(args, vec![std::ffi::OsStr::new(&expected), std::ffi::OsStr::new("--version")]);
+        }
+        fs::remove_dir_all(root).unwrap();
     }
 
     #[test]

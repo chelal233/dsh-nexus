@@ -60,6 +60,23 @@ targets['x86_64-unknown-linux-gnu'] = {
 
 export const updateChannelFile = spec => `latest-${spec.arch}${spec.platform === 'darwin' ? '-mac' : spec.platform === 'linux' ? '-linux' + (spec.arch === 'x64' ? '' : '-' + spec.arch) : ''}.yml`;
 
+// Electron Builder emits plain filename scalars for these two fields. Keep
+// its hashes and sizes verbatim, but reject unknown references before publish.
+export function collectedUpdateChannel(text, names) {
+  let references = 0;
+  const result = text.replace(/^(\s*(?:-\s+)?)(url|path):\s*([^\r\n]+)$/gm, (_, prefix, key, scalar) => {
+    let name = scalar.trim();
+    if ((name.startsWith("'") && name.endsWith("'")) || (name.startsWith('"') && name.endsWith('"'))) name = name.slice(1, -1);
+    if (!/^[A-Za-z0-9_.+-]+$/.test(name) || !names.has(name)) throw new Error(`Unknown update asset: ${name}`);
+    const collected = names.get(name);
+    if (!/^[A-Za-z0-9_.+-]+$/.test(collected)) throw new Error(`Invalid collected asset: ${collected}`);
+    references += 1;
+    return `${prefix}${key}: ${collected}`;
+  });
+  if (!references) throw new Error('Update channel has no package references');
+  return result;
+}
+
 export function selectPlatform(target, platform = process.platform, arch = process.arch) {
   target ||= Object.keys(targets).find(key => targets[key].platform === platform && targets[key].arch === arch);
   const spec = targets[target];
