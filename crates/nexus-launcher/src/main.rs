@@ -538,7 +538,7 @@ async fn run(options: Options) -> Result<(), String> {
             if result.started {
                 persist_started_agent_or_stop(&runtime, &paths, &result).await?;
             }
-            print_started(&options, result.pid, &paths, !result.started);
+            print_started(&options, result.pid, result.port, &paths, !result.started);
         }
         LauncherCommand::Run => {
             let result = runtime
@@ -552,7 +552,7 @@ async fn run(options: Options) -> Result<(), String> {
                 );
             }
             persist_started_agent_or_stop(&runtime, &paths, &result).await?;
-            run_foreground(&runtime, &options, &paths).await?;
+            run_foreground(&runtime, &options, result.port, &paths).await?;
         }
         LauncherCommand::Api | LauncherCommand::Console => run_api(&options, &runtime).await?,
         LauncherCommand::Stop => stop_agent(&runtime, &options, &paths).await?,
@@ -1309,9 +1309,10 @@ async fn persist_started_agent_or_stop(
 async fn run_foreground(
     runtime: &AgentRuntime,
     options: &Options,
+    port: u16,
     paths: &NexusPaths,
 ) -> Result<(), String> {
-    print_started(options, runtime.child_pid(), paths, false);
+    print_started(options, runtime.child_pid(), port, paths, false);
     let mut down_polls = 0u8;
     loop {
         tokio::select! {
@@ -1384,11 +1385,23 @@ async fn status_agent(
         }
     };
 
+    // A successful probe adopts the data-root-verified discovery endpoint. The
+    // default requested port can differ from the Agent's actual listening port.
+    let port = if health.is_some() {
+        runtime
+            .client()
+            .base_url()
+            .port_or_known_default()
+            .ok_or_else(|| "verified Agent endpoint has no port".to_owned())?
+    } else {
+        options.config.port
+    };
+
     if options.json {
         let value = serde_json::json!({
             "api_version": nexus_protocol::API_VERSION,
             "agent": if health.is_some() { "running" } else { "stopped" },
-            "port": options.config.port,
+            "port": port,
             "data_root": paths.root.display().to_string(),
             "record": record,
             "state": state.state,
@@ -1408,7 +1421,7 @@ async fn status_agent(
             }
         );
         println!("data_root: {}", paths.root.display());
-        println!("port: {}", options.config.port);
+        println!("port: {port}");
         if let Some(record) = record {
             println!("pid: {}", record.pid);
         } else {
@@ -1428,13 +1441,19 @@ async fn status_agent(
     Ok(())
 }
 
-fn print_started(options: &Options, pid: Option<u32>, paths: &NexusPaths, already_running: bool) {
+fn print_started(
+    options: &Options,
+    pid: Option<u32>,
+    port: u16,
+    paths: &NexusPaths,
+    already_running: bool,
+) {
     if options.json {
         let value = serde_json::json!({
             "api_version": nexus_protocol::API_VERSION,
             "status": if already_running { "already_running" } else { "started" },
             "pid": pid,
-            "port": options.config.port,
+            "port": port,
             "data_root": paths.root.display().to_string(),
         });
         println!(
@@ -1442,12 +1461,12 @@ fn print_started(options: &Options, pid: Option<u32>, paths: &NexusPaths, alread
             serde_json::to_string_pretty(&value).expect("launcher JSON encodes")
         );
     } else if already_running {
-        println!("agent already running on 127.0.0.1:{}", options.config.port);
+        println!("agent already running on 127.0.0.1:{port}");
     } else {
         println!(
             "agent started: pid={} address=127.0.0.1:{} data_root={}",
             pid.map_or_else(|| "<none>".to_owned(), |pid| pid.to_string()),
-            options.config.port,
+            port,
             paths.root.display()
         );
     }

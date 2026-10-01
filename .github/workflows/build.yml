@@ -231,6 +231,20 @@ jobs:
           if-no-files-found: error
           retention-days: 14
 
+      # A complete single installer is also delivered for independent native QA
+      # without requiring download of all Linux package formats together.
+      - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        if: steps.git-license.outputs.cleared == 'true' && matrix.target == 'x86_64-unknown-linux-gnu'
+        with:
+          name: qa-linux-x64-rpm
+          path: |
+            target/release-assets/${{ matrix.target }}/*.rpm
+            target/release-assets/${{ matrix.target }}/*.yml
+            target/release-assets/${{ matrix.target }}/*_build.json
+            target/release-assets/${{ matrix.target }}/*_SHA256SUMS.txt
+          if-no-files-found: error
+          retention-days: 14
+
   git-sources:
     runs-on: ubuntu-24.04
     steps:
