@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { mkdir, readFile, readlink, writeFile } from 'node:fs/promises';
+import { mkdir, open, readdir, readFile, readlink, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 
 assert.equal(process.platform, 'linux');
@@ -22,11 +22,14 @@ const report = {
   uid: process.getuid(),
   node: process.versions,
   checks: [],
+  phase: 'create isolated directories',
 };
 const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
 function start(program, args, env = {}) {
   assert.ok(args.every(arg => !/no-sandbox|disable-setuid-sandbox|disable-web-security/.test(arg)));
   const child = spawn(program, args, { env: { ...process.env, ...env }, stdio: ['ignore', 'pipe', 'pipe'] });
+  child.qaProgram = program;
+  child.qaArgs = args;
   child.qaClosed = false;
   child.qaClose = new Promise(resolve => child.once('close', () => { child.qaClosed = true; resolve(); }));
   children.push(child);
@@ -78,6 +81,7 @@ async function socket(url) {
   return { ws, cdp };
 }
 async function connect(child, userData, type) {
+  report.phase = `${type}: wait for DevToolsActivePort`;
   const port = await until(child, async () => {
     try { return (await readFile(path.join(userData, 'DevToolsActivePort'), 'utf8')).split('\n')[0]; } catch { return null; }
   });
@@ -87,8 +91,10 @@ async function connect(child, userData, type) {
     assert.equal(response.status, 200);
     return response.json();
   };
+  report.phase = `${type}: find expected page`;
   const page = await until(child, async () => (await get('json/list')).find(p => p.type === 'page' && (type === 'electron' ? p.url.startsWith('file:') : p.url.includes('browser-fixture.html'))));
   const channel = await socket(page.webSocketDebuggerUrl);
+  report.phase = `${type}: connect browser CDP`;
   let host;
   try { host = await socket((await get('json/version')).webSocketDebuggerUrl); }
   catch (error) { channel.ws.close(); throw error; }
@@ -111,6 +117,50 @@ let electron;
 let browser;
 let desktop;
 let web;
+async function failureEvidence() {
+  // Only this disposable QA environment and children owned by this test.
+  const diagnostic = { phase: report.phase, children: [], profiles: [] };
+  for (const child of children) {
+    const entry = { pid: child.pid, program: child.qaProgram, args: child.qaArgs, exitCode: child.exitCode, signalCode: child.signalCode };
+    try {
+      entry.status = await status(child.pid);
+      entry.cmdline = (await readFile(`/proc/${child.pid}/cmdline`, 'utf8')).split('\0').filter(Boolean);
+      entry.exe = await readlink(`/proc/${child.pid}/exe`);
+    } catch (error) { entry.processReadError = error.code ?? error.message; }
+    diagnostic.children.push(entry);
+  }
+  for (const directory of [path.join(root, 'browser'), path.join(root, 'home', '.config', 'chromium')]) {
+    const entry = { directory };
+    try { entry.names = (await readdir(directory)).sort().slice(0, 40); }
+    catch (error) { entry.directoryReadError = error.code ?? error.message; }
+    try { entry.devToolsActivePort = (await readFile(`${directory}/DevToolsActivePort`, 'utf8')).slice(0, 1024); }
+    catch (error) { entry.portReadError = error.code ?? error.message; }
+    diagnostic.profiles.push(entry);
+  }
+  if (process.env.NEXUS_QA_BROWSER?.startsWith('/usr/')) {
+    try {
+      const file = await open(process.env.NEXUS_QA_BROWSER, 'r');
+      try {
+        const { size } = await file.stat();
+        const buffer = Buffer.alloc(16384);
+        const { bytesRead } = await file.read(buffer, 0, buffer.length, 0);
+        const contents = buffer.subarray(0, bytesRead);
+        diagnostic.browserCommand = { path: process.env.NEXUS_QA_BROWSER, bytes: size };
+        if (size <= buffer.length) diagnostic.browserCommand.sha256 = createHash('sha256').update(contents).digest('hex');
+        if (contents.subarray(0, 2).toString() === '#!') diagnostic.browserCommand.wrapper = contents.toString('utf8');
+      } finally { await file.close(); }
+    } catch (error) { diagnostic.browserCommandReadError = error.code ?? error.message; }
+  }
+  for (const [name, channel] of [['browser', web], ['electron', desktop]]) {
+    if (!channel) continue;
+    try {
+      diagnostic[name] = await channel.evaluate('({url:location.href,readyState:document.readyState,title:document.title,text:document.body?.innerText?.slice(0,10000),sandboxRows:Array.from(document.querySelectorAll("#sandbox-status tr"),r=>r.innerText),evaluation:document.querySelector("#evaluation")?.innerText})');
+      const image = await channel.cdp('Page.captureScreenshot', { format: 'png' });
+      await writeFile(`${evidence}/failure-${name}.png`, Buffer.from(image.data, 'base64'));
+    } catch (error) { diagnostic[`${name}ReadError`] = error.message; }
+  }
+  await writeFile(`${evidence}/failure-state.json`, JSON.stringify(diagnostic, null, 2));
+}
 try {
   for (const directory of ['electron', 'browser', 'business', 'dsh', 'harness']) await mkdir(path.join(root, directory), { recursive: true });
   report.executableSha256 = createHash('sha256').update(await readFile(executable)).digest('hex');
@@ -119,11 +169,13 @@ try {
     NEXUS_AGENT_PORT: '0', NEXUS_LOCALE: 'en',
   });
   desktop = await connect(electron, `${root}/electron`, 'electron');
+  report.phase = 'electron: real Agent startup status';
   const startup = await until(electron, () => desktop.evaluate('window.nexusDesktop ? window.nexusDesktop.invoke("startup_status").then(s=>s.available?s:null) : null'));
   assert.equal(startup.data_root, `${root}/business`);
   assert.equal(await desktop.evaluate('typeof require'), 'undefined');
   assert.equal(await desktop.evaluate('typeof process'), 'undefined');
   const baseline = await status(process.pid);
+  report.phase = 'electron: renderer sandbox';
   const { processInfo } = await desktop.host.cdp('SystemInfo.getProcessInfo');
   const browserProcess = processInfo.find(p => p.type === 'browser');
   assert.equal(browserProcess?.id, electron.pid);
@@ -152,16 +204,21 @@ try {
   assert.ok(process.env.NEXUS_QA_BROWSER?.startsWith('/usr/'));
   browser = start(process.env.NEXUS_QA_BROWSER, [`--user-data-dir=${root}/browser`, '--remote-debugging-port=0', `file://${root}/browser-fixture.html`]);
   web = await connect(browser, `${root}/browser`, 'browser');
+  report.phase = 'browser: fixture text';
   assert.equal(await web.evaluate('document.querySelector("#marker")?.textContent'), 'nexus-qa-browser-preflight');
   await web.cdp('Page.navigate', { url: 'chrome://sandbox' });
+  report.phase = 'browser: sandbox page';
   const sandbox = await until(browser, () => web.evaluate('document.body?.innerText?.includes("Sandbox") ? document.body.innerText : null'));
   await writeFile(`${evidence}/browser-sandbox.txt`, sandbox);
   assert.match(sandbox, /Seccomp.BPF sandbox\s+Yes/i);
   report.checks.push('ordinary non-root Chromium rendered prerequisite fixture with Seccomp-BPF sandbox enabled; no security-disabling arguments');
   report.result = 'PASS prerequisites only';
+  report.phase = 'prerequisites complete';
 } catch (error) {
   report.error = error.message;
   process.exitCode = 1;
+  try { await failureEvidence(); }
+  catch (diagnosticError) { report.diagnosticError = diagnosticError.message; }
 } finally {
   if (desktop && electron.exitCode === null && electron.signalCode === null) {
     try { await desktop.evaluate('window.nexusDesktop.invoke("proxy_request", {method:"POST",path:"/v1/agent",body:{action:"stop"}})'); report.agentStop = 'official stop request returned; process exit checked separately by container cleanup'; }
@@ -180,7 +237,7 @@ try {
       await Promise.race([child.qaClose, delay(10000)]);
     }
   }
-  report.children = children.map(c => ({ pid: c.pid, closed: c.qaClosed, exitCode: c.exitCode, signalCode: c.signalCode }));
+  report.children = children.map(c => ({ pid: c.pid, program: c.qaProgram, args: c.qaArgs, closed: c.qaClosed, exitCode: c.exitCode, signalCode: c.signalCode }));
   if (children.some(c => !c.qaClosed)) {
     report.result = 'FAIL';
     report.cleanupError = 'Owned GUI process did not confirm close after bounded TERM/KILL waits';
