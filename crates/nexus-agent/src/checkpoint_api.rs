@@ -73,7 +73,7 @@ pub(super) async fn ensure_mutation_ready_for_owner(
     if *state.shutdown.borrow() {
         return Err(api_error_response(StatusCode::CONFLICT, "agent_shutting_down", "Agent is shutting down"));
     }
-    if let Err(error) = crate::process_recovery::reconcile(&state.paths.run_dir.join("owned-processes")) {
+    if let Err(error) = crate::process_recovery::reconcile_run_directory(&state.paths.run_dir) {
         return Err(data_error_response(error, "process_recovery_pending"));
     }
     if let Err(error) = canary::ensure_idle(&state.paths) {

@@ -34,6 +34,26 @@ fn write_profile_file(path: &Path, content: &str) {
     fs::write(path, content).expect("synthetic profile file writes");
 }
 
+#[tokio::test]
+async fn mutation_admission_classifies_global_and_legacy_live_leases_consistently() {
+    for nested in [false, true] {
+        let state = crate::switch_ownership_tests::switch_test_state("mutation-lease-contract");
+        let registry = if nested { state.paths.run_dir.join("embedded-git-123/owned-processes") }
+            else { state.paths.run_dir.join("owned-processes") };
+        fs::create_dir_all(registry.parent().unwrap()).unwrap();
+        let owner = crate::process_recovery::Owner::create(&registry, None).unwrap();
+        let error = super::ensure_checkpoint_mutation_ready(&state).await.unwrap_err();
+        assert_eq!(error.status(), StatusCode::CONFLICT);
+        let bytes = axum::body::to_bytes(error.into_body(), 4096).await.unwrap();
+        let body: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(body["code"], "process_recovery_pending");
+        assert!(fs::read_dir(&registry).unwrap().next().is_some());
+        drop(owner);
+        assert!(super::ensure_checkpoint_mutation_ready(&state).await.is_ok());
+        fs::remove_dir_all(&state.paths.root).unwrap();
+    }
+}
+
 fn executable_on_path(name: &str) -> Option<PathBuf> {
     std::env::var_os("PATH").and_then(|path| {
         std::env::split_paths(&path)
