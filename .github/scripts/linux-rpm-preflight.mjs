@@ -113,6 +113,14 @@ async function status(pid) {
   }));
   return Object.fromEntries(['Pid', 'Uid', 'CapEff', 'NoNewPrivs', 'Seccomp', 'Seccomp_filters'].map(k => [k, values[k]]));
 }
+async function x11(args) {
+  const child = start('/usr/bin/xdotool', args);
+  let output = '';
+  child.stdout.on('data', data => { output = (output + data).slice(0, 16384); });
+  await Promise.race([child.qaClose, delay(5000)]);
+  assert.ok(child.qaClosed && child.exitCode === 0, 'Owned X11 QA input/query did not complete');
+  return output.trim();
+}
 let electron;
 let browser;
 let desktop;
@@ -227,6 +235,51 @@ try {
   await writeFile(`${root}/browser-fixture.html`, '<!doctype html><title>Normal browser prerequisite</title><p id="marker">nexus-qa-browser-preflight</p>');
   assert.ok(process.env.NEXUS_QA_BROWSER?.startsWith('/usr/'));
   browser = start(process.env.NEXUS_QA_BROWSER, [`--user-data-dir=${root}/browser`, '--remote-debugging-port=0', '--enable-logging=stderr', `file://${root}/browser-fixture.html`]);
+  report.phase = 'browser: visible first-run confirmation';
+  await delay(2000);
+  try {
+    await readFile(`${root}/browser/DevToolsActivePort`, 'utf8');
+  } catch (error) {
+    assert.equal(error.code, 'ENOENT');
+    // Fedora's unbranded first-run dialog blocks DevTools initialization.
+    // Use its normal focused Accept action; never suppress first-run or policy.
+    const windows = (await x11(['search', '--onlyvisible', '--pid', String(browser.pid)])).split(/\s+/);
+    assert.equal(windows.length, 1, 'First-run input requires one visible window owned by this browser');
+    assert.match(windows[0], /^\d+$/);
+    const title = await x11(['getwindowname', windows[0]]);
+    assert.equal(title, 'Chromium Additional Terms of Service', 'Do not accept an unidentified dialog');
+    const localePath = '/usr/lib64/chromium-browser/locales/en-US.pak';
+    const localeFile = await open(localePath, 'r');
+    let locale;
+    try {
+      assert.ok((await localeFile.stat()).size <= 8 * 1024 * 1024);
+      locale = await localeFile.readFile();
+    } finally { await localeFile.close(); }
+    const placeholder = 'This Space Intentionally Blank\n\nIn official builds this space will show the terms of service.';
+    assert.ok(locale.includes(Buffer.from(placeholder)), 'Installed unbranded terms resource must match the verified empty placeholder');
+    await x11(['windowfocus', '--sync', windows[0]]);
+    assert.equal(await x11(['getwindowpid', windows[0]]), String(browser.pid));
+    assert.equal(await x11(['getwindowname', windows[0]]), title);
+    const before = start('/usr/bin/xwd', ['-root', '-silent', '-out', `${evidence}/browser-first-run.xwd`]);
+    await Promise.race([before.qaClose, delay(5000)]);
+    assert.ok(before.qaClosed && before.exitCode === 0, 'First-run screenshot must complete before input');
+    const display = await readFile(`${evidence}/browser-first-run.xwd`);
+    assert.equal(display.length, 1231979, 'Current display must match the reviewed full-screen geometry');
+    const header = Array.from({ length: 25 }, (_, i) => display.readUInt32BE(i * 4));
+    assert.deepEqual(header.slice(1, 22), [7, 2, 24, 640, 480, 0, 0, 32, 0, 32, 32, 2560, 4, 16711680, 65280, 255, 8, 256, 256, 640, 480]);
+    const offset = header[0] + header[19] * 12;
+    assert.equal(offset + header[12] * header[5], display.length);
+    const rgb = Buffer.alloc(header[4] * header[5] * 3);
+    for (let y = 0; y < header[5]; y++) for (let x = 0; x < header[4]; x++) {
+      const i = offset + y * header[12] + x * 4;
+      const j = (y * header[4] + x) * 3;
+      rgb[j] = display[i + 2]; rgb[j + 1] = display[i + 1]; rgb[j + 2] = display[i];
+    }
+    const pixelsSha256 = createHash('sha256').update(rgb).digest('hex');
+    assert.equal(pixelsSha256, '81d49611bda7ddfcf5258a2db88ec39a0924ef35db8b152783db816e30cb6019', 'Visible first-run screen must exactly match the reviewed empty-placeholder screen before input');
+    report.browserFirstRun = { windowId: windows[0], browserPid: browser.pid, title, placeholder, localePath, localeSha256: createHash('sha256').update(locale).digest('hex'), pixelsSha256, action: 'normal Return key after exact reviewed visible-screen match', sourceEvidenceRunId: 36865876182, sourceDisplaySha256: '99cd6dd1f8aca17a4d0b944c9ad39ad2c996eda13f479c6d70726ad9d3430ce7' };
+    await x11(['key', '--window', windows[0], 'Return']);
+  }
   web = await connect(browser, `${root}/browser`, 'browser');
   report.phase = 'browser: fixture text';
   assert.equal(await web.evaluate('document.querySelector("#marker")?.textContent'), 'nexus-qa-browser-preflight');

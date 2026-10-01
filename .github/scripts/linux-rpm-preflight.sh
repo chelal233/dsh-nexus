@@ -52,9 +52,9 @@ within_budget() {
   [[ "$occupied $delivered $total $free" =~ ^[0-9]+\ [0-9]+\ [0-9]+\ [0-9]+$ ]] || return 2
   floor=$((total / 10)); if (( floor < 21474836480 )); then floor=21474836480; fi
   printf '%s %s %s\n' "$(date -u +%FT%TZ)" "$occupied" "$free" >> "$evidence/storage-timeline.txt"
-  # Reserve 1GiB below the authorized 8GiB peak for the polling interval and
+  # Reserve 1GiB below the one-time authorized 24GiB peak for the polling interval and
   # transaction shutdown. Report the actual peak; sampling is not a hard quota.
-  (( occupied <= 7516192768 && delivered <= 134217728 && free >= floor + 1073741824 ))
+  (( occupied <= 24696061952 && delivered <= 134217728 && free >= floor + 1073741824 ))
 }
 
 run_bounded() {
@@ -94,8 +94,8 @@ case "${1:?phase required}" in
 import json, shutil, sys
 d = shutil.disk_usage(sys.argv[1])
 floor = max(20 * 2**30, d.total // 10)
-print(json.dumps({'scope': 'approved8GiB temporary budget, original volume floor', 'total': d.total, 'free': d.free, 'floor': floor, 'estimate': 8 * 2**30}))
-if d.free - 8 * 2**30 < floor:
+print(json.dumps({'scope': 'one-time approved24GiB temporary budget, original volume floor', 'total': d.total, 'free': d.free, 'floor': floor, 'estimate': 24 * 2**30}))
+if d.free - 24 * 2**30 < floor:
     raise SystemExit('Insufficient native runner headroom; no download/install started')
 PY
     mkdir -p "$temporary/incoming" "$evidence"
@@ -189,7 +189,7 @@ PY
       fi
       dnf -y --setopt=cachedir=/qa/dnf-cache install \
         "$rpm_file" \
-        xorg-x11-server-Xvfb xorg-x11-xauth xwd chromium procps-ng util-linux shadow-utils \
+        xorg-x11-server-Xvfb xorg-x11-xauth xwd xdotool chromium procps-ng util-linux shadow-utils xdg-utils \
         gcc gcc-c++ glibc-devel make python3 cmake
       rpm -q --qf "%{NAME} %{EPOCHNUM}:%{VERSION}-%{RELEASE}.%{ARCH}\n" "$package" > /evidence/installed-nevra.txt
       cmp /evidence/expected-nevra.txt /evidence/installed-nevra.txt
