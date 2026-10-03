@@ -420,7 +420,11 @@ try {
     }
     const pixelsSha256 = createHash('sha256').update(rgb).digest('hex');
     report.browserFirstRun = { windowId: windows[0], browserPid: browser.pid, title, geometry, placeholder, localePath, localeSha256: createHash('sha256').update(locale).digest('hex'), pixelsSha256, wholeWindowSha256: createHash('sha256').update(display).digest('hex'), action: 'NOT RUN: complete owned-window baseline needs review' };
-    assert.equal(pixelsSha256, 'UNREVIEWED_FULL_DIALOG', 'Complete first-run window must be independently reviewed before normal input');
+    assert.equal(gw, 600); assert.equal(gh, 510);
+    assert.equal(report.browserFirstRun.localeSha256, '50395219c8bf086711f03846ad530c5e01d8f07cc3da0ae3450b838629d9dfba');
+    assert.equal(pixelsSha256, '33965247b87d24598ffea070cbc0116fb391562a7c91eb89f447333b24c4f1f9', 'Complete first-run window must exactly match the reviewed empty-placeholder dialog before input');
+    report.browserFirstRun.sourceEvidenceRunId = 37134369402;
+    report.browserFirstRun.sourceWindowSha256 = '820aea06e6f9b04adbd638ab84436cf80d62b46181b0a5624a116a3ecdb79c3c';
     report.browserFirstRun.action = 'normal Return key after exact reviewed complete-window match';
     await x11(['key', '--window', windows[0], 'Return']);
   }
