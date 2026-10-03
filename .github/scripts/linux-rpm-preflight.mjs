@@ -246,7 +246,7 @@ async function findOfficialPage({ url, openedAfter }) {
 let exportPayloadBytes;
 let sourceEnvironmentBytes;
 const admittedStages = new Set();
-const businessStages = new Set(['native_identity', 'fresh_official_fetch', 'normal_promote', 'synthetic_files', 'old_preserved_data', 'official_browser_session_and_plugin', 'normal_stop', 'full_runtime_export', 'launch_fresh_B', 'inspect_complete_archive', 'full_import_and_publication', 'B_real_session_and_plugin', 'B_stop_before_recovery', 'inflight_import_cancel', 'normal_B_restart', 'retry_full_import_same_B', 'recovered_B_real_session_and_plugin', 'recovered_B_stop', 'same_Agent_next_write']);
+const businessStages = new Set(['native_identity', 'fresh_official_fetch', 'normal_promote', 'synthetic_files', 'old_preserved_data', 'official_browser_session_and_plugin', 'normal_stop', 'seal_transaction_baseline', 'full_runtime_export', 'launch_fresh_B', 'inspect_complete_archive', 'full_import_and_publication', 'B_real_session_and_plugin', 'B_stop_before_recovery', 'inflight_import_cancel', 'normal_B_restart', 'retry_full_import_same_B', 'recovered_B_real_session_and_plugin', 'recovered_B_stop', 'same_Agent_next_write']);
 async function logicalBytes(directory) {
   const metadata = await lstat(directory);
   if (metadata.isSymbolicLink()) return 4096;

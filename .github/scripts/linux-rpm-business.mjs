@@ -2,6 +2,7 @@ import fs from 'node:fs/promises';
 import { createReadStream } from 'node:fs';
 import path from 'node:path';
 import { createHash, randomBytes } from 'node:crypto';
+import { createRequire } from 'node:module';
 import { constants as zlibConstants, zstdCompressSync, zstdDecompressSync } from 'node:zlib';
 
 /**
@@ -124,6 +125,29 @@ export async function runBusinessQA(context) {
     await fs.appendFile(journal,JSON.stringify(item)+'\n');
     if (typeof c.report === 'function') await c.report(item);
     else if (Array.isArray(c.report)) c.report.push(item);
+  };
+  let profileYaml;
+  const readProfilePatch=async file=> {
+    await ordinary(root,file,false);
+    if((await fs.stat(file)).size>65536)fail('profile_patch_invalid','Synthetic patch exceeds 64KiB');
+    if(!profileYaml) {
+      const owner=await ordinary(root,path.join(sourceData,'releases',selected,
+        'packages/boot/config-editor/package.json'),false);
+      const require=createRequire(owner), parser=require.resolve('yaml');
+      await ordinary(root,parser,false);
+      const manifest=await ordinary(root,require.resolve('yaml/package.json'),false);
+      const metadata=JSON.parse(await fs.readFile(manifest,'utf8'));
+      if(metadata.name!=='yaml'||typeof metadata.version!=='string')fail('profile_patch_invalid','Invalid official YAML dependency identity');
+      profileYaml=require(parser);
+      await record('profile_yaml_parser',{path:path.relative(root,parser),version:metadata.version,
+        sha256:await fileHash(parser),owner:path.relative(root,owner)});
+    }
+    const document=profileYaml.parseDocument(await fs.readFile(file,'utf8'),{uniqueKeys:true});
+    if(document.errors.length)fail('profile_patch_invalid',document.errors[0].message);
+    if(document.warnings.length)fail('profile_patch_invalid',document.warnings[0].message);
+    const parsed=document.toJS({maxAliasCount:100});
+    if(!Array.isArray(parsed))fail('profile_patch_invalid','Expected the official patch array');
+    return parsed;
   };
   const gate = async () => {
     if (c.signal?.aborted) fail('ABORTED',String(c.signal.reason || 'Aborted'));
@@ -443,14 +467,15 @@ export async function runBusinessQA(context) {
         await api('/v1/config',{action:'set_harness_preferences',expected_revision:config.revision,
           harness_preferences:{...config.harness_preferences,home,open_browser:false}});
         await api('/v1/profiles',{action:'select',profile:'web'});
-        await fs.writeFile(stateFile,JSON.stringify({fixtureVersion:4,release:selected,head:HEAD,home,workspace:WORKSPACE,files:fingerprints},null,2),{flag:'wx'});
+        await fs.writeFile(stateFile,JSON.stringify({fixtureVersion:5,release:selected,head:HEAD,home,workspace:WORKSPACE,
+          files:fingerprints,profilePatchSemantic:JSON.parse(files['profiles/web/cordis.patch.yml'])},null,2),{flag:'wx'});
         return {files:fingerprints,sessionPlaintextSha256:SESSION_HASH,sessionFrames:2,sessionChecksums:true,
           kind:'synthetic installed package tree and default rc2 zstd session; real Cordis activation checked separately'};
       });
     } else {
       await step('old_preserved_data',async()=> {
         const state=JSON.parse(await fs.readFile(stateFile,'utf8'));selected=state.release;
-        if(state.fixtureVersion!==4||state.workspace!==WORKSPACE)fail('fixture_version_mismatch','Use v4 cwd/default-zstd fixture provenance; do not relabel a previous fixture');
+        if(state.fixtureVersion!==5||state.workspace!==WORKSPACE)fail('fixture_version_mismatch','Use the v5 QA transaction baseline; session format remains v4, never relabel previous fixtures');
         await ordinary(root,WORKSPACE);
         const catalog=await api('/v1/releases');
         if(catalog.current_release!==selected)fail('selection_changed','A release was not preserved');
@@ -464,8 +489,39 @@ export async function runBusinessQA(context) {
     }
     await step('official_browser_session_and_plugin',verifyPage);
     await step('normal_stop',()=>stopHarness());
+    await step('seal_transaction_baseline',async()=> {
+      const state=JSON.parse(await fs.readFile(stateFile,'utf8'));
+      const rel='profiles/web/cordis.patch.yml', file=path.join(home,rel);
+      for(const [name,hash] of Object.entries(state.files)) {
+        await ordinary(root,path.join(home,name),false);
+        if(name!==rel&&await fileHash(path.join(home,name))!==hash)fail('fixture_changed',name);
+      }
+      const parsed=await readProfilePatch(file);
+      const fixture=parsed.filter(item=>item?.id==='qa-offline-fixture');
+      if(fixture.length!==1||stable(fixture[0])!==stable({id:'qa-offline-fixture',config:{marker:'qa-round2-config'}}))
+        fail('fixture_changed','Original QA plugin configuration changed');
+      const hash=await fileHash(file);
+      // Normal welcome/settings writes precede the package transaction. Record
+      // the actual semantic change for independent review; never silently
+      // bless it, or refresh hashes for the other eight immutable fixtures.
+      await record('profile_patch_baseline',{beforeSha256:state.files[rel],afterSha256:hash,
+        before:state.profilePatchSemantic,after:parsed,
+        semanticChanged:stable(state.profilePatchSemantic)!==stable(parsed),
+        configDiffReview:'REQUIRED_BY_DOT_AND_PRIMARY_BEFORE_PUBLICATION'});
+      state.files[rel]=hash;state.profilePatchSemantic=parsed;state.baselinePhase=phase;
+      await ordinary(root,stateFile,false);
+      await fs.writeFile(stateFile,JSON.stringify(state,null,2));
+      return {files:Object.keys(state.files).length,profilePatchSha256:hash,
+        configDiffReview:'REQUIRED_BY_DOT_AND_PRIMARY_BEFORE_PUBLICATION'};
+    });
     if(phase==='final') {
       const saved=JSON.parse(await fs.readFile(stateFile,'utf8'));
+      const sourceConfigs={
+        'profiles/web/package.json':JSON.parse(await fs.readFile(path.join(sourceHome,'profiles/web/package.json'),'utf8')),
+        'profiles/web/cordis.patch.yml':await readProfilePatch(path.join(sourceHome,'profiles/web/cordis.patch.yml')),
+      };
+      await record('frozen_source_config',{semanticSha256:Object.fromEntries(Object.entries(sourceConfigs)
+        .map(([name,value])=>[name,digest(stable(value))])),timing:'After normal Stop, before export'});
       const contents={runtime:true,profiles:['web'],configuration:true,environment:true,
         sessions:true,plugins:true,credentials:false,credential_policy:'preserve'};
       const archive=path.join(root,'full-offline-'+Date.now()+'.tar.gz');
@@ -534,10 +590,9 @@ export async function runBusinessQA(context) {
           const file=path.join(home,rel);await ordinary(root,file,false);
           if(['profiles/web/package.json','profiles/web/cordis.patch.yml'].includes(rel)) {
             // The official exporter/importer normalizes JSON/YAML whitespace and paths.
-            // Our bounded synthetic configuration is JSON-compatible and has no source-home paths.
-            const original=path.join(sourceHome,rel);await ordinary(root,original,false);
-            if(stable(JSON.parse(await fs.readFile(file,'utf8')))!==
-               stable(JSON.parse(await fs.readFile(original,'utf8'))))fail('migration_config_changed',rel);
+            // Compare with the source object frozen before export, not live A.
+            const imported=rel.endsWith('.yml')?await readProfilePatch(file):JSON.parse(await fs.readFile(file,'utf8'));
+            if(stable(imported)!==stable(sourceConfigs[rel]))fail('migration_config_changed',rel);
           } else if(await fileHash(file)!==h)fail('migration_content_changed',rel);
         }
         return {release:op.release_id,slot,home,runtime:config.runtime,sourceCliHash,
@@ -609,6 +664,7 @@ export async function runBusinessQA(context) {
       });
     }
     result={phase,status:'PASS',coverage:['native bridge','frozen rc2','real browser session','real Cordis apply'],
+      profilePatchDiffReview:'REQUIRED_BY_DOT_AND_PRIMARY_BEFORE_PUBLICATION',
       packageTransactions:'EXTERNAL_NOT_COVERED',fullMigration:phase==='final'?'PASS':'NOT RUN',
       cancelRestartRecovery:phase==='final'?'PASS':'NOT RUN',crashRecovery:'NOT RUN',journal};
   } catch(e) {
