@@ -7,6 +7,7 @@
 - 修复 Linux 命令所有权与进程收尾，核对 PID 命名空间；冷操作完成与实际操作身份、所有者及互斥门绑定，避免未收尾操作被当作安全完成。
 - 首次显式选择已准备的版本时初始化已验证运行时及启动参数；统一返回实际发现的私有 Agent 端口。
 - 修复完整离线导入的 Harness CLI 入口路径，避免 Unix 上混入 Windows 分隔符而被启动检查阻断。
+- 再次离线导入时仅为当前引用的依赖生成命令入口，保留未选中 profile 的依赖版本并继续拒绝越界可执行文件。
 - 增加隔离 Fedora 的正常 RPM 安装和包替换、实际沙箱浏览器、合成会话与 Cordis 插件激活、完整离线迁移及取消／重启恢复检查。
 
 ### 下载
@@ -32,6 +33,7 @@
 - Fix Linux command ownership and settlement, verify PID namespaces, and bind cold-operation completion to the actual operation, owner and gate.
 - Initialize verified runtime and launch defaults on the first explicit selection of a prepared release, and consistently return the discovered private Agent endpoint.
 - Fix the Harness CLI entry path after full offline import so Windows separators do not block Unix startup checks.
+- Regenerate executable shims only for referenced dependencies on reimport, retaining unselected profile versions and rejecting executable paths outside the managed environment.
 - Add isolated Fedora checks for normal RPM installation and replacement, a real sandboxed browser, synthetic sessions and Cordis plugin activation, full offline migration, and cancellation/restart recovery.
 
 ### Downloads and provenance

@@ -465,7 +465,7 @@ async function copyOrdinaryTree(source, destination, work, relocate = null) {
   for (const link of links) await fsp.symlink(link.target, link.to, link.directory ? 'junction' : 'file');
 }
 
-async function mergeEnvironment(job) {
+export async function mergeEnvironment(job) {
   const payload = path.join(job.work, 'payload'), incoming = path.join(payload, 'environment'), merged = path.join(payload, 'merged-environment');
   const manifest = await json(path.join(payload, 'manifest.json')); validateManifest(manifest);
   if (!manifest.entries.some(entry => entry.path === 'environment')) return;
@@ -571,8 +571,12 @@ async function mergeEnvironment(job) {
   await fsp.writeFile(path.join(job.work,'merge-summary.json'),JSON.stringify({schema_version:1,preserved_configuration_values:preservedValues}));
 }
 
-async function environmentShims(environment, slot, tools) {
+export async function environmentShims(environment, slot, tools) {
+  const root = await fsp.realpath(environment), visited = new Set();
   async function visit(directory) {
+    const realDirectory = await fsp.realpath(directory);
+    if (visited.has(realDirectory)) return;
+    visited.add(realDirectory);
     const entries = await fsp.readdir(directory, { withFileTypes: true });
     if (path.basename(directory) === 'node_modules') {
       const packages = [];
@@ -591,12 +595,17 @@ async function environmentShims(environment, slot, tools) {
           const file = path.resolve(folder, relative);
           if (!within(folder, file)) fail('Plugin executable leaves its package');
           const real = await fsp.realpath(file);
-          if (!within(await fsp.realpath(environment), real) && !within(await fsp.realpath(slot), real)) fail('Plugin executable leaves environment');
+          if (!within(root, real) && !within(await fsp.realpath(slot), real)) fail('Plugin executable leaves environment');
           await fsp.mkdir(path.join(directory, '.bin'), { recursive: true }); await tools.shim(file, path.join(directory, '.bin', name));
         }
       }
+      // Follow installed dependencies into this environment's package store.
+      // Retained, unreferenced units may still point to a prior release; they
+      // are not active installations and must not regenerate executable shims.
+      for (const folder of packages) if (within(root, await fsp.realpath(folder))) await visit(folder);
     }
-    for (const entry of entries) if (entry.isDirectory() && entry.name !== '.bin') await visit(path.join(directory, entry.name));
+    for (const entry of entries) if (entry.isDirectory() && entry.name !== '.bin'
+      && !(realDirectory === root && entry.name === '.packages')) await visit(path.join(directory, entry.name));
   }
   await visit(environment);
 }
