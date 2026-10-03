@@ -519,6 +519,35 @@ export async function runBusinessQA(context) {
       packageTransactions:'EXTERNAL_NOT_COVERED',fullMigration:phase==='final'?'PASS':'NOT RUN',
       cancelRestartRecovery:phase==='final'?'PASS':'NOT RUN',crashRecovery:'NOT RUN',journal};
   } catch(e) {
+    if (verifiedOwnership) {
+      // Preserve the actual owned run before normal Stop changes its state.
+      // Inspect only the synthetic profile and bounded tails of this Agent's logs.
+      try {
+        const snapshot = await api('/v1/harness',undefined,true);
+        await record('failure_harness',snapshot);
+        for (const stream of ['stdout','stderr']) {
+          const name = snapshot['log_'+stream+'_name'];
+          if (!/^[A-Za-z0-9._-]+$/.test(name||'')) fail('log_path_invalid',stream);
+          const log = path.join(data,'logs',name);
+          await ordinary(root,log,false);
+          const handle = await fs.open(log,'r');
+          try {
+            const metadata = await handle.stat(), length = Math.min(metadata.size,65536);
+            const bytes = Buffer.alloc(length);
+            await handle.read(bytes,0,length,metadata.size-length);
+            await fs.writeFile(path.join(out,stem+'-harness-'+stream+'.log'),safe(bytes.toString('utf8')));
+            await record('failure_log',{stream,name,bytes:metadata.size,capturedBytes:length});
+          } finally { await handle.close(); }
+        }
+        const manifestPath = path.join(home,'profiles/web/package.json');
+        await ordinary(root,manifestPath,false);
+        if ((await fs.stat(manifestPath)).size > 65536) fail('profile_budget','synthetic manifest');
+        const manifest = JSON.parse(await fs.readFile(manifestPath,'utf8'));
+        await record('failure_profile',{name:manifest.name,dsh:manifest.dsh,dependencies:manifest.dependencies});
+      } catch (diagnosticError) {
+        await record('failure_diagnostic_error',{code:diagnosticError.code,message:diagnosticError.message});
+      }
+    }
     const status=e.code==='INTERRUPTION_NOT_CAPTURED'?'NOT RUN':
       /^(contract_|BUDGET_|BROWSER_BLOCKED|DEADLINE|ABORTED)/.test(e.code||'')?'BLOCKED':'FAIL';
     await record(status,{code:e.code||'ERROR',message:e.message||String(e)});

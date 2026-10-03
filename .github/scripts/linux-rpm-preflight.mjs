@@ -20,6 +20,21 @@ const logs = [];
 const children = [];
 const extraChannels = [];
 const browserTargetEvents = [];
+let lastOfficialOpen;
+function urlIdentity(raw) {
+  const sha256 = createHash('sha256').update(String(raw)).digest('hex');
+  try {
+    const url = new URL(raw);
+    return { origin: url.origin, pathname: url.pathname, queryKeys: [...url.searchParams.keys()], sha256 };
+  } catch { return { sha256, invalid: true }; }
+}
+async function browserInventory() {
+  return {
+    expected: lastOfficialOpen,
+    targets: (await web.getPages()).slice(0, 100).map(page => ({ id: page.id, type: page.type, url: urlIdentity(page.url) })),
+    events: browserTargetEvents.slice(-200).map(({ url, ...event }) => ({ ...event, url: urlIdentity(url) })),
+  };
+}
 const report = {
   scope: 'Fedora container native RPM installation and ordinary non-root GUI/sandbox prerequisites only',
   result: 'FAIL',
@@ -179,13 +194,33 @@ async function findOfficialPage({ url, openedAfter }) {
   const expected = new URL(url);
   assert.equal(expected.protocol, 'http:');
   assert.ok(['127.0.0.1', 'localhost'].includes(expected.hostname));
-  const page = await until(browser, async () => (await web.getPages()).find(p => {
+  lastOfficialOpen = { openedAfter, url: urlIdentity(url) };
+  await writeFile(`${evidence}/official-open-expected.json`, JSON.stringify(lastOfficialOpen, null, 2));
+  let page;
+  try { page = await until(browser, async () => (await web.getPages()).find(p => {
     if (p.type !== 'page') return false;
     try {
       return new URL(p.url).href === expected.href && browserTargetEvents.some(event =>
         event.targetId === p.id && event.url === p.url && event.time >= openedAfter);
     } catch { return false; }
-  }));
+  })); } catch (error) {
+    await writeFile(`${evidence}/official-open-targets.json`, JSON.stringify(await browserInventory(), null, 2));
+    const pages = (await web.getPages()).filter(item => {
+      try { return item.type === 'page' && new URL(item.url).origin === expected.origin; }
+      catch { return false; }
+    }).slice(0, 3);
+    for (const item of pages) {
+      assert.match(item.id, /^[A-Za-z0-9_-]+$/);
+      const channel = await socket(item.webSocketDebuggerUrl);
+      try {
+        const document = await channel.cdp('Runtime.evaluate', { expression: '({readyState:document.readyState,title:document.title,text:document.body?.innerText?.slice(0,16000)})', returnByValue: true });
+        await writeFile(`${evidence}/official-page-${item.id}.json`, JSON.stringify({ id: item.id, url: urlIdentity(item.url), document: document.result?.value }, null, 2));
+        const image = await channel.cdp('Page.captureScreenshot', { format: 'png' });
+        await writeFile(`${evidence}/official-page-${item.id}.png`, Buffer.from(image.data, 'base64'));
+      } finally { channel.ws.close(); }
+    }
+    throw error;
+  }
   assert.match(page.id, /^[A-Za-z0-9_-]+$/, 'Official browser target ID must be safe for evidence naming');
   const event = browserTargetEvents.findLast(item => item.targetId === page.id && item.url === page.url && item.time >= openedAfter);
   await writeFile(`${evidence}/official-open-${page.id}.json`, JSON.stringify({ targetId: page.id, openedAfter, observedAt: event.time, event: event.method, urlSha256: createHash('sha256').update(url).digest('hex') }, null, 2));
@@ -306,10 +341,15 @@ async function failureEvidence() {
     const value = JSON.parse(await readFile(`${root}/browser/Local State`, 'utf8'));
     diagnostic.browserLocalStateDevTools = Object.fromEntries(['remote_debugging_allowed', 'remote_debugging_enabled', 'availability'].filter(k => Object.hasOwn(value.devtools ?? {}, k)).map(k => [k, value.devtools[k]]));
   } catch (error) { diagnostic.browserLocalStateReadError = error.code ?? error.message; }
+  if (web) {
+    try { diagnostic.browserInventory = await browserInventory(); }
+    catch (error) { diagnostic.browserInventoryError = error.message; }
+  }
   for (const [name, channel] of [['browser', web], ['electron', desktop]]) {
     if (!channel) continue;
     try {
       diagnostic[name] = await channel.evaluate('({url:location.href,readyState:document.readyState,title:document.title,text:document.body?.innerText?.slice(0,10000),sandboxRows:Array.from(document.querySelectorAll("#sandbox-status tr"),r=>r.innerText),evaluation:document.querySelector("#evaluation")?.innerText})');
+      diagnostic[name].url = urlIdentity(diagnostic[name].url);
       const image = await channel.cdp('Page.captureScreenshot', { format: 'png' });
       await writeFile(`${evidence}/failure-${name}.png`, Buffer.from(image.data, 'base64'));
     } catch (error) { diagnostic[`${name}ReadError`] = error.message; }
