@@ -40,8 +40,9 @@ const WORKSPACE = '/qa/test/fixture-workspace';
 // Frozen format.ts projectKey('/qa/test/fixture-workspace'); header and path agree.
 const SESSION_DIRECTORY = 'sessions/--qa-test-fixture-workspace--/qa-valid-session';
 const SESSION = '{"type":"session","version":4,"id":"qa-valid-session","createdAt":1,"cwd":"/qa/test/fixture-workspace","isSeeded":false,"delegationDepth":0}\n' +
-  '{"type":"user/message","seq":0,"time":2,"data":{"content":[{"type":"text","text":"Synthetic valid offline migration session. No model request."}],"source":{"kind":"user"},"role":"user","id":"qa-valid-message"},"surfaceOp":"append"}\n';
-const SESSION_HASH = '8e6ab8c4df5804b7fb813d92a24dab00231fb76404abcdf7dcfe05fcd2f19b8f';
+  '{"type":"user/message","seq":0,"time":2,"data":{"content":[{"type":"text","text":"Synthetic valid offline migration session. No model request."}],"source":{"kind":"user"},"role":"user","id":"qa-valid-message"},"surfaceOp":"append"}\n' +
+  '{"type":"session/end-seed","seq":1,"time":3,"data":{}}\n';
+const SESSION_HASH = 'f30af4b942c145274b00adf0d0ec91db30cab8547b2cece68255bed4ba7e935d';
 const digest = x => createHash('sha256').update(x).digest('hex');
 const fail = (code, message) => { throw Object.assign(new Error(message), {code}); };
 async function fileHash(file) {
@@ -404,9 +405,11 @@ export async function runBusinessQA(context) {
       });
       await step('synthetic_files',async()=> {
         await stopHarness();
-        if(Buffer.byteLength(SESSION)!==373||digest(SESSION)!==SESSION_HASH) fail('fixture_invalid','session');
+        if(Buffer.byteLength(SESSION)!==428||digest(SESSION)!==SESSION_HASH) fail('fixture_invalid','session');
         // rc2 materializes a checksummed header frame followed by an independent
         // checksummed event frame; its default canonical suffix is .jsonl.zstd.
+        // A complete seed ends with the producer's session/end-seed marker;
+        // otherwise normal UI resume appends it and changes the initial file.
         const split=SESSION.indexOf('\n')+1;
         const frames=[SESSION.slice(0,split),SESSION.slice(split)].map(text=>
           zstdCompressSync(text,{params:{[zlibConstants.ZSTD_c_checksumFlag]:1}}));
@@ -445,8 +448,11 @@ export async function runBusinessQA(context) {
             "const match=snapshots.filter(item=>item.header.id==='qa-valid-session');"+
             "if(match.length!==1||match[0].header.cwd!=='/qa/test/fixture-workspace')throw Error('fixture header missing from actual backend');"+
             "let handle;try{handle=await persistence.open('qa-valid-session','read');const loaded=await handle.read();"+
-            "if(loaded.events.length!==1||loaded.events[0].type!=='user/message'||"+
+            "if(loaded.events.length!==2||loaded.events[0].type!=='user/message'||"+
             "loaded.events[0].data?.source?.kind!=='user'||loaded.events[0].data?.content?.[0]?.text!=="+JSON.stringify(TEXT)+")throw Error('actual backend message mismatch');"+
+            "const end=loaded.events[1];if(end.type!=='session/end-seed'||end.seq!==1||end.time!==3||"+
+            "!end.data||typeof end.data!=='object'||Array.isArray(end.data)||"+
+            "Object.keys(end.data).length!==0)throw Error('actual backend seed terminator mismatch');"+
             "}finally{if(handle)await handle.close();}"+
             "process.stdout.write('DSH_QA_READ_OK:qa-valid-session\\nDSH_QA_ACTIVATED:'+leaf+'\\n');}),'qa fixture');}\n",
           'profiles/web/node_modules/qa-round2-plugin/node_modules/qa-round2-dependency/package.json':
@@ -467,7 +473,7 @@ export async function runBusinessQA(context) {
         await api('/v1/config',{action:'set_harness_preferences',expected_revision:config.revision,
           harness_preferences:{...config.harness_preferences,home,open_browser:false}});
         await api('/v1/profiles',{action:'select',profile:'web'});
-        await fs.writeFile(stateFile,JSON.stringify({fixtureVersion:5,release:selected,head:HEAD,home,workspace:WORKSPACE,
+        await fs.writeFile(stateFile,JSON.stringify({fixtureVersion:6,release:selected,head:HEAD,home,workspace:WORKSPACE,
           files:fingerprints,profilePatchSemantic:JSON.parse(files['profiles/web/cordis.patch.yml'])},null,2),{flag:'wx'});
         return {files:fingerprints,sessionPlaintextSha256:SESSION_HASH,sessionFrames:2,sessionChecksums:true,
           kind:'synthetic installed package tree and default rc2 zstd session; real Cordis activation checked separately'};
@@ -475,7 +481,7 @@ export async function runBusinessQA(context) {
     } else {
       await step('old_preserved_data',async()=> {
         const state=JSON.parse(await fs.readFile(stateFile,'utf8'));selected=state.release;
-        if(state.fixtureVersion!==5||state.workspace!==WORKSPACE)fail('fixture_version_mismatch','Use the v5 QA transaction baseline; session format remains v4, never relabel previous fixtures');
+        if(state.fixtureVersion!==6||state.workspace!==WORKSPACE)fail('fixture_version_mismatch','Use the v6 complete-seed QA transaction baseline; session format remains v4, never relabel previous fixtures');
         await ordinary(root,WORKSPACE);
         const catalog=await api('/v1/releases');
         if(catalog.current_release!==selected)fail('selection_changed','A release was not preserved');
