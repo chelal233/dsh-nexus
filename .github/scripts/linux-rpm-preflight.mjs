@@ -135,8 +135,18 @@ async function connect(child, userData, type) {
     const result = await cdp('Runtime.evaluate', { expression, awaitPromise: true, returnByValue: true });
     if (result.exceptionDetails) {
       const detail=result.exceptionDetails;
-      const description=String(detail.exception?.description??detail.exception?.value??detail.text)
-        .replace(/(https?:\/\/[^\s?#]+)[?#][^\s]*/g,'$1?<redacted>').slice(0,4096);
+      let message=detail.exception?.description??detail.exception?.value??detail.text;
+      const objectId=detail.exception?.objectId;
+      if(objectId)try {
+        const properties=await cdp('Runtime.getProperties',{objectId,ownProperties:true});
+        const fields=Object.fromEntries((properties.result??[])
+          .filter(p=>['code','message'].includes(p.name)&&['string','number','boolean'].includes(p.value?.type))
+          .map(p=>[p.name,p.value.value]));
+        if(Object.keys(fields).length)message=JSON.stringify(fields);
+      }catch{/* Preserve the original exception if property inspection fails. */}
+      finally{if(objectId)try{await cdp('Runtime.releaseObject',{objectId});}catch{}}
+      const description=String(message)
+        .replace(/(https?:\/\/[^\s?#"']+)[?#][^\s"']*/g,'$1?<redacted>').slice(0,4096);
       throw Object.assign(new Error('Renderer evaluation failed: '+description),{code:'renderer_evaluation_failed'});
     }
     return result.result.value;
