@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# A prerequisite test, not full Harness acceptance. The original installer is
-# never rebuilt; a denied sandbox or insufficient volume stops this test.
+# Install the frozen original RPM. Optional business acceptance uses only
+# isolated synthetic data; a denied sandbox or insufficient volume stops it.
 workspace=$(pwd -P)
 temporary="$workspace/.codex-temp/linux-rpm-acceptance"
 evidence="$workspace/.codex-artifacts/linux-rpm-acceptance"
@@ -58,14 +58,22 @@ within_budget() {
 }
 
 run_bounded() {
-  local operation pid code=0 stop_code=0 term_code=0 kill_code=0
+  local operation pid deadline reason code=0 stop_code=0 term_code=0 kill_code=0
   operation=$1; shift
+  deadline=$((SECONDS + 125 * 60)); if test "$operation" = pull; then deadline=$((SECONDS + 20 * 60)); fi
   within_budget || { echo 'Storage envelope already exceeded'; return 1; }
   setsid "$@" &
   pid=$!
   while kill -0 "$pid" 2>/dev/null; do
-    if ! within_budget; then
-      printf 'Storage monitor failed or shutdown margin reached during %s\n' "$operation" > "$evidence/storage-limit.txt"
+    reason=''
+    if (( SECONDS >= deadline )); then
+      reason='Shared execution deadline reached'
+      printf '%s during %s\n' "$reason" "$operation" > "$evidence/execution-limit.txt"
+    elif ! within_budget; then
+      reason='Storage monitor failed or shutdown margin reached'
+      printf '%s during %s\n' "$reason" "$operation" > "$evidence/storage-limit.txt"
+    fi
+    if test -n "$reason"; then
       # Only this foreground operation's session and the uniquely named QA
       # container are owned here. Abort immediately, then verify its outcome.
       sudo kill -TERM -- "-$pid" || term_code=$?
@@ -102,9 +110,9 @@ PY
     df -B1 "$workspace" > "$evidence/initial-storage.txt"
     ;;
   verify)
-    python3 - "$temporary" "$evidence" <<'PY'
+    python3 - "$temporary" "$evidence" "${NEXUS_QA_BUSINESS:-0}" <<'PY'
 import hashlib, json, pathlib, sys, zipfile
-root, evidence = map(pathlib.Path, sys.argv[1:])
+root, evidence = map(pathlib.Path, sys.argv[1:3])
 archives = list((root / 'incoming').glob('*.zip'))
 if len(archives) != 1:
     raise SystemExit('Expected one original artifact ZIP')
@@ -152,13 +160,47 @@ with zipfile.ZipFile(archive) as package:
 (evidence / 'original-bytes.json').write_text(json.dumps({'result':'PASS','scope':'original ZIP and selected immutable RPM content/source, not native installation','artifactId':11149572256,'zipSha256':digest,'build':build,'files':verified}, indent=2))
 # This current-run duplicate is no longer needed; preserve the verified RPM.
 archive.unlink()
+if sys.argv[3] == '1':
+    old_archives = list((root / 'incoming-old').glob('*.zip'))
+    assert len(old_archives) == 1
+    old_archive = old_archives[0]
+    assert old_archive.stat().st_size == 183384334
+    with old_archive.open('rb') as stream:
+        old_digest = digest_stream(stream)
+    assert old_digest == 'b4971deeef671d008705a91c8790dcee48219d96b8e9a3f69f83e4c24bb97b47'
+    old_destination = root / 'verified-old'
+    old_destination.mkdir(exist_ok=False)
+    with zipfile.ZipFile(old_archive) as package:
+        entries = package.infolist()
+        assert len(entries) == 4 and {e.filename for e in entries} == names
+        assert sum(e.file_size for e in entries) <= 200 * 1024**2
+        assert all(not e.is_dir() and (e.external_attr >> 16) & 0o170000 != 0o120000 for e in entries)
+        old_build = json.loads(package.read(build_name))
+        assert old_build['commit'] == '81ae28ed65df7630f3b1aa3b5e0215383218341d'
+        assert old_build['target'] == 'x86_64-unknown-linux-gnu' and old_build['version'] == '1.0.3'
+        assert old_build['buildId'] == 'electron-36832892260-1-x86_64-unknown-linux-gnu'
+        assert old_build['automatedChecks'] == 'passed' and old_build['installedPackageSmoke'] == 'passed-on-ci-runner'
+        assert package.read(sums_name).decode() == ''.join(f"{f['sha256']}  {f['name']}\n" for f in old_build['files'])
+        old_records = {f['name']: f['sha256'] for f in old_build['files']}
+        old_verified = []
+        for entry in entries:
+            with package.open(entry) as source, (old_destination / entry.filename).open('xb') as output:
+                sha = hashlib.sha256()
+                for block in iter(lambda: source.read(1024 * 1024), b''):
+                    output.write(block)
+                    sha.update(block)
+            if entry.filename in (rpm, 'latest-x64-linux.yml'):
+                assert sha.hexdigest() == old_records[entry.filename]
+            old_verified.append({'name': entry.filename, 'bytes': entry.file_size, 'sha256': sha.hexdigest()})
+    (evidence / 'old-original-bytes.json').write_text(json.dumps({'result':'PASS','scope':'same-version different-build QA package; not an accepted public Release','artifactId':11148587625,'zipSha256':old_digest,'build':old_build,'files':old_verified}, indent=2))
+    old_archive.unlink()
 PY
     ;;
   environment)
     test -f "$evidence/original-bytes.json"
     command -v podman
     mkdir -p "$temporary/engine-home" "$temporary/engine-tmp" "$temporary/engine-run" \
-      "$temporary/test/home" "$temporary/test/tmp" "$temporary/dnf-cache" "$temporary/engine-net"
+      "$temporary/test/home" "$temporary/test/tmp" "$temporary/dnf-cache" "$temporary/engine-net" "$temporary/verified-old"
     printf '{"auths":{}}\n' > "$temporary/engine-home/auth.json"
     chmod 600 "$temporary/engine-home/auth.json"
     uname -a > "$evidence/runner-kernel.txt"
@@ -179,8 +221,10 @@ PY
     "${engine[@]}" image inspect "$image" > "$evidence/fedora-image.json"
     run_bounded install-and-gui "${engine[@]}" run --name "$container" --network bridge \
       -v "$workspace/.github/scripts:/source:ro" -v "$temporary/verified:/qa/verified:ro" \
+      -v "$temporary/verified-old:/qa/verified-old:ro" \
       -v "$temporary/test:/qa/test" -v "$temporary/dnf-cache:/qa/dnf-cache" -v "$evidence:/evidence" \
-      -e GITHUB_ACTIONS=true "$image" bash -euo pipefail -c '
+      -e GITHUB_ACTIONS=true -e "NEXUS_QA_BUSINESS=${NEXUS_QA_BUSINESS:-0}" \
+      -e "NEXUS_QA_DEADLINE_MS=$(( $(date +%s) * 1000 + 120 * 60 * 1000 ))" "$image" bash -euo pipefail -c '
       rpm_file=/qa/verified/dsh-nexus_1.0.3_linux_x64.rpm
       package=$(rpm -qp --qf "%{NAME}" "$rpm_file")
       rpm -qp --qf "%{NAME} %{EPOCHNUM}:%{VERSION}-%{RELEASE}.%{ARCH}\n" "$rpm_file" > /evidence/expected-nevra.txt
@@ -202,11 +246,47 @@ PY
       mkdir -p /evidence/gui
       chown -R 1000:1000 /qa/test /evidence/gui
       browser=$(command -v chromium-browser || command -v chromium)
-      runuser -u nexusqa -- env HOME=/qa/test/home TMPDIR=/qa/test/tmp \
-        XDG_CONFIG_HOME=/qa/test/home/.config XDG_CACHE_HOME=/qa/test/home/.cache \
-        XDG_DATA_HOME=/qa/test/home/.local/share NEXUS_QA_BROWSER="$browser" xvfb-run -a \
-        "/opt/Nexus Launcher/resources/runtime/node/bin/node" \
-        /source/linux-rpm-preflight.mjs
+      if test "$NEXUS_QA_BUSINESS" = 1; then
+        # A normal default URI handler scoped to the synthetic QA HOME. The
+        # official Open action still goes through Electron shell.openExternal.
+        mkdir -p /qa/test/home/.local/share/applications /qa/test/home/.config
+        printf "%s\n" "[Desktop Entry]" "Type=Application" "Name=Nexus QA Browser" \
+          "Exec=$browser --user-data-dir=/qa/test/browser %U" "NoDisplay=true" \
+          "MimeType=x-scheme-handler/http;x-scheme-handler/https;" \
+          > /qa/test/home/.local/share/applications/nexus-qa-browser.desktop
+        chown -R 1000:1000 /qa/test/home/.local /qa/test/home/.config
+        for scheme in http https; do
+          runuser -u nexusqa -- env HOME=/qa/test/home XDG_CONFIG_HOME=/qa/test/home/.config \
+            XDG_DATA_HOME=/qa/test/home/.local/share xdg-mime default nexus-qa-browser.desktop "x-scheme-handler/$scheme"
+          handler=$(runuser -u nexusqa -- env HOME=/qa/test/home XDG_CONFIG_HOME=/qa/test/home/.config \
+            XDG_DATA_HOME=/qa/test/home/.local/share xdg-mime query default "x-scheme-handler/$scheme")
+          test "$handler" = nexus-qa-browser.desktop
+          printf "%s %s\n" "$scheme" "$handler" >> /evidence/default-browser.txt
+        done
+      fi
+      run_qa() {
+        runuser -u nexusqa -- env HOME=/qa/test/home TMPDIR=/qa/test/tmp \
+          XDG_CONFIG_HOME=/qa/test/home/.config XDG_CACHE_HOME=/qa/test/home/.cache \
+          XDG_DATA_HOME=/qa/test/home/.local/share NEXUS_QA_BROWSER="$browser" \
+          NEXUS_QA_BUSINESS="$NEXUS_QA_BUSINESS" NEXUS_QA_PHASE="$1" \
+          NEXUS_QA_DEADLINE_MS="$NEXUS_QA_DEADLINE_MS" xvfb-run -a -s "-screen 0 1280x800x24" \
+          "/opt/Nexus Launcher/resources/runtime/node/bin/node" /source/linux-rpm-preflight.mjs
+      }
+      run_qa fresh
+      if test "$NEXUS_QA_BUSINESS" = 1; then
+        old_rpm=/qa/verified-old/dsh-nexus_1.0.3_linux_x64.rpm
+        rpm -qp --qf "%{NAME} %{EPOCHNUM}:%{VERSION}-%{RELEASE}.%{ARCH}\n" "$old_rpm" > /evidence/old-expected-nevra.txt
+        cmp /evidence/expected-nevra.txt /evidence/old-expected-nevra.txt
+        # Normal same-NEVRA replacement from a local RPM, including dependencies
+        # and scriptlets. Installed identity and data are checked after each.
+        dnf -y --setopt=cachedir=/qa/dnf-cache reinstall "$old_rpm" > /evidence/replace-with-old.log 2>&1
+        rpm -V "$package" > /evidence/old-installed-verification.txt
+        run_qa old
+        dnf -y --setopt=cachedir=/qa/dnf-cache reinstall "$rpm_file" > /evidence/replace-with-final.log 2>&1
+        rpm -V "$package" > /evidence/final-installed-verification.txt
+        dnf --setopt=cachedir=/qa/dnf-cache clean all
+        run_qa final
+      fi
       ' 2>&1 | tee "$evidence/environment.log"
     test ! -e "$evidence/storage-limit.txt"
     ;;

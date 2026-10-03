@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { mkdir, open, readdir, readFile, readlink, writeFile } from 'node:fs/promises';
+import { lstat, mkdir, open, readdir, readFile, readlink, statfs, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 
 assert.equal(process.platform, 'linux');
@@ -9,10 +9,17 @@ assert.equal(process.arch, 'x64');
 assert.notEqual(process.getuid(), 0);
 assert.equal(process.env.GITHUB_ACTIONS, 'true');
 const root = '/qa/test';
-const evidence = '/evidence/gui';
+const business = process.env.NEXUS_QA_BUSINESS === '1';
+const phase = process.env.NEXUS_QA_PHASE ?? 'fresh';
+assert.ok(['fresh', 'old', 'final'].includes(phase));
+const sharedDeadlineAt = Number(process.env.NEXUS_QA_DEADLINE_MS);
+assert.ok(Number.isSafeInteger(sharedDeadlineAt) && sharedDeadlineAt > Date.now());
+const evidence = business ? `/evidence/gui/${phase}` : '/evidence/gui';
 const executable = '/opt/Nexus Launcher/nexus-launcher';
 const logs = [];
 const children = [];
+const extraChannels = [];
+const browserTargetEvents = [];
 const report = {
   scope: 'Fedora container native RPM installation and ordinary non-root GUI/sandbox prerequisites only',
   result: 'FAIL',
@@ -73,7 +80,7 @@ async function socket(url) {
   });
   const cdp = (method, params = {}) => new Promise((resolve, reject) => {
     const id = ++next;
-    const timer = setTimeout(() => { pending.delete(id); reject(new Error(`CDP timeout ${method}`)); }, 5000);
+    const timer = setTimeout(() => { pending.delete(id); reject(new Error(`CDP timeout ${method}`)); }, method === 'Runtime.evaluate' ? 120000 : 5000);
     pending.set(id, { resolve: result => { clearTimeout(timer); resolve(result); }, reject: error => { clearTimeout(timer); reject(error); } });
     try { ws.send(JSON.stringify({ id, method, params })); }
     catch (error) { pending.delete(id); clearTimeout(timer); reject(error); }
@@ -83,7 +90,17 @@ async function socket(url) {
 async function connect(child, userData, type) {
   report.phase = `${type}: wait for DevToolsActivePort`;
   const port = await until(child, async () => {
-    try { return (await readFile(path.join(userData, 'DevToolsActivePort'), 'utf8')).split('\n')[0]; } catch { return null; }
+    try {
+      const candidate = (await readFile(path.join(userData, 'DevToolsActivePort'), 'utf8')).split('\n')[0];
+      assert.match(candidate, /^\d+$/);
+      // A reused QA profile can retain the previous closed process port file.
+      const response = await fetch(`http://127.0.0.1:${candidate}/json/version`, { signal: AbortSignal.timeout(5000) });
+      assert.equal(response.status, 200);
+      return candidate;
+    } catch (error) {
+      if (error.code === 'ENOENT' || error.cause?.code === 'ECONNREFUSED') return null;
+      throw error;
+    }
   });
   assert.match(port, /^\d+$/);
   const get = async endpoint => {
@@ -104,7 +121,7 @@ async function connect(child, userData, type) {
     if (result.exceptionDetails) throw new Error('Renderer evaluation failed');
     return result.result.value;
   };
-  return { ...channel, host, evaluate };
+  return { ...channel, host, evaluate, port, getPages: () => get('json/list') };
 }
 async function status(pid) {
   const text = await readFile(`/proc/${pid}/status`, 'utf8');
@@ -120,6 +137,112 @@ async function x11(args) {
   await Promise.race([child.qaClose, delay(5000)]);
   assert.ok(child.qaClosed && child.exitCode === 0, 'Owned X11 QA input/query did not complete');
   return output.trim();
+}
+async function command(program, args, env = {}) {
+  const child = start(program, args, env);
+  await Promise.race([child.qaClose, delay(15000)]);
+  assert.ok(child.qaClosed && child.exitCode === 0, `Owned QA command failed: ${program}`);
+}
+async function browserAssociation(home) {
+  const env = { HOME: home, XDG_CONFIG_HOME: `${home}/.config`, XDG_DATA_HOME: `${home}/.local/share` };
+  await mkdir(`${home}/.local/share/applications`, { recursive: true });
+  await mkdir(`${home}/.config`, { recursive: true });
+  await writeFile(`${home}/.local/share/applications/nexus-qa-browser.desktop`, `[Desktop Entry]\nType=Application\nName=Nexus QA Browser\nExec=${process.env.NEXUS_QA_BROWSER} --user-data-dir=${root}/browser %U\nNoDisplay=true\nMimeType=x-scheme-handler/http;x-scheme-handler/https;\n`);
+  for (const scheme of ['http', 'https']) await command('/usr/bin/xdg-mime', ['default', 'nexus-qa-browser.desktop', `x-scheme-handler/${scheme}`], env);
+}
+async function launchInstance(spec) {
+  assert.equal(spec.executable, executable);
+  for (const value of [spec.dataRoot, spec.home, spec.dshHome, spec.userDataDir]) {
+    assert.ok(value.startsWith(`${root}/`) && !(await lstat(value)).isSymbolicLink());
+  }
+  await browserAssociation(spec.home);
+  const proc = start(executable, [`--user-data-dir=${spec.userDataDir}`, '--remote-debugging-port=0'], {
+    HOME: spec.home, TMPDIR: `${root}/tmp`, XDG_CONFIG_HOME: `${spec.home}/.config`,
+    XDG_CACHE_HOME: `${spec.home}/.cache`, XDG_DATA_HOME: `${spec.home}/.local/share`,
+    NEXUS_DATA_DIR: spec.dataRoot, DSH_HOME: spec.dshHome, NEXUS_AGENT_PORT: '0', NEXUS_LOCALE: 'en',
+  });
+  const channel = await connect(proc, spec.userDataDir, 'electron');
+  extraChannels.push(channel);
+  return { proc, desktop: channel };
+}
+async function restartInstance({ instance, spec }) {
+  assert.ok(children.includes(instance.proc) && instance.proc.qaProgram === executable);
+  await instance.desktop.evaluate('window.nexusDesktop.invoke("proxy_request", {method:"POST",path:"/v1/agent",body:{action:"stop"}})');
+  try { await instance.desktop.host.cdp('Browser.close'); } catch { /* Close may precede response. */ }
+  instance.desktop.ws.close(); instance.desktop.host.ws.close();
+  await Promise.race([instance.proc.qaClose, delay(15000)]);
+  assert.ok(instance.proc.qaClosed && instance.proc.exitCode === 0, 'Normal QA instance restart requires confirmed prior GUI exit');
+  return launchInstance(spec);
+}
+async function findOfficialPage({ url, openedAfter }) {
+  assert.ok(Number.isFinite(openedAfter) && openedAfter <= Date.now());
+  const expected = new URL(url);
+  assert.equal(expected.protocol, 'http:');
+  assert.ok(['127.0.0.1', 'localhost'].includes(expected.hostname));
+  const page = await until(browser, async () => (await web.getPages()).find(p => {
+    if (p.type !== 'page') return false;
+    try {
+      return new URL(p.url).href === expected.href && browserTargetEvents.some(event =>
+        event.targetId === p.id && event.url === p.url && event.time >= openedAfter);
+    } catch { return false; }
+  }));
+  assert.match(page.id, /^[A-Za-z0-9_-]+$/, 'Official browser target ID must be safe for evidence naming');
+  const event = browserTargetEvents.findLast(item => item.targetId === page.id && item.url === page.url && item.time >= openedAfter);
+  await writeFile(`${evidence}/official-open-${page.id}.json`, JSON.stringify({ targetId: page.id, openedAfter, observedAt: event.time, event: event.method, urlSha256: createHash('sha256').update(url).digest('hex') }, null, 2));
+  const channel = await socket(page.webSocketDebuggerUrl);
+  extraChannels.push(channel);
+  const evaluate = async expression => {
+    const value = await channel.cdp('Runtime.evaluate', { expression, awaitPromise: true, returnByValue: true });
+    if (value.exceptionDetails) throw new Error('Official browser renderer evaluation failed');
+    return value.result.value;
+  };
+  return { page: { evaluate, cdp: channel.cdp }, targetId: page.id, method: 'existing-cdp-target' };
+}
+let exportPayloadBytes;
+let sourceEnvironmentBytes;
+const admittedStages = new Set();
+const businessStages = new Set(['native_identity', 'fresh_official_fetch', 'normal_promote', 'synthetic_files', 'old_preserved_data', 'official_browser_session_and_plugin', 'normal_stop', 'full_runtime_export', 'launch_fresh_B', 'inspect_complete_archive', 'full_import_and_publication', 'B_real_session_and_plugin', 'B_stop_before_recovery', 'inflight_import_cancel', 'normal_B_restart', 'retry_full_import_same_B', 'recovered_B_real_session_and_plugin', 'recovered_B_stop', 'same_Agent_next_write']);
+async function logicalBytes(directory) {
+  const metadata = await lstat(directory);
+  if (metadata.isSymbolicLink()) return 4096;
+  if (metadata.isFile()) return Math.ceil(metadata.size / 4096) * 4096 + 4096;
+  assert.ok(metadata.isDirectory(), 'Unexpected QA payload entry');
+  let bytes = 4096;
+  for (const entry of await readdir(directory)) bytes += await logicalBytes(path.join(directory, entry));
+  return bytes;
+}
+async function budgetGate({ stage, dataRoot, dshHome }) {
+  assert.ok(businessStages.has(stage), 'Unknown business QA stage');
+  for (const directory of [dataRoot, dshHome]) {
+    assert.ok(directory.startsWith(`${root}/`) && !(await lstat(directory)).isSymbolicLink(), 'Budget paths must be owned ordinary QA directories');
+  }
+  const lines = (await readFile('/evidence/storage-timeline.txt', 'utf8')).trim().split('\n');
+  const [time, occupiedText] = lines.at(-1).split(' ');
+  assert.ok(Date.now() - Date.parse(time) <= 15000, 'Host QA physical measurement is stale');
+  const occupied = Number(occupiedText);
+  assert.ok(Number.isSafeInteger(occupied) && occupied >= 0 && occupied <= 23 * 2 ** 30);
+  const fs = await statfs(root);
+  const free = fs.bavail * fs.bsize, floor = Math.max(20 * 2 ** 30, fs.blocks * fs.bsize / 10);
+  let increment = 0;
+  if (!admittedStages.has(stage)) {
+    if (stage === 'fresh_official_fetch') increment = 8 * 2 ** 30;
+    if (['full_runtime_export', 'full_import_and_publication', 'inflight_import_cancel', 'retry_full_import_same_B'].includes(stage)) {
+      sourceEnvironmentBytes ??= await logicalBytes(`${root}/dsh`);
+      // Include all source slots/runtime and the complete source environment,
+      // rounding regular files and directory entries to 4 KiB allocation units.
+      // Import additionally copies the receiver HOME to merged-environment and
+      // overlays incoming environment files while the extracted payload exists.
+      exportPayloadBytes ??= await logicalBytes(`${root}/business/releases`) + await logicalBytes('/opt/Nexus Launcher/resources/runtime') + sourceEnvironmentBytes;
+      const receiverEnvironmentBytes = await logicalBytes(dshHome);
+      increment = stage === 'full_runtime_export' ? 2 * exportPayloadBytes : exportPayloadBytes + receiverEnvironmentBytes + sourceEnvironmentBytes;
+      increment += 512 * 1024 ** 2;
+    }
+    assert.ok(occupied + increment <= 23 * 2 ** 30 && free - increment >= floor + 2 ** 30, 'Measured QA phase estimate exceeds approved envelope');
+    admittedStages.add(stage);
+    await writeFile(`${evidence}/budget-${stage}.json`, JSON.stringify({ stage, dataRoot, dshHome, occupied, free, floor, increment, exportPayloadBytes, sourceEnvironmentBytes, limit: 24 * 2 ** 30, stopLine: 23 * 2 ** 30 }, null, 2));
+  }
+  assert.ok(free >= floor + 2 ** 30);
+  return { ok: true, occupied, free, floor, increment };
 }
 let electron;
 let browser;
@@ -194,10 +317,21 @@ async function failureEvidence() {
   await writeFile(`${evidence}/failure-state.json`, JSON.stringify(diagnostic, null, 2));
 }
 try {
+  await mkdir(evidence, { recursive: true });
   for (const directory of ['electron', 'browser', 'business', 'dsh', 'harness']) await mkdir(path.join(root, directory), { recursive: true });
   report.executableSha256 = createHash('sha256').update(await readFile(executable)).digest('hex');
+  if (business) {
+    assert.equal(process.env.NEXUS_HARNESS_ROOT, undefined, 'Full first selection must use normal managed releases');
+    const manifestBytes = await readFile('/opt/Nexus Launcher/resources/release-manifest.json');
+    const manifest = JSON.parse(manifestBytes);
+    const expectedCommit = phase === 'old' ? '81ae28ed65df7630f3b1aa3b5e0215383218341d' : 'c34b51ccfe5467e76340e6e3bc1201d304cadde7';
+    const expectedRun = phase === 'old' ? 36832892260 : 36834335424;
+    assert.equal(manifest.commit, expectedCommit);
+    assert.equal(manifest.buildId, `electron-${expectedRun}-1-x86_64-unknown-linux-gnu`);
+    report.installedIdentity = { commit: manifest.commit, buildId: manifest.buildId, manifestSha256: createHash('sha256').update(manifestBytes).digest('hex') };
+  }
   electron = start(executable, [`--user-data-dir=${root}/electron`, '--remote-debugging-port=0'], {
-    NEXUS_DATA_DIR: `${root}/business`, DSH_HOME: `${root}/dsh`, NEXUS_HARNESS_ROOT: `${root}/harness`,
+    NEXUS_DATA_DIR: `${root}/business`, DSH_HOME: `${root}/dsh`, ...(!business && { NEXUS_HARNESS_ROOT: `${root}/harness` }),
     NEXUS_AGENT_PORT: '0', NEXUS_LOCALE: 'en',
   });
   desktop = await connect(electron, `${root}/electron`, 'electron');
@@ -260,24 +394,34 @@ try {
     await x11(['windowfocus', '--sync', windows[0]]);
     assert.equal(await x11(['getwindowpid', windows[0]]), String(browser.pid));
     assert.equal(await x11(['getwindowname', windows[0]]), title);
-    const before = start('/usr/bin/xwd', ['-root', '-silent', '-out', `${evidence}/browser-first-run.xwd`]);
+    const geometry = Object.fromEntries((await x11(['getwindowgeometry', '--shell', windows[0]])).split('\n').map(line => line.split('=')));
+    const gx = Number(geometry.X), gy = Number(geometry.Y), gw = Number(geometry.WIDTH), gh = Number(geometry.HEIGHT);
+    assert.ok([gx, gy, gw, gh].every(Number.isInteger));
+    assert.ok(gx >= 0 && gy >= 0 && gw > 0 && gh > 0 && gx + gw <= 1280 && gy + gh <= 800, 'Whole first-run dialog must be visible within the enlarged display');
+    const before = start('/usr/bin/xwd', ['-id', windows[0], '-silent', '-out', `${evidence}/browser-first-run.xwd`]);
     await Promise.race([before.qaClose, delay(5000)]);
     assert.ok(before.qaClosed && before.exitCode === 0, 'First-run screenshot must complete before input');
     const display = await readFile(`${evidence}/browser-first-run.xwd`);
-    assert.equal(display.length, 1231979, 'Current display must match the reviewed full-screen geometry');
+    assert.ok(display.length <= 8 * 1024 ** 2);
     const header = Array.from({ length: 25 }, (_, i) => display.readUInt32BE(i * 4));
-    assert.deepEqual(header.slice(1, 22), [7, 2, 24, 640, 480, 0, 0, 32, 0, 32, 32, 2560, 4, 16711680, 65280, 255, 8, 256, 256, 640, 480]);
+    assert.equal(header[1], 7); assert.equal(header[2], 2); assert.equal(header[3], 24);
+    assert.equal(header[4], gw); assert.equal(header[5], gh);
+    assert.equal(header[6], 0); assert.equal(header[7], 0); assert.equal(header[11], 32);
+    assert.deepEqual(header.slice(14, 17), [16711680, 65280, 255]);
     const offset = header[0] + header[19] * 12;
     assert.equal(offset + header[12] * header[5], display.length);
-    const rgb = Buffer.alloc(header[4] * header[5] * 3);
-    for (let y = 0; y < header[5]; y++) for (let x = 0; x < header[4]; x++) {
+    // Hash the complete owned window, including every line and both buttons.
+    // Never reuse a screen-clipped baseline or unrelated background pixels.
+    const rgb = Buffer.alloc(gw * gh * 3);
+    for (let y = 0; y < gh; y++) for (let x = 0; x < gw; x++) {
       const i = offset + y * header[12] + x * 4;
-      const j = (y * header[4] + x) * 3;
+      const j = (y * gw + x) * 3;
       rgb[j] = display[i + 2]; rgb[j + 1] = display[i + 1]; rgb[j + 2] = display[i];
     }
     const pixelsSha256 = createHash('sha256').update(rgb).digest('hex');
-    assert.equal(pixelsSha256, '81d49611bda7ddfcf5258a2db88ec39a0924ef35db8b152783db816e30cb6019', 'Visible first-run screen must exactly match the reviewed empty-placeholder screen before input');
-    report.browserFirstRun = { windowId: windows[0], browserPid: browser.pid, title, placeholder, localePath, localeSha256: createHash('sha256').update(locale).digest('hex'), pixelsSha256, action: 'normal Return key after exact reviewed visible-screen match', sourceEvidenceRunId: 36865876182, sourceDisplaySha256: '99cd6dd1f8aca17a4d0b944c9ad39ad2c996eda13f479c6d70726ad9d3430ce7' };
+    report.browserFirstRun = { windowId: windows[0], browserPid: browser.pid, title, geometry, placeholder, localePath, localeSha256: createHash('sha256').update(locale).digest('hex'), pixelsSha256, wholeWindowSha256: createHash('sha256').update(display).digest('hex'), action: 'NOT RUN: complete owned-window baseline needs review' };
+    assert.equal(pixelsSha256, 'UNREVIEWED_FULL_DIALOG', 'Complete first-run window must be independently reviewed before normal input');
+    report.browserFirstRun.action = 'normal Return key after exact reviewed complete-window match';
     await x11(['key', '--window', windows[0], 'Return']);
   }
   web = await connect(browser, `${root}/browser`, 'browser');
@@ -285,12 +429,36 @@ try {
   assert.equal(await web.evaluate('document.querySelector("#marker")?.textContent'), 'nexus-qa-browser-preflight');
   await web.cdp('Page.navigate', { url: 'chrome://sandbox' });
   report.phase = 'browser: sandbox page';
-  const sandbox = await until(browser, () => web.evaluate('document.body?.innerText?.includes("Sandbox") ? document.body.innerText : null'));
+  const sandbox = await until(browser, () => web.evaluate('/Seccomp.BPF sandbox\\s+(Yes|No)/i.test(document.body?.innerText ?? "") ? document.body.innerText : null'));
   await writeFile(`${evidence}/browser-sandbox.txt`, sandbox);
   assert.match(sandbox, /Seccomp.BPF sandbox\s+Yes/i);
   report.checks.push('ordinary non-root Chromium rendered prerequisite fixture with Seccomp-BPF sandbox enabled; no security-disabling arguments');
+  if (business) {
+    report.scope = 'Frozen original RPM fresh installation, same-version package replacement and full synthetic runtime migration';
+    web.host.ws.addEventListener('message', event => {
+      const message = JSON.parse(event.data);
+      if (['Target.targetCreated', 'Target.targetInfoChanged'].includes(message.method)) {
+        const info = message.params.targetInfo;
+        browserTargetEvents.push({ time: Date.now(), method: message.method, targetId: info.targetId, url: info.url });
+        if (browserTargetEvents.length > 1000) browserTargetEvents.shift();
+      }
+    });
+    await web.host.cdp('Target.setDiscoverTargets', { discover: true });
+    const { runBusinessQA } = await import('./linux-rpm-business.mjs');
+    await runBusinessQA({ phase, root, evidence, report, desktop, browser, web, electron,
+      expectedIdentity: { commit: report.installedIdentity.commit, buildId: report.installedIdentity.buildId },
+      // The shared deadline starts before DNF and leaves two minutes for owned
+      // cleanup, five more before the host command deadline and upload time.
+      deadlineAt: Math.min(sharedDeadlineAt - 120000, Date.now() + (phase === 'final' ? 65 : 20) * 60 * 1000),
+      budgetGate, findOfficialPage, launchInstance, restartInstance });
+    assert.equal(report.businessQA?.status, 'PASS');
+    report.harnessFirstSelection = phase === 'fresh' ? 'PASS' : 'Previously selected release preserved';
+    report.actualHarnessBrowserSessionAndPluginActivation = 'PASS synthetic session and Cordis fixture';
+    report.dataPreservingPackageTransaction = phase === 'fresh' ? 'Fresh install; transaction verified externally' : 'PASS preserved QA data; DNF transaction verified externally';
+  }
   report.result = 'PASS prerequisites only';
-  report.phase = 'prerequisites complete';
+  if (business) report.result = `PASS business ${phase}`;
+  report.phase = business ? `business ${phase} complete` : 'prerequisites complete';
 } catch (error) {
   report.error = error.message;
   process.exitCode = 1;
@@ -301,10 +469,10 @@ try {
     try { await desktop.evaluate('window.nexusDesktop.invoke("proxy_request", {method:"POST",path:"/v1/agent",body:{action:"stop"}})'); report.agentStop = 'official stop request returned; process exit checked separately by container cleanup'; }
     catch { report.agentStop = 'official stop unavailable; full container cleanup required'; }
   }
-  for (const channel of [web, desktop]) {
+  for (const channel of [web, desktop, ...extraChannels]) {
     try { await channel?.host.cdp('Browser.close'); } catch { /* Close event can precede the response. */ }
     channel?.ws.close();
-    channel?.host.ws.close();
+    channel?.host?.ws.close();
   }
   for (const child of children) {
     if (!child.qaClosed && child.exitCode === null && child.signalCode === null) child.kill('SIGTERM');
