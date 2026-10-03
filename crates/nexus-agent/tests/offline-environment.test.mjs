@@ -84,7 +84,13 @@ test('a reachable pnpm unit regenerates executable shims for hoisted sibling dep
   await link(path.join(unit, 'plugin'), path.join(environment, 'profiles/web/node_modules/plugin'));
   const calls = [];
   await environmentShims(environment, slot, { shim: async (from, to) => calls.push({ from, to }) });
-  assert.ok(calls.some(call => call.to === path.join(unit, '.bin/dependency')));
+  const expectedDirectory = await fs.realpath(path.join(unit, '.bin'));
+  const expectedSource = await fs.realpath(path.join(unit, 'dependency/cli.js'));
+  let found = false;
+  for (const call of calls) if (path.basename(call.to) === 'dependency'
+    && await fs.realpath(path.dirname(call.to)) === expectedDirectory
+    && await fs.realpath(call.from) === expectedSource) found = true;
+  assert.ok(found, 'hoisted shim must use the actual unit directory and dependency executable');
 }));
 
 test('reachable package executables cannot escape their package lexically or through links', async () => fixture(async ({ root, put, link, pkg }) => {
