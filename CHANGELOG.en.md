@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.0.4 — 2026-10-04
+
+- Add native Linux x86_64 AppImage, DEB and RPM packages alongside Linux ARM64, Windows x64/ARM64 and macOS Intel/Apple Silicon.
+- Adapt Harness 0.2 settings parsing, Desktop target preparation and unpackaged runtime environment to the upstream interfaces. Preserve compatibility with older hosts and explicit runtime overrides.
+- Fix Linux process ownership, PID namespace checks and command settlement so stale or unrelated process records cannot authorize mutations. Bind cold-operation completion to the owning operation and gate.
+- Initialize verified runtime and launch defaults when the user explicitly selects the first prepared release, and return the discovered private Agent endpoint consistently.
+- Add isolated Fedora RPM installation, real sandboxed browser, synthetic session/plugin and full offline migration acceptance. Bundled Harness remains 0.1.6-alpha.2; these checks do not certify every third-party plugin, real session migration or macOS device upgrade.
+
 
 ## 1.0.3 — 2026-09-26
 

@@ -1,23 +1,43 @@
-# Nexus 1.0.3
+# Nexus 1.0.4
 
-## 1.0.3 — 2026-09-26
+## 1.0.4 — 2026-10-04
 
-- 修复 macOS/Linux 内置 Node 的 bin/npm、bin/npx 及存在的 Corepack 入口：打包展开符号链接后仍从正确的包目录启动，避免选择 bin/node 时出现 npm_probe_failed 并连带显示 pnpm 不可用。旧构建缓存会重新生成；已安装包需要升级才能获得修复。
-- 官方桌面端后台运行时可再次“打开桌面端”，恢复已有窗口而不重启任务。按实际宿主能力显示入口，旧独立宿主保留原有控制方式。
-- 明确关闭窗口后进程可能继续运行；切换模式或修改数据前仍须中止桌面端。保留新旧 Harness 接口兼容，不自动升级用户 Harness。
+- 新增 Linux x86_64 原生 AppImage、DEB、RPM；Linux 双架构均检查安装包架构、资源及非 root 启动。
+- 按实际接口适配 Harness 0.2 的设置解析、Desktop 构建目标及非打包启动运行时，保留旧版宿主兼容。
+- 修复 Linux 命令所有权与进程收尾，核对 PID 命名空间；冷操作完成与实际操作身份、所有者及互斥门绑定，避免未收尾操作被当作安全完成。
+- 首次显式选择已准备的版本时初始化已验证运行时及启动参数；统一返回实际发现的私有 Agent 端口。
+- 增加隔离 Fedora 的正常 RPM 安装和包替换、实际沙箱浏览器、合成会话与 Cordis 插件激活、完整离线迁移及取消／重启恢复检查。
 
-### 验证范围
+### 下载
 
-平台构建和自动化检查不等于所有设备上的真实升级验收。内置 Harness 仍为 0.1.6-alpha.2；新版兼容适配不代表所有会话迁移及第三方插件已验收。
+| 系统 | 架构 | 安装包 |
+| --- | --- | --- |
+| Windows | x64、ARM64 | EXE、portable ZIP |
+| macOS | Intel、Apple Silicon | DMG、portable ZIP |
+| Linux | x86_64、ARM64 | AppImage、DEB、RPM |
+
+附件中的每个平台 `_build.json` 记录提交、构建身份和检查范围；`_SHA256SUMS.txt` 及总清单用于核对下载。总清单附带 GitHub Actions 身份绑定的 Sigstore 签名和证书；这不是操作系统生产代码签名。
+
+### 验证边界
+
+内置 Harness 锁仍为 0.1.6-alpha.2，不自动升级用户 Harness。该锁没有官方 Linux Desktop 资源，Linux 保留 Web 模式。Harness 0.2.0-rc.2 的隔离检查使用冻结源码和合成数据，不代表全部真实会话或第三方插件兼容。Fedora 容器验收不等于所有 Linux 发行版或 Mac 真机升级验收；CI unsigned 产物不等于生产签名。明确指定的运行时优先，否则使用内置工具；捆绑 Git 不包含 GCM。
 
 ---
 
-## 1.0.3 — 2026-09-26
+## 1.0.4 — 2026-10-04
 
-- Fix bundled macOS/Linux Node bin/npm, bin/npx and available Corepack entry points. They now launch from the correct package directory after packaging dereferences symbolic links, preventing npm_probe_failed and the resulting unavailable pnpm status when bin/node is selected. Old build caches are regenerated; installed applications need an update to receive the fix.
-- Open Desktop can restore an existing background desktop window without restarting its tasks. The running host advertises support; older independent hosts retain their existing controls.
-- Clarify that closing a window may leave Desktop running. Stop Desktop before switching modes or changing data. Compatibility with older and newer Harness interfaces remains; user Harness installations are not upgraded automatically.
+- Add native Linux x86_64 AppImage, DEB and RPM downloads. Both Linux architectures check package architecture, resources and non-root startup.
+- Adapt Harness 0.2 settings parsing, Desktop build targets and unpackaged runtime setup to the actual interfaces while retaining older host compatibility.
+- Fix Linux command ownership and settlement, verify PID namespaces, and bind cold-operation completion to the actual operation, owner and gate.
+- Initialize verified runtime and launch defaults on the first explicit selection of a prepared release, and consistently return the discovered private Agent endpoint.
+- Add isolated Fedora checks for normal RPM installation and replacement, a real sandboxed browser, synthetic sessions and Cordis plugin activation, full offline migration, and cancellation/restart recovery.
+
+### Downloads and provenance
+
+Windows x64/ARM64: EXE and portable ZIP. macOS Intel/Apple Silicon: DMG and portable ZIP. Linux x86_64/ARM64: AppImage, DEB and RPM.
+
+Each `_build.json` records the source commit, build identity and check scope. Verify downloaded bytes against the per-platform or aggregate SHA256 manifest. The aggregate manifest includes a GitHub Actions identity-bound Sigstore signature and certificate; this does not provide production OS code signing.
 
 ### Verification scope
 
-Platform builds and automated checks do not establish real upgrade acceptance on every device. Bundled Harness remains 0.1.6-alpha.2; compatibility work does not certify every session migration or third-party plugin.
+Bundled Harness remains 0.1.6-alpha.2 and user installations are not automatically upgraded. Its lock has no official Linux Desktop runtime, so Linux retains Web mode. Isolated Harness 0.2.0-rc.2 checks use frozen source and synthetic data and do not certify every real session or third-party plugin. Fedora container acceptance does not establish every Linux distribution or macOS device upgrade. Unsigned CI artifacts are not production-signed applications. Explicit runtime paths take precedence; otherwise bundled tools are used. Bundled Git excludes GCM.

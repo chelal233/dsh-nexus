@@ -156,18 +156,21 @@ export async function runBusinessQA(context) {
     const value = await fn(); await record('PASS',value??{}); return value;
   };
   const stopHarness = async (cleanup=false) => {
-    await api('/v1/harness',{action:'stop'},cleanup);
+    const stopped = response => ['detached','stopped'].includes(response.harness?.state) && response.harness.pid == null;
+    const response = await api('/v1/harness',{action:'stop'},cleanup);
+    await record('stop_response',response);
+    if (stopped(response)) return response;
     if (cleanup) {
       const end = Date.now()+20000;
       while (Date.now()<end) {
         const h = await api('/v1/harness',undefined,true);
-        if (h.harness?.state === 'stopped') return h;
+        if (stopped(h)) return h;
         await delay(250);
       }
       fail('CLEANUP_TIMEOUT','Harness did not report stopped');
     }
     return wait('Harness stopped',async()=> {
-      const h=await api('/v1/harness'); return h.harness?.state==='stopped'&&h;
+      const h=await api('/v1/harness'); return stopped(h)&&h;
     });
   };
   const verifyPage = async () => {
