@@ -257,7 +257,7 @@ async fn publish_verified_import(state: &AppState, mut operation: ColdOperation,
     });
     config.harness = Some(HarnessLaunchSpec {
         mode: HarnessLaunchMode::Node, program: runtime_root.join(node_entry),
-        args: vec!["{release_root}\\apps/cli/lib/bin.js".into(), "--profile".into(), "{profile}".into()],
+        args: vec!["{release_root}/apps/cli/lib/bin.js".into(), "--profile".into(), "{profile}".into()],
         working_dir: Some("{release_root}".into()), readiness_url: None, readiness_timeout_secs: None, readiness_token_required: false,
     });
     config.external_harness = None;

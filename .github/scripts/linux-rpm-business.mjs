@@ -636,6 +636,11 @@ export async function runBusinessQA(context) {
             if(stable(imported)!==stable(sourceConfigs[rel]))fail('migration_config_changed',rel);
           } else if(await fileHash(file)!==h)fail('migration_content_changed',rel);
         }
+        const preflight=await api('/v1/preflight');
+        await record('imported_startup_preflight',preflight);
+        if(preflight.ready!==true || !Array.isArray(preflight.checks) ||
+            !preflight.checks.some(check=>check.id==='entry'&&check.status==='ok'))
+          fail('imported_launch_blocked','Imported launch must resolve to an accessible managed CLI entry');
         return {release:op.release_id,slot,home,runtime:config.runtime,sourceCliHash,
           files:Object.keys(saved.files).length};
       };
