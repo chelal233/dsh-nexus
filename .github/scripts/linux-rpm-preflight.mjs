@@ -133,7 +133,12 @@ async function connect(child, userData, type) {
   const { cdp } = channel;
   const evaluate = async expression => {
     const result = await cdp('Runtime.evaluate', { expression, awaitPromise: true, returnByValue: true });
-    if (result.exceptionDetails) throw new Error('Renderer evaluation failed');
+    if (result.exceptionDetails) {
+      const detail=result.exceptionDetails;
+      const description=String(detail.exception?.description??detail.exception?.value??detail.text)
+        .replace(/(https?:\/\/[^\s?#]+)[?#][^\s]*/g,'$1?<redacted>').slice(0,4096);
+      throw Object.assign(new Error('Renderer evaluation failed: '+description),{code:'renderer_evaluation_failed'});
+    }
     return result.result.value;
   };
   return { ...channel, host, evaluate, port, getPages: () => get('json/list') };
