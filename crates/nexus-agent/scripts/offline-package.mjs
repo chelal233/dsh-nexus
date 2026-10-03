@@ -602,7 +602,14 @@ export async function environmentShims(environment, slot, tools) {
       // Follow installed dependencies into this environment's package store.
       // Retained, unreferenced units may still point to a prior release; they
       // are not active installations and must not regenerate executable shims.
-      for (const folder of packages) if (within(root, await fsp.realpath(folder))) await visit(folder);
+      for (const folder of packages) {
+        const real = await fsp.realpath(folder);
+        if (!within(root, real)) continue;
+        const parts = path.relative(root, real).split(path.sep);
+        // pnpm places dependencies beside the package in the same unit's
+        // node_modules. Visiting only the package would miss those shims.
+        await visit(parts[0] === '.packages' && parts.length > 1 ? path.join(root, parts[0], parts[1]) : folder);
+      }
     }
     for (const entry of entries) if (entry.isDirectory() && entry.name !== '.bin'
       && !(realDirectory === root && entry.name === '.packages')) await visit(path.join(directory, entry.name));

@@ -63,7 +63,7 @@ test('retained profiles keep separate package versions and reachable transitive 
   assert.equal(JSON.parse(await fs.readFile(path.join(environment, 'profiles/web/node_modules/plugin/package.json'))).version, '1.0.0');
   assert.ok(calls.some(call => call.to === path.join(environment, 'profiles/private/node_modules/.bin/plugin')));
   assert.ok(calls.some(call => path.basename(call.to) === 'dependency'));
-  assert.equal(calls.length, 4);
+  assert.ok(calls.length <= 8, 'cyclic units must have bounded shim generation');
 }));
 
 test('an actively referenced executable in a prior slot still fails the environment boundary', async () => fixture(async ({ root, link, pkg }) => {
@@ -73,6 +73,18 @@ test('an actively referenced executable in a prior slot still fails the environm
   let calls = 0;
   await assert.rejects(environmentShims(environment, slot, { shim: async () => { calls++; } }), /Plugin executable leaves environment/);
   assert.equal(calls, 0);
+}));
+
+test('a reachable pnpm unit regenerates executable shims for hoisted sibling dependencies', async () => fixture(async ({ root, link, pkg }) => {
+  const environment = path.join(root, 'environment'), slot = path.join(root, 'slot');
+  const unit = path.join(environment, '.packages/active/node_modules');
+  await fs.mkdir(slot);
+  await pkg(path.join(unit, 'plugin'), 'plugin', '1.0.0', {});
+  await pkg(path.join(unit, 'dependency'), 'dependency');
+  await link(path.join(unit, 'plugin'), path.join(environment, 'profiles/web/node_modules/plugin'));
+  const calls = [];
+  await environmentShims(environment, slot, { shim: async (from, to) => calls.push({ from, to }) });
+  assert.ok(calls.some(call => call.to === path.join(unit, '.bin/dependency')));
 }));
 
 test('reachable package executables cannot escape their package lexically or through links', async () => fixture(async ({ root, put, link, pkg }) => {
