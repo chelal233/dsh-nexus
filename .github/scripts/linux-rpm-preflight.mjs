@@ -196,12 +196,19 @@ async function findOfficialPage({ url, openedAfter }) {
   assert.ok(['127.0.0.1', 'localhost'].includes(expected.hostname));
   lastOfficialOpen = { openedAfter, url: urlIdentity(url) };
   await writeFile(`${evidence}/official-open-expected.json`, JSON.stringify(lastOfficialOpen, null, 2));
+  // Frozen rc2 BrowserAuth.authorizeIndex consumes the single root token and
+  // sends303 Location: ./. Require the exact launch URL event on this target
+  // before accepting its subsequent clean-root event; no arbitrary same-origin tab.
+  const cleanRoot = expected.pathname === '/' && expected.searchParams.size === 1 && expected.searchParams.has('token') && !expected.hash
+    ? new URL('./', expected).href : undefined;
+  const openingEvent = targetId => browserTargetEvents.findLast(event => event.targetId === targetId && event.url === expected.href && event.time >= openedAfter);
   let page;
   try { page = await until(browser, async () => (await web.getPages()).find(p => {
     if (p.type !== 'page') return false;
     try {
-      return new URL(p.url).href === expected.href && browserTargetEvents.some(event =>
-        event.targetId === p.id && event.url === p.url && event.time >= openedAfter);
+      const opened = openingEvent(p.id), current = new URL(p.url).href;
+      return opened && (current === expected.href || current === cleanRoot) && browserTargetEvents.some(event =>
+        event.targetId === p.id && event.url === current && event.time >= opened.time);
     } catch { return false; }
   })); } catch (error) {
     await writeFile(`${evidence}/official-open-targets.json`, JSON.stringify(await browserInventory(), null, 2));
@@ -222,8 +229,11 @@ async function findOfficialPage({ url, openedAfter }) {
     throw error;
   }
   assert.match(page.id, /^[A-Za-z0-9_-]+$/, 'Official browser target ID must be safe for evidence naming');
-  const event = browserTargetEvents.findLast(item => item.targetId === page.id && item.url === page.url && item.time >= openedAfter);
-  await writeFile(`${evidence}/official-open-${page.id}.json`, JSON.stringify({ targetId: page.id, openedAfter, observedAt: event.time, event: event.method, urlSha256: createHash('sha256').update(url).digest('hex') }, null, 2));
+  const opened = openingEvent(page.id);
+  const event = browserTargetEvents.findLast(item => item.targetId === page.id && item.url === page.url && item.time >= opened.time);
+  await writeFile(`${evidence}/official-open-${page.id}.json`, JSON.stringify({ targetId: page.id, openedAfter,
+    openedAt: opened.time, openedEvent: opened.method, expected: urlIdentity(url), observedAt: event.time,
+    event: event.method, observed: urlIdentity(page.url), source: 'rc2 BrowserAuth.authorizeIndex303 Location ./' }, null, 2));
   const channel = await socket(page.webSocketDebuggerUrl);
   extraChannels.push(channel);
   const evaluate = async expression => {
@@ -364,10 +374,13 @@ try {
     assert.equal(process.env.NEXUS_HARNESS_ROOT, undefined, 'Full first selection must use normal managed releases');
     const manifestBytes = await readFile('/opt/Nexus Launcher/resources/release-manifest.json');
     const manifest = JSON.parse(manifestBytes);
-    const expectedCommit = phase === 'old' ? '81ae28ed65df7630f3b1aa3b5e0215383218341d' : 'c34b51ccfe5467e76340e6e3bc1201d304cadde7';
-    const expectedRun = phase === 'old' ? 36832892260 : 36834335424;
+    const verified = JSON.parse(await readFile(phase === 'old' ? '/evidence/old-original-bytes.json' : '/evidence/original-bytes.json', 'utf8'));
+    assert.equal(verified.result, 'PASS');
+    const expectedCommit = verified.build.commit;
+    const expectedBuildId = verified.build.buildId;
     assert.equal(manifest.commit, expectedCommit);
-    assert.equal(manifest.buildId, `electron-${expectedRun}-1-x86_64-unknown-linux-gnu`);
+    assert.equal(manifest.buildId, expectedBuildId);
+    assert.equal(manifest.version, verified.build.version);
     report.installedIdentity = { commit: manifest.commit, buildId: manifest.buildId, manifestSha256: createHash('sha256').update(manifestBytes).digest('hex') };
   }
   electron = start(executable, [`--user-data-dir=${root}/electron`, '--remote-debugging-port=0'], {
@@ -478,7 +491,7 @@ try {
   assert.match(sandbox, /Seccomp.BPF sandbox\s+Yes/i);
   report.checks.push('ordinary non-root Chromium rendered prerequisite fixture with Seccomp-BPF sandbox enabled; no security-disabling arguments');
   if (business) {
-    report.scope = 'Frozen original RPM fresh installation, same-version package replacement and full synthetic runtime migration';
+    report.scope = 'Exact original RPM fresh installation, normal version-aware package transactions and full synthetic runtime migration';
     web.host.ws.addEventListener('message', event => {
       const message = JSON.parse(event.data);
       if (['Target.targetCreated', 'Target.targetInfoChanged'].includes(message.method)) {

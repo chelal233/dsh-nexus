@@ -2,6 +2,7 @@ import fs from 'node:fs/promises';
 import { createReadStream } from 'node:fs';
 import path from 'node:path';
 import { createHash, randomBytes } from 'node:crypto';
+import { constants as zlibConstants, zstdCompressSync, zstdDecompressSync } from 'node:zlib';
 
 /**
  * Candidate v4, all product execution NOT RUN. fresh/old/final native phases.
@@ -308,6 +309,15 @@ export async function runBusinessQA(context) {
       await step('synthetic_files',async()=> {
         await stopHarness();
         if(Buffer.byteLength(SESSION)!==338||digest(SESSION)!==SESSION_HASH) fail('fixture_invalid','session');
+        // rc2 materializes a checksummed header frame followed by an independent
+        // checksummed event frame; its default canonical suffix is .jsonl.zstd.
+        const split=SESSION.indexOf('\n')+1;
+        const frames=[SESSION.slice(0,split),SESSION.slice(split)].map(text=>
+          zstdCompressSync(text,{params:{[zlibConstants.ZSTD_c_checksumFlag]:1}}));
+        if(frames.some(frame=>frame.readUInt32LE(0)!==0xfd2fb528||!(frame[4]&4))||
+           digest(Buffer.concat(frames.map(frame=>zstdDecompressSync(frame))))!==SESSION_HASH)
+          fail('fixture_invalid','checksummed two-frame zstd session');
+        const sessionBytes=Buffer.concat(frames);
         const profile=path.join(home,'profiles/web'), plugin=path.join(profile,'node_modules/qa-round2-plugin');
         const dep=path.join(plugin,'node_modules/qa-round2-dependency');
         for(const d of [profile,plugin,dep,path.join(home,'sessions/_no-cwd/qa-valid-session'),path.join(home,'storages/qa-round2')]) {
@@ -338,7 +348,7 @@ export async function runBusinessQA(context) {
             '{"name":"qa-round2-dependency","version":"1.0.0","main":"index.js"}\n',
           'profiles/web/node_modules/qa-round2-plugin/node_modules/qa-round2-dependency/index.js':
             'module.exports="qa-round2-transitive-ok";\n',
-          'sessions/_no-cwd/qa-valid-session/session.v4.jsonl':SESSION,
+          'sessions/_no-cwd/qa-valid-session/session.v4.jsonl.zstd':sessionBytes,
           'storages/qa-round2/sentinel.txt':'Synthetic migration storage sentinel.\n'
         };
         const fingerprints={};
@@ -352,13 +362,14 @@ export async function runBusinessQA(context) {
         await api('/v1/config',{action:'set_harness_preferences',expected_revision:config.revision,
           harness_preferences:{...config.harness_preferences,home,open_browser:false}});
         await api('/v1/profiles',{action:'select',profile:'web'});
-        await fs.writeFile(stateFile,JSON.stringify({fixtureVersion:2,release:selected,head:HEAD,home,files:fingerprints},null,2),{flag:'wx'});
-        return {files:fingerprints,kind:'synthetic installed package tree; real Cordis activation checked separately'};
+        await fs.writeFile(stateFile,JSON.stringify({fixtureVersion:3,release:selected,head:HEAD,home,files:fingerprints},null,2),{flag:'wx'});
+        return {files:fingerprints,sessionPlaintextSha256:SESSION_HASH,sessionFrames:2,sessionChecksums:true,
+          kind:'synthetic installed package tree and default rc2 zstd session; real Cordis activation checked separately'};
       });
     } else {
       await step('old_preserved_data',async()=> {
         const state=JSON.parse(await fs.readFile(stateFile,'utf8'));selected=state.release;
-        if(state.fixtureVersion!==2)fail('fixture_version_mismatch','Use v2 fixture provenance; do not relabel a v1-only config test');
+        if(state.fixtureVersion!==3)fail('fixture_version_mismatch','Use v3 default-zstd fixture provenance; do not relabel a previous config/encoding test');
         const catalog=await api('/v1/releases');
         if(catalog.current_release!==selected)fail('selection_changed','A release was not preserved');
         if(!/^[A-Za-z0-9_-]+$/.test(selected||''))fail('release_id_invalid',String(selected));

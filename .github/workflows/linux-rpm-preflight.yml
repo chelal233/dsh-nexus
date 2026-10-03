@@ -7,6 +7,10 @@ on:
         description: 'Run the approved 24 GiB frozen-package business and migration acceptance'
         type: boolean
         default: false
+      candidate:
+        description: 'Optional reviewed1.0.4 artifact identity JSON; commit must equal this workflow checkout'
+        type: string
+        default: ''
 
 permissions:
   contents: read
@@ -24,17 +28,20 @@ jobs:
       QA_TEMP: ${{ github.workspace }}/.codex-temp/linux-rpm-acceptance
       QA_EVIDENCE: ${{ github.workspace }}/.codex-artifacts/linux-rpm-acceptance
       NEXUS_QA_BUSINESS: ${{ inputs.full_business && '1' || '0' }}
+      NEXUS_QA_CANDIDATE: ${{ inputs.candidate }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           persist-credentials: false
       - name: Check approved storage envelope before downloads
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: bash .github/scripts/linux-rpm-preflight.sh capacity
       - name: Receive intact frozen QA artifact
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
         with:
-          artifact-ids: '11149572256'
-          run-id: '36834335424'
+          artifact-ids: ${{ fromJSON(inputs.candidate || '{"artifactId":11149572256,"runId":36834335424}').artifactId }}
+          run-id: ${{ fromJSON(inputs.candidate || '{"artifactId":11149572256,"runId":36834335424}').runId }}
           github-token: ${{ github.token }}
           path: ${{ env.QA_TEMP }}/incoming
           skip-decompress: true

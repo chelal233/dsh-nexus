@@ -107,12 +107,55 @@ if d.free - 24 * 2**30 < floor:
     raise SystemExit('Insufficient native runner headroom; no download/install started')
 PY
     mkdir -p "$temporary/incoming" "$evidence"
+    # A release candidate is supplied as data, never interpolated shell code.
+    # Freeze its exact bytes/source before the download, and bind it to this
+    # checkout. Empty input retains the historical frozen QA comparison.
+    python3 - "$evidence" <<'PY'
+import json, os, pathlib, re, subprocess, sys
+raw = os.environ.get('NEXUS_QA_CANDIDATE', '')
+candidate = json.loads(raw) if raw else {
+    'artifactId': 11149572256, 'runId': 36834335424,
+    'commit': 'c34b51ccfe5467e76340e6e3bc1201d304cadde7',
+    'zipBytes': 183377947, 'zipSha256': '5ce5253ea3aec8a96c6cc461bf02dfe880e49ccfa1c84bdb603599073a95a641',
+    'rpmBytes': 184254885, 'rpmSha256': '049021576157dc97e253d9ba0c9e33e423feb090eb378d3550f40031a055d023',
+}
+assert set(candidate) == {'artifactId','runId','commit','zipBytes','zipSha256','rpmBytes','rpmSha256'}
+for key in ('artifactId','runId','zipBytes','rpmBytes'):
+    assert type(candidate[key]) is int and candidate[key] > 0
+assert candidate['zipBytes'] <= 200 * 1024**2 and candidate['rpmBytes'] <= 200 * 1024**2
+assert re.fullmatch('[a-f0-9]{40}', candidate['commit'])
+for key in ('zipSha256','rpmSha256'):
+    assert re.fullmatch('[a-f0-9]{64}', candidate[key])
+if raw:
+    assert candidate['commit'] == subprocess.check_output(['git','rev-parse','HEAD'], text=True).strip()
+    repository = os.environ['GITHUB_REPOSITORY']
+    assert repository == 'chelal233/dsh-nexus'
+    def api(resource):
+        return json.loads(subprocess.check_output(['gh','api',f'repos/{repository}/{resource}'], text=True))
+    artifact = api(f"actions/artifacts/{candidate['artifactId']}")
+    run = api(f"actions/runs/{candidate['runId']}")
+    jobs = api(f"actions/runs/{candidate['runId']}/jobs?filter=latest&per_page=100")['jobs']
+    assert artifact['name'] == 'qa-linux-x64-rpm' and not artifact['expired']
+    assert artifact['size_in_bytes'] == candidate['zipBytes'] and artifact['digest'] == 'sha256:' + candidate['zipSha256']
+    assert artifact['workflow_run']['id'] == candidate['runId'] and artifact['workflow_run']['head_sha'] == candidate['commit']
+    assert run['head_sha'] == candidate['commit'] and run['name'] == 'Desktop build'
+    assert run['status'] == 'completed' and run['conclusion'] == 'success'
+    assert len(jobs) == 7 and len({job['name'] for job in jobs}) == 7
+    assert all(job['status'] == 'completed' and job['conclusion'] == 'success' for job in jobs)
+    (pathlib.Path(sys.argv[1]) / 'candidate-source.json').write_text(json.dumps({
+        'artifact': artifact, 'run': {'id':run['id'],'head_sha':run['head_sha'],'conclusion':run['conclusion']},
+        'jobs': [{'id':job['id'],'name':job['name'],'conclusion':job['conclusion']} for job in jobs],
+    }, indent=2))
+candidate['version'] = '1.0.4' if raw else '1.0.3'
+(pathlib.Path(sys.argv[1]) / 'candidate-identity.json').write_text(json.dumps(candidate, indent=2))
+PY
     df -B1 "$workspace" > "$evidence/initial-storage.txt"
     ;;
   verify)
     python3 - "$temporary" "$evidence" "${NEXUS_QA_BUSINESS:-0}" <<'PY'
 import hashlib, json, pathlib, sys, zipfile
 root, evidence = map(pathlib.Path, sys.argv[1:3])
+candidate = json.loads((evidence / 'candidate-identity.json').read_text())
 archives = list((root / 'incoming').glob('*.zip'))
 if len(archives) != 1:
     raise SystemExit('Expected one original artifact ZIP')
@@ -124,11 +167,12 @@ def digest_stream(stream):
     return value.hexdigest()
 with archive.open('rb') as stream:
     digest = digest_stream(stream)
-assert archive.stat().st_size == 183377947
-assert digest == '5ce5253ea3aec8a96c6cc461bf02dfe880e49ccfa1c84bdb603599073a95a641'
-rpm = 'dsh-nexus_1.0.3_linux_x64.rpm'
-build_name = 'dsh-nexus_1.0.3_linux_x64_build.json'
-sums_name = 'dsh-nexus_1.0.3_linux_x64_SHA256SUMS.txt'
+assert archive.stat().st_size == candidate['zipBytes']
+assert digest == candidate['zipSha256']
+version = candidate['version']
+rpm = f'dsh-nexus_{version}_linux_x64.rpm'
+build_name = f'dsh-nexus_{version}_linux_x64_build.json'
+sums_name = f'dsh-nexus_{version}_linux_x64_SHA256SUMS.txt'
 names = {rpm, build_name, sums_name, 'latest-x64-linux.yml'}
 destination = root / 'verified'
 destination.mkdir(exist_ok=False)
@@ -138,9 +182,9 @@ with zipfile.ZipFile(archive) as package:
     assert sum(e.file_size for e in entries) <= 200 * 1024**2
     assert all(not e.is_dir() and (e.external_attr >> 16) & 0o170000 != 0o120000 for e in entries)
     build = json.loads(package.read(build_name))
-    assert build['commit'] == 'c34b51ccfe5467e76340e6e3bc1201d304cadde7'
-    assert build['target'] == 'x86_64-unknown-linux-gnu' and build['version'] == '1.0.3'
-    assert build['buildId'] == 'electron-36834335424-1-x86_64-unknown-linux-gnu'
+    assert build['commit'] == candidate['commit']
+    assert build['target'] == 'x86_64-unknown-linux-gnu' and build['version'] == version
+    assert build['buildId'] == f"electron-{candidate['runId']}-1-x86_64-unknown-linux-gnu"
     assert build['automatedChecks'] == 'passed' and build['installedPackageSmoke'] == 'passed-on-ci-runner'
     assert package.read(sums_name).decode() == ''.join(f"{f['sha256']}  {f['name']}\n" for f in build['files'])
     records = {f['name']: f['sha256'] for f in build['files']}
@@ -154,10 +198,10 @@ with zipfile.ZipFile(archive) as package:
         if entry.filename in (rpm, 'latest-x64-linux.yml'):
             assert sha.hexdigest() == records[entry.filename]
         if entry.filename == rpm:
-            assert entry.file_size == 184254885
-            assert sha.hexdigest() == '049021576157dc97e253d9ba0c9e33e423feb090eb378d3550f40031a055d023'
+            assert entry.file_size == candidate['rpmBytes']
+            assert sha.hexdigest() == candidate['rpmSha256']
         verified.append({'name': entry.filename, 'bytes': entry.file_size, 'sha256': sha.hexdigest()})
-(evidence / 'original-bytes.json').write_text(json.dumps({'result':'PASS','scope':'original ZIP and selected immutable RPM content/source, not native installation','artifactId':11149572256,'zipSha256':digest,'build':build,'files':verified}, indent=2))
+(evidence / 'original-bytes.json').write_text(json.dumps({'result':'PASS','scope':'original ZIP and selected immutable RPM content/source, not native installation','artifactId':candidate['artifactId'],'zipSha256':digest,'build':build,'files':verified}, indent=2))
 # This current-run duplicate is no longer needed; preserve the verified RPM.
 archive.unlink()
 if sys.argv[3] == '1':
@@ -171,6 +215,10 @@ if sys.argv[3] == '1':
     old_destination = root / 'verified-old'
     old_destination.mkdir(exist_ok=False)
     with zipfile.ZipFile(old_archive) as package:
+        rpm = 'dsh-nexus_1.0.3_linux_x64.rpm'
+        build_name = 'dsh-nexus_1.0.3_linux_x64_build.json'
+        sums_name = 'dsh-nexus_1.0.3_linux_x64_SHA256SUMS.txt'
+        names = {rpm, build_name, sums_name, 'latest-x64-linux.yml'}
         entries = package.infolist()
         assert len(entries) == 4 and {e.filename for e in entries} == names
         assert sum(e.file_size for e in entries) <= 200 * 1024**2
@@ -225,7 +273,10 @@ PY
       -v "$temporary/test:/qa/test" -v "$temporary/dnf-cache:/qa/dnf-cache" -v "$evidence:/evidence" \
       -e GITHUB_ACTIONS=true -e "NEXUS_QA_BUSINESS=${NEXUS_QA_BUSINESS:-0}" \
       -e "NEXUS_QA_DEADLINE_MS=$(( $(date +%s) * 1000 + 120 * 60 * 1000 ))" "$image" bash -euo pipefail -c '
-      rpm_file=/qa/verified/dsh-nexus_1.0.3_linux_x64.rpm
+      rpms=(/qa/verified/dsh-nexus_*_linux_x64.rpm)
+      test "${#rpms[@]}" = 1
+      rpm_file=${rpms[0]}
+      test -f "$rpm_file"
       package=$(rpm -qp --qf "%{NAME}" "$rpm_file")
       rpm -qp --qf "%{NAME} %{EPOCHNUM}:%{VERSION}-%{RELEASE}.%{ARCH}\n" "$rpm_file" > /evidence/expected-nevra.txt
       if rpm -q "$package" > /evidence/before-install.txt 2>&1; then
@@ -276,13 +327,22 @@ PY
       if test "$NEXUS_QA_BUSINESS" = 1; then
         old_rpm=/qa/verified-old/dsh-nexus_1.0.3_linux_x64.rpm
         rpm -qp --qf "%{NAME} %{EPOCHNUM}:%{VERSION}-%{RELEASE}.%{ARCH}\n" "$old_rpm" > /evidence/old-expected-nevra.txt
-        cmp /evidence/expected-nevra.txt /evidence/old-expected-nevra.txt
-        # Normal same-NEVRA replacement from a local RPM, including dependencies
-        # and scriptlets. Installed identity and data are checked after each.
-        dnf -y --setopt=cachedir=/qa/dnf-cache reinstall "$old_rpm" > /evidence/replace-with-old.log 2>&1
+        # Normal local-RPM transactions, including dependencies and scriptlets.
+        # Historical equal-NEVRA packages use reinstall;1.0.4 candidates exercise
+        # a real downgrade to old1.0.3 and an upgrade back to the candidate.
+        old_action=downgrade; final_action=upgrade
+        if cmp -s /evidence/expected-nevra.txt /evidence/old-expected-nevra.txt; then
+          old_action=reinstall; final_action=reinstall
+        fi
+        printf "%s %s\n" "$old_action" "$final_action" > /evidence/package-transaction-types.txt
+        dnf -y --setopt=cachedir=/qa/dnf-cache "$old_action" "$old_rpm" > /evidence/replace-with-old.log 2>&1
+        rpm -q --qf "%{NAME} %{EPOCHNUM}:%{VERSION}-%{RELEASE}.%{ARCH}\n" "$package" > /evidence/old-installed-nevra.txt
+        cmp /evidence/old-expected-nevra.txt /evidence/old-installed-nevra.txt
         rpm -V "$package" > /evidence/old-installed-verification.txt
         run_qa old
-        dnf -y --setopt=cachedir=/qa/dnf-cache reinstall "$rpm_file" > /evidence/replace-with-final.log 2>&1
+        dnf -y --setopt=cachedir=/qa/dnf-cache "$final_action" "$rpm_file" > /evidence/replace-with-final.log 2>&1
+        rpm -q --qf "%{NAME} %{EPOCHNUM}:%{VERSION}-%{RELEASE}.%{ARCH}\n" "$package" > /evidence/final-installed-nevra.txt
+        cmp /evidence/expected-nevra.txt /evidence/final-installed-nevra.txt
         rpm -V "$package" > /evidence/final-installed-verification.txt
         dnf --setopt=cachedir=/qa/dnf-cache clean all
         run_qa final
