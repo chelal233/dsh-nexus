@@ -5,7 +5,8 @@ import { createHash, randomBytes } from 'node:crypto';
 import { constants as zlibConstants, zstdCompressSync, zstdDecompressSync } from 'node:zlib';
 
 /**
- * Candidate v4, all product execution NOT RUN. fresh/old/final native phases.
+ * Frozen rc2 synthetic business acceptance; actual results live in run evidence.
+ * fresh/old/final native phases.
  * Required additions to the supplied context:
  * phase: 'fresh'|'old'|'final'
  * expectedIdentity: >=2 exact fields from the independently verified package identity
@@ -33,9 +34,13 @@ const TAG = 'dsh-v0.2.0-rc.2';
 const HEAD = '639ed015397290b3745d163aafe02ffee4aa3f84';
 const TEXT = 'Synthetic valid offline migration session. No model request.';
 const MARKER = 'DSH_QA_ACTIVATED:qa-round2-transitive-ok';
-const SESSION = '{"type":"session","version":4,"id":"qa-valid-session","createdAt":1,"isSeeded":false,"delegationDepth":0}\n' +
+const READ_MARKER = 'DSH_QA_READ_OK:qa-valid-session';
+const WORKSPACE = '/qa/test/fixture-workspace';
+// Frozen format.ts projectKey('/qa/test/fixture-workspace'); header and path agree.
+const SESSION_DIRECTORY = 'sessions/--qa-test-fixture-workspace--/qa-valid-session';
+const SESSION = '{"type":"session","version":4,"id":"qa-valid-session","createdAt":1,"cwd":"/qa/test/fixture-workspace","isSeeded":false,"delegationDepth":0}\n' +
   '{"type":"user/message","seq":0,"time":2,"data":{"content":[{"type":"text","text":"Synthetic valid offline migration session. No model request."}],"source":{"kind":"user"},"role":"user","id":"qa-valid-message"},"surfaceOp":"append"}\n';
-const SESSION_HASH = '75f2e5d49e62501eae21dd4a48ff3aecf5f05537e1f90060a3744388c87ffdeb';
+const SESSION_HASH = '8e6ab8c4df5804b7fb813d92a24dab00231fb76404abcdf7dcfe05fcd2f19b8f';
 const digest = x => createHash('sha256').update(x).digest('hex');
 const fail = (code, message) => { throw Object.assign(new Error(message), {code}); };
 async function fileHash(file) {
@@ -182,6 +187,21 @@ export async function runBusinessQA(context) {
         ui.available===true && ui.browser_health?.state==='active' &&
         ui.run_id===h.log_session_run_id && ui.generation===h.generation && {h,ui};
     });
+    const first=ready.h;
+    if (!/^[A-Za-z0-9._-]+$/.test(first.log_stdout_name||'')) fail('log_path_invalid','stdout name');
+    const log=path.join(data,'logs',first.log_stdout_name);
+    await wait('real backend read and Cordis apply markers',async()=> {
+      const h=await api('/v1/harness');
+      if (h.log_session_run_id!==first.log_session_run_id ||
+          h.log_stdout_file_identity!==first.log_stdout_file_identity)
+        fail('run_changed','Harness run changed while observing markers');
+      await ordinary(root,log,false);
+      const s=await fs.stat(log); if(s.size>8*1024*1024) fail('log_budget','stdout exceeds 8 MiB read cap');
+      const text=await fs.readFile(log,'utf8');
+      return text.includes(MARKER)&&text.includes(READ_MARKER);
+    });
+    await record('actual_persistence_read',{runId:first.log_session_run_id,marker:READ_MARKER,
+      scope:'Real backend list/open/read/close; read-only access, no SessionManager or model invocation'});
     const openedAfter = Date.now();
     const opened = await api('/v1/harness/ui',{action:'open'});
     if (typeof opened.url !== 'string') fail('open_missing_url','Official Open returned no URL');
@@ -219,12 +239,16 @@ export async function runBusinessQA(context) {
     // rc2 reads welcome/models asynchronously after Workspaces has rendered.
     // Keep normal dialog actions and tree navigation in the same bounded loop.
     await wait('official selected session message body',async()=> {
-      const surface=await evaluate(page,({origin,pathname,text})=>{
+      const surface=await evaluate(page,({origin,pathname,text,workspaceName})=>{
         if(location.origin!==origin||location.pathname!==pathname)return {ready:false};
         const visibleLabels=Array.from(document.querySelectorAll('button'))
           .filter(button=>button.getClientRects().length>0).map(button=>button.textContent.trim());
         const notice=document.body?.innerText.includes('Preview Notice')===true;
-        const group=document.querySelector('[role="treeitem"][data-row-key="workspace:"]');
+        // rc2 group keys contain bootstrap-generated workspace UUIDs, not cwd.
+        const groups=Array.from(document.querySelectorAll('[role="treeitem"][data-row-key]')).filter(row=>
+          row.getAttribute('data-row-key').startsWith('workspace:')&&row.getClientRects().length>0&&
+          row.innerText.includes(workspaceName));
+        const group=groups.length===1?groups[0]:null;
         const row=document.querySelector('[data-row-key="session:qa-valid-session"]');
         const chat=document.querySelector('[data-conversation-content][data-conversation-session="qa-valid-session"][data-conversation-region="chat"]');
         const scroll=chat?.querySelector(':scope > [data-conversation-scroll]');
@@ -232,32 +256,22 @@ export async function runBusinessQA(context) {
         const message=!!scroll&&Array.from(scroll.children).some(view=>
           !view.hasAttribute('data-composer-seat')&&view.getClientRects().length>0&&
           view.innerText.includes(text));
-        return {ready:true,notice,visibleLabels,collapsed:group?.getAttribute('aria-expanded')==='false',
+        return {ready:true,notice,visibleLabels,ambiguousGroup:groups.length>1,
+          groupKey:group?.getAttribute('data-row-key'),collapsed:group?.getAttribute('aria-expanded')==='false',
           session:!!row,selected:row?.getAttribute('aria-selected')==='true',message};
-      },{origin:expected.origin,pathname:expected.pathname,text:TEXT});
+      },{origin:expected.origin,pathname:expected.pathname,text:TEXT,workspaceName:path.basename(WORKSPACE)});
       if(!surface.ready)return false;
+      if(surface.ambiguousGroup)fail('workspace_group_ambiguous','QA workspace name must identify one actual group');
       const label=surface.notice?'Continue':surface.visibleLabels.includes('Configure later')?'Configure later':null;
       if(label) {
         if(!acknowledged.has(label)&&await clickVisible({label}))acknowledged.add(label);
         return false;
       }
       if(surface.selected&&surface.message)return true;
-      // onToggle belongs to the outer Ungrouped treeitem, not an inner button.
-      if(surface.collapsed)await clickVisible({rowKey:'workspace:'});
+      // onToggle belongs to the outer workspace treeitem, not an inner button.
+      if(surface.collapsed)await clickVisible({rowKey:surface.groupKey});
       else if(surface.session&&!surface.selected)await clickVisible({rowKey:'session:qa-valid-session'});
       return false;
-    });
-    const first=ready.h;
-    if (!/^[A-Za-z0-9._-]+$/.test(first.log_stdout_name||'')) fail('log_path_invalid','stdout name');
-    const log=path.join(data,'logs',first.log_stdout_name);
-    await wait('real Cordis apply marker',async()=> {
-      const h=await api('/v1/harness');
-      if (h.log_session_run_id!==first.log_session_run_id ||
-          h.log_stdout_file_identity!==first.log_stdout_file_identity)
-        fail('run_changed','Harness run changed while observing marker');
-      await ordinary(root,log,false);
-      const s=await fs.stat(log); if(s.size>8*1024*1024) fail('log_budget','stdout exceeds 8 MiB read cap');
-      return (await fs.readFile(log,'utf8')).includes(MARKER);
     });
     if (typeof page.cdp === 'function') {
       if (!/^[A-Za-z0-9._-]+$/.test(first.log_session_run_id || '')) fail('log_path_invalid','run ID');
@@ -265,7 +279,7 @@ export async function runBusinessQA(context) {
       await fs.writeFile(path.join(out, phase + '-' + first.log_session_run_id + '-session.png'), Buffer.from(screenshot.data, 'base64'));
     }
     return {targetId:found.targetId,url:expected.origin+expected.pathname,
-      runId:first.log_session_run_id,pid:first.harness.pid,sessionText:TEXT,marker:MARKER};
+      runId:first.log_session_run_id,pid:first.harness.pid,sessionText:TEXT,marker:MARKER,actualPersistenceRead:READ_MARKER};
   };
   const coldFinished = async (id, terminal='succeeded') => wait('cold '+terminal,async()=> {
     const response=await api('/v1/updates'), op=response.operation;
@@ -332,7 +346,7 @@ export async function runBusinessQA(context) {
       });
       await step('synthetic_files',async()=> {
         await stopHarness();
-        if(Buffer.byteLength(SESSION)!==338||digest(SESSION)!==SESSION_HASH) fail('fixture_invalid','session');
+        if(Buffer.byteLength(SESSION)!==373||digest(SESSION)!==SESSION_HASH) fail('fixture_invalid','session');
         // rc2 materializes a checksummed header frame followed by an independent
         // checksummed event frame; its default canonical suffix is .jsonl.zstd.
         const split=SESSION.indexOf('\n')+1;
@@ -342,9 +356,10 @@ export async function runBusinessQA(context) {
            digest(Buffer.concat(frames.map(frame=>zstdDecompressSync(frame))))!==SESSION_HASH)
           fail('fixture_invalid','checksummed two-frame zstd session');
         const sessionBytes=Buffer.concat(frames);
+        await fs.mkdir(WORKSPACE,{recursive:true});await ordinary(root,WORKSPACE);
         const profile=path.join(home,'profiles/web'), plugin=path.join(profile,'node_modules/qa-round2-plugin');
         const dep=path.join(plugin,'node_modules/qa-round2-dependency');
-        for(const d of [profile,plugin,dep,path.join(home,'sessions/_no-cwd/qa-valid-session'),path.join(home,'storages/qa-round2')]) {
+        for(const d of [profile,plugin,dep,path.join(home,SESSION_DIRECTORY),path.join(home,'storages/qa-round2')]) {
           await fs.mkdir(d,{recursive:true}); await ordinary(root,d);
         }
         const manifestPath=path.join(profile,'package.json');
@@ -367,12 +382,20 @@ export async function runBusinessQA(context) {
             "export function apply(ctx,config){if(leaf!=='qa-round2-transitive-ok')throw Error('dependency mismatch');"+
             "if(config?.marker!=='qa-round2-config')throw Error('profile configuration mismatch');"+
             "const ready=ctx.get('appReady');if(!ready)throw Error('appReady missing');"+
-            "ctx.effect(()=>ready.onReady(()=>process.stdout.write('DSH_QA_ACTIVATED:'+leaf+'\\n')),'qa fixture');}\n",
+            "ctx.effect(()=>ready.onReady(async()=>{const persistence=ctx.get('sessionPersistence');"+
+            "if(!persistence)throw Error('sessionPersistence missing');const snapshots=await persistence.list();"+
+            "const match=snapshots.filter(item=>item.header.id==='qa-valid-session');"+
+            "if(match.length!==1||match[0].header.cwd!=='/qa/test/fixture-workspace')throw Error('fixture header missing from actual backend');"+
+            "let handle;try{handle=await persistence.open('qa-valid-session','read');const loaded=await handle.read();"+
+            "if(loaded.events.length!==1||loaded.events[0].type!=='user/message'||"+
+            "loaded.events[0].data?.source?.kind!=='user'||loaded.events[0].data?.content?.[0]?.text!=="+JSON.stringify(TEXT)+")throw Error('actual backend message mismatch');"+
+            "}finally{if(handle)await handle.close();}"+
+            "process.stdout.write('DSH_QA_READ_OK:qa-valid-session\\nDSH_QA_ACTIVATED:'+leaf+'\\n');}),'qa fixture');}\n",
           'profiles/web/node_modules/qa-round2-plugin/node_modules/qa-round2-dependency/package.json':
             '{"name":"qa-round2-dependency","version":"1.0.0","main":"index.js"}\n',
           'profiles/web/node_modules/qa-round2-plugin/node_modules/qa-round2-dependency/index.js':
             'module.exports="qa-round2-transitive-ok";\n',
-          'sessions/_no-cwd/qa-valid-session/session.v4.jsonl.zstd':sessionBytes,
+          [SESSION_DIRECTORY+'/session.v4.jsonl.zstd']:sessionBytes,
           'storages/qa-round2/sentinel.txt':'Synthetic migration storage sentinel.\n'
         };
         const fingerprints={};
@@ -386,14 +409,15 @@ export async function runBusinessQA(context) {
         await api('/v1/config',{action:'set_harness_preferences',expected_revision:config.revision,
           harness_preferences:{...config.harness_preferences,home,open_browser:false}});
         await api('/v1/profiles',{action:'select',profile:'web'});
-        await fs.writeFile(stateFile,JSON.stringify({fixtureVersion:3,release:selected,head:HEAD,home,files:fingerprints},null,2),{flag:'wx'});
+        await fs.writeFile(stateFile,JSON.stringify({fixtureVersion:4,release:selected,head:HEAD,home,workspace:WORKSPACE,files:fingerprints},null,2),{flag:'wx'});
         return {files:fingerprints,sessionPlaintextSha256:SESSION_HASH,sessionFrames:2,sessionChecksums:true,
           kind:'synthetic installed package tree and default rc2 zstd session; real Cordis activation checked separately'};
       });
     } else {
       await step('old_preserved_data',async()=> {
         const state=JSON.parse(await fs.readFile(stateFile,'utf8'));selected=state.release;
-        if(state.fixtureVersion!==3)fail('fixture_version_mismatch','Use v3 default-zstd fixture provenance; do not relabel a previous config/encoding test');
+        if(state.fixtureVersion!==4||state.workspace!==WORKSPACE)fail('fixture_version_mismatch','Use v4 cwd/default-zstd fixture provenance; do not relabel a previous fixture');
+        await ordinary(root,WORKSPACE);
         const catalog=await api('/v1/releases');
         if(catalog.current_release!==selected)fail('selection_changed','A release was not preserved');
         if(!/^[A-Za-z0-9_-]+$/.test(selected||''))fail('release_id_invalid',String(selected));
