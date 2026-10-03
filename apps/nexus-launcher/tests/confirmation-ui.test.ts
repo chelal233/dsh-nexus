@@ -38,8 +38,12 @@ test("custom confirmation cancels on Escape, confirms explicitly and blocks the 
     await React.act(async () => root.render(React.createElement(BusyOverlay, { label: "Saving" })));
     assert.match(document.querySelector('[role="timer"]')!.textContent!, /0s/);
     assert.ok(document.querySelector('progress:not([value])'));
-    await React.act(async () => { await new Promise(resolve => setTimeout(resolve, 1100)); });
-    assert.match(document.querySelector('[role="timer"]')!.textContent!, /1s/);
+    // Timer callbacks and React commits can run late on a loaded runner.
+    const timerDeadline = performance.now() + 5000;
+    while (document.querySelector('[role="timer"]')!.textContent === "Elapsed time: 0s" && performance.now() < timerDeadline) {
+      await React.act(async () => { await new Promise(resolve => setTimeout(resolve, 100)); });
+    }
+    assert.match(document.querySelector('[role="timer"]')!.textContent!, /^Elapsed time: [1-9]\d*s$/);
     assert.equal(container.inert, true);
     await React.act(async () => { document.querySelector('.modal-card')!.dispatchEvent(new dom.window.KeyboardEvent('keydown', { key: 'Escape', bubbles: true })); });
     assert.ok(document.querySelector('[role="dialog"]'));

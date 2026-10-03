@@ -211,6 +211,7 @@ export async function runBusinessQA(context) {
     });
   };
   const verifyPage = async () => {
+    await record('startup_preflight', await api('/v1/preflight'));
     await api('/v1/harness',{action:'start'});
     const ready = await wait('current Web Ready',async()=> {
       const h=await api('/v1/harness'), ui=await api('/v1/harness/ui');
