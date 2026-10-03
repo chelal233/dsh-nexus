@@ -3,7 +3,9 @@ import { createReadStream } from 'node:fs';
 import path from 'node:path';
 import { createHash, randomBytes } from 'node:crypto';
 import { createRequire } from 'node:module';
-import { constants as zlibConstants, zstdCompressSync, zstdDecompressSync } from 'node:zlib';
+import { Readable } from 'node:stream';
+import { pipeline } from 'node:stream/promises';
+import { constants as zlibConstants, zstdCompressSync, zstdDecompressSync, createZstdDecompress } from 'node:zlib';
 
 /**
  * Frozen rc2 synthetic business acceptance; actual results live in run evidence.
@@ -499,8 +501,29 @@ export async function runBusinessQA(context) {
       const state=JSON.parse(await fs.readFile(stateFile,'utf8'));
       const rel='profiles/web/cordis.patch.yml', file=path.join(home,rel);
       for(const [name,hash] of Object.entries(state.files)) {
-        await ordinary(root,path.join(home,name),false);
-        if(name!==rel&&await fileHash(path.join(home,name))!==hash)fail('fixture_changed',name);
+        const fixtureFile=await ordinary(root,path.join(home,name),false);
+        if(name!==rel&&await fileHash(fixtureFile)!==hash) {
+          // Evidence only: never refresh a changed session's immutable hash.
+          if(name===SESSION_DIRECTORY+'/session.v4.jsonl.zstd')try {
+            if((await fs.stat(fixtureFile)).size>65536)fail('evidence_budget','Synthetic session exceeds64KiB');
+            const bytes=await fs.readFile(fixtureFile),chunks=[];let decodedBytes=0;
+            if(bytes.length>65536)fail('evidence_budget','Synthetic session grew beyond64KiB');
+            await record('changed_synthetic_session_bytes',{expectedSha256:hash,actualSha256:digest(bytes),
+              compressedBytes:bytes.length,compressedBase64:bytes.toString('base64')});
+            // In the local bounded probe, a single-buffer decoder returned only
+            // the first frame; one-byte streaming recovered both complete frames.
+            await pipeline(Readable.from((function*(){for(let i=0;i<bytes.length;i++)yield bytes.subarray(i,i+1);})()),
+              createZstdDecompress(),async input=>{for await(const chunk of input){
+                decodedBytes+=chunk.length;if(decodedBytes>65536)fail('evidence_budget','Decoded synthetic session exceeds64KiB');
+                chunks.push(chunk);
+              }});
+            const decoded=Buffer.concat(chunks);
+            await record('changed_synthetic_session',{expectedSha256:hash,actualSha256:digest(bytes),
+              decodedBytes,decodedSha256:digest(decoded),expectedPlaintextSha256:SESSION_HASH,
+              decoded:decoded.toString('utf8').trim().split('\n').map(JSON.parse)});
+          }catch(error){try{await record('changed_session_diagnostic_error',{code:error.code,message:error.message});}catch{}}
+          fail('fixture_changed',name);
+        }
       }
       const parsed=await readProfilePatch(file);
       const fixture=parsed.filter(item=>item?.id==='qa-offline-fixture');
