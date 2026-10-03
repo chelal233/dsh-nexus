@@ -252,10 +252,44 @@ export async function runBusinessQA(context) {
         const row=document.querySelector('[data-row-key="session:qa-valid-session"]');
         const chat=document.querySelector('[data-conversation-content][data-conversation-session="qa-valid-session"][data-conversation-region="chat"]');
         const scroll=chat?.querySelector(':scope > [data-conversation-scroll]');
-        // rc2 ConversationContent + DefaultConversationViews: exclude the composer seat.
-        const message=!!scroll&&Array.from(scroll.children).some(view=>
-          !view.hasAttribute('data-composer-seat')&&view.getClientRects().length>0&&
-          view.innerText.includes(text));
+        // Slot wrappers may have no layout box. Measure the actual message text
+        // inside this session's chat, excluding composer and editable content.
+        let message=false;
+        if(scroll) {
+          const nodes=document.createTreeWalker(scroll,NodeFilter.SHOW_TEXT);
+          for(let node=nodes.nextNode();node;node=nodes.nextNode()) {
+            const parent=node.parentElement;
+            if(!node.textContent.includes(text)||!parent||
+              parent.closest('[data-composer-seat],[data-conversation-region="composer"],textarea,[contenteditable="true"]'))continue;
+            const user=parent.closest('[data-chat-flow-kind="user"]');
+            if(!user||!scroll.contains(user))continue;
+            let visible=true;
+            const clip={left:0,top:0,right:innerWidth,bottom:innerHeight};
+            for(let element=parent;element;element=element.parentElement) {
+              const style=getComputedStyle(element);
+              if(style.display==='none'||style.visibility==='hidden'||style.visibility==='collapse'||
+                Number(style.opacity)===0||style.contentVisibility==='hidden') {visible=false;break;}
+              if(element.getClientRects().length>0) {
+                const bounds=element.getBoundingClientRect();
+                if(['auto','scroll','hidden','clip'].includes(style.overflowX)) {
+                  clip.left=Math.max(clip.left,bounds.left+element.clientLeft);
+                  clip.right=Math.min(clip.right,bounds.left+element.clientLeft+element.clientWidth);
+                }
+                if(['auto','scroll','hidden','clip'].includes(style.overflowY)) {
+                  clip.top=Math.max(clip.top,bounds.top+element.clientTop);
+                  clip.bottom=Math.min(clip.bottom,bounds.top+element.clientTop+element.clientHeight);
+                }
+              }
+            }
+            if(!visible)continue;
+            const offset=node.textContent.indexOf(text),range=document.createRange();
+            range.setStart(node,offset);range.setEnd(node,offset+text.length);
+            message=Array.from(range.getClientRects()).some(rect=>rect.width>0&&rect.height>0&&
+              clip.right>clip.left&&clip.bottom>clip.top&&rect.right>clip.left&&
+              rect.bottom>clip.top&&rect.left<clip.right&&rect.top<clip.bottom);
+            if(message)break;
+          }
+        }
         return {ready:true,notice,visibleLabels,ambiguousGroup:groups.length>1,
           groupKey:group?.getAttribute('data-row-key'),collapsed:group?.getAttribute('aria-expanded')==='false',
           session:!!row,selected:row?.getAttribute('aria-selected')==='true',message};
