@@ -27,20 +27,68 @@ engine=(sudo env "HOME=$temporary/engine-home" "TMPDIR=$temporary/engine-tmp"
   --tmpdir "$temporary/engine-tmp" --network-config-dir "$temporary/engine-net" --events-backend file)
 
 measure_root() {
-  local root before after measured
-  root=$1
-  test -d "$root" && test ! -L "$root" || return 2
-  before=$(sudo stat -c '%d:%i' -- "$root") || return 2
-  # Package managers replace temporary directory entries during transactions.
-  # GNU find ignores only entries disappearing between readdir and stat; other
-  # traversal failures still abort the operation. Count physical blocks once
-  # per inode, without following symlinks or traversing engine overlay mounts.
-  measured=$(sudo find "$root" -xdev -ignore_readdir_race -printf '%D %i %b\n' |
-    awk -v root_inode="$before" '!seen[$1 ":" $2]++ { blocks += $3 } END { if (!seen[root_inode]) exit 1; printf "%.0f\n", blocks * 512 }') || return 2
-  test -d "$root" && test ! -L "$root" || return 2
-  after=$(sudo stat -c '%d:%i' -- "$root") || return 2
-  test "$before" = "$after" && [[ "$measured" =~ ^[0-9]+$ ]] || return 2
-  printf '%s\n' "$measured"
+  # Hold directory descriptors so package-manager renames cannot redirect the
+  # walk. Ignore only disappearing child entries or an already removed child
+  # directory; root replacement, permissions and other I/O errors still fail.
+  # Count allocated blocks once per inode and do not descend overlay mounts.
+  sudo python3 - "$1" <<'PY'
+import os, stat, sys
+
+root = sys.argv[1]
+flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
+before = os.lstat(root)
+if not stat.S_ISDIR(before.st_mode):
+    raise RuntimeError('Storage root is not an ordinary directory')
+identity = (before.st_dev, before.st_ino)
+seen = set()
+blocks = 0
+
+def count(info):
+    global blocks
+    key = (info.st_dev, info.st_ino)
+    if key not in seen:
+        seen.add(key)
+        blocks += info.st_blocks
+
+def walk(fd):
+    info = os.fstat(fd)
+    count(info)
+    if info.st_dev != identity[0]:
+        return
+    try:
+        with os.scandir(fd) as entries:
+            for entry in entries:
+                try:
+                    item = os.stat(entry.name, dir_fd=fd, follow_symlinks=False)
+                except FileNotFoundError:
+                    continue
+                count(item)
+                if stat.S_ISDIR(item.st_mode) and item.st_dev == identity[0]:
+                    try:
+                        child = os.open(entry.name, flags, dir_fd=fd)
+                    except FileNotFoundError:
+                        continue
+                    try:
+                        walk(child)
+                    finally:
+                        os.close(child)
+    except FileNotFoundError:
+        if fd == root_fd or os.fstat(fd).st_nlink != 0:
+            raise
+
+root_fd = os.open(root, flags)
+try:
+    opened = os.fstat(root_fd)
+    if (opened.st_dev, opened.st_ino) != identity:
+        raise RuntimeError('Storage root changed before traversal')
+    walk(root_fd)
+    after = os.lstat(root)
+    if not stat.S_ISDIR(after.st_mode) or (after.st_dev, after.st_ino) != identity:
+        raise RuntimeError('Storage root changed during traversal')
+    print(blocks * 512)
+finally:
+    os.close(root_fd)
+PY
 }
 
 within_budget() {
