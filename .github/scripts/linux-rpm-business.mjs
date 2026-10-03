@@ -104,7 +104,7 @@ export async function runBusinessQA(context) {
   const root = await ordinary(c.root,c.root);
   let data = await ordinary(root,path.join(root,'business'));
   let home = await ordinary(root,path.join(root,'dsh'));
-  let desktop=c.desktop, instanceB=null, specB=null;
+  let desktop=c.desktop, instanceB=null, specB=null, activePage=null;
   const sourceData=data, sourceHome=home;
   const out = typeof c.evidence === 'string' ? c.evidence : path.join(root,'evidence');
   if (!path.isAbsolute(out)) fail('contract_invalid','evidence must be an explicit absolute directory');
@@ -189,6 +189,7 @@ export async function runBusinessQA(context) {
     if (!found?.page?.evaluate || !found.targetId || found.method!=='existing-cdp-target')
       fail('official_target_missing','Need actual officially opened CDP page');
     const page=found.page, expected=new URL(opened.url);
+    activePage=found;
     await wait('official browser document',async()=> {
       const observed=await evaluate(page,({origin,pathname})=>({
         blocked:document.body?.innerText.includes('ERR_BLOCKED_BY_CLIENT')===true,
@@ -197,32 +198,55 @@ export async function runBusinessQA(context) {
       if(observed.blocked)fail('BROWSER_BLOCKED','Official browser entry: ERR_BLOCKED_BY_CLIENT');
       return observed.ready;
     });
-    if(!await evaluate(page,()=>!!document.querySelector('[data-row-key="session:qa-valid-session"]'),null)) {
-      const toggled=await evaluate(page,()=>{
-        const button=document.querySelector('button[aria-label="View options"]');
-        if(!button)return false;button.click();return true;
-      },null);
-      if(toggled) await wait('workspace flat view option',async()=>evaluate(page,()=>{
-        const item=Array.from(document.querySelectorAll('[role="menuitemradio"],[role="menuitem"],button'))
-          .find(x=>x.textContent.trim()==='In one list');
-        if(!item)return false;item.click();return true;
-      },null));
-    }
-    await wait('official target and session row',async()=> evaluate(page,({origin,pathname}) => {
-      if (location.origin!==origin || location.pathname!==pathname) return false;
-      const row=document.querySelector('[data-row-key="session:qa-valid-session"]');
-      if (!row) return false; row.click(); return true;
-    },{origin:expected.origin,pathname:expected.pathname}));
-    await wait('selected session message body',async()=>evaluate(page,text=> {
-      const row=document.querySelector('[data-row-key="session:qa-valid-session"]');
-      if(row?.getAttribute('aria-selected')!=='true')return false;
-      const chat=document.querySelector('[data-conversation-content][data-conversation-session="qa-valid-session"][data-conversation-region="chat"]');
-      const scroll=chat?.querySelector(':scope > [data-conversation-scroll]');
-      // rc2 ConversationContent + DefaultConversationViews: exclude the composer seat.
-      return !!scroll&&Array.from(scroll.children).some(view=>
-        !view.hasAttribute('data-composer-seat')&&view.getClientRects().length>0&&
-        view.innerText.includes(text));
-    },TEXT));
+    const clickVisible = async locator => {
+      const point=await evaluate(page,locator=>{
+        const matches=locator.label
+          ?Array.from(document.querySelectorAll('button')).filter(button=>button.textContent.trim()===locator.label)
+          :Array.from(document.querySelectorAll('[role="treeitem"][data-row-key]')).filter(row=>row.getAttribute('data-row-key')===locator.rowKey);
+        const visible=matches.filter(element=>!element.disabled&&element.getClientRects().length>0);
+        if(visible.length!==1)return null;
+        const button=visible[0],r=button.getBoundingClientRect();
+        const x=r.left+r.width/2,y=r.top+r.height/2,hit=document.elementFromPoint(x,y);
+        return hit===button||button.contains(hit)?{x,y}:null;
+      },locator);
+      if(!point)return false;
+      await page.cdp('Input.dispatchMouseEvent',{type:'mousePressed',...point,button:'left',clickCount:1});
+      await page.cdp('Input.dispatchMouseEvent',{type:'mouseReleased',...point,button:'left',clickCount:1});
+      await record('normal_pointer_click',{...locator,targetId:found.targetId});
+      return true;
+    };
+    const acknowledged=new Set();
+    // rc2 reads welcome/models asynchronously after Workspaces has rendered.
+    // Keep normal dialog actions and tree navigation in the same bounded loop.
+    await wait('official selected session message body',async()=> {
+      const surface=await evaluate(page,({origin,pathname,text})=>{
+        if(location.origin!==origin||location.pathname!==pathname)return {ready:false};
+        const visibleLabels=Array.from(document.querySelectorAll('button'))
+          .filter(button=>button.getClientRects().length>0).map(button=>button.textContent.trim());
+        const notice=document.body?.innerText.includes('Preview Notice')===true;
+        const group=document.querySelector('[role="treeitem"][data-row-key="workspace:"]');
+        const row=document.querySelector('[data-row-key="session:qa-valid-session"]');
+        const chat=document.querySelector('[data-conversation-content][data-conversation-session="qa-valid-session"][data-conversation-region="chat"]');
+        const scroll=chat?.querySelector(':scope > [data-conversation-scroll]');
+        // rc2 ConversationContent + DefaultConversationViews: exclude the composer seat.
+        const message=!!scroll&&Array.from(scroll.children).some(view=>
+          !view.hasAttribute('data-composer-seat')&&view.getClientRects().length>0&&
+          view.innerText.includes(text));
+        return {ready:true,notice,visibleLabels,collapsed:group?.getAttribute('aria-expanded')==='false',
+          session:!!row,selected:row?.getAttribute('aria-selected')==='true',message};
+      },{origin:expected.origin,pathname:expected.pathname,text:TEXT});
+      if(!surface.ready)return false;
+      const label=surface.notice?'Continue':surface.visibleLabels.includes('Configure later')?'Configure later':null;
+      if(label) {
+        if(!acknowledged.has(label)&&await clickVisible({label}))acknowledged.add(label);
+        return false;
+      }
+      if(surface.selected&&surface.message)return true;
+      // onToggle belongs to the outer Ungrouped treeitem, not an inner button.
+      if(surface.collapsed)await clickVisible({rowKey:'workspace:'});
+      else if(surface.session&&!surface.selected)await clickVisible({rowKey:'session:qa-valid-session'});
+      return false;
+    });
     const first=ready.h;
     if (!/^[A-Za-z0-9._-]+$/.test(first.log_stdout_name||'')) fail('log_path_invalid','stdout name');
     const log=path.join(data,'logs',first.log_stdout_name);
@@ -530,6 +554,23 @@ export async function runBusinessQA(context) {
       packageTransactions:'EXTERNAL_NOT_COVERED',fullMigration:phase==='final'?'PASS':'NOT RUN',
       cancelRestartRecovery:phase==='final'?'PASS':'NOT RUN',crashRecovery:'NOT RUN',journal};
   } catch(e) {
+    if(activePage?.page) {
+      try {
+        await record('failure_page',await evaluate(activePage.page,()=>({
+          origin:location.origin,pathname:location.pathname,readyState:document.readyState,title:document.title,
+          text:document.body?.innerText.slice(0,16000),
+          rows:Array.from(document.querySelectorAll('[data-row-key]')).slice(0,60).map(row=>({
+            key:row.getAttribute('data-row-key'),expanded:row.getAttribute('aria-expanded'),
+            selected:row.getAttribute('aria-selected'),text:row.innerText.slice(0,300)})),
+        }),null));
+        const image=await activePage.page.cdp('Page.captureScreenshot',{format:'png'});
+        const bytes=Buffer.from(image.data,'base64');
+        if(bytes.length>8*1024*1024)fail('evidence_budget','active page screenshot');
+        await fs.writeFile(path.join(out,stem+'-active-page.png'),bytes);
+      } catch(diagnosticError) {
+        await record('failure_page_error',{code:diagnosticError.code,message:diagnosticError.message});
+      }
+    }
     if (verifiedOwnership) {
       // Preserve the actual owned run before normal Stop changes its state.
       // Inspect only the synthetic profile and bounded tails of this Agent's logs.

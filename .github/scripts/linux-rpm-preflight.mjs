@@ -381,6 +381,11 @@ try {
     assert.equal(manifest.commit, expectedCommit);
     assert.equal(manifest.buildId, expectedBuildId);
     assert.equal(manifest.version, verified.build.version);
+    const updateBytes = await readFile('/opt/Nexus Launcher/resources/app-update.yml');
+    assert.ok(updateBytes.length <= 8192);
+    assert.match(updateBytes.toString('utf8'), /^channel: latest-x64\r?$/m);
+    report.installedUpdateConfiguration = { sha256: createHash('sha256').update(updateBytes).digest('hex'),
+      configuration: updateBytes.toString('utf8'), scope: 'Installed configuration only; no live release update download or installation' };
     report.installedIdentity = { commit: manifest.commit, buildId: manifest.buildId, manifestSha256: createHash('sha256').update(manifestBytes).digest('hex') };
   }
   electron = start(executable, [`--user-data-dir=${root}/electron`, '--remote-debugging-port=0'], {
