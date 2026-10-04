@@ -595,7 +595,12 @@ export async function environmentShims(environment, slot, tools) {
           const file = path.resolve(folder, relative);
           if (!within(folder, file)) fail('Plugin executable leaves its package');
           const real = await fsp.realpath(file);
-          if (!within(root, real) && !within(await fsp.realpath(slot), real)) fail('Plugin executable leaves environment');
+          if (!within(root, real) && !within(await fsp.realpath(slot), real)) {
+            // Identify the walked installation without disclosing an absolute
+            // receiver path. Keep rejecting executables outside both roots.
+            const location = slash(path.relative(root, file)).slice(0, 512);
+            fail(`Plugin executable leaves environment at ${JSON.stringify(location)}`);
+          }
           await fsp.mkdir(path.join(directory, '.bin'), { recursive: true }); await tools.shim(file, path.join(directory, '.bin', name));
         }
       }

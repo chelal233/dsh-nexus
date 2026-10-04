@@ -71,7 +71,11 @@ test('an actively referenced executable in a prior slot still fails the environm
   await fs.mkdir(slot); await pkg(previous, 'tool');
   await link(previous, path.join(environment, 'profiles/private/node_modules/tool'));
   let calls = 0;
-  await assert.rejects(environmentShims(environment, slot, { shim: async () => { calls++; } }), /Plugin executable leaves environment/);
+  await assert.rejects(environmentShims(environment, slot, { shim: async () => { calls++; } }), error => {
+    assert.equal(error.message, 'Plugin executable leaves environment at "profiles/private/node_modules/tool/cli.js"');
+    assert.ok(!error.message.includes(root), 'diagnostic must not include an absolute receiver path');
+    return true;
+  });
   assert.equal(calls, 0);
 }));
 
