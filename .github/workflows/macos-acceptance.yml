@@ -52,7 +52,7 @@ jobs:
     runs-on: ${{ matrix.os }}
     timeout-minutes: 180
     env:
-      QA_TEMP: ${{ github.workspace }}/.codex-temp/macos-acceptance
+      QA_TEMP: ${{ github.workspace }}/.codex-temp/mq
       QA_EVIDENCE: ${{ github.workspace }}/.codex-artifacts/macos-acceptance
       QA_ARCH: ${{ matrix.arch }}
       QA_CANDIDATE_TAG: ${{ inputs.candidate_tag }}

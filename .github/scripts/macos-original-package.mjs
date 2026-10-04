@@ -17,17 +17,20 @@ assert.ok(['0', '1'].includes(process.env.QA_DESKTOP_ONLY || '0'));
 const desktopOnly = process.env.QA_DESKTOP_ONLY === '1';
 assert.ok(!packageSmoke || !desktopOnly);
 const workspace = await fs.realpath(process.env.GITHUB_WORKSPACE);
-const base = path.join(workspace, '.codex-temp/macos-acceptance');
+// tsx places its IPC socket below TMPDIR; macOS permits only 103 pathname bytes.
+const base = path.join(workspace, '.codex-temp/mq');
 const evidence = path.join(workspace, '.codex-artifacts/macos-acceptance');
 await ownedDirectory(workspace, evidence);
 assert.match(process.env.GITHUB_RUN_ID, /^\d+$/);
-for (const part of ['.codex-temp', '.codex-temp/macos-acceptance']) {
+for (const part of ['.codex-temp', '.codex-temp/mq']) {
   const directory = path.join(workspace, part);
   try { assert.equal((await fs.lstat(directory)).isSymbolicLink(), false); }
   catch (error) { if (error.code !== 'ENOENT') throw error; }
   await fs.mkdir(directory, { recursive: true }); await ownedDirectory(workspace, directory);
 }
-const root = path.join(base, 'run-' + process.env.GITHUB_RUN_ID);
+const root = path.join(base, 'r' + process.env.GITHUB_RUN_ID);
+assert.ok(Buffer.byteLength(path.join(root, `dmg/tmp/tsx-${process.getuid()}/9999999999.pipe`)) <= 103,
+  'QA TMPDIR leaves no room for the native tsx IPC socket');
 await fs.mkdir(root); await ownedDirectory(base, root);
 await fs.writeFile(path.join(root, 'owner.json'), JSON.stringify({ run: process.env.GITHUB_RUN_ID, arch: process.arch }));
 const preflight = JSON.parse(await fs.readFile(path.join(evidence, 'preflight.json'), 'utf8'));
