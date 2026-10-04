@@ -69,11 +69,18 @@ async function launchInstance(spec) {
   });
   const instance = { proc, desktop: null }; instances.push(instance);
   const desktop = await connect(proc, spec.userDataDir, item => item.type === 'page' && item.url.startsWith('file:'));
+  instance.desktop = desktop;
   channels.push(desktop);
-  await until(proc, () => desktop.evaluate('window.nexusDesktop?.invoke("startup_status").then(s=>s.available?s:null)'));
+  const startup = await until(proc, () => desktop.evaluate('window.nexusDesktop?.invoke("startup_status").then(s=>s.available?s:null)'));
+  assert.equal(await fs.realpath(startup.data_root), spec.dataRoot, 'Running Agent must belong to this exact QA data root');
+  const identity = await desktop.evaluate('window.nexusDesktop.invoke("build_identity")');
+  for (const [key, value] of Object.entries(expectedIdentity)) assert.deepEqual(identity[key], value, 'Live build identity differs: ' + key);
+  (report.nativeProofs ??= []).push({ pid: proc.pid, dataRoot: startup.data_root,
+    identity: Object.fromEntries(Object.keys(expectedIdentity).map(key => [key, identity[key]])) });
+  await until(proc, () => desktop.evaluate('document.readyState === "complete" && !!document.querySelector(".page-content")'));
   assert.equal(await desktop.evaluate('typeof require'), 'undefined');
   assert.equal(await desktop.evaluate('typeof process'), 'undefined');
-  instance.desktop = desktop; return instance;
+  return instance;
 }
 async function closeInstance(instance) {
   if (!instance) return;
@@ -248,7 +255,7 @@ try {
     dshHome: path.join(root, 'dsh'), userDataDir: path.join(root, 'electron') });
   const screen = await initial.desktop.cdp('Page.captureScreenshot', { format: 'png' });
   await fs.writeFile(path.join(evidence, 'installed-native.png'), Buffer.from(screen.data, 'base64'));
-  report.checks.push('Original native app GUI, private Agent bridge, no Node globals in renderer');
+  report.checks.push('Original React workspace rendered, live build identity and exact isolated Agent root verified, no Node globals in renderer');
   if (packageSmoke) {
     const state = await initial.desktop.evaluate('window.nexusDesktop.invoke("proxy_request",{method:"GET",path:"/v1/state"})');
     assert.equal(state.state.lifecycle, 'running');
