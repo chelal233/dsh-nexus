@@ -11,6 +11,8 @@ import { verifyInventory } from '../../apps/nexus-launcher/desktop/scripts/prepa
 import { browserLease } from './macos-acceptance-browser.mjs';
 
 assert.equal(process.platform, 'darwin'); assert.ok(process.getuid() > 0);
+assert.ok(['0', '1'].includes(process.env.QA_PACKAGE_SMOKE || '0'));
+const packageSmoke = process.env.QA_PACKAGE_SMOKE === '1';
 const workspace = await fs.realpath(process.env.GITHUB_WORKSPACE);
 const base = path.join(workspace, '.codex-temp/macos-acceptance');
 const evidence = path.join(workspace, '.codex-artifacts/macos-acceptance');
@@ -31,6 +33,8 @@ assert.equal(Number(process.env.QA_TEMP_BUDGET_GIB), 32, 'Full Mac acceptance re
 const report = { schema: 1, result: 'FAIL', arch: process.arch, candidate: preflight.candidate,
   baseline: preflight.baseline, originalBytes: [], installed: [], phases: [],
   publicationChanged: false, gatekeeperFirstOpen: 'NOT RUN', realDeviceAcceptance: false };
+report.scope = packageSmoke ? 'Original package GUI and isolated Agent smoke only' : 'Full native business';
+report.fullBusiness = packageSmoke ? 'NOT RUN: separate smoke scope; Web/session/migration remain unaccepted' : 'PENDING';
 const gate = storageGate(root, evidence), mounts = new Set();
 const activeChildren = new Set(); let storageError, stopWatch;
 const own = child => { activeChildren.add(child); child.once('close', () => activeChildren.delete(child)); return child; };
@@ -201,6 +205,7 @@ try {
     for (const child of activeChildren) child.kill('SIGTERM');
   });
   await gate('before-downloads', preflight.capacity.downloadedBytes + 2 * GIB, true);
+  if (!packageSmoke) {
   const browserBridge = path.join(root, 'launchservices-browser');
   await gate('compile-native-browser-bridge', GIB / 8, true);
   command('/usr/bin/clang', ['-fobjc-arc', '-fno-modules', '-framework', 'Foundation', '-framework', 'CoreServices',
@@ -213,6 +218,7 @@ try {
     throw error;
   }
   report.browserPreflight.result = 'PASS actual existing browser readback; no preference changed';
+  }
   const build = await receiveMetadata(preflight.candidate), oldBuild = await receiveMetadata(preflight.baseline);
   for (const format of ['dmg', 'zip']) {
     const familyRoot = path.join(root, format); await fs.mkdir(familyRoot); await prepareData(familyRoot);
@@ -232,7 +238,8 @@ try {
     await ownedDirectory(root, familyRoot); await fs.rm(familyRoot, { recursive: true });
   }
   assert.deepEqual(report.phases.map(item => item.format + ':' + item.phase), ['dmg:fresh', 'dmg:old', 'dmg:final', 'zip:fresh', 'zip:old', 'zip:final']);
-  report.result = 'PASS FULL MAC CLOUD ACCEPTANCE';
+  report.result = packageSmoke ? 'PASS ORIGINAL PACKAGE SMOKE ONLY' : 'PASS FULL MAC CLOUD ACCEPTANCE';
+  if (!packageSmoke) report.fullBusiness = 'PASS';
 } catch (error) {
   report.error = { code: error.code, message: error.message }; process.exitCode = 1;
 } finally {

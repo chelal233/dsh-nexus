@@ -14,6 +14,8 @@ import { browserLease } from './macos-acceptance-browser.mjs';
 assert.equal(process.platform, 'darwin'); assert.ok(process.getuid() > 0);
 const root = await fs.realpath(process.env.QA_ROOT), evidence = await fs.realpath(process.env.QA_PHASE_EVIDENCE);
 const budgetRoot = await fs.realpath(process.env.QA_BUDGET_ROOT);
+assert.ok(['0', '1'].includes(process.env.QA_PACKAGE_SMOKE || '0'));
+const packageSmoke = process.env.QA_PACKAGE_SMOKE === '1';
 await ownedDirectory(budgetRoot, root);
 await ownedDirectory(root, root);
 const phase = process.env.QA_PHASE, app = await ownedDirectory(root, process.env.QA_INSTALLED_APP);
@@ -28,6 +30,7 @@ const expectedIdentity = { version: manifest.version, commit: manifest.commit, b
   manifestSha256: createHash('sha256').update(manifestBytes).digest('hex') };
 const report = { schema: 1, result: 'FAIL', phase, format: process.env.QA_PACKAGE_FORMAT, expectedIdentity, checks: [], children: [],
   realDeviceAcceptance: false, gatekeeperFirstOpen: 'NOT RUN', crashRecovery: 'NOT RUN' };
+report.fullBusiness = packageSmoke ? 'NOT RUN: separate original package smoke scope' : 'PENDING';
 const children = [], instances = [], channels = [], targetEvents = [], gate = storageGate(budgetRoot, evidence);
 const abort = new AbortController();
 process.once('SIGTERM', () => abort.abort('Parent stopped this owned worker after capacity or deadline failure'));
@@ -49,9 +52,11 @@ function start(program, args, env) {
   });
   children.push(child); return child;
 }
-const browserBridge = await fs.realpath(process.env.QA_BROWSER_BRIDGE);
-assert.equal(browserBridge, path.join(budgetRoot, 'launchservices-browser'));
-assert.equal((await fs.lstat(browserBridge)).isFile(), true);
+const browserBridge = packageSmoke ? null : await fs.realpath(process.env.QA_BROWSER_BRIDGE);
+if (!packageSmoke) {
+  assert.equal(browserBridge, path.join(budgetRoot, 'launchservices-browser'));
+  assert.equal((await fs.lstat(browserBridge)).isFile(), true);
+}
 const browserCommand = args => execFileSync(browserBridge, args,
   { encoding: 'utf8', timeout: 30000, maxBuffer: 8192, env: { ...process.env, TMPDIR: path.join(root, 'tmp') } }).trim();
 async function launchInstance(spec) {
@@ -239,6 +244,21 @@ async function desktopChecks(instance = initial, home = path.join(root, 'dsh'), 
 }
 try {
   await gate('native_gui', 128 * 1024 ** 2, true);
+  initial = await launchInstance({ executable, dataRoot: path.join(root, 'business'), home: path.join(root, 'home'),
+    dshHome: path.join(root, 'dsh'), userDataDir: path.join(root, 'electron') });
+  const screen = await initial.desktop.cdp('Page.captureScreenshot', { format: 'png' });
+  await fs.writeFile(path.join(evidence, 'installed-native.png'), Buffer.from(screen.data, 'base64'));
+  report.checks.push('Original native app GUI, private Agent bridge, no Node globals in renderer');
+  if (packageSmoke) {
+    const state = await initial.desktop.evaluate('window.nexusDesktop.invoke("proxy_request",{method:"GET",path:"/v1/state"})');
+    assert.equal(state.state.lifecycle, 'running');
+    assert.equal(await initial.desktop.evaluate('window.nexusDesktop.invoke("exec",{}).then(()=>false,()=>true)'), true);
+    assert.equal(await initial.desktop.evaluate('window.nexusDesktop.invoke("proxy_request",{method:"GET",path:"/etc/passwd"}).then(()=>false,()=>true)'), true);
+    const desktop = await initial.desktop.evaluate('window.nexusDesktop.invoke("harness_desktop_status")');
+    assert.equal(desktop.phase, 'idle');
+    report.checks.push('Authenticated isolated Agent state, arbitrary command/path rejected, native Desktop status without launching Harness');
+    report.result = 'PASS ORIGINAL PACKAGE SMOKE ' + phase;
+  } else {
   // Observe the existing native browser; do not repeat the runner's denied preference-setting operation.
   defaultBrowser = browserLease(browserCommand);
   defaultBrowser.requireExistingChrome();
@@ -257,11 +277,6 @@ try {
     }
   });
   await web.host.cdp('Target.setDiscoverTargets', { discover: true });
-  initial = await launchInstance({ executable, dataRoot: path.join(root, 'business'), home: path.join(root, 'home'),
-    dshHome: path.join(root, 'dsh'), userDataDir: path.join(root, 'electron') });
-  const screen = await initial.desktop.cdp('Page.captureScreenshot', { format: 'png' });
-  await fs.writeFile(path.join(evidence, 'installed-native.png'), Buffer.from(screen.data, 'base64'));
-  report.checks.push('Original native app GUI, private Agent bridge, no Node globals in renderer');
   await runBusinessQA({ phase, root, evidence, report, desktop: initial.desktop, executable,
       signal: abort.signal,
       expectedIdentity, workspace: path.join(root, 'fixture-workspace'),
@@ -272,6 +287,8 @@ try {
     assert.equal(report.businessQA.status, 'PASS');
   if (phase === 'fresh') await desktopChecks(initial, path.join(root, 'dsh'), path.join(root, 'electron'), true);
   report.result = 'PASS BUSINESS ' + phase;
+  report.fullBusiness = 'PASS';
+  }
 } catch (error) {
   report.error = { code: error.code, message: redact(error.message) }; process.exitCode = 1;
 } finally {

@@ -15,6 +15,10 @@ on:
         description: 'Run actual original DMG/ZIP, version replacement and complete synthetic business acceptance'
         type: boolean
         default: false
+      original_package_smoke:
+        description: 'Separate original DMG/ZIP GUI and Agent smoke only; never full Web/session/migration acceptance'
+        type: boolean
+        default: false
       temporary_limit_gib:
         description: 'Reviewed task temporary envelope; full business currently requires explicit 32 GiB approval'
         type: string
@@ -51,18 +55,21 @@ jobs:
       QA_BASELINE_TAG: ${{ inputs.baseline_tag }}
       QA_TEMP_BUDGET_GIB: ${{ inputs.temporary_limit_gib }}
       QA_ARM_FREE_GIB: ${{ inputs.arm_free_gib }}
+      QA_PACKAGE_SMOKE: ${{ inputs.original_package_smoke && '1' || '0' }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           persist-credentials: false
       - name: Verify fail-closed acceptance contracts
-        run: node --test .github/scripts/macos-acceptance-contract.test.mjs .github/scripts/migration-session-fixture.test.mjs .github/scripts/macos-acceptance-storage.test.mjs .github/scripts/macos-acceptance-browser.test.mjs
+        run: |
+          test '${{ inputs.full_business }}:${{ inputs.original_package_smoke }}' != 'true:true'
+          node --test .github/scripts/macos-acceptance-contract.test.mjs .github/scripts/migration-session-fixture.test.mjs .github/scripts/macos-acceptance-storage.test.mjs .github/scripts/macos-acceptance-browser.test.mjs
       - name: Read original identities, native GUI capability and capacity
         env:
           GH_TOKEN: ${{ github.token }}
         run: node .github/scripts/macos-acceptance-preflight.mjs
-      - name: Accept intact published original packages and full native business
-        if: inputs.full_business
+      - name: Accept intact published original packages within the requested scope
+        if: inputs.full_business || inputs.original_package_smoke
         env:
           GH_TOKEN: ${{ github.token }}
         run: node .github/scripts/macos-original-package.mjs
