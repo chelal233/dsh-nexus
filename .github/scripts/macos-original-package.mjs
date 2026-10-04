@@ -43,6 +43,10 @@ report.scope = desktopOnly ? 'Native Desktop producer subset' : packageSmoke ? '
 report.fullBusiness = packageSmoke || desktopOnly ? 'NOT RUN: separate subset scope; Web/migration remain unaccepted' : 'PENDING';
 const gate = storageGate(root, evidence), mounts = new Set();
 const activeChildren = new Set(); let storageError, stopWatch;
+const storageViolation = error => {
+  storageError = error;
+  for (const child of activeChildren) child.kill('SIGTERM');
+};
 const own = child => { activeChildren.add(child); child.once('close', () => activeChildren.delete(child)); return child; };
 const checkStorage = () => { if (storageError) throw storageError; };
 let processesClosed = true;
@@ -204,12 +208,24 @@ function ownedProcesses(directory) {
     return match && { pid: Number(match[1]), ppid: Number(match[2]), command: match[3] };
   }).filter(item => item && item.pid !== process.pid);
 }
+async function removeStoppedTree(directory, stage) {
+  await ownedDirectory(root, directory);
+  assert.equal(ownedProcesses(directory).length, 0, 'Cleanup still owns live processes');
+  assert.equal(activeChildren.size, 0, 'Cleanup still owns an active worker or command');
+  // No producer or further writes remain in this tree. Drain the current sample
+  // before deleting it; counting a tree while our own removal walks it is invalid.
+  await stopWatch?.(); stopWatch = undefined;
+  checkStorage();
+  const before = await gate(stage + '-before', 0, true);
+  await fs.rm(directory, { recursive: true });
+  const after = await gate(stage + '-after', 0, true);
+  (report.quiescentTreeCleanup ??= []).push({ stage, drainedSampler: true,
+    activeOwnedChildren: 0, beforeOccupied: before.occupied, afterOccupied: after.occupied });
+  stopWatch = watchStorage(gate, storageViolation);
+}
 try {
   await prepareData(root);
-  stopWatch = watchStorage(gate, error => {
-    storageError = error;
-    for (const child of activeChildren) child.kill('SIGTERM');
-  });
+  stopWatch = watchStorage(gate, storageViolation);
   await gate('before-downloads', preflight.capacity.downloadedBytes + 2 * GIB, true);
   if (!packageSmoke && !desktopOnly) {
   const browserBridge = path.join(root, 'launchservices-browser');
@@ -237,13 +253,13 @@ try {
     const saved = path.join(familyRoot, 'candidate.app'); await fs.rename(app, saved);
     const oldProof = await install(preflight.baseline, oldBuild);
     await runPhase('old', app, oldProof, familyRoot, format);
-    await ownedDirectory(root, app); await fs.rm(app, { recursive: true });
+    await removeStoppedTree(app, format + '-old-app-cleanup');
     await fs.rename(saved, app); await identity(app, preflight.candidate, build);
     await runPhase('final', app, proof, familyRoot, format);
     }
     const leftovers = ownedProcesses(familyRoot);
     assert.equal(leftovers.length, 0, 'Format transaction still owns live processes');
-    await ownedDirectory(root, familyRoot); await fs.rm(familyRoot, { recursive: true });
+    await removeStoppedTree(familyRoot, format + '-transaction-cleanup');
   }
   assert.deepEqual(report.phases.map(item => item.format + ':' + item.phase), desktopOnly ? ['dmg:fresh', 'zip:fresh']
     : ['dmg:fresh', 'dmg:old', 'dmg:final', 'zip:fresh', 'zip:old', 'zip:final']);

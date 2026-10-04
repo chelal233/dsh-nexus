@@ -61,3 +61,15 @@ test('persistent subtree disappearance remains a failure after three probes', as
   await assert.rejects(allocatedBytes('/qa', { run: () => { calls++; throw error; }, delay: async () => {} }), actual => actual === error);
   assert.equal(calls, 3);
 });
+
+test('stopping a sampler waits for its unfinished probe before a tree can be removed', async () => {
+  let enter, finish, calls = 0, drained = false;
+  const entered = new Promise(resolve => { enter = resolve; });
+  const pending = new Promise(resolve => { finish = resolve; });
+  const stop = watchStorage(async () => { calls++; enter(); await pending; }, () => assert.fail('Unexpected violation'), 5);
+  await entered;
+  const stopped = stop().then(() => { drained = true; });
+  await Promise.resolve(); assert.equal(drained, false);
+  finish(); await stopped;
+  assert.equal(drained, true); assert.equal(calls, 1);
+});
