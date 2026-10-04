@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { watchStorage, storageGate } from './macos-acceptance-storage.mjs';
+import { watchStorage, storageGate, allocatedBytes } from './macos-acceptance-storage.mjs';
 import { GIB } from './macos-acceptance-contract.mjs';
 
 test('zero-increment periodic sample cannot overwrite a rejected concurrent admission', async () => {
@@ -38,4 +38,26 @@ test('periodic sampling serializes slow measurements and stops without leaving a
   }, () => assert.fail('No failure expected'), 5);
   await sampled; await stop();
   assert.equal(maximum, 1); assert.equal(probes, 1); assert.equal(active, 0);
+});
+
+test('renamed cold subtree needs a complete successful du recount, never its partial output', async () => {
+  let calls = 0; const retries = [];
+  const error = Object.assign(new Error('du race'), { status: 1, stdout: '1\t/qa\n', stderr: 'du: /qa/cold/packages: No such file or directory\n' });
+  const bytes = await allocatedBytes('/qa', { run: () => { if (++calls === 1) throw error; return '4096\t/qa\n'; },
+    delay: async () => {}, onRetry: event => retries.push(event) });
+  assert.equal(bytes, 4096 * 1024); assert.equal(calls, 2); assert.equal(retries.length, 1);
+});
+
+test('a denied probe or a missing task root is not a renamed-subtree retry', async () => {
+  for (const stderr of ['du: /qa/cold: Operation not permitted\n', 'du: /qa: No such file or directory\n']) {
+    let calls = 0; const error = Object.assign(new Error('du failure'), { status: 1, stderr });
+    await assert.rejects(allocatedBytes('/qa', { run: () => { calls++; throw error; }, delay: async () => {} }), actual => actual === error);
+    assert.equal(calls, 1);
+  }
+});
+
+test('persistent subtree disappearance remains a failure after three probes', async () => {
+  let calls = 0; const error = Object.assign(new Error('du race persists'), { status: 1, stderr: 'du: /qa/cold: No such file or directory\n' });
+  await assert.rejects(allocatedBytes('/qa', { run: () => { calls++; throw error; }, delay: async () => {} }), actual => actual === error);
+  assert.equal(calls, 3);
 });

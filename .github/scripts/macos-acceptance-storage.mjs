@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { execFileSync } from 'node:child_process';
+import { setTimeout as delay } from 'node:timers/promises';
 import { GIB } from './macos-acceptance-contract.mjs';
 
 export async function ownedDirectory(root, directory) {
@@ -14,11 +15,29 @@ export async function ownedDirectory(root, directory) {
   return real;
 }
 
-export function allocatedBytes(directory) {
-  const output = execFileSync('/usr/bin/du', ['-sk', directory], { encoding: 'utf8', timeout: 30000, maxBuffer: 8192 });
-  const value = Number(output.trim().split(/\s/)[0]) * 1024;
-  assert.ok(Number.isSafeInteger(value) && value >= 0);
-  return value;
+export async function allocatedBytes(directory, hooks = {}) {
+  const run = hooks.run || (() => execFileSync('/usr/bin/du', ['-sk', directory], {
+    encoding: 'utf8', timeout: 30000, maxBuffer: 256 * 1024, stdio: ['ignore', 'pipe', 'pipe'],
+    env: { ...process.env, LC_ALL: 'C' },
+  }));
+  for (let attempt = 1; attempt <= 3; attempt++) {
+    let output;
+    try { output = run(); }
+    catch (error) {
+      const lines = String(error.stderr || '').trim().split('\n');
+      // A normal cold promotion renames a subtree while du is walking it. Only
+      // retry that explicit race, never accept a partial count or denied probe.
+      const movedSubtree = error.status === 1 && lines.length > 0 && lines.every(line =>
+        line.startsWith('du: ' + directory + '/') && line.endsWith(': No such file or directory'));
+      if (!movedSubtree || attempt === 3) throw error;
+      await hooks.onRetry?.({ attempt, reason: 'subtree-disappeared-during-du', stderr: String(error.stderr).slice(0, 4096) });
+      await (hooks.delay || delay)(100);
+      continue;
+    }
+    const value = Number(output.trim().split(/\s/)[0]) * 1024;
+    assert.ok(Number.isSafeInteger(value) && value >= 0);
+    return value;
+  }
 }
 
 export async function treeFootprint(root, directory) {
@@ -62,8 +81,10 @@ export function storageGate(root, evidence, hooks = {}) {
   const limit = limitGiB * GIB; let peak = 0, last = null, measuredAt = 0;
   const measure = hooks.measure || (async () => {
     await ownedDirectory(root, root);
+    const occupied = await allocatedBytes(root, { onRetry: snapshot =>
+      fs.appendFile(path.join(evidence, 'storage-retries.jsonl'), JSON.stringify({ measuredAt: new Date().toISOString(), ...snapshot }) + '\n') });
     const info = await fs.statfs(root);
-    return { occupied: allocatedBytes(root), free: info.bavail * info.bsize, total: info.blocks * info.bsize };
+    return { occupied, free: info.bavail * info.bsize, total: info.blocks * info.bsize };
   });
   const append = hooks.append || (snapshot => fs.appendFile(path.join(evidence, 'storage.jsonl'), JSON.stringify(snapshot) + '\n'));
   return async (stage, increment = 0, force = false) => {
