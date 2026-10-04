@@ -247,10 +247,12 @@ async function desktopChecks(instance = initial, home = path.join(root, 'dsh'), 
   // The public preload rejects with a plain error object, which CDP otherwise describes only as "Object".
   const mutationLock = await instance.desktop.evaluate(`window.nexusDesktop.invoke('proxy_request',
     {method:'POST',path:'/v1/harness',body:{action:'start'}}).then(
-      () => ({accepted:true}), error => ({accepted:false,message:typeof error?.message==='string'?error.message:null}))`);
+      () => ({accepted:true}), error => ({accepted:false,code:typeof error?.code==='string'?error.code:null,
+        message:typeof error?.message==='string'?error.message:null}))`);
   assert.equal(mutationLock.accepted, false, 'Running Desktop must reject the Web start mutation');
-  assert.equal(typeof mutationLock.message, 'string');
-  assert.match(mutationLock.message, /Close Harness Desktop|请先关闭 Harness Desktop/);
+  assert.equal(mutationLock.code, 'desktop_error');
+  assert.ok(['Close Harness Desktop before changing versions, configuration, or data.',
+    '请先关闭 Harness Desktop，再修改版本、配置或数据。'].includes(mutationLock.message), 'Exact native Desktop mutation-lock message required');
   report.desktopMutationLock = mutationLock;
   const restartedProof = await bootWithReceipt('harness_desktop_restart');
   const restarted = restartedProof.current;
