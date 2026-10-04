@@ -314,7 +314,7 @@ async fn publish_verified_import(state: &AppState, mut operation: ColdOperation,
         // The copied shared farm still points at the receiver's previous slot.
         // Reconcile only this unpublished environment before executable checks,
         // using the same guarded link replacement as a normal Harness launch.
-        ReleaseStore::heal_module_farm(&environment, &slot)?;
+        nexus_core::ReleaseStore::heal_module_farm(&environment, &slot)?;
     }
     helper(state, &operation, &tools, "finalize", Some(&slot), Some(&runtime_root)).await?;
     ensure_not_cancelled(&cancellation)?;
