@@ -143,6 +143,7 @@ async function runPhase(phase, app, proof, phaseRoot, format) {
   const child = own(spawn(proof.node, [path.join(workspace, '.github/scripts/macos-native-business.mjs')], {
     env: { ...process.env, QA_ROOT: phaseRoot, QA_INSTALLED_APP: app, QA_PHASE: phase,
       QA_PHASE_EVIDENCE: phaseEvidence, QA_PACKAGE_PROOF: proofFile, QA_PACKAGE_FORMAT: format, QA_BUDGET_ROOT: root,
+      QA_BROWSER_BRIDGE: path.join(root, 'launchservices-browser'),
       TMPDIR: path.join(root, 'tmp'), TEMP: path.join(root, 'tmp'), TMP: path.join(root, 'tmp') },
     stdio: ['ignore', 'pipe', 'pipe'],
   }));
@@ -200,7 +201,11 @@ try {
     for (const child of activeChildren) child.kill('SIGTERM');
   });
   await gate('before-downloads', preflight.capacity.downloadedBytes + 2 * GIB, true);
-  const browser = browserLease(script => command('/usr/bin/osascript', ['-l', 'JavaScript', '-e', script]));
+  const browserBridge = path.join(root, 'launchservices-browser');
+  await gate('compile-native-browser-bridge', GIB / 8, true);
+  command('/usr/bin/clang', ['-fobjc-arc', '-fno-modules', '-framework', 'Foundation', '-framework', 'CoreServices',
+    path.join(workspace, '.github/scripts/macos-acceptance-browser.m'), '-o', browserBridge]);
+  const browser = browserLease(args => command(browserBridge, args));
   try { browser.setChrome(); } finally { browser.restore(); }
   report.browserPreflight = { result: 'PASS actual native set/readback/restore', original: browser.before };
   const build = await receiveMetadata(preflight.candidate), oldBuild = await receiveMetadata(preflight.baseline);

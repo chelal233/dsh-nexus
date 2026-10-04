@@ -49,8 +49,11 @@ function start(program, args, env) {
   });
   children.push(child); return child;
 }
-const jxa = script => execFileSync('/usr/bin/osascript', ['-l', 'JavaScript', '-e', script],
-  { encoding: 'utf8', timeout: 30000, maxBuffer: 8192 }).trim();
+const browserBridge = await fs.realpath(process.env.QA_BROWSER_BRIDGE);
+assert.equal(browserBridge, path.join(budgetRoot, 'launchservices-browser'));
+assert.equal((await fs.lstat(browserBridge)).isFile(), true);
+const browserCommand = args => execFileSync(browserBridge, args,
+  { encoding: 'utf8', timeout: 30000, maxBuffer: 8192, env: { ...process.env, TMPDIR: path.join(root, 'tmp') } }).trim();
 async function launchInstance(spec) {
   checkAbort();
   assert.equal(spec.executable, executable);
@@ -237,7 +240,7 @@ async function desktopChecks(instance = initial, home = path.join(root, 'dsh'), 
 try {
   await gate('native_gui', 128 * 1024 ** 2, true);
   // Temporary runner-only native LaunchServices setting; restore exact old handlers in finally.
-  defaultBrowser = browserLease(jxa);
+  defaultBrowser = browserLease(browserCommand);
   defaultBrowser.setChrome();
   const fixture = path.join(root, 'browser-fixture.html');
   await fs.writeFile(fixture, '<!doctype html><title>Nexus QA ordinary browser</title><p>nexus-qa-browser-preflight</p>');
