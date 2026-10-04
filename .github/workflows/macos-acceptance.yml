@@ -1,0 +1,57 @@
+name: macOS original-package acceptance
+
+on:
+  workflow_dispatch:
+    inputs:
+      candidate_tag:
+        description: 'Published original candidate; this workflow never rebuilds release packages'
+        type: string
+        default: 'v1.0.4'
+      baseline_tag:
+        description: 'Published original previous-version package'
+        type: string
+        default: 'v1.0.3'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: macos-original-package-acceptance
+  cancel-in-progress: false
+
+jobs:
+  preflight:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-15-intel
+            arch: x64
+          - os: macos-15
+            arch: arm64
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 10
+    env:
+      QA_TEMP: ${{ github.workspace }}/.codex-temp/macos-acceptance
+      QA_EVIDENCE: ${{ github.workspace }}/.codex-artifacts/macos-acceptance
+      QA_ARCH: ${{ matrix.arch }}
+      QA_CANDIDATE_TAG: ${{ inputs.candidate_tag }}
+      QA_BASELINE_TAG: ${{ inputs.baseline_tag }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - name: Verify fail-closed acceptance contracts
+        run: node --test .github/scripts/macos-acceptance-contract.test.mjs
+      - name: Read original identities, native GUI capability and capacity
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: node .github/scripts/macos-acceptance-preflight.mjs
+      - name: Deliver bounded preflight evidence
+        if: always()
+        uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5
+        with:
+          name: macos-preflight-${{ matrix.arch }}-${{ github.run_id }}
+          path: ${{ env.QA_EVIDENCE }}
+          if-no-files-found: error
+          retention-days: 14
