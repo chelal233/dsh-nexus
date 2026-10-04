@@ -23,6 +23,11 @@ on:
         description: 'Separate real rc.2 Desktop producer/session/plugin/start/restart subset; no Web or migration claim'
         type: boolean
         default: false
+      architecture:
+        description: 'Select only a failed native architecture for a diagnosed follow-up; both remains the default'
+        type: choice
+        options: [both, x64, arm64]
+        default: both
       temporary_limit_gib:
         description: 'Reviewed task temporary envelope; full business currently requires explicit 32 GiB approval'
         type: string
@@ -44,11 +49,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        include:
-          - os: macos-15-intel
-            arch: x64
-          - os: macos-15
-            arch: arm64
+        include: ${{ fromJSON(inputs.architecture == 'x64' && '[{"os":"macos-15-intel","arch":"x64"}]' || inputs.architecture == 'arm64' && '[{"os":"macos-15","arch":"arm64"}]' || '[{"os":"macos-15-intel","arch":"x64"},{"os":"macos-15","arch":"arm64"}]') }}
     runs-on: ${{ matrix.os }}
     timeout-minutes: 180
     env:

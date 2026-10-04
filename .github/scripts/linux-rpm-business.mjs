@@ -128,6 +128,13 @@ export async function runBusinessQA(context) {
     if (typeof c.report === 'function') await c.report(item);
     else if (Array.isArray(c.report)) c.report.push(item);
   };
+  const coldSnapshot = operation => ({
+    operation_id: operation.operation_id, kind: operation.kind, phase: operation.phase,
+    progress_percent: operation.progress_percent, updated_at_unix: operation.updated_at_unix,
+    candidate_revision: operation.candidate_revision, owner_quiescent: operation.owner_quiescent,
+    cleanup_pending: operation.cleanup_pending, error: operation.error, cleanup_error: operation.cleanup_error,
+    output_tail: typeof operation.output_tail === 'string' ? operation.output_tail.slice(-16384) : undefined,
+  });
   let profileYaml;
   const readProfilePatch=async file=> {
     await ordinary(root,file,false);
@@ -382,9 +389,13 @@ export async function runBusinessQA(context) {
         const accepted=await api('/v1/updates',{action:'switch',tag:TAG,source:'official',mode:'portable'});
         ownedOperation=accepted.operation?.operation_id;
         if(!ownedOperation) fail('operation_missing','Fetch response missing operation_id');
+        let observedPhase, observedAt = 0;
         const op=await wait('official rc2 prepared',async()=> {
           const x=(await api('/v1/updates')).operation;
           if(x?.operation_id!==ownedOperation) fail('operation_changed','Fetch operation changed');
+          if (x.phase !== observedPhase || Date.now() - observedAt >= 30000) {
+            await record('cold_progress',coldSnapshot(x)); observedPhase=x.phase; observedAt=Date.now();
+          }
           if(['failed','cancelled'].includes(x.phase)) fail('fetch_failed',JSON.stringify(safe(x)));
           return x.phase==='prepared'&&x;
         },15*60*1000);
@@ -736,6 +747,15 @@ export async function runBusinessQA(context) {
       }
     }
     if (verifiedOwnership) {
+      if (ownedOperation) {
+        try {
+          const operation=(await api('/v1/updates',undefined,true)).operation;
+          if(operation?.operation_id!==ownedOperation) fail('operation_changed','Diagnostic fetch operation changed');
+          await record('failure_cold_operation',coldSnapshot(operation));
+        } catch (diagnosticError) {
+          await record('failure_cold_diagnostic_error',{code:diagnosticError.code,message:diagnosticError.message});
+        }
+      }
       // Preserve the actual owned run before normal Stop changes its state.
       // Inspect only the synthetic profile and bounded tails of this Agent's logs.
       try {
