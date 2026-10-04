@@ -310,6 +310,12 @@ async fn publish_verified_import(state: &AppState, mut operation: ColdOperation,
         Some("offline package".into()), Some("Verified offline package; integrity is not a publisher signature".into()))?;
     state.releases.release_root(&operation.release_id)?
     } else { state.releases.load()?.current_release.map(|id| state.releases.release_root(&id)).transpose()?.unwrap_or_else(|| candidate.join("unused-slot")) };
+    if base && has_environment {
+        // The copied shared farm still points at the receiver's previous slot.
+        // Reconcile only this unpublished environment before executable checks,
+        // using the same guarded link replacement as a normal Harness launch.
+        ReleaseStore::heal_module_farm(&environment, &slot)?;
+    }
     helper(state, &operation, &tools, "finalize", Some(&slot), Some(&runtime_root)).await?;
     ensure_not_cancelled(&cancellation)?;
     if !state.config.write_if_current(&intent.previous_config, &config)? {
