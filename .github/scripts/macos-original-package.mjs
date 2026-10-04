@@ -210,16 +210,18 @@ function ownedProcesses(directory) {
 }
 async function removeStoppedTree(directory, stage) {
   await ownedDirectory(root, directory);
-  assert.equal(ownedProcesses(directory).length, 0, 'Cleanup still owns live processes');
+  assert.equal(ownedProcesses(root).length, 0, 'Cleanup still owns live processes in the task root');
   assert.equal(activeChildren.size, 0, 'Cleanup still owns an active worker or command');
   // No producer or further writes remain in this tree. Drain the current sample
   // before deleting it; counting a tree while our own removal walks it is invalid.
   await stopWatch?.(); stopWatch = undefined;
+  assert.equal(ownedProcesses(root).length, 0, 'Task root gained a live process while draining storage');
+  assert.equal(activeChildren.size, 0, 'Task root gained an active worker while draining storage');
   checkStorage();
   const before = await gate(stage + '-before', 0, true);
   await fs.rm(directory, { recursive: true });
   const after = await gate(stage + '-after', 0, true);
-  (report.quiescentTreeCleanup ??= []).push({ stage, drainedSampler: true,
+  (report.quiescentTreeCleanup ??= []).push({ stage, directory: path.relative(root, directory), drainedSampler: true,
     activeOwnedChildren: 0, beforeOccupied: before.occupied, afterOccupied: after.occupied });
   stopWatch = watchStorage(gate, storageViolation);
 }

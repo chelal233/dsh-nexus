@@ -73,3 +73,13 @@ test('stopping a sampler waits for its unfinished probe before a tree can be rem
   finish(); await stopped;
   assert.equal(drained, true); assert.equal(calls, 1);
 });
+
+test('a truncated du diagnostic remains a failure and records its bounded metadata', async () => {
+  let calls = 0; const failures = [];
+  const error = Object.assign(new Error('buffer exceeded'), { code: 'ENOBUFS', status: 1,
+    stderr: 'du: /qa/cold: No such file or directory\n' });
+  await assert.rejects(allocatedBytes('/qa', { run: () => { calls++; throw error; },
+    onFailure: value => failures.push(value), delay: async () => {} }), actual => actual === error);
+  assert.equal(calls, 1); assert.equal(failures[0].code, 'ENOBUFS');
+  assert.equal(failures[0].stderrBytes, Buffer.byteLength(error.stderr));
+});

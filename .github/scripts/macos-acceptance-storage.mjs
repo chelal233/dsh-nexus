@@ -17,7 +17,7 @@ export async function ownedDirectory(root, directory) {
 
 export async function allocatedBytes(directory, hooks = {}) {
   const run = hooks.run || (() => execFileSync('/usr/bin/du', ['-sk', directory], {
-    encoding: 'utf8', timeout: 30000, maxBuffer: 256 * 1024, stdio: ['ignore', 'pipe', 'pipe'],
+    encoding: 'utf8', timeout: 30000, maxBuffer: 8 * 1024 ** 2, stdio: ['ignore', 'pipe', 'pipe'],
     env: { ...process.env, LC_ALL: 'C' },
   }));
   for (let attempt = 1; attempt <= 3; attempt++) {
@@ -27,9 +27,14 @@ export async function allocatedBytes(directory, hooks = {}) {
       const lines = String(error.stderr || '').trim().split('\n');
       // A normal cold promotion renames a subtree while du is walking it. Only
       // retry that explicit race, never accept a partial count or denied probe.
-      const movedSubtree = error.status === 1 && lines.length > 0 && lines.every(line =>
+      const movedSubtree = !error.code && error.status === 1 && lines.length > 0 && lines.every(line =>
         line.startsWith('du: ' + directory + '/') && line.endsWith(': No such file or directory'));
-      if (!movedSubtree || attempt === 3) throw error;
+      if (!movedSubtree || attempt === 3) {
+        await hooks.onFailure?.({ attempt, code: error.code, status: error.status, signal: error.signal,
+          stderrBytes: Buffer.byteLength(String(error.stderr || '')), stdoutBytes: Buffer.byteLength(String(error.stdout || '')),
+          stderrTail: String(error.stderr || '').slice(-4096) });
+        throw error;
+      }
       await hooks.onRetry?.({ attempt, reason: 'subtree-disappeared-during-du', stderr: String(error.stderr).slice(0, 4096) });
       await (hooks.delay || delay)(100);
       continue;
@@ -81,8 +86,10 @@ export function storageGate(root, evidence, hooks = {}) {
   const limit = limitGiB * GIB; let peak = 0, last = null, measuredAt = 0;
   const measure = hooks.measure || (async () => {
     await ownedDirectory(root, root);
-    const occupied = await allocatedBytes(root, { onRetry: snapshot =>
-      fs.appendFile(path.join(evidence, 'storage-retries.jsonl'), JSON.stringify({ measuredAt: new Date().toISOString(), ...snapshot }) + '\n') });
+    const appendProbe = (name, snapshot) => fs.appendFile(path.join(evidence, name),
+      JSON.stringify({ measuredAt: new Date().toISOString(), ...snapshot }) + '\n');
+    const occupied = await allocatedBytes(root, { onRetry: snapshot => appendProbe('storage-retries.jsonl', snapshot),
+      onFailure: snapshot => appendProbe('storage-measurement-failures.jsonl', snapshot) });
     const info = await fs.statfs(root);
     return { occupied, free: info.bavail * info.bsize, total: info.blocks * info.bsize };
   });
