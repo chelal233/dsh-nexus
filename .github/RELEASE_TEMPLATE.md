@@ -1,47 +1,51 @@
-# Nexus 1.0.4
+# Nexus 1.0.5
 
-## 1.0.4 — 2026-10-04
+## 1.0.5 — 2026-10-05
 
-- 新增 Linux x86_64 原生 AppImage、DEB、RPM；Linux 双架构均检查安装包架构、资源及非 root 启动。
-- 按实际接口适配 Harness 0.2 的设置解析、Desktop 构建目标及非打包启动运行时，保留旧版宿主兼容。
-- 修复 Linux 命令所有权与进程收尾，核对 PID 命名空间；冷操作完成与实际操作身份、所有者及互斥门绑定，避免未收尾操作被当作安全完成。
-- 首次显式选择已准备的版本时初始化已验证运行时及启动参数；统一返回实际发现的私有 Agent 端口。
-- 修复完整离线导入的 Harness CLI 入口路径，避免 Unix 上混入 Windows 分隔符而被启动检查阻断。
-- 再次离线导入时仅为当前引用的依赖生成命令入口，保留未选中 profile 的依赖版本并继续拒绝越界可执行文件。
-- 增加隔离 Fedora 的正常 RPM 安装和包替换、实际沙箱浏览器、合成会话与 Cordis 插件激活、完整离线迁移及取消／重启恢复检查。
+- 修复停止 Agent 后后台 Desktop 能力检查可能重新启动 Agent 的竞态。能力检查现在只读取状态；显式启动 Harness Desktop 仍保留正常启动行为。
+- 增加实际安装包回归：停止 Agent 后执行真实能力探测与十二秒普通托盘轮询，确认 Agent 保持停止。
+- 完善隔离 macOS QA 的冷准备进度和收尾诊断。诊断失败保留原始错误，不放宽等待、校验或容量门禁。
 
 ### 下载
 
 | 系统 | 架构 | 安装包 |
 | --- | --- | --- |
 | Windows | x64、ARM64 | EXE、portable ZIP |
-| macOS | Intel、Apple Silicon | DMG、portable ZIP |
+| macOS | Intel x64、Apple Silicon ARM64 | DMG、portable ZIP |
 | Linux | x86_64、ARM64 | AppImage、DEB、RPM |
 
-附件中的每个平台 `_build.json` 记录提交、构建身份和检查范围；`_SHA256SUMS.txt` 及总清单用于核对下载。总清单附带 GitHub Actions 身份绑定的 Sigstore 签名和证书；这不是操作系统生产代码签名。
+每个平台的 `_build.json` 记录提交、构建身份和检查范围；`_SHA256SUMS.txt` 及总清单用于核对实际下载字节。总清单附带 GitHub Actions 身份绑定的 Sigstore 签名与证书，这是来源证明，不是操作系统生产代码签名。
 
-### 验证边界
+### 验证范围
 
-内置 Harness 锁仍为 0.1.6-alpha.2，不自动升级用户 Harness。该锁没有官方 Linux Desktop 资源，Linux 保留 Web 模式。Harness 0.2.0-rc.2 的隔离检查使用冻结源码和合成数据，不代表全部真实会话或第三方插件兼容。Fedora 容器验收不等于所有 Linux 发行版或 Mac 真机升级验收；CI unsigned 产物不等于生产签名。明确指定的运行时优先，否则使用内置工具；捆绑 Git 不包含 GCM。
+发行门禁覆盖冻结依赖、前端／Rust 回归、六平台构建、资源核验及 CI runner 上的实际安装包启动。八份 CI artifact 包含六平台包、Git 源码伴随包和单独的 Linux x64 RPM QA 包；QA 包不作为额外公开发行附件。
+
+双架构 Mac 的此前原始 v1.0.4 DMG／ZIP 已通过隔离启动及官方 Harness 0.2.0-rc.2 Desktop producer 子集检查，包含合成会话读取、传递 Cordis 测试插件、重启、变更锁和正常清理。这些记录属于此前原包，不能称为 v1.0.5 的完整真实会话迁移验收。v1.0.5 的 Agent Stop 回归以本版本同提交原生安装包日志为准。
+
+完整浏览器内 Web 会话、真实会话／完整离线迁移、全部第三方插件、用户 Mac 真机升级、Gatekeeper 首次打开、生产公证及崩溃恢复仍未验收。Mac runner 的默认 Safari 设置受系统权限限制，且目前没有可用用户 Mac；相关项没有被计为通过。此前失败和取消记录保留。
+
+内置 Harness 锁仍为 0.1.6-alpha.2，不自动升级用户 Harness；该锁无官方 Linux Desktop 资源，Linux 保留 Web 模式。明确指定的运行时优先，否则使用内置工具；捆绑 Git 不包含 GCM。macOS 包使用临时签名且未公证，其他平台为 unsigned；CI 通过不等于生产签名或用户真机升级。
 
 ---
 
-## 1.0.4 — 2026-10-04
+## 1.0.5 — 2026-10-05
 
-- Add native Linux x86_64 AppImage, DEB and RPM downloads. Both Linux architectures check package architecture, resources and non-root startup.
-- Adapt Harness 0.2 settings parsing, Desktop build targets and unpackaged runtime setup to the actual interfaces while retaining older host compatibility.
-- Fix Linux command ownership and settlement, verify PID namespaces, and bind cold-operation completion to the actual operation, owner and gate.
-- Initialize verified runtime and launch defaults on the first explicit selection of a prepared release, and consistently return the discovered private Agent endpoint.
-- Fix the Harness CLI entry path after full offline import so Windows separators do not block Unix startup checks.
-- Regenerate executable shims only for referenced dependencies on reimport, retaining unselected profile versions and rejecting executable paths outside the managed environment.
-- Add isolated Fedora checks for normal RPM installation and replacement, a real sandboxed browser, synthetic sessions and Cordis plugin activation, full offline migration, and cancellation/restart recovery.
+- Fix a race where background Desktop capability checks could restart an Agent after an explicit Stop. Capability checks now read status without starting the Agent; explicit Harness Desktop launch retains its normal startup behavior.
+- Add an installed-package regression that verifies the Agent remains stopped after the real capability probe and twelve seconds of normal tray polling.
+- Improve cold-preparation progress and cleanup diagnostics in isolated macOS QA. Diagnostic errors retain the primary failure without weakening wait, verification or storage gates.
 
 ### Downloads and provenance
 
-Windows x64/ARM64: EXE and portable ZIP. macOS Intel/Apple Silicon: DMG and portable ZIP. Linux x86_64/ARM64: AppImage, DEB and RPM.
+Windows x64/ARM64: EXE and portable ZIP. macOS Intel x64/Apple Silicon ARM64: DMG and portable ZIP. Linux x86_64/ARM64: AppImage, DEB and RPM.
 
-Each `_build.json` records the source commit, build identity and check scope. Verify downloaded bytes against the per-platform or aggregate SHA256 manifest. The aggregate manifest includes a GitHub Actions identity-bound Sigstore signature and certificate; this does not provide production OS code signing.
+Each platform `_build.json` records its source commit, build identity and check scope. Verify actual downloads against the per-platform or aggregate SHA256 manifest. The aggregate manifest has a GitHub Actions identity-bound Sigstore signature and certificate. This is provenance, not production OS code signing.
 
 ### Verification scope
 
-Bundled Harness remains 0.1.6-alpha.2 and user installations are not automatically upgraded. Its lock has no official Linux Desktop runtime, so Linux retains Web mode. Isolated Harness 0.2.0-rc.2 checks use frozen source and synthetic data and do not certify every real session or third-party plugin. Fedora container acceptance does not establish every Linux distribution or macOS device upgrade. Unsigned CI artifacts are not production-signed applications. Explicit runtime paths take precedence; otherwise bundled tools are used. Bundled Git excludes GCM.
+Release gates cover frozen dependencies, frontend/Rust regressions, six-platform builds, bundled resources and actual installed-package startup on CI runners. The eight CI artifacts comprise six platform packages, the Git source companion and a separate Linux x64 RPM QA package; the QA package is not an extra public release asset.
+
+Earlier original v1.0.4 DMG/ZIP packages passed isolated native checks on both Mac architectures and an official Harness 0.2.0-rc.2 Desktop producer subset, including a synthetic session, a transitive Cordis test plugin, restart, mutation locks and normal cleanup. Those receipts belong to the earlier original packages and do not establish full real-session migration acceptance for v1.0.5. The v1.0.5 Agent Stop regression is verified by its own same-commit native installed-package logs.
+
+Full in-browser Web sessions, real-session/full offline migration, every third-party plugin, user Mac upgrades, Gatekeeper first-open, production notarization and crash recovery remain unaccepted. Default Safari configuration is restricted on Mac runners and no user Mac is available. These gaps are not counted as passing; earlier failures and cancellations remain recorded.
+
+Bundled Harness remains 0.1.6-alpha.2 and user installations are not automatically upgraded. That lock has no official Linux Desktop runtime, so Linux retains Web mode. Explicit runtime paths take precedence; otherwise bundled tools are used. Bundled Git excludes GCM. macOS packages are ad-hoc signed and not notarized; other platforms are unsigned. CI success does not establish production signing or real-device upgrade acceptance.
