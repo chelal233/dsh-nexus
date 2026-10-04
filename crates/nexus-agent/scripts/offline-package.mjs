@@ -670,6 +670,14 @@ export async function desktopRuntimeForExport(slot, runtime, fallback) {
 
 // Exports remain self-contained even if the receiving Nexus uses a different
 // Electron. Package only the immutable application host, never its data root.
+export function verifyMacHostSignature(app, run = spawnSync) {
+  const result = run('/usr/bin/codesign', ['--verify', '--deep', '--strict', app], { encoding: 'utf8', timeout: 30000 });
+  if (result.status === 0 && !result.error && !result.signal) return;
+  const detail = String(result.stderr || result.stdout || '').replace(/[\x00-\x08\x0b-\x1f\x7f]/g, '').trim().slice(0, 4096);
+  const timedOut = result.error?.code === 'ETIMEDOUT';
+  throw new Error(`${timedOut ? 'macOS app signature verification timed out' : 'Cannot export an invalid macOS app signature'} (status ${result.status}, signal ${result.signal || 'none'}, error ${result.error?.code || 'none'})${detail ? `: ${detail}` : ''}`, { cause: result.error });
+}
+
 export async function desktopHostForExport(desktop, job) {
   if (!desktop) return null;
   const manifest = await json(path.join(desktop, 'manifest.json'));
@@ -702,8 +710,7 @@ export async function desktopHostForExport(desktop, job) {
     else fail('Invalid portable Electron host');
   }
   if (!windows) {
-    const verify = spawnSync('/usr/bin/codesign', ['--verify', '--deep', '--strict', path.join(root, 'Nexus Launcher.app')], { encoding: 'utf8', timeout: 30000 });
-    if (verify.status !== 0) fail('Cannot export an invalid macOS app signature');
+    verifyMacHostSignature(path.join(root, 'Nexus Launcher.app'));
   }
   for (const name of names) await measure(path.join(root, name));
   return { root, names, bytes, entries };
