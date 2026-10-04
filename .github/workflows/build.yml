@@ -123,7 +123,9 @@ jobs:
           pnpm prepare:notices
           pnpm prepare:release
           pnpm verify:release
-          node --test tests/*.test.mjs
+          # Preserve worker exit codes/signals in failures; the default spec
+          # reporter can reduce an aborted file to only 'test failed'.
+          node --test --test-reporter=tap tests/*.test.mjs
           node --test ../../.github/scripts/verify-release-assets.test.mjs
       - name: Package Electron acceptance build
         run: |
