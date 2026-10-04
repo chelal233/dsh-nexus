@@ -106,9 +106,21 @@ test('Desktop support probe reads the selected release without requiring runtime
   assert.deepEqual(await desktop.capability(),{supported:true,version:'test',release:'native'});
   release='web-only'; assert.deepEqual(await desktop.capability(),{supported:false,release:'web-only'});
   assert.equal(fs.existsSync(desktop.file),false);
-  assert.ok(calls.every(([command,args])=>command==='desktop_launch_context'||args.method==='GET'));
+  assert.ok(calls.every(([command,args])=>command==='desktop_launch_context' ? args.ensureStarted === false : args.method==='GET'));
   put('releases/native/apps/desktop/package.json','invalid');
   assert.throws(()=>probeDesktopSupport(path.join(root,'releases/native')));
+});
+
+test('capability polling never starts a stopped Agent', async t => {
+  const { root } = fixture(t); let starts = 0;
+  const bridge = { request: async (command, args) => {
+    assert.equal(command, 'desktop_launch_context');
+    if (args?.ensureStarted !== false) starts++;
+    return { available: starts > 0, data_root: root };
+  } };
+  const desktop = new HarnessDesktop({ bridge, userData: root, resources: root });
+  for (let poll = 0; poll < 3; poll++) await assert.rejects(desktop.capability(), /Desktop support check unavailable/);
+  assert.equal(starts, 0);
 });
 
 // Exercise OS child environment serialization, including an explicit empty opt-in.

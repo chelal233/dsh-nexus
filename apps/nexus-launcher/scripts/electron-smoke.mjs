@@ -109,6 +109,11 @@ try {
   }
   // Explicit test-owned Agent stop, not the automatic updater's shutdown path.
   await evaluate('window.nexusDesktop.invoke("proxy_request", {method:"POST",path:"/v1/agent",body:{action:"stop"}})');
+  await evaluate('window.nexusDesktop.invoke("harness_desktop_capability").then(()=>null,()=>null)');
+  const stopped = await evaluate('window.nexusDesktop.invoke("proxy_request", {method:"GET",path:"/v1/agent"})');
+  assert.equal(stopped.running, false, 'Desktop capability polling must not restart a stopped Agent');
+  assert.equal(stopped.available, false);
+  report.checks.push('explicit Agent Stop survives the real Desktop capability probe without spawning another Agent');
   await writeFile(path.join(fixture, 'report.json'), JSON.stringify(report, null, 2));
   console.log(JSON.stringify(report, null, 2));
   const exited = new Promise(resolve => child.once('exit', resolve));

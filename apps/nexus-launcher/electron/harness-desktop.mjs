@@ -181,7 +181,7 @@ export class HarnessDesktop {
     throw new Error('desktop_stop_timeout');
   }
   async capability() {
-    const startup = await this.bridge.request('desktop_launch_context');
+    const startup = await this.bridge.request('desktop_launch_context', { ensureStarted: false });
     if (!startup.available) throw new Error('Desktop support check unavailable');
     const [releases, config] = await Promise.all([
       this.bridge.request('proxy_request', { method: 'GET', path: '/v1/releases' }),

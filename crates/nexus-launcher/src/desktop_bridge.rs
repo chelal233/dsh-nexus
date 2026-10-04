@@ -345,6 +345,11 @@ async fn dispatch(state: &AppState, request: &Request) -> Result<Value, BridgeEr
         "startup_status" => Ok(serde_json::to_value(startup_status(state).await?).unwrap()),
         // A Desktop launch must inspect Agent without scheduling the Web CLI.
         "desktop_launch_context" => {
+            // Periodic capability probes must not undo an explicit Agent Stop.
+            // Only the actual launch path may ensure that Agent is running.
+            if args.get("ensureStarted").and_then(Value::as_bool) == Some(false) {
+                return Ok(serde_json::to_value(startup_response(state, state.runtime.status().await)).unwrap());
+            }
             state.runtime.ensure_started(START_WAIT_SECS).await.map_err(|error| error.to_string())?;
             state.startup_attempted.store(true, Ordering::Release);
             let configured = nexus_core::ConfigStore::new(state.runtime.paths().clone()).load().map_err(|e| e.to_string())?.runtime.unwrap_or_default();

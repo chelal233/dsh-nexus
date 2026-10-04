@@ -10,6 +10,7 @@ import { GIB, exportIncrement, importIncrement } from './macos-acceptance-contra
 import { releaseOwnedChildHandles } from './linux-rpm-preflight-lifecycle.mjs';
 import { SESSION_TEXT } from './migration-session-fixture.mjs';
 import { browserLease } from './macos-acceptance-browser.mjs';
+import { RustBridge } from '../../apps/nexus-launcher/electron/bridge.mjs';
 
 assert.equal(process.platform, 'darwin'); assert.ok(process.getuid() > 0);
 const root = await fs.realpath(process.env.QA_ROOT), evidence = await fs.realpath(process.env.QA_PHASE_EVIDENCE);
@@ -40,13 +41,13 @@ process.once('SIGTERM', () => abort.abort('Parent stopped this owned worker afte
 const checkAbort = () => { if (abort.signal.aborted) throw Object.assign(new Error(String(abort.signal.reason)), { code: 'ABORTED' }); };
 let browser, web, initial, defaultBrowser;
 const redact = value => String(value).replace(/([?&]token=)[^\s&"']+/gi, '$1[redacted]');
-function start(program, args, env) {
+function start(program, args, env, stdin = 'ignore') {
   assert.ok(args.every(arg => !/no-sandbox|disable-setuid-sandbox|disable-web-security/.test(arg)));
   const child = spawn(program, args, { env: { ...process.env,
     HOME: path.join(root, 'home'), TMPDIR: path.join(root, 'tmp'),
     XDG_CACHE_HOME: path.join(root, 'cache'), XDG_CONFIG_HOME: path.join(root, 'config'), XDG_DATA_HOME: path.join(root, 'share'),
     npm_config_cache: path.join(root, 'cache/npm'), COREPACK_HOME: path.join(root, 'cache/corepack'),
-    ...env }, stdio: ['ignore', 'pipe', 'pipe'] });
+    ...env }, stdio: [stdin, 'pipe', 'pipe'] });
   child.qaProgram = program; child.qaClosed = false; child.qaLog = '';
   child.qaClose = new Promise(resolve => child.once('close', () => { child.qaClosed = true; resolve(); }));
   child.on('error', error => { child.qaLog = redact(error.message); });
@@ -70,7 +71,7 @@ async function launchInstance(spec) {
     HOME: spec.home, TMPDIR: path.join(root, 'tmp'), NEXUS_DATA_DIR: spec.dataRoot,
     DSH_HOME: spec.dshHome, NEXUS_AGENT_PORT: '0', NEXUS_LOCALE: 'en',
   });
-  const instance = { proc, desktop: null }; instances.push(instance);
+  const instance = { proc, desktop: null, spec }; instances.push(instance);
   const desktop = await connect(proc, spec.userDataDir, item => item.type === 'page' && item.url.startsWith('file:'));
   instance.desktop = desktop;
   channels.push(desktop);
@@ -94,11 +95,45 @@ async function closeInstance(instance) {
   }
   assert.ok(instance.desktop, 'Unconnected owned GUI cannot prove normal API shutdown');
   await instance.desktop.evaluate('window.nexusDesktop.invoke("harness_desktop_stop")');
-  await instance.desktop.evaluate('window.nexusDesktop.invoke("proxy_request",{method:"POST",path:"/v1/agent",body:{action:"stop"}})');
   try { await instance.desktop.host.cdp('Browser.close'); } catch { /* May close before replying. */ }
   instance.desktop.ws.close(); instance.desktop.host.ws.close();
   await Promise.race([instance.proc.qaClose, delay(15000)]);
   assert.ok(instance.proc.qaClosed && instance.proc.exitCode === 0 && instance.proc.signalCode === null, 'Normal owned GUI close must complete');
+  // Launcher EOF intentionally preserves Agent. Close the GUI first so old
+  // tray capability polling cannot race the explicit ordinary Agent Stop.
+  const resources = path.join(app, 'Contents/Resources');
+  const agentProgram = path.join(resources, 'nexus-agent');
+  const agentRows = () => execFileSync('/bin/ps', ['-axo', 'pid=,command='], { encoding: 'utf8' }).split('\n')
+    .map(line => line.trim().match(/^(\d+)\s+(.+)$/)).filter(match => match &&
+      match[2].startsWith(agentProgram + ' --data-dir ' + instance.spec.dataRoot + ' --port '))
+    .map(match => ({ pid: Number(match[1]), command: match[2] }));
+  let helper;
+  const bridge = new RustBridge(resources, (program, args, options) => {
+    helper = start(program, args, options.env, 'pipe'); return helper;
+  }, { NEXUS_DATA_DIR: instance.spec.dataRoot, NEXUS_AGENT_PORT: '0', HOME: instance.spec.home, DSH_HOME: instance.spec.dshHome });
+  try {
+    const status = await bridge.request('proxy_request', { method: 'GET', path: '/v1/agent' });
+    assert.equal(await fs.realpath(status.data_root), instance.spec.dataRoot);
+    const before = agentRows();
+    if (status.running) {
+      assert.equal(status.available, true, 'Owned Agent is not a verified ready instance');
+      assert.equal(await fs.realpath(status.agent_program), await fs.realpath(agentProgram));
+      assert.equal(before.length, 1, 'Expected one exact owned Agent for shutdown');
+      assert.ok(status.instance_id && before[0].command.endsWith(' --instance-id ' + status.instance_id));
+      const accepted = await bridge.request('proxy_request', { method: 'POST', path: '/v1/agent', body: { action: 'stop' } });
+      assert.deepEqual(accepted, { accepted: true, action: 'stop' });
+      const deadline = Date.now() + 20000;
+      while (agentRows().length && Date.now() < deadline) await delay(100);
+      assert.deepEqual(agentRows(), [], 'Normally stopped owned Agent must actually exit');
+    } else assert.deepEqual(before, [], 'Unavailable Agent must not leave an owned process');
+    (report.agentShutdown ??= []).push({ dataRoot: status.data_root, instanceId: status.instance_id,
+      pid: before[0]?.pid, guiClosedFirst: true, transport: 'Original packaged stdio bridge and ordinary Agent Stop API',
+      agentAbsent: true, signalUsed: false });
+  } finally {
+    bridge.close();
+    await Promise.race([helper.qaClose, delay(15000)]);
+    assert.ok(helper.qaClosed && helper.exitCode === 0 && helper.signalCode === null, 'Shutdown bridge must exit normally');
+  }
 }
 async function restartInstance({ instance, spec }) { await closeInstance(instance); return launchInstance(spec); }
 async function findOfficialPage({ url, openedAfter }) {
