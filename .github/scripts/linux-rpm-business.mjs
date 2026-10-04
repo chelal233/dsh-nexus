@@ -120,7 +120,8 @@ export async function runBusinessQA(context) {
   const stem = phase + '-' + Date.now(), journal = path.join(out,stem+'.jsonl');
   const stateFile = path.join(root,'business-qa-state.json');
   let stage = 'preflight', ownedOperation = null, selected = null, cleanupOK = true, result, archivePreview;
-  let verifiedOwnership = false, migrationVerified = false;
+  let verifiedOwnership = false, migrationVerified = false, lastColdSnapshot, primaryFailure;
+  const diagnosticErrors = [];
   const delay = ms => new Promise(resolve => setTimeout(resolve,ms));
   const record = async (kind, value) => {
     const item = {time:new Date().toISOString(),phase,stage,kind,value:safe(value)};
@@ -128,13 +129,21 @@ export async function runBusinessQA(context) {
     if (typeof c.report === 'function') await c.report(item);
     else if (Array.isArray(c.report)) c.report.push(item);
   };
-  const coldSnapshot = operation => ({
+  const recordDiagnostic = async (kind, value) => {
+    try { await record(kind,value); }
+    catch (error) { if(diagnosticErrors.length<8) diagnosticErrors.push({kind,code:error.code,message:String(error.message).slice(0,512)}); }
+  };
+  const coldSnapshot = operation => {
+    const bytes = Buffer.from(typeof operation.output_tail === 'string' ? operation.output_tail : '');
+    let start = Math.max(0,bytes.length-16384);
+    while(start<bytes.length&&(bytes[start]&0xc0)===0x80)start++;
+    return {
     operation_id: operation.operation_id, kind: operation.kind, phase: operation.phase,
     progress_percent: operation.progress_percent, updated_at_unix: operation.updated_at_unix,
     candidate_revision: operation.candidate_revision, owner_quiescent: operation.owner_quiescent,
     cleanup_pending: operation.cleanup_pending, error: operation.error, cleanup_error: operation.cleanup_error,
-    output_tail: typeof operation.output_tail === 'string' ? operation.output_tail.slice(-16384) : undefined,
-  });
+    output_tail: typeof operation.output_tail === 'string' ? bytes.subarray(start).toString('utf8') : undefined,
+  }; };
   let profileYaml;
   const readProfilePatch=async file=> {
     await ordinary(root,file,false);
@@ -393,8 +402,9 @@ export async function runBusinessQA(context) {
         const op=await wait('official rc2 prepared',async()=> {
           const x=(await api('/v1/updates')).operation;
           if(x?.operation_id!==ownedOperation) fail('operation_changed','Fetch operation changed');
+          lastColdSnapshot=coldSnapshot(x);
           if (x.phase !== observedPhase || Date.now() - observedAt >= 30000) {
-            await record('cold_progress',coldSnapshot(x)); observedPhase=x.phase; observedAt=Date.now();
+            await record('cold_progress',lastColdSnapshot); observedPhase=x.phase; observedAt=Date.now();
           }
           if(['failed','cancelled'].includes(x.phase)) fail('fetch_failed',JSON.stringify(safe(x)));
           return x.phase==='prepared'&&x;
@@ -729,6 +739,7 @@ export async function runBusinessQA(context) {
       cancelRestartRecovery:phase==='final'?'PASS':'NOT RUN',crashRecovery:'NOT RUN',journal};
     }
   } catch(e) {
+    primaryFailure=e;
     if(activePage?.page) {
       try {
         await record('failure_page',await evaluate(activePage.page,()=>({
@@ -743,17 +754,19 @@ export async function runBusinessQA(context) {
         if(bytes.length>8*1024*1024)fail('evidence_budget','active page screenshot');
         await fs.writeFile(path.join(out,stem+'-active-page.png'),bytes);
       } catch(diagnosticError) {
-        await record('failure_page_error',{code:diagnosticError.code,message:diagnosticError.message});
+        await recordDiagnostic('failure_page_error',{code:diagnosticError.code,message:diagnosticError.message});
       }
     }
     if (verifiedOwnership) {
       if (ownedOperation) {
+        if(lastColdSnapshot?.operation_id===ownedOperation)
+          await recordDiagnostic('failure_cold_last_observed',lastColdSnapshot);
         try {
           const operation=(await api('/v1/updates',undefined,true)).operation;
           if(operation?.operation_id!==ownedOperation) fail('operation_changed','Diagnostic fetch operation changed');
-          await record('failure_cold_operation',coldSnapshot(operation));
+          await recordDiagnostic('failure_cold_operation',coldSnapshot(operation));
         } catch (diagnosticError) {
-          await record('failure_cold_diagnostic_error',{code:diagnosticError.code,message:diagnosticError.message});
+          await recordDiagnostic('failure_cold_diagnostic_error',{code:diagnosticError.code,message:diagnosticError.message});
         }
       }
       // Preserve the actual owned run before normal Stop changes its state.
@@ -781,12 +794,12 @@ export async function runBusinessQA(context) {
         const manifest = JSON.parse(await fs.readFile(manifestPath,'utf8'));
         await record('failure_profile',{name:manifest.name,dsh:manifest.dsh,dependencies:manifest.dependencies});
       } catch (diagnosticError) {
-        await record('failure_diagnostic_error',{code:diagnosticError.code,message:diagnosticError.message});
+        await recordDiagnostic('failure_diagnostic_error',{code:diagnosticError.code,message:diagnosticError.message});
       }
     }
     const status=e.code==='INTERRUPTION_NOT_CAPTURED'?'NOT RUN':
       /^(contract_|BUDGET_|BROWSER_BLOCKED|DEADLINE|ABORTED)/.test(e.code||'')?'BLOCKED':'FAIL';
-    await record(status,{code:e.code||'ERROR',message:e.message||String(e)});
+    await recordDiagnostic(status,{code:e.code||'ERROR',message:e.message||String(e)});
     result={phase,status,stage,code:e.code||'ERROR',fullMigration:migrationVerified?'PASS':'NOT RUN',
       cancelRestartRecovery:'NOT RUN',crashRecovery:'NOT RUN',journal};
     throw Object.assign(e,{qaResult:result});
@@ -794,30 +807,34 @@ export async function runBusinessQA(context) {
     if(verifiedOwnership) {
       if(ownedOperation) {
         try {
-          try {await api('/v1/updates',{action:'cancel',operation_id:ownedOperation},true);}
-          catch(e){await record('cleanup_cancel_response',{code:e.code,message:e.message});}
-          const end=Date.now()+20000;let settled=null;
+          try {await recordDiagnostic('cleanup_cancel_response',await api('/v1/updates',{action:'cancel',operation_id:ownedOperation},true));}
+          catch(e){await recordDiagnostic('cleanup_cancel_response',{code:e.code,message:e.message});}
+          const end=Date.now()+20000;let settled=null,lastCleanup;
           while(Date.now()<end) {
             const op=(await api('/v1/updates',undefined,true)).operation;
+            if(op?.operation_id===ownedOperation)lastCleanup=coldSnapshot(op);
             if(op?.operation_id===ownedOperation&&op.owner_quiescent===true&&!op.cleanup_pending&&
                ['prepared','succeeded','failed','cancelled'].includes(op.phase)){settled=op;break;}
             await delay(250);
           }
+          if(lastCleanup)await recordDiagnostic('cold_cleanup_last_observed',lastCleanup);
           if(!settled)fail('COLD_CLEANUP_TIMEOUT','Owned cold operation is not proven quiescent');
           await record('cold_cleanup',{operation:settled.operation_id,phase:settled.phase,
             owner_quiescent:settled.owner_quiescent,cleanup_pending:settled.cleanup_pending});
-        } catch(e){cleanupOK=false;await record('cold_cleanup_failed',{code:e.code,message:e.message});}
+        } catch(e){cleanupOK=false;await recordDiagnostic('cold_cleanup_failed',{code:e.code,message:e.message});}
       }
       try {
         await stopHarness(true);
         await record('cleanup',{harness:'stopped',processCleanup:'caller global finally owns Agent/GUI/browser'});
-      } catch(e){cleanupOK=false;await record('harness_cleanup_failed',{code:e.code,message:e.message});}
-    } else await record('cleanup',{harness:'not touched: QA ownership was not established'});
+      } catch(e){cleanupOK=false;await recordDiagnostic('harness_cleanup_failed',{code:e.code,message:e.message});}
+    } else await recordDiagnostic('cleanup',{harness:'not touched: QA ownership was not established'});
+    if(diagnosticErrors.length&&result?.status==='PASS')cleanupOK=false;
     const cleanupFailedAfterPass=!cleanupOK&&result?.status==='PASS';
-    result={...result,cleanupOK,
+    result={...result,cleanupOK,diagnosticErrors,
       ...(cleanupFailedAfterPass?{status:'FAIL',code:'CLEANUP_FAILED'}:{}),
       cleanupScope:'Owned cold operation and Harness only; caller must prove Agent/GUI/browser cleanup'};
-    await fs.writeFile(path.join(out,stem+'.result.json'),JSON.stringify(result,null,2));
+    try {await fs.writeFile(path.join(out,stem+'.result.json'),JSON.stringify(result,null,2));}
+    catch(error){if(!primaryFailure)throw error;primaryFailure.resultWriteError={code:error.code,message:String(error.message).slice(0,512)};}
     if(c.report&&typeof c.report==='object'&&!Array.isArray(c.report))c.report.businessQA=result;
     if(cleanupFailedAfterPass) fail('CLEANUP_FAILED','See cleanup evidence');
   }
