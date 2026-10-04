@@ -29,10 +29,10 @@ const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
 async function until(fn) {
   const deadline = Date.now() + 45000;
   while (Date.now() < deadline) {
-    if (child.exitCode !== null) throw new Error(`Electron exited ${child.exitCode}. ${stderr}`);
+    if (child.exitCode !== null || child.signalCode !== null) throw new Error(`Electron exited ${child.exitCode}, signal ${child.signalCode}. ${stderr}`);
     const value = await fn(); if (value) return value; await delay(150);
   }
-  throw new Error(`Smoke timeout. ${stderr}`);
+  throw new Error(`Smoke timeout (pid ${child.pid}, exit ${child.exitCode}, signal ${child.signalCode}). ${stderr}`);
 }
 let ws;
 try {
