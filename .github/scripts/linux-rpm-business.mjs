@@ -3,6 +3,7 @@ import { createReadStream } from 'node:fs';
 import path from 'node:path';
 import { createHash, randomBytes } from 'node:crypto';
 import { createRequire } from 'node:module';
+import { migrationSessionFixture, DEFAULT_WORKSPACE } from './migration-session-fixture.mjs';
 import { Readable } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
 import { constants as zlibConstants, zstdCompressSync, zstdDecompressSync, createZstdDecompress } from 'node:zlib';
@@ -38,17 +39,6 @@ const HEAD = '639ed015397290b3745d163aafe02ffee4aa3f84';
 const TEXT = 'Synthetic valid offline migration session. No model request.';
 const MARKER = 'DSH_QA_ACTIVATED:qa-round2-transitive-ok';
 const READ_MARKER = 'DSH_QA_READ_OK:qa-valid-session';
-const WORKSPACE = '/qa/test/fixture-workspace';
-// Frozen format.ts projectKey('/qa/test/fixture-workspace'); header and path agree.
-const SESSION_DIRECTORY = 'sessions/--qa-test-fixture-workspace--/qa-valid-session';
-const SESSION = '{"type":"session","version":4,"id":"qa-valid-session","createdAt":1,"cwd":"/qa/test/fixture-workspace","isSeeded":false,"delegationDepth":0}\n' +
-  '{"type":"user/message","seq":0,"time":2,"data":{"content":[{"type":"text","text":"Synthetic valid offline migration session. No model request."}],"source":{"kind":"user"},"role":"user","id":"qa-valid-message"},"surfaceOp":"append"}\n' +
-  '{"type":"session/end-seed","seq":1,"time":3,"data":{}}\n' +
-  '{"type":"permission/preset","seq":2,"time":4,"data":{"preset":"workspace-write"}}\n' +
-  '{"type":"sandbox/mode","seq":3,"time":5,"data":{"mode":"workspace-write"}}\n' +
-  '{"type":"approval/policy","seq":4,"time":6,"data":{"policy":"ask"}}\n' +
-  '{"type":"session/end-seed","seq":5,"time":7,"data":{}}\n';
-const SESSION_HASH = 'f04ac0f666365c5819bda050ccbe5e298ccd532258262c1c151d2b98daaa0f7a';
 const digest = x => createHash('sha256').update(x).digest('hex');
 const fail = (code, message) => { throw Object.assign(new Error(message), {code}); };
 async function fileHash(file) {
@@ -105,6 +95,9 @@ async function headAt(slot) {
 }
 export async function runBusinessQA(context) {
   const c = context, phase = c.phase || 'fresh';
+  const fixture = migrationSessionFixture(c.workspace || DEFAULT_WORKSPACE);
+  const WORKSPACE = fixture.cwd, SESSION_DIRECTORY = fixture.directory;
+  const SESSION = fixture.plaintext, SESSION_HASH = fixture.sha256;
   if (!['fresh','old','final'].includes(phase)) fail('contract_invalid','phase');
   if (phase === 'final') for (const key of ['launchInstance','restartInstance'])
     if(typeof c[key]!=='function') fail('contract_missing',key);
@@ -412,7 +405,7 @@ export async function runBusinessQA(context) {
       });
       await step('synthetic_files',async()=> {
         await stopHarness();
-        if(Buffer.byteLength(SESSION)!==708||digest(SESSION)!==SESSION_HASH) fail('fixture_invalid','session');
+        if(Buffer.byteLength(SESSION)!==fixture.bytes||digest(SESSION)!==SESSION_HASH) fail('fixture_invalid','session');
         // rc2 materializes a checksummed header frame followed by an independent
         // checksummed event frame; its default canonical suffix is .jsonl.zstd.
         // A complete seed ends with the producer's session/end-seed marker;
@@ -455,7 +448,7 @@ export async function runBusinessQA(context) {
             "ctx.effect(()=>ready.onReady(async()=>{const persistence=ctx.get('sessionPersistence');"+
             "if(!persistence)throw Error('sessionPersistence missing');const snapshots=await persistence.list();"+
             "const match=snapshots.filter(item=>item.header.id==='qa-valid-session');"+
-            "if(match.length!==1||match[0].header.cwd!=='/qa/test/fixture-workspace')throw Error('fixture header missing from actual backend');"+
+            "if(match.length!==1||match[0].header.cwd!=="+JSON.stringify(WORKSPACE)+")throw Error('fixture header missing from actual backend');"+
             "let handle;try{handle=await persistence.open('qa-valid-session','read');const loaded=await handle.read();"+
             "if(loaded.events.length!==6||loaded.events[0].type!=='user/message'||"+
             "loaded.events[0].data?.source?.kind!=='user'||loaded.events[0].data?.content?.[0]?.text!=="+JSON.stringify(TEXT)+")throw Error('actual backend message mismatch');"+

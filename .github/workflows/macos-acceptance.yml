@@ -11,6 +11,18 @@ on:
         description: 'Published original previous-version package'
         type: string
         default: 'v1.0.3'
+      full_business:
+        description: 'Run actual original DMG/ZIP, version replacement and complete synthetic business acceptance'
+        type: boolean
+        default: false
+      temporary_limit_gib:
+        description: 'Reviewed task temporary envelope; full business currently requires explicit 32 GiB approval'
+        type: string
+        default: '2'
+      arm_free_gib:
+        description: '0 preserves normal 20 GiB/10% floor; 8 requires an explicit ephemeral ARM QA exception'
+        type: string
+        default: '0'
 
 permissions:
   contents: read
@@ -30,23 +42,30 @@ jobs:
           - os: macos-15
             arch: arm64
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 10
+    timeout-minutes: 180
     env:
       QA_TEMP: ${{ github.workspace }}/.codex-temp/macos-acceptance
       QA_EVIDENCE: ${{ github.workspace }}/.codex-artifacts/macos-acceptance
       QA_ARCH: ${{ matrix.arch }}
       QA_CANDIDATE_TAG: ${{ inputs.candidate_tag }}
       QA_BASELINE_TAG: ${{ inputs.baseline_tag }}
+      QA_TEMP_BUDGET_GIB: ${{ inputs.temporary_limit_gib }}
+      QA_ARM_FREE_GIB: ${{ inputs.arm_free_gib }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           persist-credentials: false
       - name: Verify fail-closed acceptance contracts
-        run: node --test .github/scripts/macos-acceptance-contract.test.mjs
+        run: node --test .github/scripts/macos-acceptance-contract.test.mjs .github/scripts/migration-session-fixture.test.mjs
       - name: Read original identities, native GUI capability and capacity
         env:
           GH_TOKEN: ${{ github.token }}
         run: node .github/scripts/macos-acceptance-preflight.mjs
+      - name: Accept intact published original packages and full native business
+        if: inputs.full_business
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: node .github/scripts/macos-original-package.mjs
       - name: Deliver bounded preflight evidence
         if: always()
         uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5
