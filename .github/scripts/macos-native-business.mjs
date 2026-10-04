@@ -239,9 +239,9 @@ async function desktopChecks(instance = initial, home = path.join(root, 'dsh'), 
 }
 try {
   await gate('native_gui', 128 * 1024 ** 2, true);
-  // Temporary runner-only native LaunchServices setting; restore exact old handlers in finally.
+  // Observe the existing native browser; do not repeat the runner's denied preference-setting operation.
   defaultBrowser = browserLease(browserCommand);
-  defaultBrowser.setChrome();
+  defaultBrowser.requireExistingChrome();
   const fixture = path.join(root, 'browser-fixture.html');
   await fs.writeFile(fixture, '<!doctype html><title>Nexus QA ordinary browser</title><p>nexus-qa-browser-preflight</p>');
   browser = start('/Applications/Google Chrome.app/Contents/MacOS/Google Chrome', [
@@ -290,8 +290,8 @@ try {
     if (!child.qaClosed) { report.cleanupError = 'Owned child did not confirm close'; releaseOwnedChildHandles(child); }
   }
   if (defaultBrowser) try {
-    defaultBrowser.restore();
-    report.defaultBrowserRestored = true;
+    browserLease(browserCommand).requireExistingChrome();
+    report.defaultBrowserUnchanged = true;
   } catch (error) { report.cleanupError = 'Temporary default browser restoration failed: ' + error.message; }
   if (report.cleanupError) { report.result = 'FAIL'; process.exitCode = 1; }
   await fs.writeFile(path.join(evidence, 'native-result.json'), JSON.stringify(report, null, 2));

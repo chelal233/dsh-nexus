@@ -13,11 +13,18 @@ export function browserLease(command) {
     assert.match(handler, /^[A-Za-z0-9.-]+$/);
   }
   const write = (scheme, handler) => assert.equal(Number(command(['set', scheme, handler])),
-  0, `LaunchServices rejected ${scheme} handler`);
+  0, `LaunchServices rejected ${scheme} handler ${handler}`);
   const verify = expected => assert.deepEqual(read().map(([scheme, handler]) => [scheme, handler?.toLowerCase()]),
     expected.map(([scheme, handler]) => [scheme, handler.toLowerCase()]), 'Default browser readback differs');
   return {
     before,
+    requireExistingChrome() {
+      if (!before.every(([, handler]) => handler.toLowerCase() === 'com.google.chrome')) {
+        throw Object.assign(new Error('Existing default browser is not Chrome; native browser observation requires normal user configuration'),
+          { code: 'BROWSER_CONFIGURATION_BLOCKED' });
+      }
+      verify(before);
+    },
     setChrome() { for (const scheme of schemes) write(scheme, 'com.google.Chrome'); verify(schemes.map(s => [s, 'com.google.Chrome'])); },
     restore() {
       const failures = [];

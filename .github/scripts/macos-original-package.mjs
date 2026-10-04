@@ -206,8 +206,13 @@ try {
   command('/usr/bin/clang', ['-fobjc-arc', '-fno-modules', '-framework', 'Foundation', '-framework', 'CoreServices',
     path.join(workspace, '.github/scripts/macos-acceptance-browser.m'), '-o', browserBridge]);
   const browser = browserLease(args => command(browserBridge, args));
-  try { browser.setChrome(); } finally { browser.restore(); }
-  report.browserPreflight = { result: 'PASS actual native set/readback/restore', original: browser.before };
+  report.browserPreflight = { result: 'PENDING existing native browser observation', original: browser.before, preferenceWrites: 0 };
+  // Stop the denied setting operation; only the already configured native browser can satisfy this contract.
+  try { browser.requireExistingChrome(); } catch (error) {
+    report.browserPreflight.result = 'BLOCKED normal browser configuration required';
+    throw error;
+  }
+  report.browserPreflight.result = 'PASS actual existing browser readback; no preference changed';
   const build = await receiveMetadata(preflight.candidate), oldBuild = await receiveMetadata(preflight.baseline);
   for (const format of ['dmg', 'zip']) {
     const familyRoot = path.join(root, format); await fs.mkdir(familyRoot); await prepareData(familyRoot);

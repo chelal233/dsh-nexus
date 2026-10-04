@@ -38,3 +38,11 @@ test('restoration attempts both schemes and reports refusal plus mismatched read
   assert.throws(() => lease.restore(), /rejected http.*readback differs/s);
   assert.equal(native.handlers.get('https'), 'com.apple.safari');
 });
+
+test('existing Chrome needs no preference write and a different existing browser is blocked without mutation', () => {
+  const chrome = nativeFixture(['com.google.Chrome', 'com.google.chrome']);
+  browserLease(chrome.command).requireExistingChrome(); assert.deepEqual(chrome.writes, []);
+  const safari = nativeFixture();
+  assert.throws(() => browserLease(safari.command).requireExistingChrome(), { code: 'BROWSER_CONFIGURATION_BLOCKED' });
+  assert.deepEqual(safari.writes, []);
+});
