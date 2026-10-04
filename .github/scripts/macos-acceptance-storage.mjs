@@ -20,6 +20,32 @@ export function allocatedBytes(directory) {
   return value;
 }
 
+export async function treeFootprint(root, directory) {
+  await ownedDirectory(root, directory);
+  let bytes = 0, entries = 0;
+  async function visit(file) {
+    const stat = await fs.lstat(file); entries++;
+    assert.ok(entries <= 250000, 'QA footprint entry bound');
+    if (stat.isSymbolicLink()) return;
+    if (stat.isDirectory()) for (const name of await fs.readdir(file)) await visit(path.join(file, name));
+    else { assert.ok(stat.isFile()); bytes += stat.size; }
+    assert.ok(Number.isSafeInteger(bytes));
+  }
+  await visit(directory); return { bytes, entries };
+}
+
+export function watchStorage(gate, onViolation, intervalMs = 2000) {
+  let active = true, pending = null;
+  const sample = () => {
+    if (!active || pending) return;
+    pending = Promise.resolve().then(() => gate('periodic-sample', 0, true)).catch(async error => {
+      active = false; clearInterval(timer); await onViolation(error);
+    }).finally(() => { pending = null; });
+  };
+  const timer = setInterval(sample, intervalMs); sample();
+  return async () => { active = false; clearInterval(timer); await pending; };
+}
+
 export function storageGate(root, evidence) {
   const limitGiB = Number(process.env.QA_TEMP_BUDGET_GIB || 2);
   const armFloor = Number(process.env.QA_ARM_FREE_GIB || 0);
@@ -35,7 +61,7 @@ export function storageGate(root, evidence) {
       const ordinaryFloor = Math.max(20 * GIB, Math.ceil(total / 10));
       const floor = process.arch === 'arm64' && armFloor === 8 ? 8 * GIB : ordinaryFloor;
       peak = Math.max(peak, occupied);
-      last = { stage, occupied, increment, peak, free, total, floor, ordinaryFloor, limit,
+      last = { measuredAt: new Date().toISOString(), stage, occupied, increment, sampledPeak: peak, free, total, floor, ordinaryFloor, limit,
         approvedArmException: process.arch === 'arm64' && armFloor === 8,
         ok: occupied + increment <= limit - GIB && free - increment >= floor + GIB };
       measuredAt = Date.now();

@@ -5,14 +5,16 @@ import { spawn, execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { runBusinessQA } from './linux-rpm-business.mjs';
 import { connect, socket, until, delay } from './acceptance-cdp.mjs';
-import { ownedDirectory, allocatedBytes, storageGate } from './macos-acceptance-storage.mjs';
-import { GIB } from './macos-acceptance-contract.mjs';
+import { ownedDirectory, storageGate, treeFootprint } from './macos-acceptance-storage.mjs';
+import { GIB, exportIncrement, importIncrement } from './macos-acceptance-contract.mjs';
 import { releaseOwnedChildHandles } from './linux-rpm-preflight-lifecycle.mjs';
+import { SESSION_TEXT } from './migration-session-fixture.mjs';
 
 assert.equal(process.platform, 'darwin'); assert.ok(process.getuid() > 0);
 const root = await fs.realpath(process.env.QA_ROOT), evidence = await fs.realpath(process.env.QA_PHASE_EVIDENCE);
 await ownedDirectory(root, root);
 const phase = process.env.QA_PHASE, app = await ownedDirectory(root, process.env.QA_INSTALLED_APP);
+assert.ok(['fresh', 'old', 'final'].includes(phase));
 const executable = path.join(app, 'Contents/MacOS/Nexus Launcher');
 const manifestBytes = await fs.readFile(path.join(app, 'Contents/Resources/release-manifest.json'));
 const manifest = JSON.parse(manifestBytes);
@@ -21,9 +23,12 @@ for (const name of ['version', 'commit', 'buildId']) assert.equal(manifest[name]
 assert.equal(manifest.runtime.target, `${process.arch === 'x64' ? 'x86_64' : 'aarch64'}-apple-darwin`);
 const expectedIdentity = { version: manifest.version, commit: manifest.commit, buildId: manifest.buildId,
   manifestSha256: createHash('sha256').update(manifestBytes).digest('hex') };
-const report = { schema: 1, result: 'FAIL', phase, expectedIdentity, checks: [], children: [],
+const report = { schema: 1, result: 'FAIL', phase, format: process.env.QA_PACKAGE_FORMAT, expectedIdentity, checks: [], children: [],
   realDeviceAcceptance: false, gatekeeperFirstOpen: 'NOT RUN', crashRecovery: 'NOT RUN' };
 const children = [], channels = [], targetEvents = [], gate = storageGate(root, evidence);
+const abort = new AbortController();
+process.once('SIGTERM', () => abort.abort('Parent stopped this owned worker after capacity or deadline failure'));
+const checkAbort = () => { if (abort.signal.aborted) throw Object.assign(new Error(String(abort.signal.reason)), { code: 'ABORTED' }); };
 let browser, web, initial, oldHandlers;
 const redact = value => String(value).replace(/([?&]token=)[^\s&"']+/gi, '$1[redacted]');
 function start(program, args, env) {
@@ -40,6 +45,7 @@ function start(program, args, env) {
 const jxa = script => execFileSync('/usr/bin/osascript', ['-l', 'JavaScript', '-e', script],
   { encoding: 'utf8', timeout: 30000, maxBuffer: 8192 }).trim();
 async function launchInstance(spec) {
+  checkAbort();
   assert.equal(spec.executable, executable);
   for (const directory of [spec.dataRoot, spec.home, spec.dshHome, spec.userDataDir]) await ownedDirectory(root, directory);
   const proc = start(executable, [`--user-data-dir=${spec.userDataDir}`, '--remote-debugging-port=0'], {
@@ -80,23 +86,59 @@ async function findOfficialPage({ url, openedAfter }) {
   return { page: channel, targetId: page.id, method: 'existing-cdp-target' };
 }
 const admitted = new Set();
-async function budgetGate({ stage, dataRoot, dshHome }) {
+async function budgetGate({ stage, dataRoot, dshHome, archivePreview }) {
+  checkAbort();
   for (const directory of [dataRoot, dshHome]) await ownedDirectory(root, directory);
   let increment = 0;
   if (!admitted.has(stage)) {
     if (stage === 'fresh_official_fetch') increment = 6 * GIB;
     if (['full_runtime_export', 'full_import_and_publication', 'inflight_import_cancel', 'retry_full_import_same_B'].includes(stage)) {
-      const sourceHome = allocatedBytes(path.join(root, 'dsh'));
-      const payload = allocatedBytes(path.join(root, 'business/releases')) + sourceHome
-        + allocatedBytes(path.join(app, 'Contents/Resources/runtime'));
-      increment = (stage === 'full_runtime_export' ? 2 * payload : payload + allocatedBytes(dshHome) + sourceHome) + GIB / 2;
+      if (stage === 'full_runtime_export') {
+        const [slot, runtime, home, host] = await Promise.all([
+          treeFootprint(root, path.join(root, 'business/releases')),
+          treeFootprint(root, path.join(app, 'Contents/Resources/runtime')),
+          treeFootprint(root, path.join(root, 'dsh')), treeFootprint(root, app),
+        ]);
+        increment = exportIncrement({ slot, runtime, home, host });
+        await fs.writeFile(path.join(evidence, 'export-admission.json'), JSON.stringify({ slot, runtime, home, host, increment }));
+      } else {
+        const receiver = await treeFootprint(root, dshHome);
+        increment = importIncrement(archivePreview, receiver);
+        await fs.writeFile(path.join(evidence, stage + '-admission.json'), JSON.stringify({ archivePreview, receiver, increment }));
+      }
     }
     await gate(stage, increment, true); admitted.add(stage);
   }
   return gate(stage);
 }
-async function desktopChecks() {
-  const invoke = (command, args = {}) => initial.desktop.evaluate(`window.nexusDesktop.invoke(${JSON.stringify(command)},${JSON.stringify(args)})`);
+async function seedDesktopFixture(home) {
+  const profile = path.join(home, 'profiles/desktop'), modules = path.join(profile, 'node_modules');
+  await ownedDirectory(root, profile);
+  const file = path.join(profile, 'package.json'), metadata = JSON.parse(await fs.readFile(file));
+  metadata.dependencies = { ...metadata.dependencies, 'qa-round2-plugin': '1.0.0' };
+  metadata.dsh.profile.bundles = [...new Set([...metadata.dsh.profile.bundles, 'qa-round2-plugin'])];
+  await fs.writeFile(file, JSON.stringify(metadata, null, 2) + '\n');
+  await fs.mkdir(modules, { recursive: true }); await ownedDirectory(root, modules);
+  const unit = path.join(modules, 'qa-round2-plugin');
+  await fs.cp(path.join(home, 'profiles/web/node_modules/qa-round2-plugin'), unit, { recursive: true, errorOnExist: true, force: false });
+  await fs.copyFile(path.join(home, 'profiles/web/cordis.patch.yml'), path.join(profile, 'cordis.patch.yml'));
+  const plugin = path.join(unit, 'plugin.mjs');
+  let text = await fs.readFile(plugin, 'utf8');
+  assert.ok(text.includes('let handle;') && text.includes('const loaded=await handle.read();') && text.includes('process.stdout.write('));
+  text = "import fs from 'node:fs/promises';import path from 'node:path';\n" + text
+    .replace('let handle;', 'let receiptFacts;let handle;')
+    .replace('const loaded=await handle.read();', "const loaded=await handle.read();receiptFacts={sessionId:'qa-valid-session',cwd:match[0].header.cwd,eventCount:loaded.events.length,kind:loaded.events[0]?.data?.source?.kind,text:loaded.events[0]?.data?.content?.[0]?.text,dependency:leaf,marker:config.marker,pid:process.pid};")
+    .replace('process.stdout.write(', "await fs.writeFile(path.join(process.env.DSH_HOME,'storages/qa-round2/desktop-receipt.json'),JSON.stringify(receiptFacts));process.stdout.write(");
+  await fs.writeFile(plugin, text);
+  return { pluginSha256: createHash('sha256').update(text).digest('hex') };
+}
+async function desktopChecks(instance = initial, home = path.join(root, 'dsh'), userData = path.join(root, 'electron'), seed = false) {
+  const invoke = (command, args = {}) => { checkAbort(); return instance.desktop.evaluate(`window.nexusDesktop.invoke(${JSON.stringify(command)},${JSON.stringify(args)})`); };
+  const waitReady = timeout => until(instance.proc, async () => {
+    const state = await invoke('harness_desktop_status');
+    if (state.phase === 'failed' || state.audit?.state === 'failed') throw new Error('Official Desktop failure: ' + JSON.stringify(state));
+    return state.phase === 'launched' && state.audit?.state === 'ready' && state;
+  }, timeout);
   const before = await invoke('harness_desktop_capability'); assert.equal(before.supported, true);
   await gate('official_desktop_preparation', 6 * GIB, true);
   const started = await invoke('harness_desktop_start');
@@ -105,18 +147,32 @@ async function desktopChecks() {
   const stopped = await invoke('harness_desktop_stop'); assert.equal(stopped.phase, 'stopped');
   report.desktopCancel = { started, captured: preparing, stopped };
   await invoke('harness_desktop_start');
-  const ready = await until(initial.proc, async () => {
-    const state = await invoke('harness_desktop_status');
-    if (state.phase === 'failed' || state.audit?.state === 'failed') throw new Error('Official Desktop failure: ' + JSON.stringify(state));
-    return state.phase === 'launched' && state.audit?.state === 'ready' && state;
-  }, 8 * 60 * 1000);
+  let ready = await waitReady(8 * 60 * 1000);
+  if (seed) {
+    assert.equal((await invoke('harness_desktop_stop')).phase, 'stopped');
+    report.desktopFixture = await seedDesktopFixture(home);
+  }
+  const receiptFile = path.join(home, 'storages/qa-round2/desktop-receipt.json');
+  await fs.rm(receiptFile, { force: true });
+  await invoke('harness_desktop_restart'); ready = await waitReady(5 * 60 * 1000);
+  const receipt = await until(instance.proc, async () => {
+    try { return JSON.parse(await fs.readFile(receiptFile)); } catch (error) { if (error.code === 'ENOENT') return null; throw error; }
+  });
+  assert.deepEqual({ sessionId: receipt.sessionId, cwd: receipt.cwd, eventCount: receipt.eventCount,
+    kind: receipt.kind, text: receipt.text, dependency: receipt.dependency, marker: receipt.marker }, {
+    sessionId: 'qa-valid-session', cwd: path.join(root, 'fixture-workspace'), eventCount: 6, kind: 'user',
+    text: SESSION_TEXT, dependency: 'qa-round2-transitive-ok', marker: 'qa-round2-config',
+  });
+  assert.ok(Number.isInteger(receipt.pid) && receipt.pid > 0);
+  report.desktopBusiness = { status: 'PASS actual Desktop producer session read and Cordis transitive plugin apply', receipt,
+    visualSessionResume: 'NOT RUN', thirdPartyPlugins: 'Synthetic QA plugin only' };
   assert.ok(Number.isInteger(ready.childPid) && ready.childPid > 0);
   // The original producer's structured startup audit is required, never only a live PID.
   report.officialDesktop = ready;
-  const sourceState = JSON.parse(await fs.readFile(path.join(root, 'business-qa-state.json')));
-  const officialPackage = JSON.parse(await fs.readFile(path.join(root, 'business/releases', sourceState.release, 'apps/desktop/node_modules/electron/package.json')));
-  const kit = JSON.parse(await fs.readFile(path.join(app, 'Contents/Resources/runtime/desktop/manifest.json')));
-  const recipe = JSON.parse(await fs.readFile(path.join(root, 'electron/harness-desktop/launch.json')));
+  const recipe = JSON.parse(await fs.readFile(path.join(userData, 'harness-desktop/launch.json')));
+  await ownedDirectory(root, recipe.source); await ownedDirectory(root, recipe.kit);
+  const officialPackage = JSON.parse(await fs.readFile(path.join(recipe.source, 'apps/desktop/node_modules/electron/package.json')));
+  const kit = JSON.parse(await fs.readFile(path.join(recipe.kit, 'manifest.json')));
   const actualCommand = execFileSync('/bin/ps', ['-p', String(ready.childPid), '-o', 'command='], { encoding: 'utf8', timeout: 10000 }).trim();
   const shared = recipe.electronVersion === officialPackage.version;
   const selectedHost = shared ? recipe.electronExecutable : kit.schema === 3
@@ -129,11 +185,7 @@ async function desktopChecks() {
     portableFallback: shared ? 'NOT APPLICABLE: exact shared host selected' : 'PASS required different-version host launched' };
   await assert.rejects(() => invoke('proxy_request', { method: 'POST', path: '/v1/harness', body: { action: 'start' } }), /Close Harness Desktop|请先关闭 Harness Desktop/);
   await invoke('harness_desktop_restart');
-  const restarted = await until(initial.proc, async () => {
-    const state = await invoke('harness_desktop_status');
-    if (state.phase === 'failed' || state.audit?.state === 'failed') throw new Error('Official Desktop restart failed');
-    return state.phase === 'launched' && state.audit?.state === 'ready' && state;
-  }, 5 * 60 * 1000);
+  const restarted = await waitReady(5 * 60 * 1000);
   assert.notEqual(restarted.operationId, ready.operationId);
   report.desktopRestart = restarted;
   assert.equal((await invoke('harness_desktop_stop')).phase, 'stopped');
@@ -164,15 +216,16 @@ try {
   const screen = await initial.desktop.cdp('Page.captureScreenshot', { format: 'png' });
   await fs.writeFile(path.join(evidence, 'installed-native.png'), Buffer.from(screen.data, 'base64'));
   report.checks.push('Original native app GUI, private Agent bridge, no Node globals in renderer');
-  if (phase !== 'portable') {
-    await runBusinessQA({ phase, root, evidence, report, desktop: initial.desktop, executable,
+  await runBusinessQA({ phase, root, evidence, report, desktop: initial.desktop, executable,
+      signal: abort.signal,
       expectedIdentity, workspace: path.join(root, 'fixture-workspace'),
+      migrationProfiles: ['web', 'desktop'],
+      verifyDesktopMigration: ({ instance, spec, home }) => desktopChecks(instance, home, spec.userDataDir),
       deadlineAt: Date.now() + (phase === 'final' ? 65 : 25) * 60 * 1000,
       budgetGate, findOfficialPage, launchInstance, restartInstance });
     assert.equal(report.businessQA.status, 'PASS');
-    if (phase === 'fresh') await desktopChecks();
-  }
-  report.result = phase === 'portable' ? 'PASS PORTABLE NATIVE STARTUP' : 'PASS BUSINESS ' + phase;
+  if (phase === 'fresh') await desktopChecks(initial, path.join(root, 'dsh'), path.join(root, 'electron'), true);
+  report.result = 'PASS BUSINESS ' + phase;
 } catch (error) {
   report.error = { code: error.code, message: redact(error.message) }; process.exitCode = 1;
 } finally {

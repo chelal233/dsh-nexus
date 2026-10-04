@@ -5,8 +5,8 @@ import path from 'node:path';
 import { spawn, execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { pipeline } from 'node:stream/promises';
-import { GIB } from './macos-acceptance-contract.mjs';
-import { ownedDirectory, allocatedBytes, storageGate } from './macos-acceptance-storage.mjs';
+import { GIB, verifyNodeIdentity } from './macos-acceptance-contract.mjs';
+import { ownedDirectory, storageGate, watchStorage, treeFootprint } from './macos-acceptance-storage.mjs';
 import { verifyInventory } from '../../apps/nexus-launcher/desktop/scripts/prepare-release.mjs';
 
 assert.equal(process.platform, 'darwin'); assert.ok(process.getuid() > 0);
@@ -31,22 +31,39 @@ const report = { schema: 1, result: 'FAIL', arch: process.arch, candidate: prefl
   baseline: preflight.baseline, originalBytes: [], installed: [], phases: [],
   publicationChanged: false, gatekeeperFirstOpen: 'NOT RUN', realDeviceAcceptance: false };
 const gate = storageGate(root, evidence), mounts = new Set();
+const activeChildren = new Set(); let storageError, stopWatch;
+const own = child => { activeChildren.add(child); child.once('close', () => activeChildren.delete(child)); return child; };
+const checkStorage = () => { if (storageError) throw storageError; };
 let processesClosed = true;
 const command = (program, args, options = {}) => execFileSync(program, args, {
   encoding: 'utf8', timeout: 120000, maxBuffer: 1024 * 1024,
   env: { ...process.env, TMPDIR: path.join(root, 'tmp'), TEMP: path.join(root, 'tmp'), TMP: path.join(root, 'tmp') }, ...options,
 }).trim();
+async function longCommand(program, args) {
+  checkStorage();
+  const child = own(spawn(program, args, { env: { ...process.env, TMPDIR: path.join(root, 'tmp') }, stdio: ['ignore', 'pipe', 'pipe'] }));
+  let tail = '';
+  for (const stream of [child.stdout, child.stderr]) stream.on('data', chunk => { tail = (tail + chunk).slice(-8192); });
+  const timer = setTimeout(() => child.kill('SIGTERM'), 120000);
+  try {
+    await new Promise((resolve, reject) => {
+      child.once('error', reject); child.once('close', code => code === 0 ? resolve() : reject(new Error('Owned command failed: ' + tail)));
+    });
+    checkStorage();
+  } finally { clearTimeout(timer); }
+}
 async function digest(file) {
   const hash = createHash('sha256'); let bytes = 0;
   for await (const chunk of createReadStream(file)) { hash.update(chunk); bytes += chunk.length; }
   return { bytes, sha256: hash.digest('hex') };
 }
 async function download(asset) {
+  checkStorage();
   await gate('download:' + asset.name, asset.bytes + GIB / 8, true);
   const target = path.join(root, 'downloads', asset.name);
-  const child = spawn('gh', ['api', `repos/chelal233/dsh-nexus/releases/assets/${asset.id}`, '-H', 'Accept: application/octet-stream'], {
+  const child = own(spawn('gh', ['api', `repos/chelal233/dsh-nexus/releases/assets/${asset.id}`, '-H', 'Accept: application/octet-stream'], {
     stdio: ['ignore', 'pipe', 'pipe'], env: { ...process.env, TMPDIR: path.join(root, 'tmp') },
-  });
+  }));
   let errorTail = '', received = 0;
   child.stderr.on('data', chunk => { errorTail = (errorTail + chunk).slice(-4096); });
   const exited = new Promise((resolve, reject) => {
@@ -55,6 +72,7 @@ async function download(asset) {
   child.stdout.on('data', chunk => { received += chunk.length; if (received > asset.bytes) child.kill('SIGTERM'); });
   try { await Promise.all([pipeline(child.stdout, createWriteStream(target, { flags: 'wx' })), exited]); }
   catch (error) { child.kill('SIGTERM'); await exited.catch(() => {}); throw error; }
+  checkStorage();
   const actual = await digest(target); assert.deepEqual(actual, { bytes: asset.bytes, sha256: asset.sha256 });
   report.originalBytes.push({ ...asset, status: 'PASS actual downloaded bytes' });
   return target;
@@ -78,9 +96,10 @@ async function identity(app, release, build) {
   const update = await fs.readFile(path.join(resources, 'app-update.yml'), 'utf8');
   assert.match(update, new RegExp(`^channel: latest-${process.arch}\\r?$`, 'm'));
   const node = path.join(resources, 'runtime/node/bin/node');
-  assert.deepEqual(JSON.parse(command(node, ['-p', 'JSON.stringify({platform:process.platform,arch:process.arch,version:process.version})'])),
-    { platform: 'darwin', arch: process.arch, version: 'v' + manifest.runtime.node.version });
+  verifyNodeIdentity(JSON.parse(command(node, ['-p', 'JSON.stringify({platform:process.platform,arch:process.arch,version:process.version})'])),
+    manifest.runtime.node.version, process.arch);
   const result = { app, build, manifestSha256: createHash('sha256').update(raw).digest('hex'),
+    expandedApp: await treeFootprint(root, app),
     resourceFilesVerified: manifest.files.length, node, architecture: target, appSignatureIntegrity: 'PASS',
     productionSigning: false, updateChannel: `latest-${process.arch}`, updateYaml: `latest-${process.arch}-mac.yml` };
   report.installed.push(result); return result;
@@ -106,24 +125,26 @@ async function installDmg(release, destination, build) {
   const size = Number(info['Size Information']?.['Total Bytes']);
   assert.ok(Number.isSafeInteger(size) && size > 0);
   await gate('mount-and-copy:' + release.tag, size + GIB / 4, true);
-  command('/usr/bin/hdiutil', ['attach', file, '-readonly', '-nobrowse', '-mountpoint', mount]); mounts.add(mount);
+  mounts.add(mount);
+  await longCommand('/usr/bin/hdiutil', ['attach', file, '-readonly', '-nobrowse', '-mountpoint', mount]);
   try {
     const source = path.join(mount, 'Nexus Launcher.app');
     assert.equal((await fs.lstat(source)).isSymbolicLink(), false);
-    command('/usr/bin/ditto', [source, destination]);
+    await longCommand('/usr/bin/ditto', [source, destination]);
   } finally { command('/usr/bin/hdiutil', ['detach', mount]); mounts.delete(mount); }
   await fs.unlink(file); return identity(destination, release, build);
 }
-async function runPhase(phase, app, proof, phaseRoot = root) {
-  const phaseEvidence = path.join(evidence, phase); await fs.mkdir(phaseEvidence);
+async function runPhase(phase, app, proof, phaseRoot, format) {
+  checkStorage();
+  const phaseEvidence = path.join(evidence, format + '-' + phase); await fs.mkdir(phaseEvidence);
   await gate('phase:' + phase, GIB / 4, true);
   const proofFile = path.join(phaseEvidence, 'package-proof.json'); await fs.writeFile(proofFile, JSON.stringify(proof));
-  const child = spawn(proof.node, [path.join(workspace, '.github/scripts/macos-native-business.mjs')], {
+  const child = own(spawn(proof.node, [path.join(workspace, '.github/scripts/macos-native-business.mjs')], {
     env: { ...process.env, QA_ROOT: phaseRoot, QA_INSTALLED_APP: app, QA_PHASE: phase,
-      QA_PHASE_EVIDENCE: phaseEvidence, QA_PACKAGE_PROOF: proofFile,
+      QA_PHASE_EVIDENCE: phaseEvidence, QA_PACKAGE_PROOF: proofFile, QA_PACKAGE_FORMAT: format,
       TMPDIR: path.join(root, 'tmp'), TEMP: path.join(root, 'tmp'), TMP: path.join(root, 'tmp') },
     stdio: ['ignore', 'pipe', 'pipe'],
-  });
+  }));
   const log = createWriteStream(path.join(phaseEvidence, 'worker.log'), { flags: 'wx' });
   let logBytes = 0;
   for (const stream of [child.stdout, child.stderr]) stream.on('data', chunk => {
@@ -135,10 +156,20 @@ async function runPhase(phase, app, proof, phaseRoot = root) {
     child.kill('SIGTERM'); reject(new Error('Mac business phase deadline')); }, (phase === 'final' ? 75 : 40) * 60 * 1000); });
   try {
     assert.equal(await Promise.race([close, timeout]), 0, 'Actual native business phase failed; inspect worker receipt');
-  } finally { clearTimeout(timer); log.end(); }
+    checkStorage();
+  } finally {
+    clearTimeout(timer);
+    if (child.exitCode === null && child.signalCode === null) {
+      child.kill('SIGTERM');
+      let cleanupTimer;
+      await Promise.race([close.catch(() => {}), new Promise(resolve => { cleanupTimer = setTimeout(resolve, 90000); })]);
+      clearTimeout(cleanupTimer);
+    }
+    log.end();
+  }
   const result = JSON.parse(await fs.readFile(path.join(phaseEvidence, 'native-result.json'), 'utf8'));
   assert.ok(result.result.startsWith('PASS')); assert.equal(result.cleanupError, undefined);
-  assert.ok(result.children.every(item => item.closed)); report.phases.push({ phase, result: result.result });
+  assert.ok(result.children.every(item => item.closed)); report.phases.push({ format, phase, result: result.result });
   return result;
 }
 async function prepareData(baseRoot) {
@@ -147,43 +178,59 @@ async function prepareData(baseRoot) {
     await ownedDirectory(root, path.join(baseRoot, name));
   }
 }
+async function installZip(release, destination, build) {
+  const zip = await download(release.assets.find(item => item.name.endsWith('.zip')));
+  const footprint = report.installed.find(item => item.build.commit === release.commit)?.expandedApp;
+  assert.ok(footprint, 'ZIP extraction needs the independently measured original DMG app');
+  await gate('portable-extraction', footprint.bytes + footprint.entries * 8192 + GIB / 4, true);
+  await longCommand('/usr/bin/ditto', ['-x', '-k', zip, destination]); await fs.unlink(zip);
+  return identity(path.join(destination, 'Nexus Launcher.app'), release, build);
+}
+function ownedProcesses(directory) {
+  return command('/bin/ps', ['-axo', 'pid=,ppid=,command=']).split('\n').filter(line => line.includes(directory)).map(line => {
+    const match = line.trim().match(/^(\d+)\s+(\d+)\s+(.+)$/);
+    return match && { pid: Number(match[1]), ppid: Number(match[2]), command: match[3] };
+  }).filter(item => item && item.pid !== process.pid && /Nexus Launcher|nexus-agent|nexus-desktop-bridge|Google Chrome|macos-native-business/.test(item.command));
+}
 try {
-  await prepareData(root); await gate('before-downloads', preflight.capacity.downloadedBytes + 2 * GIB, true);
+  await prepareData(root);
+  stopWatch = watchStorage(gate, error => {
+    storageError = error;
+    for (const child of activeChildren) child.kill('SIGTERM');
+  });
+  await gate('before-downloads', preflight.capacity.downloadedBytes + 2 * GIB, true);
   const build = await receiveMetadata(preflight.candidate), oldBuild = await receiveMetadata(preflight.baseline);
-  const app = path.join(root, 'Nexus Launcher.app');
-  const proof = await installDmg(preflight.candidate, app, build);
-  await runPhase('fresh', app, proof);
-  const saved = path.join(root, 'candidate.app'); await fs.rename(app, saved);
-  const oldProof = await installDmg(preflight.baseline, app, oldBuild);
-  await runPhase('old', app, oldProof);
-  await ownedDirectory(root, app); await fs.rm(app, { recursive: true });
-  await fs.rename(saved, app);
-  await identity(app, preflight.candidate, build);
-  await runPhase('final', app, proof);
-  // The portable package is independently received, checked and actually launched.
-  const zip = await download(preflight.candidate.assets.find(item => item.name.endsWith('.zip')));
-  const portableRoot = path.join(root, 'portable'); await fs.mkdir(portableRoot); await prepareData(portableRoot);
-  await gate('portable-extraction', allocatedBytes(app) + GIB / 4, true);
-  command('/usr/bin/ditto', ['-x', '-k', zip, portableRoot]); await fs.unlink(zip);
-  const portableApp = path.join(portableRoot, 'Nexus Launcher.app');
-  const portableProof = await identity(portableApp, preflight.candidate, build);
-  await runPhase('portable', portableApp, portableProof, portableRoot);
-  assert.deepEqual(report.phases.map(item => item.phase), ['fresh', 'old', 'final', 'portable']);
+  for (const format of ['dmg', 'zip']) {
+    const familyRoot = path.join(root, format); await fs.mkdir(familyRoot); await prepareData(familyRoot);
+    const app = path.join(familyRoot, 'Nexus Launcher.app');
+    const install = (release, packageBuild) => format === 'dmg'
+      ? installDmg(release, app, packageBuild) : installZip(release, familyRoot, packageBuild);
+    const proof = await install(preflight.candidate, build);
+    await runPhase('fresh', app, proof, familyRoot, format);
+    const saved = path.join(familyRoot, 'candidate.app'); await fs.rename(app, saved);
+    const oldProof = await install(preflight.baseline, oldBuild);
+    await runPhase('old', app, oldProof, familyRoot, format);
+    await ownedDirectory(root, app); await fs.rm(app, { recursive: true });
+    await fs.rename(saved, app); await identity(app, preflight.candidate, build);
+    await runPhase('final', app, proof, familyRoot, format);
+    const leftovers = ownedProcesses(familyRoot);
+    assert.equal(leftovers.length, 0, 'Format transaction still owns live processes');
+    await ownedDirectory(root, familyRoot); await fs.rm(familyRoot, { recursive: true });
+  }
+  assert.deepEqual(report.phases.map(item => item.format + ':' + item.phase), ['dmg:fresh', 'dmg:old', 'dmg:final', 'zip:fresh', 'zip:old', 'zip:final']);
   report.result = 'PASS FULL MAC CLOUD ACCEPTANCE';
 } catch (error) {
   report.error = { code: error.code, message: error.message }; process.exitCode = 1;
 } finally {
+  await stopWatch?.();
   for (const mount of mounts) try { command('/usr/bin/hdiutil', ['detach', mount]); mounts.delete(mount); }
   catch (error) { report.cleanupError = error.message; }
-  const output = command('/bin/ps', ['-axo', 'pid=,ppid=,command=']);
-  const leftovers = output.split('\n').filter(line => line.includes(root)).map(line => {
-    const match = line.trim().match(/^(\d+)\s+(\d+)\s+(.+)$/);
-    return match && { pid: Number(match[1]), ppid: Number(match[2]), command: match[3] };
-  }).filter(item => item && item.pid !== process.pid && /Nexus Launcher|nexus-agent|nexus-desktop-bridge|Google Chrome|macos-native-business/.test(item.command));
+  const leftovers = ownedProcesses(root);
   report.ownedProcessLeftovers = leftovers; processesClosed = leftovers.length === 0;
   report.cleanup = { ownedChildrenAbsent: processesClosed, imagesDetached: mounts.size === 0, removedTaskTemporaryRoot: false };
   if (!processesClosed || mounts.size || report.cleanupError) { report.result = 'FAIL'; process.exitCode = 1; }
-  try { report.finalStorage = await gate('finish', 0, true); } catch (error) { report.storageError = error.message; }
+  try { checkStorage(); report.finalStorage = await gate('finish', 0, true); }
+  catch (error) { report.storageError = error.message; report.result = 'FAIL'; process.exitCode = 1; }
   if (processesClosed && mounts.size === 0) {
     await ownedDirectory(base, root);
     const owner = JSON.parse(await fs.readFile(path.join(root, 'owner.json')));

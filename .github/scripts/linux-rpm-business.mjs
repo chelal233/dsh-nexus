@@ -117,7 +117,7 @@ export async function runBusinessQA(context) {
   await fs.mkdir(out,{recursive:true}); await ordinary(out,out);
   const stem = phase + '-' + Date.now(), journal = path.join(out,stem+'.jsonl');
   const stateFile = path.join(root,'business-qa-state.json');
-  let stage = 'preflight', ownedOperation = null, selected = null, cleanupOK = true, result;
+  let stage = 'preflight', ownedOperation = null, selected = null, cleanupOK = true, result, archivePreview;
   let verifiedOwnership = false, migrationVerified = false;
   const delay = ms => new Promise(resolve => setTimeout(resolve,ms));
   const record = async (kind, value) => {
@@ -152,7 +152,7 @@ export async function runBusinessQA(context) {
   const gate = async () => {
     if (c.signal?.aborted) fail('ABORTED',String(c.signal.reason || 'Aborted'));
     if (Date.now() >= c.deadlineAt) fail('DEADLINE','Business deadline reached');
-    const b = await c.budgetGate({stage,cleanup:false,dataRoot:data,dshHome:home});
+    const b = await c.budgetGate({stage,cleanup:false,dataRoot:data,dshHome:home,archivePreview});
     if (b?.ok !== true) fail('BUDGET_BLOCKED',JSON.stringify(safe(b)));
   };
   const invoke = (command,args={}) => evaluate(desktop,
@@ -556,7 +556,7 @@ export async function runBusinessQA(context) {
       };
       await record('frozen_source_config',{semanticSha256:Object.fromEntries(Object.entries(sourceConfigs)
         .map(([name,value])=>[name,digest(stable(value))])),timing:'After normal Stop, before export'});
-      const contents={runtime:true,profiles:['web'],configuration:true,environment:true,
+      const contents={runtime:true,profiles:c.migrationProfiles||['web'],configuration:true,environment:true,
         sessions:true,plugins:true,credentials:false,credential_policy:'preserve'};
       const archive=path.join(root,'full-offline-'+Date.now()+'.tar.gz');
       const sourceSlot=await ordinary(root,path.join(sourceData,'releases',selected));
@@ -593,10 +593,11 @@ export async function runBusinessQA(context) {
         const preview=await api('/v1/updates',{action:'offline_inspect',archive_path:archive});
         for(const key of ['runtime','configuration','environment','sessions','plugins'])
           if(preview.contents?.[key]!==true)fail('incomplete_archive',key);
-        if(preview.contents.credentials!==false||!preview.contents.profiles?.includes('web'))
+        if(preview.contents.credentials!==false||!contents.profiles.every(name=>preview.contents.profiles?.includes(name)))
           fail('wrong_archive_selection','credentials/profile');
         if(!Number.isFinite(preview.bytes)||!Number.isFinite(preview.files))
           fail('inspect_contract','Archive preview lacks bytes/files');
+        archivePreview=preview;
         return preview;
       });
       let firstImport, firstBRelease;
@@ -692,6 +693,8 @@ export async function runBusinessQA(context) {
       });
       await step('recovered_B_real_session_and_plugin',verifyPage);
       await step('recovered_B_stop',()=>stopHarness());
+      if (c.verifyDesktopMigration) await step('recovered_B_desktop_session_and_plugin', () =>
+        c.verifyDesktopMigration({ instance: instanceB, spec: specB, home, dataRoot: data }));
       await step('same_Agent_next_write',async()=> {
         const before=await invoke('startup_status'), config=await api('/v1/config');
         await api('/v1/config',{action:'set_harness_preferences',expected_revision:config.revision,

@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { GIB, selectOriginalAssets, capacityVerdict } from './macos-acceptance-contract.mjs';
+import { GIB, selectOriginalAssets, capacityVerdict, verifyNodeIdentity, exportIncrement, importIncrement } from './macos-acceptance-contract.mjs';
 
 const fixture = () => ({ tag_name: 'v1.0.4', draft: false, prerelease: false,
   assets: ['dsh-nexus_1.0.4_macos_x64.dmg', 'dsh-nexus_1.0.4_macos_x64_portable.zip',
@@ -34,4 +34,22 @@ test('a passing download lower bound never means full migration was admitted', (
   assert.equal(result.status, 'LOWER_BOUND_ONLY');
   assert.equal(result.fullAcceptance, 'NOT RUN');
   assert.ok(result.excludes.includes('receiver and import staging'));
+});
+
+test('original runtime version already includes v and is compared without rewriting', () => {
+  verifyNodeIdentity({ platform: 'darwin', arch: 'arm64', version: 'v24.20.0' }, 'v24.20.0', 'arm64');
+  assert.throws(() => verifyNodeIdentity({ platform: 'darwin', arch: 'arm64', version: 'v24.20.0' }, 'vv24.20.0', 'arm64'));
+});
+
+test('complete Mac host and simultaneous archives contribute to export admission', () => {
+  const part = { bytes: GIB, entries: 100 };
+  const estimate = exportIncrement({ slot: part, runtime: part, home: part, host: { bytes: 3 * GIB, entries: 500 } });
+  assert.ok(estimate > 14 * GIB);
+});
+
+test('import admission requires actual manifest totals and retains receiver allocation', () => {
+  const receiver = { bytes: GIB, entries: 100 };
+  assert.ok(importIncrement({ bytes: 5 * GIB, files: 1000 }, receiver) > 11 * GIB);
+  assert.throws(() => importIncrement(undefined, receiver));
+  assert.throws(() => importIncrement({ bytes: -1, files: 1 }, receiver));
 });

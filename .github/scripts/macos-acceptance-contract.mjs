@@ -2,6 +2,32 @@ import assert from 'node:assert/strict';
 
 export const GIB = 2 ** 30;
 
+export function verifyNodeIdentity(actual, version, arch) {
+  assert.match(version, /^v\d+\.\d+\.\d+$/);
+  assert.deepEqual(actual, { platform: 'darwin', arch, version });
+}
+
+const archiveBound = ({ bytes, entries }) => {
+  for (const value of [bytes, entries]) assert.ok(Number.isSafeInteger(value) && value >= 0);
+  return Math.ceil((bytes + (entries + 2) * 8192) * 1.01) + 1024 ** 2;
+};
+export function exportIncrement({ slot, runtime, home, host }) {
+  // Runtime may need a separate Git copy; the complete Mac app also becomes
+  // host.tar.gz inside staging, while the final compressed archive coexists.
+  const parts = [slot, runtime, runtime, home];
+  const hostArchive = archiveBound(host);
+  const staged = { bytes: parts.reduce((n, p) => n + p.bytes, hostArchive),
+    entries: parts.reduce((n, p) => n + p.entries, 2) };
+  return archiveBound(staged) * 2 + GIB / 2;
+}
+export function importIncrement(preview, receiver) {
+  assert.ok(preview && Number.isSafeInteger(preview.bytes) && Number.isSafeInteger(preview.files));
+  // Actual archive manifest bounds extraction plus all incoming environment
+  // during the merge; existing receiver contents must coexist with both.
+  return archiveBound({ bytes: preview.bytes, entries: preview.files }) * 2
+    + archiveBound(receiver) + GIB / 2;
+}
+
 export function selectOriginalAssets(release, arch) {
   assert.ok(['x64', 'arm64'].includes(arch));
   assert.match(release.tag_name, /^v\d+\.\d+\.\d+$/);
