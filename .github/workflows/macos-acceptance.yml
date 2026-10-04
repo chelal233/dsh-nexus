@@ -56,7 +56,7 @@ jobs:
         with:
           persist-credentials: false
       - name: Verify fail-closed acceptance contracts
-        run: node --test .github/scripts/macos-acceptance-contract.test.mjs .github/scripts/migration-session-fixture.test.mjs .github/scripts/macos-acceptance-storage.test.mjs
+        run: node --test .github/scripts/macos-acceptance-contract.test.mjs .github/scripts/migration-session-fixture.test.mjs .github/scripts/macos-acceptance-storage.test.mjs .github/scripts/macos-acceptance-browser.test.mjs
       - name: Read original identities, native GUI capability and capacity
         env:
           GH_TOKEN: ${{ github.token }}

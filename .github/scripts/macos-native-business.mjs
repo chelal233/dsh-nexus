@@ -9,6 +9,7 @@ import { ownedDirectory, storageGate, treeFootprint } from './macos-acceptance-s
 import { GIB, exportIncrement, importIncrement } from './macos-acceptance-contract.mjs';
 import { releaseOwnedChildHandles } from './linux-rpm-preflight-lifecycle.mjs';
 import { SESSION_TEXT } from './migration-session-fixture.mjs';
+import { browserLease } from './macos-acceptance-browser.mjs';
 
 assert.equal(process.platform, 'darwin'); assert.ok(process.getuid() > 0);
 const root = await fs.realpath(process.env.QA_ROOT), evidence = await fs.realpath(process.env.QA_PHASE_EVIDENCE);
@@ -31,7 +32,7 @@ const children = [], instances = [], channels = [], targetEvents = [], gate = st
 const abort = new AbortController();
 process.once('SIGTERM', () => abort.abort('Parent stopped this owned worker after capacity or deadline failure'));
 const checkAbort = () => { if (abort.signal.aborted) throw Object.assign(new Error(String(abort.signal.reason)), { code: 'ABORTED' }); };
-let browser, web, initial, oldHandlers;
+let browser, web, initial, defaultBrowser;
 const redact = value => String(value).replace(/([?&]token=)[^\s&"']+/gi, '$1[redacted]');
 function start(program, args, env) {
   assert.ok(args.every(arg => !/no-sandbox|disable-setuid-sandbox|disable-web-security/.test(arg)));
@@ -236,8 +237,8 @@ async function desktopChecks(instance = initial, home = path.join(root, 'dsh'), 
 try {
   await gate('native_gui', 128 * 1024 ** 2, true);
   // Temporary runner-only native LaunchServices setting; restore exact old handlers in finally.
-  oldHandlers = JSON.parse(jxa("ObjC.import('CoreServices'); JSON.stringify(['http','https'].map(s=>[s,ObjC.unwrap($.LSCopyDefaultHandlerForURLScheme(s))]));"));
-  for (const [scheme] of oldHandlers) assert.equal(Number(jxa(`ObjC.import('CoreServices'); $.LSSetDefaultHandlerForURLScheme(${JSON.stringify(scheme)},'com.google.Chrome');`)), 0);
+  defaultBrowser = browserLease(jxa);
+  defaultBrowser.setChrome();
   const fixture = path.join(root, 'browser-fixture.html');
   await fs.writeFile(fixture, '<!doctype html><title>Nexus QA ordinary browser</title><p>nexus-qa-browser-preflight</p>');
   browser = start('/Applications/Google Chrome.app/Contents/MacOS/Google Chrome', [
@@ -285,11 +286,8 @@ try {
       exitCode: child.exitCode, signalCode: child.signalCode, tail: child.qaLog });
     if (!child.qaClosed) { report.cleanupError = 'Owned child did not confirm close'; releaseOwnedChildHandles(child); }
   }
-  if (oldHandlers) try {
-    for (const [scheme, handler] of oldHandlers) {
-      assert.equal(typeof handler, 'string');
-      assert.equal(Number(jxa(`ObjC.import('CoreServices'); $.LSSetDefaultHandlerForURLScheme(${JSON.stringify(scheme)},${JSON.stringify(handler)});`)), 0);
-    }
+  if (defaultBrowser) try {
+    defaultBrowser.restore();
     report.defaultBrowserRestored = true;
   } catch (error) { report.cleanupError = 'Temporary default browser restoration failed: ' + error.message; }
   if (report.cleanupError) { report.result = 'FAIL'; process.exitCode = 1; }

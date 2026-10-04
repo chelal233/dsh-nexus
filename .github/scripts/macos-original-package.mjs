@@ -8,6 +8,7 @@ import { pipeline } from 'node:stream/promises';
 import { GIB, verifyNodeIdentity } from './macos-acceptance-contract.mjs';
 import { ownedDirectory, storageGate, watchStorage, treeFootprint } from './macos-acceptance-storage.mjs';
 import { verifyInventory } from '../../apps/nexus-launcher/desktop/scripts/prepare-release.mjs';
+import { browserLease } from './macos-acceptance-browser.mjs';
 
 assert.equal(process.platform, 'darwin'); assert.ok(process.getuid() > 0);
 const workspace = await fs.realpath(process.env.GITHUB_WORKSPACE);
@@ -199,6 +200,9 @@ try {
     for (const child of activeChildren) child.kill('SIGTERM');
   });
   await gate('before-downloads', preflight.capacity.downloadedBytes + 2 * GIB, true);
+  const browser = browserLease(script => command('/usr/bin/osascript', ['-l', 'JavaScript', '-e', script]));
+  try { browser.setChrome(); } finally { browser.restore(); }
+  report.browserPreflight = { result: 'PASS actual native set/readback/restore', original: browser.before };
   const build = await receiveMetadata(preflight.candidate), oldBuild = await receiveMetadata(preflight.baseline);
   for (const format of ['dmg', 'zip']) {
     const familyRoot = path.join(root, format); await fs.mkdir(familyRoot); await prepareData(familyRoot);
