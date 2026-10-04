@@ -2,7 +2,6 @@
 async fn api_authorization_rejects_anonymous_origin_tampering_and_replay() {
     use super::*;
     use nexus_core::agent_auth as auth;
-    use tokio::io::{AsyncReadExt, AsyncWriteExt};
     let root = std::env::temp_dir().join(format!("nexus-auth-{}", auth::random_hex().unwrap()));
     let paths = nexus_core::NexusPaths::from_root(root.clone());
     std::fs::create_dir_all(&paths.run_dir).unwrap();
@@ -36,30 +35,32 @@ async fn api_authorization_rejects_anonymous_origin_tampering_and_replay() {
         path: &str,
         headers: &str,
         body: &[u8],
-    ) -> (String, Vec<u8>) {
-        let mut socket = tokio::net::TcpStream::connect(address).await.unwrap();
-        socket.write_all(format!("GET {path} HTTP/1.1\r\nHost: {address}\r\nConnection: close\r\nContent-Length: {}\r\n{headers}\r\n", body.len()).as_bytes()).await.unwrap();
-        socket.write_all(body).await.unwrap();
-        let mut bytes = Vec::new();
-        socket.read_to_end(&mut bytes).await.unwrap();
-        let boundary = bytes.windows(4).position(|b| b == b"\r\n\r\n").unwrap() + 4;
-        (
-            String::from_utf8(bytes[..boundary].to_vec()).unwrap(),
-            bytes[boundary..].to_vec(),
-        )
+    ) -> (reqwest::StatusCode, reqwest::header::HeaderMap, Vec<u8>) {
+        // An early rejection may close TCP with unread request bytes. Read the
+        // complete HTTP response instead of requiring a graceful socket EOF.
+        let client = reqwest::Client::builder()
+            .no_proxy()
+            .http1_only()
+            .timeout(std::time::Duration::from_secs(5))
+            .build()
+            .unwrap();
+        let mut request = client
+            .get(format!("http://{address}{path}"))
+            .header(reqwest::header::CONNECTION, "close")
+            .body(body.to_vec());
+        for line in headers.lines() {
+            let (name, value) = line.split_once(':').unwrap();
+            request = request.header(name, value.trim());
+        }
+        let response = request.send().await.unwrap();
+        let status = response.status();
+        let headers = response.headers().clone();
+        let body = response.bytes().await.unwrap().to_vec();
+        (status, headers, body)
     }
-    assert!(send(address, "/v1/health", "", b"")
-        .await
-        .0
-        .starts_with("HTTP/1.1 200"));
-    assert!(send(address, "/v1/health?x=1", "", b"")
-        .await
-        .0
-        .starts_with("HTTP/1.1 409"));
-    assert!(send(address, "/v1/config", "", b"")
-        .await
-        .0
-        .starts_with("HTTP/1.1 409"));
+    assert_eq!(send(address, "/v1/health", "", b"").await.0, 200);
+    assert_eq!(send(address, "/v1/health?x=1", "", b"").await.0, 409);
+    assert_eq!(send(address, "/v1/config", "", b"").await.0, 409);
     let nonce = auth::random_hex().unwrap();
     let time = auth::unix_seconds().to_string();
     let ciphertext = credential
@@ -67,30 +68,33 @@ async fn api_authorization_rejects_anonymous_origin_tampering_and_replay() {
         .unwrap();
     let signature = credential.request_signature("GET", "/v1/config", &nonce, &time, &ciphertext);
     let headers = format!("x-nexus-auth-version: 2\r\nx-nexus-data-root-id: {}\r\nx-nexus-instance-id: {}\r\n{}: {nonce}\r\n{}: {time}\r\n{}: {signature}\r\n", credential.data_root_id, credential.instance_id, auth::NONCE_HEADER, auth::TIME_HEADER, auth::SIGNATURE_HEADER);
-    assert!(send(
-        address,
-        "/v1/config",
-        &(headers.clone() + "Origin: https://evil.invalid\r\n"),
-        &ciphertext
-    )
-    .await
-    .0
-    .starts_with("HTTP/1.1 403"));
+    assert_eq!(
+        send(
+            address,
+            "/v1/config",
+            &(headers.clone() + "Origin: https://evil.invalid\r\n"),
+            &ciphertext
+        )
+        .await
+        .0,
+        403
+    );
     assert_eq!(calls.load(Ordering::SeqCst), 0);
     let response = send(address, "/v1/config", &headers, &ciphertext).await;
-    assert!(response.0.starts_with("HTTP/1.1 200"));
+    assert_eq!(response.0, 200);
     let proof = response
-        .0
-        .lines()
-        .find_map(|line| line.strip_prefix("x-nexus-auth-response: "))
+        .1
+        .get(auth::RESPONSE_HEADER)
+        .unwrap()
+        .to_str()
         .unwrap();
-    assert!(credential.verify_response(&nonce, 200, &response.1, proof));
-    assert!(send(address, "/v1/config", &headers, &ciphertext)
-        .await
-        .0
-        .starts_with("HTTP/1.1 401"));
+    assert!(credential.verify_response(&nonce, 200, &response.2, proof));
     assert_eq!(
-        credential.open_response(&nonce, 200, &response.1).unwrap(),
+        send(address, "/v1/config", &headers, &ciphertext).await.0,
+        401
+    );
+    assert_eq!(
+        credential.open_response(&nonce, 200, &response.2).unwrap(),
         b"ok"
     );
     assert_eq!(calls.load(Ordering::SeqCst), 1);

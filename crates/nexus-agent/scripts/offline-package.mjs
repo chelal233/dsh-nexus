@@ -671,7 +671,7 @@ export async function desktopRuntimeForExport(slot, runtime, fallback) {
 // Exports remain self-contained even if the receiving Nexus uses a different
 // Electron. Package only the immutable application host, never its data root.
 export function verifyMacHostSignature(app, run = spawnSync) {
-  const result = run('/usr/bin/codesign', ['--verify', '--deep', '--strict', app], { encoding: 'utf8', timeout: 30000 });
+  const result = run('/usr/bin/codesign', ['--verify', '--deep', '--strict', app], { encoding: 'utf8', timeout: 120000 });
   if (result.status === 0 && !result.error && !result.signal) return;
   const detail = String(result.stderr || result.stdout || '').replace(/[\x00-\x08\x0b-\x1f\x7f]/g, '').trim().slice(0, 4096);
   const timedOut = result.error?.code === 'ETIMEDOUT';

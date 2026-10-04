@@ -2,11 +2,11 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { verifyMacHostSignature } from '../scripts/offline-package.mjs';
 
-test('portable macOS export keeps strict verification and the existing timeout', () => {
+test('portable macOS export keeps strict verification with a bounded cold-copy timeout', () => {
   verifyMacHostSignature('/fixture/Nexus Launcher.app', (program, args, options) => {
     assert.equal(program, '/usr/bin/codesign');
     assert.deepEqual(args, ['--verify', '--deep', '--strict', '/fixture/Nexus Launcher.app']);
-    assert.deepEqual(options, { encoding: 'utf8', timeout: 30000 });
+    assert.deepEqual(options, { encoding: 'utf8', timeout: 120000 });
     return { status: 0, signal: null, stderr: '' };
   });
 });
