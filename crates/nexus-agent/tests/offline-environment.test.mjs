@@ -79,6 +79,19 @@ test('an actively referenced executable in a prior slot still fails the environm
   assert.equal(calls, 0);
 }));
 
+test('rejected executable diagnostics remain relative through an aliased environment root', async () => fixture(async ({ root, link, pkg }) => {
+  const environment = path.join(root, 'environment'), alias = path.join(root, 'alias');
+  const slot = path.join(root, 'slot'), previous = path.join(root, 'prior-slot/tool');
+  await fs.mkdir(slot); await pkg(previous, 'tool');
+  await link(previous, path.join(environment, 'profiles/private/node_modules/tool'));
+  await link(environment, alias);
+  let calls = 0;
+  await assert.rejects(environmentShims(alias, slot, { shim: async () => { calls++; } }), {
+    message: 'Plugin executable leaves environment at "profiles/private/node_modules/tool/cli.js"',
+  });
+  assert.equal(calls, 0);
+}));
+
 test('a reachable pnpm unit regenerates executable shims for hoisted sibling dependencies', async () => fixture(async ({ root, link, pkg }) => {
   const environment = path.join(root, 'environment'), slot = path.join(root, 'slot');
   const unit = path.join(environment, '.packages/active/node_modules');
