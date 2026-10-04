@@ -109,11 +109,18 @@ try {
   }
   // Explicit test-owned Agent stop, not the automatic updater's shutdown path.
   await evaluate('window.nexusDesktop.invoke("proxy_request", {method:"POST",path:"/v1/agent",body:{action:"stop"}})');
-  await evaluate('window.nexusDesktop.invoke("harness_desktop_capability").then(()=>null,()=>null)');
-  const stopped = await evaluate('window.nexusDesktop.invoke("proxy_request", {method:"GET",path:"/v1/agent"})');
-  assert.equal(stopped.running, false, 'Desktop capability polling must not restart a stopped Agent');
-  assert.equal(stopped.available, false);
-  report.checks.push('explicit Agent Stop survives the real Desktop capability probe without spawning another Agent');
+  const capability = await evaluate('window.nexusDesktop.invoke("harness_desktop_capability").then(()=>({accepted:true}),error=>({accepted:false,code:error.code,message:error.message}))');
+  assert.deepEqual(capability, { accepted: false, code: 'desktop_error', message: 'Desktop support check unavailable' });
+  const stoppedAt = Date.now(); let observations = 0;
+  // Keep the real UI alive across two ordinary five-second tray intervals.
+  while (Date.now() - stoppedAt < 12000) {
+    const stopped = await evaluate('window.nexusDesktop.invoke("proxy_request", {method:"POST",path:"/v1/agent",body:{action:"status"}})');
+    assert.equal(stopped.running, false, 'Desktop capability polling must not restart a stopped Agent');
+    assert.equal(stopped.available, false);
+    observations++; await delay(250);
+  }
+  report.agentStopObservation = { capability, elapsedMs: Date.now() - stoppedAt, observations };
+  report.checks.push('explicit Agent Stop survives the real capability probe and twelve seconds of normal tray polling');
   await writeFile(path.join(fixture, 'report.json'), JSON.stringify(report, null, 2));
   console.log(JSON.stringify(report, null, 2));
   const exited = new Promise(resolve => child.once('exit', resolve));

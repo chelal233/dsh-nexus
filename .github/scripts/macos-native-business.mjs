@@ -88,17 +88,18 @@ async function launchInstance(spec) {
 }
 async function closeInstance(instance) {
   if (!instance) return;
+  if (instance.qaAgentCleaned) return;
   if (instance.proc.qaClosed) {
     assert.equal(instance.proc.exitCode, 0, 'Already closed tested GUI exited abnormally');
     assert.equal(instance.proc.signalCode, null, 'Tested GUI was stopped by a signal');
-    return;
+  } else {
+    assert.ok(instance.desktop, 'Unconnected owned GUI cannot prove normal API shutdown');
+    await instance.desktop.evaluate('window.nexusDesktop.invoke("harness_desktop_stop")');
+    try { await instance.desktop.host.cdp('Browser.close'); } catch { /* May close before replying. */ }
+    instance.desktop.ws.close(); instance.desktop.host.ws.close();
+    await Promise.race([instance.proc.qaClose, delay(15000)]);
+    assert.ok(instance.proc.qaClosed && instance.proc.exitCode === 0 && instance.proc.signalCode === null, 'Normal owned GUI close must complete');
   }
-  assert.ok(instance.desktop, 'Unconnected owned GUI cannot prove normal API shutdown');
-  await instance.desktop.evaluate('window.nexusDesktop.invoke("harness_desktop_stop")');
-  try { await instance.desktop.host.cdp('Browser.close'); } catch { /* May close before replying. */ }
-  instance.desktop.ws.close(); instance.desktop.host.ws.close();
-  await Promise.race([instance.proc.qaClose, delay(15000)]);
-  assert.ok(instance.proc.qaClosed && instance.proc.exitCode === 0 && instance.proc.signalCode === null, 'Normal owned GUI close must complete');
   // Launcher EOF intentionally preserves Agent. Close the GUI first so old
   // tray capability polling cannot race the explicit ordinary Agent Stop.
   const resources = path.join(app, 'Contents/Resources');
@@ -112,7 +113,7 @@ async function closeInstance(instance) {
     helper = start(program, args, options.env, 'pipe'); return helper;
   }, { NEXUS_DATA_DIR: instance.spec.dataRoot, NEXUS_AGENT_PORT: '0', HOME: instance.spec.home, DSH_HOME: instance.spec.dshHome });
   try {
-    const status = await bridge.request('proxy_request', { method: 'GET', path: '/v1/agent' });
+    const status = await bridge.request('proxy_request', { method: 'POST', path: '/v1/agent', body: { action: 'status' } });
     assert.equal(await fs.realpath(status.data_root), instance.spec.dataRoot);
     const before = agentRows();
     if (status.running) {
@@ -122,8 +123,13 @@ async function closeInstance(instance) {
       assert.ok(status.instance_id && before[0].command.endsWith(' --instance-id ' + status.instance_id));
       const accepted = await bridge.request('proxy_request', { method: 'POST', path: '/v1/agent', body: { action: 'stop' } });
       assert.deepEqual(accepted, { accepted: true, action: 'stop' });
+      const pidAlive = () => {
+        try { process.kill(before[0].pid, 0); return true; }
+        catch (error) { if (error.code === 'ESRCH') return false; throw error; }
+      };
       const deadline = Date.now() + 20000;
-      while (agentRows().length && Date.now() < deadline) await delay(100);
+      while (pidAlive() && Date.now() < deadline) await delay(100);
+      assert.equal(pidAlive(), false, 'Saved owned Agent PID must actually exit');
       assert.deepEqual(agentRows(), [], 'Normally stopped owned Agent must actually exit');
     } else assert.deepEqual(before, [], 'Unavailable Agent must not leave an owned process');
     (report.agentShutdown ??= []).push({ dataRoot: status.data_root, instanceId: status.instance_id,
@@ -134,6 +140,7 @@ async function closeInstance(instance) {
     await Promise.race([helper.qaClose, delay(15000)]);
     assert.ok(helper.qaClosed && helper.exitCode === 0 && helper.signalCode === null, 'Shutdown bridge must exit normally');
   }
+  instance.qaAgentCleaned = true;
 }
 async function restartInstance({ instance, spec }) { await closeInstance(instance); return launchInstance(spec); }
 async function findOfficialPage({ url, openedAfter }) {
