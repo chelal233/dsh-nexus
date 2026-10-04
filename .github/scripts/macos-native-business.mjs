@@ -67,14 +67,19 @@ async function launchInstance(spec) {
   instance.desktop = desktop; return instance;
 }
 async function closeInstance(instance) {
-  if (!instance || instance.proc.qaClosed) return;
+  if (!instance) return;
+  if (instance.proc.qaClosed) {
+    assert.equal(instance.proc.exitCode, 0, 'Already closed tested GUI exited abnormally');
+    assert.equal(instance.proc.signalCode, null, 'Tested GUI was stopped by a signal');
+    return;
+  }
   assert.ok(instance.desktop, 'Unconnected owned GUI cannot prove normal API shutdown');
   await instance.desktop.evaluate('window.nexusDesktop.invoke("harness_desktop_stop")');
   await instance.desktop.evaluate('window.nexusDesktop.invoke("proxy_request",{method:"POST",path:"/v1/agent",body:{action:"stop"}})');
   try { await instance.desktop.host.cdp('Browser.close'); } catch { /* May close before replying. */ }
   instance.desktop.ws.close(); instance.desktop.host.ws.close();
   await Promise.race([instance.proc.qaClose, delay(15000)]);
-  assert.ok(instance.proc.qaClosed && instance.proc.exitCode === 0, 'Normal owned GUI close must complete');
+  assert.ok(instance.proc.qaClosed && instance.proc.exitCode === 0 && instance.proc.signalCode === null, 'Normal owned GUI close must complete');
 }
 async function restartInstance({ instance, spec }) { await closeInstance(instance); return launchInstance(spec); }
 async function findOfficialPage({ url, openedAfter }) {
@@ -102,12 +107,13 @@ async function budgetGate({ stage, dataRoot, dshHome, archivePreview }) {
     if (stage === 'fresh_official_fetch') increment = 6 * GIB;
     if (['full_runtime_export', 'full_import_and_publication', 'inflight_import_cancel', 'retry_full_import_same_B'].includes(stage)) {
       if (stage === 'full_runtime_export') {
-        const launch = await initial.desktop.evaluate('window.nexusDesktop.invoke("desktop_launch_context")');
+        const config = await initial.desktop.evaluate('window.nexusDesktop.invoke("proxy_request",{method:"GET",path:"/v1/config"})');
         const tools = await initial.desktop.evaluate('window.nexusDesktop.invoke("proxy_request",{method:"GET",path:"/v1/runtime"})');
         const node = tools.tools?.find(tool => tool.name === 'node'), gitTool = tools.tools?.find(tool => tool.name === 'git');
         assert.ok(node?.available && gitTool?.available && node.path && gitTool.path);
         const nodePath = await fs.realpath(node.path), gitPath = await fs.realpath(gitTool.path);
-        assert.equal(nodePath, await fs.realpath(launch.runtime_environment.NEXUS_RUNTIME_NODE));
+        assert.equal(nodePath, await fs.realpath(config.runtime?.node?.path || path.join(app, 'Contents/Resources/runtime/node/bin/node')));
+        assert.equal(gitPath, await fs.realpath(config.runtime?.git?.path || path.join(app, 'Contents/Resources/runtime/git/bin/git')));
         const runtimeRoot = path.basename(path.dirname(nodePath)) === 'bin'
           ? path.dirname(path.dirname(path.dirname(nodePath))) : path.dirname(path.dirname(nodePath));
         const gitRoot = path.dirname(path.dirname(gitPath));
