@@ -13,6 +13,9 @@ import { browserLease } from './macos-acceptance-browser.mjs';
 assert.equal(process.platform, 'darwin'); assert.ok(process.getuid() > 0);
 assert.ok(['0', '1'].includes(process.env.QA_PACKAGE_SMOKE || '0'));
 const packageSmoke = process.env.QA_PACKAGE_SMOKE === '1';
+assert.ok(['0', '1'].includes(process.env.QA_DESKTOP_ONLY || '0'));
+const desktopOnly = process.env.QA_DESKTOP_ONLY === '1';
+assert.ok(!packageSmoke || !desktopOnly);
 const workspace = await fs.realpath(process.env.GITHUB_WORKSPACE);
 const base = path.join(workspace, '.codex-temp/macos-acceptance');
 const evidence = path.join(workspace, '.codex-artifacts/macos-acceptance');
@@ -33,8 +36,8 @@ assert.equal(Number(process.env.QA_TEMP_BUDGET_GIB), 32, 'Full Mac acceptance re
 const report = { schema: 1, result: 'FAIL', arch: process.arch, candidate: preflight.candidate,
   baseline: preflight.baseline, originalBytes: [], installed: [], phases: [],
   publicationChanged: false, gatekeeperFirstOpen: 'NOT RUN', realDeviceAcceptance: false };
-report.scope = packageSmoke ? 'Original package GUI and isolated Agent smoke only' : 'Full native business';
-report.fullBusiness = packageSmoke ? 'NOT RUN: separate smoke scope; Web/session/migration remain unaccepted' : 'PENDING';
+report.scope = desktopOnly ? 'Native Desktop producer subset' : packageSmoke ? 'Original package GUI and isolated Agent smoke only' : 'Full native business';
+report.fullBusiness = packageSmoke || desktopOnly ? 'NOT RUN: separate subset scope; Web/migration remain unaccepted' : 'PENDING';
 const gate = storageGate(root, evidence), mounts = new Set();
 const activeChildren = new Set(); let storageError, stopWatch;
 const own = child => { activeChildren.add(child); child.once('close', () => activeChildren.delete(child)); return child; };
@@ -159,7 +162,7 @@ async function runPhase(phase, app, proof, phaseRoot, format) {
   const close = new Promise((resolve, reject) => { child.once('error', reject); child.once('close', resolve); });
   let timer;
   const timeout = new Promise((_, reject) => { timer = setTimeout(() => {
-    child.kill('SIGTERM'); reject(new Error('Mac business phase deadline')); }, (phase === 'final' ? 75 : 40) * 60 * 1000); });
+    child.kill('SIGTERM'); reject(new Error('Mac business phase deadline')); }, (desktopOnly ? 60 : phase === 'final' ? 75 : 40) * 60 * 1000); });
   try {
     assert.equal(await Promise.race([close, timeout]), 0, 'Actual native business phase failed; inspect worker receipt');
     checkStorage();
@@ -205,7 +208,7 @@ try {
     for (const child of activeChildren) child.kill('SIGTERM');
   });
   await gate('before-downloads', preflight.capacity.downloadedBytes + 2 * GIB, true);
-  if (!packageSmoke) {
+  if (!packageSmoke && !desktopOnly) {
   const browserBridge = path.join(root, 'launchservices-browser');
   await gate('compile-native-browser-bridge', GIB / 8, true);
   command('/usr/bin/clang', ['-fobjc-arc', '-fno-modules', '-framework', 'Foundation', '-framework', 'CoreServices',
@@ -219,7 +222,7 @@ try {
   }
   report.browserPreflight.result = 'PASS actual existing browser readback; no preference changed';
   }
-  const build = await receiveMetadata(preflight.candidate), oldBuild = await receiveMetadata(preflight.baseline);
+  const build = await receiveMetadata(preflight.candidate), oldBuild = desktopOnly ? null : await receiveMetadata(preflight.baseline);
   for (const format of ['dmg', 'zip']) {
     const familyRoot = path.join(root, format); await fs.mkdir(familyRoot); await prepareData(familyRoot);
     const app = path.join(familyRoot, 'Nexus Launcher.app');
@@ -227,19 +230,22 @@ try {
       ? installDmg(release, app, packageBuild) : installZip(release, familyRoot, packageBuild);
     const proof = await install(preflight.candidate, build);
     await runPhase('fresh', app, proof, familyRoot, format);
+    if (!desktopOnly) {
     const saved = path.join(familyRoot, 'candidate.app'); await fs.rename(app, saved);
     const oldProof = await install(preflight.baseline, oldBuild);
     await runPhase('old', app, oldProof, familyRoot, format);
     await ownedDirectory(root, app); await fs.rm(app, { recursive: true });
     await fs.rename(saved, app); await identity(app, preflight.candidate, build);
     await runPhase('final', app, proof, familyRoot, format);
+    }
     const leftovers = ownedProcesses(familyRoot);
     assert.equal(leftovers.length, 0, 'Format transaction still owns live processes');
     await ownedDirectory(root, familyRoot); await fs.rm(familyRoot, { recursive: true });
   }
-  assert.deepEqual(report.phases.map(item => item.format + ':' + item.phase), ['dmg:fresh', 'dmg:old', 'dmg:final', 'zip:fresh', 'zip:old', 'zip:final']);
-  report.result = packageSmoke ? 'PASS ORIGINAL PACKAGE SMOKE ONLY' : 'PASS FULL MAC CLOUD ACCEPTANCE';
-  if (!packageSmoke) report.fullBusiness = 'PASS';
+  assert.deepEqual(report.phases.map(item => item.format + ':' + item.phase), desktopOnly ? ['dmg:fresh', 'zip:fresh']
+    : ['dmg:fresh', 'dmg:old', 'dmg:final', 'zip:fresh', 'zip:old', 'zip:final']);
+  report.result = desktopOnly ? 'PASS NATIVE DESKTOP PRODUCER SUBSET' : packageSmoke ? 'PASS ORIGINAL PACKAGE SMOKE ONLY' : 'PASS FULL MAC CLOUD ACCEPTANCE';
+  if (!packageSmoke && !desktopOnly) report.fullBusiness = 'PASS';
 } catch (error) {
   report.error = { code: error.code, message: error.message }; process.exitCode = 1;
 } finally {

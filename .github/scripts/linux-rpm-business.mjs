@@ -101,7 +101,9 @@ export async function runBusinessQA(context) {
   if (!['fresh','old','final'].includes(phase)) fail('contract_invalid','phase');
   if (phase === 'final') for (const key of ['launchInstance','restartInstance'])
     if(typeof c[key]!=='function') fail('contract_missing',key);
-  for (const key of ['budgetGate','findOfficialPage'])
+  if(c.desktopOnly===true && (phase!=='fresh'||typeof c.verifyDesktopPrepared!=='function'))
+    fail('contract_missing','Desktop-only requires fresh preparation and real producer verification');
+  for (const key of c.desktopOnly===true?['budgetGate']:['budgetGate','findOfficialPage'])
     if (typeof c[key] !== 'function') fail('contract_missing',key);
   if (!c.desktop?.evaluate || !path.isAbsolute(c.root || '') || !Number.isFinite(c.deadlineAt))
     fail('contract_missing','absolute root, desktop.evaluate, deadlineAt');
@@ -500,6 +502,11 @@ export async function runBusinessQA(context) {
         return {release:selected,files:Object.keys(state.files).length};
       });
     }
+    if(c.desktopOnly===true) {
+      await step('native_desktop_session_and_plugin',c.verifyDesktopPrepared);
+      result={phase,status:'PASS',scope:'DESKTOP PRODUCER SUBSET',coverage:['native bridge','frozen rc2','actual Desktop producer'],
+        webVisibleSession:'NOT RUN',fullMigration:'NOT RUN',cancelRestartRecovery:'NOT RUN',crashRecovery:'NOT RUN',journal};
+    } else {
     await step('official_browser_session_and_plugin',verifyPage);
     await step('normal_stop',()=>stopHarness());
     await step('seal_transaction_baseline',async()=> {
@@ -709,6 +716,7 @@ export async function runBusinessQA(context) {
       profilePatchDiffReview:'REQUIRED_BY_DOT_AND_PRIMARY_BEFORE_PUBLICATION',
       packageTransactions:'EXTERNAL_NOT_COVERED',fullMigration:phase==='final'?'PASS':'NOT RUN',
       cancelRestartRecovery:phase==='final'?'PASS':'NOT RUN',crashRecovery:'NOT RUN',journal};
+    }
   } catch(e) {
     if(activePage?.page) {
       try {

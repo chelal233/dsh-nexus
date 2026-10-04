@@ -16,6 +16,9 @@ const root = await fs.realpath(process.env.QA_ROOT), evidence = await fs.realpat
 const budgetRoot = await fs.realpath(process.env.QA_BUDGET_ROOT);
 assert.ok(['0', '1'].includes(process.env.QA_PACKAGE_SMOKE || '0'));
 const packageSmoke = process.env.QA_PACKAGE_SMOKE === '1';
+assert.ok(['0', '1'].includes(process.env.QA_DESKTOP_ONLY || '0'));
+const desktopOnly = process.env.QA_DESKTOP_ONLY === '1';
+assert.ok(!packageSmoke || !desktopOnly);
 await ownedDirectory(budgetRoot, root);
 await ownedDirectory(root, root);
 const phase = process.env.QA_PHASE, app = await ownedDirectory(root, process.env.QA_INSTALLED_APP);
@@ -30,7 +33,7 @@ const expectedIdentity = { version: manifest.version, commit: manifest.commit, b
   manifestSha256: createHash('sha256').update(manifestBytes).digest('hex') };
 const report = { schema: 1, result: 'FAIL', phase, format: process.env.QA_PACKAGE_FORMAT, expectedIdentity, checks: [], children: [],
   realDeviceAcceptance: false, gatekeeperFirstOpen: 'NOT RUN', crashRecovery: 'NOT RUN' };
-report.fullBusiness = packageSmoke ? 'NOT RUN: separate original package smoke scope' : 'PENDING';
+report.fullBusiness = packageSmoke || desktopOnly ? 'NOT RUN: separate subset scope, Web/migration unaccepted' : 'PENDING';
 const children = [], instances = [], channels = [], targetEvents = [], gate = storageGate(budgetRoot, evidence);
 const abort = new AbortController();
 process.once('SIGTERM', () => abort.abort('Parent stopped this owned worker after capacity or deadline failure'));
@@ -52,8 +55,8 @@ function start(program, args, env) {
   });
   children.push(child); return child;
 }
-const browserBridge = packageSmoke ? null : await fs.realpath(process.env.QA_BROWSER_BRIDGE);
-if (!packageSmoke) {
+const browserBridge = packageSmoke || desktopOnly ? null : await fs.realpath(process.env.QA_BROWSER_BRIDGE);
+if (!packageSmoke && !desktopOnly) {
   assert.equal(browserBridge, path.join(budgetRoot, 'launchservices-browser'));
   assert.equal((await fs.lstat(browserBridge)).isFile(), true);
 }
@@ -265,6 +268,16 @@ try {
     assert.equal(desktop.phase, 'idle');
     report.checks.push('Authenticated isolated Agent state, arbitrary command/path rejected, native Desktop status without launching Harness');
     report.result = 'PASS ORIGINAL PACKAGE SMOKE ' + phase;
+  } else if (desktopOnly) {
+    assert.equal(phase, 'fresh');
+    await runBusinessQA({ phase, root, evidence, report, desktop: initial.desktop, executable,
+      signal: abort.signal, expectedIdentity, workspace: path.join(root, 'fixture-workspace'),
+      desktopOnly: true,
+      verifyDesktopPrepared: () => desktopChecks(initial, path.join(root, 'dsh'), path.join(root, 'electron'), true),
+      deadlineAt: Date.now() + 50 * 60 * 1000, budgetGate });
+    assert.equal(report.businessQA.status, 'PASS');
+    assert.equal(report.businessQA.scope, 'DESKTOP PRODUCER SUBSET');
+    report.result = 'PASS NATIVE DESKTOP PRODUCER SUBSET';
   } else {
   // Observe the existing native browser; do not repeat the runner's denied preference-setting operation.
   defaultBrowser = browserLease(browserCommand);
