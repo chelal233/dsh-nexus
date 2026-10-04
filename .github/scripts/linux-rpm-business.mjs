@@ -404,7 +404,7 @@ export async function runBusinessQA(context) {
           if(x?.operation_id!==ownedOperation) fail('operation_changed','Fetch operation changed');
           lastColdSnapshot=coldSnapshot(x);
           if (x.phase !== observedPhase || Date.now() - observedAt >= 30000) {
-            await record('cold_progress',lastColdSnapshot); observedPhase=x.phase; observedAt=Date.now();
+            await recordDiagnostic('cold_progress',lastColdSnapshot); observedPhase=x.phase; observedAt=Date.now();
           }
           if(['failed','cancelled'].includes(x.phase)) fail('fetch_failed',JSON.stringify(safe(x)));
           return x.phase==='prepared'&&x;
@@ -806,10 +806,11 @@ export async function runBusinessQA(context) {
   } finally {
     if(verifiedOwnership) {
       if(ownedOperation) {
+        let lastCleanup;
         try {
           try {await recordDiagnostic('cleanup_cancel_response',await api('/v1/updates',{action:'cancel',operation_id:ownedOperation},true));}
           catch(e){await recordDiagnostic('cleanup_cancel_response',{code:e.code,message:e.message});}
-          const end=Date.now()+20000;let settled=null,lastCleanup;
+          const end=Date.now()+20000;let settled=null;
           while(Date.now()<end) {
             const op=(await api('/v1/updates',undefined,true)).operation;
             if(op?.operation_id===ownedOperation)lastCleanup=coldSnapshot(op);
@@ -817,11 +818,11 @@ export async function runBusinessQA(context) {
                ['prepared','succeeded','failed','cancelled'].includes(op.phase)){settled=op;break;}
             await delay(250);
           }
-          if(lastCleanup)await recordDiagnostic('cold_cleanup_last_observed',lastCleanup);
           if(!settled)fail('COLD_CLEANUP_TIMEOUT','Owned cold operation is not proven quiescent');
           await record('cold_cleanup',{operation:settled.operation_id,phase:settled.phase,
             owner_quiescent:settled.owner_quiescent,cleanup_pending:settled.cleanup_pending});
         } catch(e){cleanupOK=false;await recordDiagnostic('cold_cleanup_failed',{code:e.code,message:e.message});}
+        finally {if(lastCleanup)await recordDiagnostic('cold_cleanup_last_observed',lastCleanup);}
       }
       try {
         await stopHarness(true);
