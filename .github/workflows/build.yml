@@ -67,7 +67,7 @@ jobs:
           sudo apt-get install -y xvfb xauth rpm cpio libgtk-3-0 libnss3 libasound2 libgbm1 libxss1 libatk-bridge2.0-0 libdrm2 libxkbcommon0 libfuse2
       - name: Check source privacy
         run: |
-          node --test ../../.github/scripts/check-source-privacy.test.mjs ../../.github/scripts/check-git-redistribution.test.mjs
+          node --test ../../.github/scripts/check-source-privacy.test.mjs ../../.github/scripts/check-git-redistribution.test.mjs ../../.github/scripts/linux-rpm-preflight-lifecycle.test.mjs
           node ../../.github/scripts/check-source-privacy.mjs
       - name: Prepare native tools
         run: |

@@ -3,6 +3,7 @@ import { spawn } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { lstat, mkdir, open, readdir, readFile, readlink, statfs, writeFile } from 'node:fs/promises';
 import path from 'node:path';
+import { completedDevToolsPort, releaseOwnedChildHandles } from './linux-rpm-preflight-lifecycle.mjs';
 
 assert.equal(process.platform, 'linux');
 assert.equal(process.arch, 'x64');
@@ -106,8 +107,8 @@ async function connect(child, userData, type) {
   report.phase = `${type}: wait for DevToolsActivePort`;
   const port = await until(child, async () => {
     try {
-      const candidate = (await readFile(path.join(userData, 'DevToolsActivePort'), 'utf8')).split('\n')[0];
-      assert.match(candidate, /^\d+$/);
+      const candidate = completedDevToolsPort(await readFile(path.join(userData, 'DevToolsActivePort'), 'utf8'));
+      if (candidate === null) return null;
       // A reused QA profile can retain the previous closed process port file.
       const response = await fetch(`http://127.0.0.1:${candidate}/json/version`, { signal: AbortSignal.timeout(5000) });
       assert.equal(response.status, 200);
@@ -568,4 +569,7 @@ try {
   await writeFile(`${evidence}/gui-preflight.json`, JSON.stringify(report, null, 2));
   await writeFile(`${evidence}/gui-preflight.log`, logs.join(''));
   console.log(JSON.stringify({ result: report.result, error: report.error, scope: report.scope }));
+  // Preserve FAIL and the unconfirmed-close receipt above, then let the normal
+  // outer container cleanup run instead of waiting on inherited pipes forever.
+  for (const child of children) if (!child.qaClosed) releaseOwnedChildHandles(child);
 }
