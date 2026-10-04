@@ -141,7 +141,7 @@ async function runPhase(phase, app, proof, phaseRoot, format) {
   const proofFile = path.join(phaseEvidence, 'package-proof.json'); await fs.writeFile(proofFile, JSON.stringify(proof));
   const child = own(spawn(proof.node, [path.join(workspace, '.github/scripts/macos-native-business.mjs')], {
     env: { ...process.env, QA_ROOT: phaseRoot, QA_INSTALLED_APP: app, QA_PHASE: phase,
-      QA_PHASE_EVIDENCE: phaseEvidence, QA_PACKAGE_PROOF: proofFile, QA_PACKAGE_FORMAT: format,
+      QA_PHASE_EVIDENCE: phaseEvidence, QA_PACKAGE_PROOF: proofFile, QA_PACKAGE_FORMAT: format, QA_BUDGET_ROOT: root,
       TMPDIR: path.join(root, 'tmp'), TEMP: path.join(root, 'tmp'), TMP: path.join(root, 'tmp') },
     stdio: ['ignore', 'pipe', 'pipe'],
   }));
@@ -190,7 +190,7 @@ function ownedProcesses(directory) {
   return command('/bin/ps', ['-axo', 'pid=,ppid=,command=']).split('\n').filter(line => line.includes(directory)).map(line => {
     const match = line.trim().match(/^(\d+)\s+(\d+)\s+(.+)$/);
     return match && { pid: Number(match[1]), ppid: Number(match[2]), command: match[3] };
-  }).filter(item => item && item.pid !== process.pid && /Nexus Launcher|nexus-agent|nexus-desktop-bridge|Google Chrome|macos-native-business/.test(item.command));
+  }).filter(item => item && item.pid !== process.pid);
 }
 try {
   await prepareData(root);
@@ -226,7 +226,9 @@ try {
   for (const mount of mounts) try { command('/usr/bin/hdiutil', ['detach', mount]); mounts.delete(mount); }
   catch (error) { report.cleanupError = error.message; }
   const leftovers = ownedProcesses(root);
-  report.ownedProcessLeftovers = leftovers; processesClosed = leftovers.length === 0;
+  report.ownedProcessLeftovers = leftovers;
+  report.unclosedOwnedCommandPids = [...activeChildren].map(child => child.pid);
+  processesClosed = leftovers.length === 0 && activeChildren.size === 0;
   report.cleanup = { ownedChildrenAbsent: processesClosed, imagesDetached: mounts.size === 0, removedTaskTemporaryRoot: false };
   if (!processesClosed || mounts.size || report.cleanupError) { report.result = 'FAIL'; process.exitCode = 1; }
   try { checkStorage(); report.finalStorage = await gate('finish', 0, true); }

@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { spawn, execFileSync } from 'node:child_process';
-import { createHash } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { runBusinessQA } from './linux-rpm-business.mjs';
 import { connect, socket, until, delay } from './acceptance-cdp.mjs';
 import { ownedDirectory, storageGate, treeFootprint } from './macos-acceptance-storage.mjs';
@@ -12,6 +12,8 @@ import { SESSION_TEXT } from './migration-session-fixture.mjs';
 
 assert.equal(process.platform, 'darwin'); assert.ok(process.getuid() > 0);
 const root = await fs.realpath(process.env.QA_ROOT), evidence = await fs.realpath(process.env.QA_PHASE_EVIDENCE);
+const budgetRoot = await fs.realpath(process.env.QA_BUDGET_ROOT);
+await ownedDirectory(budgetRoot, root);
 await ownedDirectory(root, root);
 const phase = process.env.QA_PHASE, app = await ownedDirectory(root, process.env.QA_INSTALLED_APP);
 assert.ok(['fresh', 'old', 'final'].includes(phase));
@@ -25,7 +27,7 @@ const expectedIdentity = { version: manifest.version, commit: manifest.commit, b
   manifestSha256: createHash('sha256').update(manifestBytes).digest('hex') };
 const report = { schema: 1, result: 'FAIL', phase, format: process.env.QA_PACKAGE_FORMAT, expectedIdentity, checks: [], children: [],
   realDeviceAcceptance: false, gatekeeperFirstOpen: 'NOT RUN', crashRecovery: 'NOT RUN' };
-const children = [], channels = [], targetEvents = [], gate = storageGate(root, evidence);
+const children = [], instances = [], channels = [], targetEvents = [], gate = storageGate(budgetRoot, evidence);
 const abort = new AbortController();
 process.once('SIGTERM', () => abort.abort('Parent stopped this owned worker after capacity or deadline failure'));
 const checkAbort = () => { if (abort.signal.aborted) throw Object.assign(new Error(String(abort.signal.reason)), { code: 'ABORTED' }); };
@@ -33,7 +35,11 @@ let browser, web, initial, oldHandlers;
 const redact = value => String(value).replace(/([?&]token=)[^\s&"']+/gi, '$1[redacted]');
 function start(program, args, env) {
   assert.ok(args.every(arg => !/no-sandbox|disable-setuid-sandbox|disable-web-security/.test(arg)));
-  const child = spawn(program, args, { env: { ...process.env, ...env }, stdio: ['ignore', 'pipe', 'pipe'] });
+  const child = spawn(program, args, { env: { ...process.env,
+    HOME: path.join(root, 'home'), TMPDIR: path.join(root, 'tmp'),
+    XDG_CACHE_HOME: path.join(root, 'cache'), XDG_CONFIG_HOME: path.join(root, 'config'), XDG_DATA_HOME: path.join(root, 'share'),
+    npm_config_cache: path.join(root, 'cache/npm'), COREPACK_HOME: path.join(root, 'cache/corepack'),
+    ...env }, stdio: ['ignore', 'pipe', 'pipe'] });
   child.qaProgram = program; child.qaClosed = false; child.qaLog = '';
   child.qaClose = new Promise(resolve => child.once('close', () => { child.qaClosed = true; resolve(); }));
   child.on('error', error => { child.qaLog = redact(error.message); });
@@ -52,15 +58,17 @@ async function launchInstance(spec) {
     HOME: spec.home, TMPDIR: path.join(root, 'tmp'), NEXUS_DATA_DIR: spec.dataRoot,
     DSH_HOME: spec.dshHome, NEXUS_AGENT_PORT: '0', NEXUS_LOCALE: 'en',
   });
+  const instance = { proc, desktop: null }; instances.push(instance);
   const desktop = await connect(proc, spec.userDataDir, item => item.type === 'page' && item.url.startsWith('file:'));
   channels.push(desktop);
   await until(proc, () => desktop.evaluate('window.nexusDesktop?.invoke("startup_status").then(s=>s.available?s:null)'));
   assert.equal(await desktop.evaluate('typeof require'), 'undefined');
   assert.equal(await desktop.evaluate('typeof process'), 'undefined');
-  return { proc, desktop };
+  instance.desktop = desktop; return instance;
 }
 async function closeInstance(instance) {
   if (!instance || instance.proc.qaClosed) return;
+  assert.ok(instance.desktop, 'Unconnected owned GUI cannot prove normal API shutdown');
   await instance.desktop.evaluate('window.nexusDesktop.invoke("harness_desktop_stop")');
   await instance.desktop.evaluate('window.nexusDesktop.invoke("proxy_request",{method:"POST",path:"/v1/agent",body:{action:"stop"}})');
   try { await instance.desktop.host.cdp('Browser.close'); } catch { /* May close before replying. */ }
@@ -94,15 +102,27 @@ async function budgetGate({ stage, dataRoot, dshHome, archivePreview }) {
     if (stage === 'fresh_official_fetch') increment = 6 * GIB;
     if (['full_runtime_export', 'full_import_and_publication', 'inflight_import_cancel', 'retry_full_import_same_B'].includes(stage)) {
       if (stage === 'full_runtime_export') {
-        const [slot, runtime, home, host] = await Promise.all([
-          treeFootprint(root, path.join(root, 'business/releases')),
-          treeFootprint(root, path.join(app, 'Contents/Resources/runtime')),
-          treeFootprint(root, path.join(root, 'dsh')), treeFootprint(root, app),
+        const launch = await initial.desktop.evaluate('window.nexusDesktop.invoke("desktop_launch_context")');
+        const tools = await initial.desktop.evaluate('window.nexusDesktop.invoke("proxy_request",{method:"GET",path:"/v1/runtime"})');
+        const node = tools.tools?.find(tool => tool.name === 'node'), gitTool = tools.tools?.find(tool => tool.name === 'git');
+        assert.ok(node?.available && gitTool?.available && node.path && gitTool.path);
+        const nodePath = await fs.realpath(node.path), gitPath = await fs.realpath(gitTool.path);
+        assert.equal(nodePath, await fs.realpath(launch.runtime_environment.NEXUS_RUNTIME_NODE));
+        const runtimeRoot = path.basename(path.dirname(nodePath)) === 'bin'
+          ? path.dirname(path.dirname(path.dirname(nodePath))) : path.dirname(path.dirname(nodePath));
+        const gitRoot = path.dirname(path.dirname(gitPath));
+        const recipe = JSON.parse(await fs.readFile(path.join(root, 'electron/harness-desktop/launch.json')));
+        for (const directory of [runtimeRoot, gitRoot, recipe.kit]) await ownedDirectory(budgetRoot, directory);
+        const [slot, runtime, home, host, git, desktop] = await Promise.all([
+          treeFootprint(budgetRoot, path.join(root, 'business/releases')),
+          treeFootprint(budgetRoot, runtimeRoot),
+          treeFootprint(budgetRoot, path.join(root, 'dsh')), treeFootprint(budgetRoot, app),
+          treeFootprint(budgetRoot, gitRoot), treeFootprint(budgetRoot, recipe.kit),
         ]);
-        increment = exportIncrement({ slot, runtime, home, host });
-        await fs.writeFile(path.join(evidence, 'export-admission.json'), JSON.stringify({ slot, runtime, home, host, increment }));
+        increment = exportIncrement({ slot, runtime, home, host, git, desktop });
+        await fs.writeFile(path.join(evidence, 'export-admission.json'), JSON.stringify({ roots: { runtimeRoot, gitRoot, desktop: recipe.kit }, slot, runtime, home, host, git, desktop, increment }));
       } else {
-        const receiver = await treeFootprint(root, dshHome);
+        const receiver = await treeFootprint(budgetRoot, dshHome);
         increment = importIncrement(archivePreview, receiver);
         await fs.writeFile(path.join(evidence, stage + '-admission.json'), JSON.stringify({ archivePreview, receiver, increment }));
       }
@@ -125,11 +145,13 @@ async function seedDesktopFixture(home) {
   const plugin = path.join(unit, 'plugin.mjs');
   let text = await fs.readFile(plugin, 'utf8');
   assert.ok(text.includes('let handle;') && text.includes('const loaded=await handle.read();') && text.includes('process.stdout.write('));
-  text = "import fs from 'node:fs/promises';import path from 'node:path';\n" + text
+  text = "import fs from 'node:fs/promises';import {readFileSync} from 'node:fs';import path from 'node:path';\n" + text
+    .replace('export function apply(ctx,config){', "export function apply(ctx,config){const challenge=JSON.parse(readFileSync(path.join(process.env.DSH_HOME,'storages/qa-round2/desktop-challenge.json'),'utf8')).challenge;if(typeof challenge!=='string'||!challenge.match(/^[a-f0-9-]{36}$/))throw Error('QA challenge missing');")
     .replace('let handle;', 'let receiptFacts;let handle;')
-    .replace('const loaded=await handle.read();', "const loaded=await handle.read();receiptFacts={sessionId:'qa-valid-session',cwd:match[0].header.cwd,eventCount:loaded.events.length,kind:loaded.events[0]?.data?.source?.kind,text:loaded.events[0]?.data?.content?.[0]?.text,dependency:leaf,marker:config.marker,pid:process.pid};")
-    .replace('process.stdout.write(', "await fs.writeFile(path.join(process.env.DSH_HOME,'storages/qa-round2/desktop-receipt.json'),JSON.stringify(receiptFacts));process.stdout.write(");
+    .replace('const loaded=await handle.read();', "const loaded=await handle.read();receiptFacts={challenge,sessionId:'qa-valid-session',cwd:match[0].header.cwd,eventCount:loaded.events.length,kind:loaded.events[0]?.data?.source?.kind,text:loaded.events[0]?.data?.content?.[0]?.text,dependency:leaf,marker:config.marker,pid:process.pid};")
+    .replace('process.stdout.write(', "const receipt=path.join(process.env.DSH_HOME,'storages/qa-round2','desktop-receipt-'+challenge+'.json');const tmp=receipt+'.'+process.pid+'.tmp';await fs.writeFile(tmp,JSON.stringify(receiptFacts));await fs.rename(tmp,receipt);process.stdout.write(");
   await fs.writeFile(plugin, text);
+  execFileSync(process.execPath, ['--check', plugin], { timeout: 30000 });
   return { pluginSha256: createHash('sha256').update(text).digest('hex') };
 }
 async function desktopChecks(instance = initial, home = path.join(root, 'dsh'), userData = path.join(root, 'electron'), seed = false) {
@@ -146,25 +168,39 @@ async function desktopChecks(instance = initial, home = path.join(root, 'dsh'), 
   if (preparing.phase !== 'preparing') throw Object.assign(new Error('Desktop preparation cancellation window was not captured'), { code: 'INTERRUPTION_NOT_CAPTURED' });
   const stopped = await invoke('harness_desktop_stop'); assert.equal(stopped.phase, 'stopped');
   report.desktopCancel = { started, captured: preparing, stopped };
-  await invoke('harness_desktop_start');
-  let ready = await waitReady(8 * 60 * 1000);
+  let ready;
   if (seed) {
+    await invoke('harness_desktop_start'); ready = await waitReady(8 * 60 * 1000);
     assert.equal((await invoke('harness_desktop_stop')).phase, 'stopped');
+    await until(instance.proc, () => {
+      try { process.kill(ready.childPid, 0); return null; } catch (error) { if (error.code === 'ESRCH') return true; throw error; }
+    }, 20000);
     report.desktopFixture = await seedDesktopFixture(home);
   }
-  const receiptFile = path.join(home, 'storages/qa-round2/desktop-receipt.json');
-  await fs.rm(receiptFile, { force: true });
-  await invoke('harness_desktop_restart'); ready = await waitReady(5 * 60 * 1000);
-  const receipt = await until(instance.proc, async () => {
-    try { return JSON.parse(await fs.readFile(receiptFile)); } catch (error) { if (error.code === 'ENOENT') return null; throw error; }
-  });
-  assert.deepEqual({ sessionId: receipt.sessionId, cwd: receipt.cwd, eventCount: receipt.eventCount,
+  const bootWithReceipt = async action => {
+    const challenge = randomUUID(), receiptFile = path.join(home, 'storages/qa-round2', 'desktop-receipt-' + challenge + '.json');
+    await fs.writeFile(path.join(home, 'storages/qa-round2/desktop-challenge.json'), JSON.stringify({ challenge }));
+    assert.equal(await fs.lstat(receiptFile).then(() => true, error => { if (error.code === 'ENOENT') return false; throw error; }), false);
+    await invoke(action); const current = await waitReady(8 * 60 * 1000);
+    const receipt = await until(instance.proc, async () => {
+      try { return JSON.parse(await fs.readFile(receiptFile)); } catch (error) { if (error.code === 'ENOENT') return null; throw error; }
+    });
+    assert.equal(receipt.challenge, challenge);
+    assert.deepEqual({ sessionId: receipt.sessionId, cwd: receipt.cwd, eventCount: receipt.eventCount,
     kind: receipt.kind, text: receipt.text, dependency: receipt.dependency, marker: receipt.marker }, {
     sessionId: 'qa-valid-session', cwd: path.join(root, 'fixture-workspace'), eventCount: 6, kind: 'user',
     text: SESSION_TEXT, dependency: 'qa-round2-transitive-ok', marker: 'qa-round2-config',
-  });
-  assert.ok(Number.isInteger(receipt.pid) && receipt.pid > 0);
-  report.desktopBusiness = { status: 'PASS actual Desktop producer session read and Cordis transitive plugin apply', receipt,
+    });
+    assert.ok(Number.isInteger(receipt.pid) && receipt.pid > 0);
+    const table = execFileSync('/bin/ps', ['-axo', 'pid=,ppid='], { encoding: 'utf8', timeout: 10000 }).trim().split('\n')
+      .map(line => line.trim().split(/\s+/).map(Number));
+    const parents = new Map(table); let pid = receipt.pid; const ancestry = [];
+    for (let i = 0; i < 16 && pid > 1; i++) { ancestry.push(pid); if (pid === current.childPid) break; pid = parents.get(pid); }
+    assert.ok(ancestry.includes(current.childPid), 'Receipt producer must belong to this exact new official Desktop child');
+    return { current, receipt, ancestry };
+  };
+  const boot = await bootWithReceipt('harness_desktop_start'); ready = boot.current;
+  report.desktopBusiness = { status: 'PASS actual Desktop producer session read and Cordis transitive plugin apply', ...boot,
     visualSessionResume: 'NOT RUN', thirdPartyPlugins: 'Synthetic QA plugin only' };
   assert.ok(Number.isInteger(ready.childPid) && ready.childPid > 0);
   // The original producer's structured startup audit is required, never only a live PID.
@@ -184,10 +220,10 @@ async function desktopChecks(instance = initial, home = path.join(root, 'dsh'), 
     status: 'PASS actual normal launch and offline preparation',
     portableFallback: shared ? 'NOT APPLICABLE: exact shared host selected' : 'PASS required different-version host launched' };
   await assert.rejects(() => invoke('proxy_request', { method: 'POST', path: '/v1/harness', body: { action: 'start' } }), /Close Harness Desktop|请先关闭 Harness Desktop/);
-  await invoke('harness_desktop_restart');
-  const restarted = await waitReady(5 * 60 * 1000);
+  const restartedProof = await bootWithReceipt('harness_desktop_restart');
+  const restarted = restartedProof.current;
   assert.notEqual(restarted.operationId, ready.operationId);
-  report.desktopRestart = restarted;
+  report.desktopRestart = restartedProof;
   assert.equal((await invoke('harness_desktop_stop')).phase, 'stopped');
   report.checks.push('Official Desktop real readiness audit, preparation cancellation, mutation lock and normal restart');
 }
@@ -229,7 +265,9 @@ try {
 } catch (error) {
   report.error = { code: error.code, message: redact(error.message) }; process.exitCode = 1;
 } finally {
-  try { await closeInstance(initial); } catch (error) { report.cleanupError = redact(error.message); }
+  for (const instance of [...instances].reverse()) {
+    try { await closeInstance(instance); } catch (error) { report.cleanupError = redact(error.message); }
+  }
   for (const channel of channels) {
     try { await channel.host?.cdp('Browser.close'); } catch { /* close event can precede response */ }
     channel.ws.close(); channel.host?.ws.close();

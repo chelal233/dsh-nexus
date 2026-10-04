@@ -11,10 +11,10 @@ const archiveBound = ({ bytes, entries }) => {
   for (const value of [bytes, entries]) assert.ok(Number.isSafeInteger(value) && value >= 0);
   return Math.ceil((bytes + (entries + 2) * 8192) * 1.01) + 1024 ** 2;
 };
-export function exportIncrement({ slot, runtime, home, host }) {
+export function exportIncrement({ slot, runtime, home, host, git = runtime, desktop = { bytes: 0, entries: 0 } }) {
   // Runtime may need a separate Git copy; the complete Mac app also becomes
   // host.tar.gz inside staging, while the final compressed archive coexists.
-  const parts = [slot, runtime, runtime, home];
+  const parts = [slot, runtime, git, desktop, home];
   const hostArchive = archiveBound(host);
   const staged = { bytes: parts.reduce((n, p) => n + p.bytes, hostArchive),
     entries: parts.reduce((n, p) => n + p.entries, 2) };

@@ -10,6 +10,7 @@ export async function ownedDirectory(root, directory) {
   assert.ok(!relative.startsWith('..') && !path.isAbsolute(relative), 'QA directory escaped');
   assert.equal((await fs.lstat(directory)).isSymbolicLink(), false);
   assert.equal((await fs.stat(directory)).isDirectory(), true);
+  assert.equal((await fs.stat(realRoot)).dev, (await fs.stat(real)).dev, 'QA path crossed target volume');
   return real;
 }
 
@@ -23,10 +24,17 @@ export function allocatedBytes(directory) {
 export async function treeFootprint(root, directory) {
   await ownedDirectory(root, directory);
   let bytes = 0, entries = 0;
+  const visited = new Set(), device = (await fs.stat(root)).dev;
   async function visit(file) {
-    const stat = await fs.lstat(file); entries++;
+    let stat = await fs.lstat(file);
+    if (stat.isSymbolicLink()) {
+      const target = await fs.realpath(file), relative = path.relative(await fs.realpath(root), target);
+      assert.ok(!relative.startsWith('..') && !path.isAbsolute(relative), 'Unknown dependency link leaves measured task roots');
+      return visit(target);
+    }
+    assert.equal(stat.dev, device, 'Measured source crossed target volume');
+    const real = await fs.realpath(file); if (visited.has(real)) return; visited.add(real); entries++;
     assert.ok(entries <= 250000, 'QA footprint entry bound');
-    if (stat.isSymbolicLink()) return;
     if (stat.isDirectory()) for (const name of await fs.readdir(file)) await visit(path.join(file, name));
     else { assert.ok(stat.isFile()); bytes += stat.size; }
     assert.ok(Number.isSafeInteger(bytes));
@@ -46,28 +54,35 @@ export function watchStorage(gate, onViolation, intervalMs = 2000) {
   return async () => { active = false; clearInterval(timer); await pending; };
 }
 
-export function storageGate(root, evidence) {
+export function storageGate(root, evidence, hooks = {}) {
   const limitGiB = Number(process.env.QA_TEMP_BUDGET_GIB || 2);
   const armFloor = Number(process.env.QA_ARM_FREE_GIB || 0);
   assert.ok([2, 32].includes(limitGiB), 'Only default or specifically approved Mac envelope');
   assert.ok([0, 8].includes(armFloor), 'Only default or specifically approved ARM floor');
   const limit = limitGiB * GIB; let peak = 0, last = null, measuredAt = 0;
+  const measure = hooks.measure || (async () => {
+    await ownedDirectory(root, root);
+    const info = await fs.statfs(root);
+    return { occupied: allocatedBytes(root), free: info.bavail * info.bsize, total: info.blocks * info.bsize };
+  });
+  const append = hooks.append || (snapshot => fs.appendFile(path.join(evidence, 'storage.jsonl'), JSON.stringify(snapshot) + '\n'));
   return async (stage, increment = 0, force = false) => {
     assert.ok(Number.isSafeInteger(increment) && increment >= 0);
+    let snapshot = last;
     if (force || !last || Date.now() - measuredAt > 3000 || increment) {
-      await ownedDirectory(root, root);
-      const info = await fs.statfs(root), occupied = allocatedBytes(root);
-      const free = info.bavail * info.bsize, total = info.blocks * info.bsize;
+      const { occupied, free, total } = await measure();
+      for (const n of [occupied, free, total]) assert.ok(Number.isSafeInteger(n) && n >= 0);
       const ordinaryFloor = Math.max(20 * GIB, Math.ceil(total / 10));
       const floor = process.arch === 'arm64' && armFloor === 8 ? 8 * GIB : ordinaryFloor;
       peak = Math.max(peak, occupied);
-      last = { measuredAt: new Date().toISOString(), stage, occupied, increment, sampledPeak: peak, free, total, floor, ordinaryFloor, limit,
+      snapshot = Object.freeze({ measuredAt: new Date().toISOString(), stage, occupied, increment, sampledPeak: peak, free, total, floor, ordinaryFloor, limit,
         approvedArmException: process.arch === 'arm64' && armFloor === 8,
-        ok: occupied + increment <= limit - GIB && free - increment >= floor + GIB };
+        ok: occupied + increment <= limit - GIB && free - increment >= floor + GIB });
+      last = snapshot;
       measuredAt = Date.now();
-      await fs.appendFile(path.join(evidence, 'storage.jsonl'), JSON.stringify(last) + '\n');
+      await append(snapshot);
     }
-    if (!last.ok) throw Object.assign(new Error('Measured Mac QA capacity exceeded; no next write started'), { code: 'BUDGET_BLOCKED' });
-    return last;
+    if (!snapshot.ok) throw Object.assign(new Error('Measured Mac QA capacity exceeded; no next write started'), { code: 'BUDGET_BLOCKED' });
+    return snapshot;
   };
 }
