@@ -6,7 +6,7 @@
 
 Nexus is a local desktop manager for [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness), available for Windows, macOS, and Linux. Prepare and switch versions, launch Web or supported official Desktop, manage profiles and plugins, and recover from startup problems in one place.
 
-[Download v1.0.5](https://github.com/chelal233/dsh-nexus/releases/tag/v1.0.5) · [Get started](#start-in-three-steps) · [User guide](docs/user-guide.en.md) · [Documentation](docs/README.en.md)
+[Download v1.0.6](https://github.com/chelal233/dsh-nexus/releases/tag/v1.0.6) · [Get started](#start-in-three-steps) · [User guide](docs/user-guide.en.md) · [Documentation](docs/README.en.md)
 
 ![Nexus workbench](docs/images/workbench-en.jpg)
 
@@ -25,21 +25,21 @@ Nexus manages the Harness lifecycle; Harness provides the AI agent, models, tool
 
 ## Download and install
 
-The current release is **[v1.0.5](https://github.com/chelal233/dsh-nexus/releases/tag/v1.0.5)**. Choose the package matching your operating system and CPU architecture.
+The current release is **[v1.0.6](https://github.com/chelal233/dsh-nexus/releases/tag/v1.0.6)**. Choose the package matching your operating system and CPU architecture.
 
 | Platform | Architecture | Downloads | Official Harness Desktop |
 | --- | --- | --- | --- |
-| Windows | x64 | [EXE installer](https://github.com/chelal233/dsh-nexus/releases/download/v1.0.5/dsh-nexus_1.0.5_windows_x64.exe) · [Portable ZIP](https://github.com/chelal233/dsh-nexus/releases/download/v1.0.5/dsh-nexus_1.0.5_windows_x64_portable.zip) | Compatible managed releases |
-| Windows | ARM64 | [EXE installer](https://github.com/chelal233/dsh-nexus/releases/download/v1.0.5/dsh-nexus_1.0.5_windows_arm64.exe) · [Portable ZIP](https://github.com/chelal233/dsh-nexus/releases/download/v1.0.5/dsh-nexus_1.0.5_windows_arm64_portable.zip) | Unavailable with the bundled lock |
-| macOS | Intel x64 | [DMG](https://github.com/chelal233/dsh-nexus/releases/download/v1.0.5/dsh-nexus_1.0.5_macos_x64.dmg) · [Application ZIP](https://github.com/chelal233/dsh-nexus/releases/download/v1.0.5/dsh-nexus_1.0.5_macos_x64_portable.zip) | Compatible managed releases |
-| macOS | Apple Silicon ARM64 | [DMG](https://github.com/chelal233/dsh-nexus/releases/download/v1.0.5/dsh-nexus_1.0.5_macos_arm64.dmg) · [Application ZIP](https://github.com/chelal233/dsh-nexus/releases/download/v1.0.5/dsh-nexus_1.0.5_macos_arm64_portable.zip) | Compatible managed releases |
-| Linux | x86_64 / x64 | [AppImage](https://github.com/chelal233/dsh-nexus/releases/download/v1.0.5/dsh-nexus_1.0.5_linux_x64.AppImage) · [DEB](https://github.com/chelal233/dsh-nexus/releases/download/v1.0.5/dsh-nexus_1.0.5_linux_x64.deb) · [RPM](https://github.com/chelal233/dsh-nexus/releases/download/v1.0.5/dsh-nexus_1.0.5_linux_x64.rpm) | Unavailable with the bundled lock; use Web |
-| Linux | ARM64 | [AppImage](https://github.com/chelal233/dsh-nexus/releases/download/v1.0.5/dsh-nexus_1.0.5_linux_arm64.AppImage) · [DEB](https://github.com/chelal233/dsh-nexus/releases/download/v1.0.5/dsh-nexus_1.0.5_linux_arm64.deb) · [RPM](https://github.com/chelal233/dsh-nexus/releases/download/v1.0.5/dsh-nexus_1.0.5_linux_arm64.rpm) | Unavailable with the bundled lock; use Web |
+| Windows | x64 | [EXE installer](https://github.com/chelal233/dsh-nexus/releases/download/v1.0.6/dsh-nexus_1.0.6_windows_x64.exe) · [Portable ZIP](https://github.com/chelal233/dsh-nexus/releases/download/v1.0.6/dsh-nexus_1.0.6_windows_x64_portable.zip) | Compatible managed releases |
+| Windows | ARM64 | [EXE installer](https://github.com/chelal233/dsh-nexus/releases/download/v1.0.6/dsh-nexus_1.0.6_windows_arm64.exe) · [Portable ZIP](https://github.com/chelal233/dsh-nexus/releases/download/v1.0.6/dsh-nexus_1.0.6_windows_arm64_portable.zip) | Unavailable with the bundled lock |
+| macOS | Intel x64 | [DMG](https://github.com/chelal233/dsh-nexus/releases/download/v1.0.6/dsh-nexus_1.0.6_macos_x64.dmg) · [Application ZIP](https://github.com/chelal233/dsh-nexus/releases/download/v1.0.6/dsh-nexus_1.0.6_macos_x64_portable.zip) | Compatible managed releases |
+| macOS | Apple Silicon ARM64 | [DMG](https://github.com/chelal233/dsh-nexus/releases/download/v1.0.6/dsh-nexus_1.0.6_macos_arm64.dmg) · [Application ZIP](https://github.com/chelal233/dsh-nexus/releases/download/v1.0.6/dsh-nexus_1.0.6_macos_arm64_portable.zip) | Compatible managed releases |
+| Linux | x86_64 / x64 | [AppImage](https://github.com/chelal233/dsh-nexus/releases/download/v1.0.6/dsh-nexus_1.0.6_linux_x64.AppImage) · [DEB](https://github.com/chelal233/dsh-nexus/releases/download/v1.0.6/dsh-nexus_1.0.6_linux_x64.deb) · [RPM](https://github.com/chelal233/dsh-nexus/releases/download/v1.0.6/dsh-nexus_1.0.6_linux_x64.rpm) | Unavailable with the bundled lock; use Web |
+| Linux | ARM64 | [AppImage](https://github.com/chelal233/dsh-nexus/releases/download/v1.0.6/dsh-nexus_1.0.6_linux_arm64.AppImage) · [DEB](https://github.com/chelal233/dsh-nexus/releases/download/v1.0.6/dsh-nexus_1.0.6_linux_arm64.deb) · [RPM](https://github.com/chelal233/dsh-nexus/releases/download/v1.0.6/dsh-nexus_1.0.6_linux_arm64.rpm) | Unavailable with the bundled lock; use Web |
 
 Web mode is available on all six targets. Desktop availability depends on the selected Harness release and its runtime resources; a Nexus package alone does not establish Desktop support.
 
 - **Windows:** install the EXE, or extract the complete ZIP before running `Nexus Launcher.exe`. Keep its resource files together. Portable means installation-free; user data is stored separately.
-- **macOS:** copy the complete application from the DMG or ZIP before opening it. v1.0.5 packages are ad-hoc signed and **not notarized**.
+- **macOS:** copy the complete application from the DMG or ZIP before opening it. v1.0.6 packages are ad-hoc signed and **not notarized**.
 - **Linux:** the full bundled runtime requires **glibc 2.34 or newer**, libcurl, zlib, and Electron's desktop libraries. DEB/RPM declare dependencies; AppImage users must check their system. A matching package format or a distribution name such as deepin, UOS, or Kylin does not guarantee compatibility with every version or desktop environment.
 
 Release assets include build metadata and SHA-256 manifests. Windows and Linux packages are unsigned. See [download verification and security](SECURITY.en.md); the manifest's Sigstore provenance is separate from operating-system code signing.
@@ -54,7 +54,7 @@ Release assets include build metadata and SHA-256 manifests. Windows and Linux p
 
 ## Versions, configuration, and the Agent
 
-**Updating Nexus and switching Harness are separate actions.** Nexus does not automatically upgrade your Harness installation. v1.0.5 fixes a race in which background Desktop capability checks could restart an explicitly stopped Nexus Agent.
+**Updating Nexus and switching Harness are separate actions.** Nexus does not automatically upgrade your Harness installation. v1.0.5 fixes a race in which background Desktop capability checks could restart an explicitly stopped Nexus Agent. v1.0.6 updates the first-install market pin to dshmarket 1.66.8; existing market installations are retained.
 
 The bundled Desktop runtime lock remains **Harness 0.1.6-alpha.2**. Nexus also adapts to selected newer Harness interfaces, including 0.2 settings and Desktop preparation. Interface support does not establish compatibility with every plugin or session-data migration. Keep a pre-upgrade data backup; selecting an older version does not downgrade upstream data formats.
 
@@ -79,8 +79,8 @@ Nexus program files, Nexus management data, Harness data (`DSH_HOME`), and proje
 ## Compatibility and verification
 
 - Startup status distinguishes checking, ready, limited, failed, and unverified states. A running process or open window does not prove every model, tool, conversation, or third-party plugin works.
-- v1.0.5 release gates cover six-platform builds, resource verification, and installed-package startup on CI runners. CI success and checksum provenance do not establish production OS signing, every Linux distribution, or real-device upgrades.
-- macOS full in-browser Web sessions, real-session/full offline migration, every third-party plugin, physical-device upgrades, Gatekeeper first-open, production notarization, and crash recovery remain outside the accepted scope. Earlier v1.0.4 Mac subset checks are not v1.0.5 full migration acceptance. See the [v1.0.5 release notes](https://github.com/chelal233/dsh-nexus/releases/tag/v1.0.5).
+- v1.0.6 release gates cover six-platform builds, resource verification, and installed-package startup on CI runners. CI success and checksum provenance do not establish production OS signing, every Linux distribution, or real-device upgrades.
+- macOS full in-browser Web sessions, real-session/full offline migration, every third-party plugin, physical-device upgrades, Gatekeeper first-open, production notarization, and crash recovery remain outside the accepted scope. Earlier v1.0.4 Mac subset checks are not v1.0.6 full migration acceptance. See the [v1.0.6 release notes](https://github.com/chelal233/dsh-nexus/releases/tag/v1.0.6).
 - Harness and its plugins run with normal local-process capabilities. Nexus is not a sandbox for untrusted plugins.
 
 ## Documentation and contributions

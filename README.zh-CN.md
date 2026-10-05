@@ -6,7 +6,7 @@
 
 Nexus 是面向 Windows、macOS 和 Linux 的本地 [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) 桌面管理器。在一个界面中准备和切换版本、启动 Web 或受支持的官方 Desktop、管理配置档与插件，并处理启动问题。
 
-[下载 v1.0.5](https://github.com/chelal233/dsh-nexus/releases/tag/v1.0.5) · [三步开始](#三步开始) · [用户指南](docs/user-guide.md) · [文档目录](docs/README.md)
+[下载 v1.0.6](https://github.com/chelal233/dsh-nexus/releases/tag/v1.0.6) · [三步开始](#三步开始) · [用户指南](docs/user-guide.md) · [文档目录](docs/README.md)
 
 ![Nexus 工作台](docs/images/workbench-zh.jpg)
 
@@ -25,21 +25,21 @@ Nexus 管理 Harness 的生命周期；AI Agent、模型、工具和会话由 Ha
 
 ## 下载与安装
 
-当前版本为 **[v1.0.5](https://github.com/chelal233/dsh-nexus/releases/tag/v1.0.5)**。请选择与操作系统和 CPU 架构一致的安装包。
+当前版本为 **[v1.0.6](https://github.com/chelal233/dsh-nexus/releases/tag/v1.0.6)**。请选择与操作系统和 CPU 架构一致的安装包。
 
 | 平台 | 架构 | 下载 | 官方 Harness Desktop |
 | --- | --- | --- | --- |
-| Windows | x64 | [EXE 安装包](https://github.com/chelal233/dsh-nexus/releases/download/v1.0.5/dsh-nexus_1.0.5_windows_x64.exe) · [免安装 ZIP](https://github.com/chelal233/dsh-nexus/releases/download/v1.0.5/dsh-nexus_1.0.5_windows_x64_portable.zip) | 兼容的受管版本可用 |
-| Windows | ARM64 | [EXE 安装包](https://github.com/chelal233/dsh-nexus/releases/download/v1.0.5/dsh-nexus_1.0.5_windows_arm64.exe) · [免安装 ZIP](https://github.com/chelal233/dsh-nexus/releases/download/v1.0.5/dsh-nexus_1.0.5_windows_arm64_portable.zip) | 当前内置锁不提供支持 |
-| macOS | Intel x64 | [DMG](https://github.com/chelal233/dsh-nexus/releases/download/v1.0.5/dsh-nexus_1.0.5_macos_x64.dmg) · [应用 ZIP](https://github.com/chelal233/dsh-nexus/releases/download/v1.0.5/dsh-nexus_1.0.5_macos_x64_portable.zip) | 兼容的受管版本可用 |
-| macOS | Apple Silicon ARM64 | [DMG](https://github.com/chelal233/dsh-nexus/releases/download/v1.0.5/dsh-nexus_1.0.5_macos_arm64.dmg) · [应用 ZIP](https://github.com/chelal233/dsh-nexus/releases/download/v1.0.5/dsh-nexus_1.0.5_macos_arm64_portable.zip) | 兼容的受管版本可用 |
-| Linux | x86_64 / x64 | [AppImage](https://github.com/chelal233/dsh-nexus/releases/download/v1.0.5/dsh-nexus_1.0.5_linux_x64.AppImage) · [DEB](https://github.com/chelal233/dsh-nexus/releases/download/v1.0.5/dsh-nexus_1.0.5_linux_x64.deb) · [RPM](https://github.com/chelal233/dsh-nexus/releases/download/v1.0.5/dsh-nexus_1.0.5_linux_x64.rpm) | 当前内置锁不支持，使用 Web |
-| Linux | ARM64 | [AppImage](https://github.com/chelal233/dsh-nexus/releases/download/v1.0.5/dsh-nexus_1.0.5_linux_arm64.AppImage) · [DEB](https://github.com/chelal233/dsh-nexus/releases/download/v1.0.5/dsh-nexus_1.0.5_linux_arm64.deb) · [RPM](https://github.com/chelal233/dsh-nexus/releases/download/v1.0.5/dsh-nexus_1.0.5_linux_arm64.rpm) | 当前内置锁不支持，使用 Web |
+| Windows | x64 | [EXE 安装包](https://github.com/chelal233/dsh-nexus/releases/download/v1.0.6/dsh-nexus_1.0.6_windows_x64.exe) · [免安装 ZIP](https://github.com/chelal233/dsh-nexus/releases/download/v1.0.6/dsh-nexus_1.0.6_windows_x64_portable.zip) | 兼容的受管版本可用 |
+| Windows | ARM64 | [EXE 安装包](https://github.com/chelal233/dsh-nexus/releases/download/v1.0.6/dsh-nexus_1.0.6_windows_arm64.exe) · [免安装 ZIP](https://github.com/chelal233/dsh-nexus/releases/download/v1.0.6/dsh-nexus_1.0.6_windows_arm64_portable.zip) | 当前内置锁不提供支持 |
+| macOS | Intel x64 | [DMG](https://github.com/chelal233/dsh-nexus/releases/download/v1.0.6/dsh-nexus_1.0.6_macos_x64.dmg) · [应用 ZIP](https://github.com/chelal233/dsh-nexus/releases/download/v1.0.6/dsh-nexus_1.0.6_macos_x64_portable.zip) | 兼容的受管版本可用 |
+| macOS | Apple Silicon ARM64 | [DMG](https://github.com/chelal233/dsh-nexus/releases/download/v1.0.6/dsh-nexus_1.0.6_macos_arm64.dmg) · [应用 ZIP](https://github.com/chelal233/dsh-nexus/releases/download/v1.0.6/dsh-nexus_1.0.6_macos_arm64_portable.zip) | 兼容的受管版本可用 |
+| Linux | x86_64 / x64 | [AppImage](https://github.com/chelal233/dsh-nexus/releases/download/v1.0.6/dsh-nexus_1.0.6_linux_x64.AppImage) · [DEB](https://github.com/chelal233/dsh-nexus/releases/download/v1.0.6/dsh-nexus_1.0.6_linux_x64.deb) · [RPM](https://github.com/chelal233/dsh-nexus/releases/download/v1.0.6/dsh-nexus_1.0.6_linux_x64.rpm) | 当前内置锁不支持，使用 Web |
+| Linux | ARM64 | [AppImage](https://github.com/chelal233/dsh-nexus/releases/download/v1.0.6/dsh-nexus_1.0.6_linux_arm64.AppImage) · [DEB](https://github.com/chelal233/dsh-nexus/releases/download/v1.0.6/dsh-nexus_1.0.6_linux_arm64.deb) · [RPM](https://github.com/chelal233/dsh-nexus/releases/download/v1.0.6/dsh-nexus_1.0.6_linux_arm64.rpm) | 当前内置锁不支持，使用 Web |
 
 六个平台目标均提供 Web 模式。Desktop 是否可用取决于所选 Harness 版本与运行时资源，不能仅凭存在 Nexus 安装包判断。
 
 - **Windows：** 使用 EXE 安装，或完整解压 ZIP 后运行 `Nexus Launcher.exe`，不要单独复制可执行文件。免安装不代表用户数据与程序存放在同一目录。
-- **macOS：** 从 DMG 或 ZIP 中复制完整应用后启动。v1.0.5 应用使用临时签名，**未经 Apple 公证**。
+- **macOS：** 从 DMG 或 ZIP 中复制完整应用后启动。v1.0.6 应用使用临时签名，**未经 Apple 公证**。
 - **Linux：** 完整内置运行时需要 **glibc 2.34 或更新版本**、libcurl、zlib 及 Electron 桌面库。DEB/RPM 声明了依赖，AppImage 用户需自行核对系统环境。相同包格式或 deepin、统信 UOS、麒麟等发行版名称，不能保证其所有版本和桌面环境兼容。
 
 Release 附件包含构建记录与 SHA-256 清单，Windows 和 Linux 安装包未签名。请参阅[下载校验与安全说明](SECURITY.md)；清单的 Sigstore 来源证明与操作系统代码签名是不同机制。
@@ -54,7 +54,7 @@ Release 附件包含构建记录与 SHA-256 清单，Windows 和 Linux 安装包
 
 ## 版本、配置与 Agent
 
-**更新 Nexus 和切换 Harness 是两个独立操作。** Nexus 不会自动升级你的 Harness。v1.0.5 修复了后台 Desktop 能力检查可能重新启动已被明确停止的 Nexus Agent 的竞态。
+**更新 Nexus 和切换 Harness 是两个独立操作。** Nexus 不会自动升级你的 Harness。v1.0.5 修复了后台 Desktop 能力检查可能重新启动已被明确停止的 Nexus Agent 的竞态。 v1.0.6 将首次安装市场的版本更新为 dshmarket 1.66.8，保留已有市场版本。
 
 内置 Desktop 运行时锁仍为 **Harness 0.1.6-alpha.2**。Nexus 也适配了部分较新 Harness 接口，包括 0.2 的设置与 Desktop 准备接口。接口适配不等于所有插件和会话数据迁移均已验证。升级前保留数据备份；选择旧版本不会把上游数据格式降级。
 
@@ -79,8 +79,8 @@ Nexus 程序、Nexus 管理数据、Harness 数据（`DSH_HOME`）和项目工�
 ## 兼容性与验证范围
 
 - 启动状态区分检查中、就绪、功能受限、失败和未验证。进程已运行或窗口已打开，不等于每个模型、工具、会话和第三方插件均可用。
-- v1.0.5 发行门禁覆盖六平台构建、资源核验和 CI runner 上的实际安装包启动。CI 通过与校验清单来源证明不等于生产级操作系统签名、所有 Linux 发行版兼容或用户真机升级验收。
-- macOS 完整浏览器内 Web 会话、真实会话／完整离线迁移、全部第三方插件、真机升级、Gatekeeper 首次打开、生产公证及崩溃恢复仍未验收。此前 v1.0.4 Mac 子集检查不能作为 v1.0.5 完整迁移验收，详见 [v1.0.5 发布说明](https://github.com/chelal233/dsh-nexus/releases/tag/v1.0.5)。
+- v1.0.6 发行门禁覆盖六平台构建、资源核验和 CI runner 上的实际安装包启动。CI 通过与校验清单来源证明不等于生产级操作系统签名、所有 Linux 发行版兼容或用户真机升级验收。
+- macOS 完整浏览器内 Web 会话、真实会话／完整离线迁移、全部第三方插件、真机升级、Gatekeeper 首次打开、生产公证及崩溃恢复仍未验收。此前 v1.0.4 Mac 子集检查不能作为 v1.0.6 完整迁移验收，详见 [v1.0.6 发布说明](https://github.com/chelal233/dsh-nexus/releases/tag/v1.0.6)。
 - Harness 及其插件具有普通本地进程的权限。Nexus 不提供运行不可信插件的安全沙箱。
 
 ## 文档与参与
