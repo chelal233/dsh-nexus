@@ -9,7 +9,9 @@ export function observeHostStartup(ctx, file, run, autoOpen = false) {
   ctx.inject(['appReady'], c => c.effect(() => c.appReady.onReady(() => {
     const temporary = `${file}.${process.pid}.tmp`;
     try {
-      fs.writeFileSync(temporary, JSON.stringify({ run, pid: process.pid, state: 'ready', auto_open: autoOpen }), { mode: 0o600 });
+      const collect = globalThis[Symbol.for('nexus.startup.skipped-bundles')];
+      const skipped = typeof collect === 'function' ? { skipped_bundles: collect() } : {};
+      fs.writeFileSync(temporary, JSON.stringify({ run, pid: process.pid, state: 'ready', auto_open: autoOpen, ...skipped }), { mode: 0o600 });
       fs.renameSync(temporary, file);
     } catch { try { fs.unlinkSync(temporary); } catch {} }
   })));

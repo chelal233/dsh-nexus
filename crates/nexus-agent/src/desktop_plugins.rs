@@ -55,23 +55,43 @@ pub(crate) fn single_start_supported(root: &std::path::Path, home: &std::path::P
     }
 }
 
+fn host_startup(paths: &NexusPaths, run: &str) -> Option<serde_json::Value> {
+    let bytes = nexus_core::read_regular_file_bounded(&paths.run_dir.join("host-startup.json"), 16384).ok()??;
+    let value: serde_json::Value = serde_json::from_slice(&bytes).ok()?;
+    (value["run"].as_str() == Some(run) && value["state"] == "ready"
+        && value["pid"].as_u64().is_some_and(|pid| pid > 1 && pid <= u32::MAX as u64)).then_some(value)
+}
+
 pub(crate) fn host_startup_pid(paths: &NexusPaths, run: &str) -> Option<u32> {
-    let read = || -> io::Result<Option<u32>> {
-        let Some(bytes) = nexus_core::read_regular_file_bounded(&paths.run_dir.join("host-startup.json"), 4096)? else { return Ok(None); };
-        let value: serde_json::Value = serde_json::from_slice(&bytes)?;
-        Ok((value["run"].as_str() == Some(run) && value["state"] == "ready").then(|| value["pid"].as_u64()
-            .and_then(|pid| u32::try_from(pid).ok()).filter(|pid| *pid > 1)).flatten())
-    };
-    read().ok().flatten()
+    host_startup(paths, run)?["pid"].as_u64().map(|pid| pid as u32)
 }
 
 pub(crate) fn browser_open_deferred(paths: &NexusPaths, run: &str) -> bool {
-    let read = || -> io::Result<bool> {
-        let Some(bytes) = nexus_core::read_regular_file_bounded(&paths.run_dir.join("host-startup.json"), 4096)? else { return Ok(false); };
-        let value: serde_json::Value = serde_json::from_slice(&bytes)?;
-        Ok(value["run"].as_str() == Some(run) && value["state"] == "ready" && value["auto_open"] == true)
-    };
-    read().unwrap_or(false)
+    host_startup(paths, run).is_some_and(|value| value["auto_open"] == true)
+}
+
+pub(crate) fn host_skipped_bundles(paths: &NexusPaths, run: &str, pid: u32) -> Option<serde_json::Value> {
+    let host = host_startup(paths, run)?;
+    if host["pid"].as_u64() != Some(pid as u64) { return None; }
+    let value = host.get("skipped_bundles")?;
+    if value.as_object()?.len() != 2 || !value["truncated"].is_boolean() { return None; }
+    let entries = value["entries"].as_array()?;
+    if entries.len() > 48 || serde_json::to_vec(entries).ok()?.len() > 8000 { return None; }
+    for entry in entries {
+        if entry.as_object()?.len() != 2 || entry["package"].as_str()?.encode_utf16().count() > 240
+            || entry["reason"].as_str()?.encode_utf16().count() > 400 { return None; }
+    }
+    Some(value.clone())
+}
+
+pub(crate) fn stage_startup_observer(paths: &NexusPaths) -> io::Result<String> {
+    let directory = paths.run_dir.join("plugins/nexus-startup-observer");
+    std::fs::create_dir_all(&directory)?;
+    for (name, bytes) in [
+        ("startup-observer.mjs", include_bytes!("startup-observer.mjs").as_slice()),
+        ("startup-diagnosis.mjs", include_bytes!("startup-diagnosis.mjs").as_slice()),
+    ] { nexus_core::write_private_bytes_atomic(&paths.root, &directory.join(name), bytes)?; }
+    module_url(&directory.join("startup-observer.mjs"))
 }
 
 pub(crate) fn browser_health(paths: &NexusPaths, run: &str) -> serde_json::Value {
@@ -93,6 +113,9 @@ pub(crate) fn browser_health(paths: &NexusPaths, run: &str) -> serde_json::Value
             && matches!(value["state"].as_str(), Some("checking" | "blocked" | "active" | "limited" | "unverified"))
             && value["entries"].as_array().is_some_and(|entries| entries.len() <= 128) {
             value.as_object_mut().unwrap().remove("run");
+            // The browser cannot supply native host observations. harness_ui
+            // attaches these only from the separately validated ready record.
+            value.as_object_mut().unwrap().remove("host_skipped_bundles");
             return value;
         }
     }
@@ -183,6 +206,36 @@ mod tests {
         std::fs::remove_dir_all(paths.root).unwrap();
     }
     #[test]
+    fn host_skips_require_bounded_current_ready_evidence() {
+        let paths = NexusPaths::from_root(std::env::temp_dir().join(format!("nexus-host-skips-{}", nexus_core::unix_time_nanos_for_update())));
+        paths.ensure_directories().unwrap();
+        let file = paths.run_dir.join("host-startup.json");
+        let entries: Vec<_> = (0..5).map(|i| serde_json::json!({"package":format!("p{i}"), "reason":"界".repeat(400)})).collect();
+        let mut host = serde_json::json!({"run":"current", "pid":42, "state":"ready", "auto_open":true,
+            "skipped_bundles":{"entries":entries,"truncated":false}});
+        let write = |value: &serde_json::Value| std::fs::write(&file, serde_json::to_vec(value).unwrap()).unwrap();
+        write(&host);
+        assert!(std::fs::metadata(&file).unwrap().len() > 4096);
+        assert_eq!(host_startup_pid(&paths, "current"), Some(42));
+        assert!(browser_open_deferred(&paths, "current"));
+        assert_eq!(host_skipped_bundles(&paths, "current", 42), Some(host["skipped_bundles"].clone()));
+        assert!(host_skipped_bundles(&paths, "old", 42).is_none());
+        assert!(host_skipped_bundles(&paths, "current", 41).is_none());
+        host["state"] = "starting".into(); write(&host);
+        assert!(host_skipped_bundles(&paths, "current", 42).is_none());
+        host["state"] = "ready".into();
+        host["skipped_bundles"]["entries"][0]["reason"] = "x".repeat(401).into(); write(&host);
+        assert!(host_skipped_bundles(&paths, "current", 42).is_none());
+        host["skipped_bundles"]["entries"] = serde_json::json!([]);
+        host["skipped_bundles"]["truncated"] = "true".into(); write(&host);
+        assert!(host_skipped_bundles(&paths, "current", 42).is_none());
+        host["skipped_bundles"]["truncated"] = true.into(); write(&host);
+        assert!(host_skipped_bundles(&paths, "current", 42).is_some());
+        std::fs::write(&file, " ".repeat(16385)).unwrap();
+        assert!(host_skipped_bundles(&paths, "current", 42).is_none());
+        std::fs::remove_dir_all(paths.root).unwrap();
+    }
+    #[test]
     fn single_start_requires_known_web_artifacts_and_falls_back_on_changes() {
         let root = std::env::temp_dir().join(format!("nexus-single-start-{}", nexus_core::unix_time_nanos_for_update()));
         let home = root.join("home");
@@ -213,9 +266,11 @@ mod tests {
         paths.ensure_directories().unwrap();
         let file = paths.run_dir.join("browser-health.json");
         let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_millis() as u64;
-        let mut report = serde_json::json!({"run":"current", "observed_at":now, "state":"blocked", "entries":[]});
+        let mut report = serde_json::json!({"run":"current", "observed_at":now, "state":"blocked", "entries":[],
+            "host_skipped_bundles":{"entries":[{"package":"browser-supplied","reason":"not host evidence"}],"truncated":false}});
         std::fs::write(&file, serde_json::to_vec(&report).unwrap()).unwrap();
         assert_eq!(browser_health(&paths, "current")["state"], "blocked");
+        assert!(browser_health(&paths, "current").get("host_skipped_bundles").is_none());
         assert_eq!(browser_health(&paths, "next")["state"], "unverified");
         report["observed_at"] = serde_json::json!(now - 30000);
         std::fs::write(&file, serde_json::to_vec(&report).unwrap()).unwrap();
@@ -230,6 +285,9 @@ mod tests {
         let paths = NexusPaths::from_root(root.join("nexus"));
         paths.ensure_directories().unwrap();
         let home = root.join("home");
+        let observer = reqwest::Url::parse(&stage_startup_observer(&paths).unwrap()).unwrap().to_file_path().unwrap();
+        assert_eq!(std::fs::read(&observer).unwrap(), include_bytes!("startup-observer.mjs"));
+        assert_eq!(std::fs::read(observer.with_file_name("startup-diagnosis.mjs")).unwrap(), include_bytes!("startup-diagnosis.mjs"));
         let mut spec = HarnessLaunchSpec::new("node".into());
         spec.mode = nexus_protocol::HarnessLaunchMode::Node;
         spec.args = vec![root.join("apps/cli/lib/bin.js").to_string_lossy().into_owned(), "--profile".into(), "web".into()];

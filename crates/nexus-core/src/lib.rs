@@ -3367,6 +3367,33 @@ impl DiagnosticsStore {
                 }
             }
         }
+        // Raw, potentially stale observations are diagnostic snapshots only.
+        // Match the producer bounds and refuse redirected parent directories;
+        // do not promote these files to current-run/process readiness evidence.
+        let startup_parents_regular = [&self.paths.root, &self.paths.run_dir].iter().all(|path|
+            fs::symlink_metadata(path).is_ok_and(|meta| meta.is_dir() && !path_is_reparse(&meta)));
+        fs::create_dir_all(files_dir.join("run"))?;
+        for (relative, limit) in [("run/host-startup.json", 16384u64), ("run/browser-health.json", 65536u64)] {
+            let read = if startup_parents_regular { read_regular_file_bounded(&self.paths.root.join(relative), limit) }
+                else { Err(invalid_data("Startup diagnostic parent is not an ordinary directory")) };
+            let (mut payload, mut redacted, mut truncated) = match read {
+                Ok(None) => continue,
+                Ok(Some(bytes)) if serde_json::from_slice::<serde_json::Value>(&bytes).is_ok() => {
+                    let (payload, redacted) = redact_diagnostics_payload(&bytes);
+                    (payload, redacted, false)
+                }
+                result => (serde_json::to_vec(&serde_json::json!({"diagnostic_snapshot_error":match result {
+                    Err(error) => error.to_string(), _ => "Invalid startup observation JSON".into()
+                }}))?, false, true),
+            };
+            if payload.len() as u64 > limit {
+                payload = br#"{"diagnostic_snapshot_error":"Redacted startup observation exceeds bound"}"#.to_vec();
+                redacted = true; truncated = true;
+            }
+            write_diagnostics_file(&files_dir.join(relative), &payload)?;
+            portable_files.insert(relative.into(), serde_json::json!(String::from_utf8_lossy(&payload)));
+            files.push(DiagnosticsFile { name:relative.into(), bytes:payload.len() as u64, redacted, truncated });
+        }
         for relative in ["install-operation.json", "cold-operation.json", "cold-publication.json", "run/harness-log-session.json", "run/checkpoint-restore.json", "run/harness-recovery.json", "run/harness-effective.json",
             "run/last-capture.json", "run/cleanup-result.json", "compatibility/latest.json", "canary/latest.json", "run/agent.json", "run/launcher-agent.json"] {
             let path = self.paths.root.join(relative);
@@ -4982,6 +5009,14 @@ mod tests {
             ),
         )
         .expect("diagnostic log writes");
+        fs::write(paths.run_dir.join("host-startup.json"), serde_json::to_vec(&serde_json::json!({
+            "run":"observed-run", "pid":42, "state":"ready", "token":"host-secret",
+            "skipped_bundles":{"entries":[{"package":"@fixture/插件", "reason":"不兼容"}],"truncated":false}
+        })).unwrap()).unwrap();
+        fs::write(paths.run_dir.join("browser-health.json"), serde_json::to_vec(&serde_json::json!({
+            "run":"observed-run", "state":"blocked", "token":"browser-secret",
+            "entries":[{"name":"@fixture/client", "state":"pending", "missing":["shortcuts"]}]
+        })).unwrap()).unwrap();
         let store = DiagnosticsStore::new(paths.clone());
         let bundle = store
             .collect(Some("after failed start".to_owned()))
@@ -5013,9 +5048,64 @@ mod tests {
         ] {
             assert!(!copied.contains(secret), "diagnostics leaked {secret}");
         }
+        let host: serde_json::Value = serde_json::from_slice(&fs::read(store.open_path(&bundle.id, Some("run/host-startup.json")).unwrap()).unwrap()).unwrap();
+        let browser: serde_json::Value = serde_json::from_slice(&fs::read(store.open_path(&bundle.id, Some("run/browser-health.json")).unwrap()).unwrap()).unwrap();
+        assert_eq!(host["run"], "observed-run");
+        assert_eq!(host["skipped_bundles"]["entries"][0]["package"], "@fixture/插件");
+        assert_eq!(browser["state"], "blocked");
+        assert_eq!(browser["entries"][0]["missing"][0], "shortcuts");
+        let portable = fs::read_to_string(store.open_path(&bundle.id, Some("export.json")).unwrap()).unwrap();
+        assert!(!portable.contains("host-secret") && !portable.contains("browser-secret"));
+        let portable: serde_json::Value = serde_json::from_str(&portable).unwrap();
+        assert_eq!(serde_json::from_str::<serde_json::Value>(portable["files"]["run/browser-health.json"].as_str().unwrap()).unwrap(), browser);
         assert_eq!(store.list().expect("diagnostics list").len(), 1);
         assert!(!root.join(".dsh").exists());
         let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn diagnostics_startup_observations_reject_oversized_invalid_and_redirected_inputs() {
+        let root = unique_test_root("diagnostic-startup-bounds");
+        let paths = NexusPaths::from_root(root.clone()); paths.ensure_directories().unwrap();
+        let store = DiagnosticsStore::new(paths.clone());
+        assert!(!store.collect(None).unwrap().files.iter().any(|file| matches!(file.name.as_str(), "run/host-startup.json" | "run/browser-health.json")));
+        let payload = |limit:usize| {
+            let mut text = "{\"run\":\"observed-run\",\"padding\":\"".to_owned();
+            text.push_str(&"x".repeat(limit - text.len() - 2)); text.push_str("\"}"); text
+        };
+        for (name, limit) in [("host-startup.json", 16384usize), ("browser-health.json", 65536usize)] {
+            let source = paths.run_dir.join(name); let exact = payload(limit);
+            fs::write(&source, &exact).unwrap();
+            let bundle = store.collect(None).unwrap();
+            let copied = fs::read(store.open_path(&bundle.id, Some(&format!("run/{name}"))).unwrap()).unwrap();
+            assert_eq!(copied, exact.as_bytes()); assert_eq!(fs::read(&source).unwrap(), copied);
+            for bad in [payload(limit + 1), "{invalid JSON".into()] {
+                fs::write(&source, &bad).unwrap(); let bundle = store.collect(None).unwrap();
+                let entry = bundle.files.iter().find(|file| file.name == format!("run/{name}")).unwrap();
+                assert!(entry.truncated); assert!(entry.bytes <= limit as u64);
+                let copied:serde_json::Value = serde_json::from_slice(&fs::read(store.open_path(&bundle.id, Some(&entry.name)).unwrap()).unwrap()).unwrap();
+                assert!(copied["diagnostic_snapshot_error"].is_string()); assert_eq!(fs::read_to_string(&source).unwrap(), bad);
+            }
+            fs::remove_file(&source).unwrap(); fs::create_dir(&source).unwrap();
+            let bundle = store.collect(None).unwrap();
+            let copied:serde_json::Value = serde_json::from_slice(&fs::read(store.open_path(&bundle.id, Some(&format!("run/{name}"))).unwrap()).unwrap()).unwrap();
+            assert!(copied["diagnostic_snapshot_error"].is_string()); fs::remove_dir(&source).unwrap();
+        }
+        let outside = root.join("outside"); fs::create_dir(&outside).unwrap();
+        fs::write(outside.join("host-startup.json"), "{\"private\":\"OUTSIDE-MUST-NOT-READ\"}").unwrap();
+        fs::remove_dir(&paths.run_dir).unwrap();
+        #[cfg(unix)] std::os::unix::fs::symlink(&outside, &paths.run_dir).unwrap();
+        #[cfg(windows)] {
+            use std::os::windows::process::CommandExt;
+            assert!(std::process::Command::new("C:\\Windows\\System32\\cmd.exe").args(["/C", "mklink", "/J"])
+                .arg(&paths.run_dir).arg(&outside).creation_flags(0x0800_0000).output().unwrap().status.success());
+        }
+        let bundle = store.collect(None).unwrap();
+        let portable = fs::read_to_string(store.open_path(&bundle.id, Some("export.json")).unwrap()).unwrap();
+        assert!(!portable.contains("OUTSIDE-MUST-NOT-READ"));
+        #[cfg(windows)] fs::remove_dir(&paths.run_dir).unwrap();
+        #[cfg(unix)] fs::remove_file(&paths.run_dir).unwrap();
+        fs::remove_dir_all(root).unwrap();
     }
 
     #[test]

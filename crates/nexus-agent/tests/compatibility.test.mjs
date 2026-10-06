@@ -5,6 +5,27 @@ import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
 import { diagnoseStartup, parseActivation, duplicateEntrySources, dependencyOrigins, check, checkCanary, canarySearch, planCanary, sourceInfo, incompatibleBundles } from '../src/compatibility.mjs';
+import { parseSkippedBundles } from '../src/startup-diagnosis.mjs';
+
+test('native skipped-bundle parser requires explicit upstream records and bounds multilingual evidence', () => {
+  assert.deepEqual(parseSkippedBundles('plugin: arbitrary error\ndsh: skipping profile bundle unquoted: broken'), {entries:[],truncated:false});
+  assert.deepEqual(parseSkippedBundles('dsh desktop host: skipping profile bundle "addon\\\"name": 不兼容'), {entries:[{package:'addon"name',reason:'不兼容'}],truncated:false});
+  const bounded = parseSkippedBundles(Array.from({length:100}, (_, i) => `dsh: skipping profile bundle "addon-${i}": ${'错误'.repeat(300)}`).join('\n'));
+  assert.equal(bounded.truncated, true);
+  assert.ok(Buffer.byteLength(JSON.stringify(bounded)) < 8500);
+  const boundary = parseSkippedBundles(`dsh: skipping profile bundle ${JSON.stringify('x'.repeat(239)+'😀')}: ${'x'.repeat(399)+'😀'}`);
+  assert.equal(boundary.truncated, true);
+  assert.equal(boundary.entries[0].package, 'x'.repeat(239));
+  assert.equal(boundary.entries[0].reason, 'x'.repeat(399));
+  assert.equal(parseSkippedBundles('dsh: skipping profile bundle "bad\\ud800name": reason').entries[0].package, 'bad�name');
+});
+
+test('native multiline reasons do not silently certify a shortened reason as complete', () => {
+  assert.deepEqual(parseSkippedBundles('dsh: skipping profile bundle "addon": first\n\nsecond\n'),
+    { entries: [{ package: 'addon', reason: 'first' }], truncated: true });
+  assert.deepEqual(parseSkippedBundles('dsh: skipping profile bundle "a": first\ndsh: skipping profile bundle "b": second\n'),
+    { entries: [{ package: 'a', reason: 'first' }, { package: 'b', reason: 'second' }], truncated: false });
+});
 
 test('parallel inventory stays stable, ignores only generated Desktop assets, and detects changed files and link targets', async t => {
   const root=fs.mkdtempSync(path.join(os.tmpdir(),'nexus-inventory-'));
@@ -55,6 +76,65 @@ function fixture() {
   fs.mkdirSync(options.work,{recursive:true});
   return {root,home,slot,source,options,write,close:()=>fs.rmSync(root,{recursive:true,force:true})};
 }
+
+function nativeProfileOutput(f, code) {
+  const cli = path.join(f.slot, 'apps/cli/lib/bin.js');
+  fs.writeFileSync(cli, fs.readFileSync(cli, 'utf8').replace('const bundles=m.dsh.profile.bundles;', 'const bundles=m.dsh.profile.bundles;\n' + code));
+}
+
+test('independent native probe flags multiline reasons even across data chunks', async t => {
+  const f = fixture(); t.after(f.close); f.write(['retired-plugin']);
+  nativeProfileOutput(f, `process.stderr.write('dsh: skipping profile bundle "retired-plugin": YAMLException\\n\\n'); setTimeout(() => process.stderr.write('  1 | invalid patch\\n'), 20);`);
+  const result = await check(f.options);
+  assert.equal(result.status, 'passed');
+  assert.deepEqual(result.diagnosis.skipped_bundles,
+    { entries: [{ package: 'retired-plugin', reason: 'YAMLException' }], truncated: true });
+  assert.deepEqual(result.candidates ?? [], []);
+});
+
+test('native skipped bundles remain visible after authenticated readiness and noisy boot output', async t => {
+  const f = fixture(); t.after(f.close); f.write(['retired-plugin']);
+  nativeProfileOutput(f, `console.error('dsh: skipping profile bundle "retired-plugin": removed invariant export'); console.log('x'.repeat(300000));`);
+  const result = await check(f.options);
+  assert.equal(result.status, 'passed');
+  assert.equal(result.diagnosis.level, 'limited');
+  assert.deepEqual(result.diagnosis.skipped_bundles.entries, [{package:'retired-plugin',reason:'removed invariant export'}]);
+  assert.deepEqual(result.candidates ?? [], []);
+  const cached = await check(f.options);
+  assert.equal(cached.cache_reused, true);
+  assert.deepEqual(cached.diagnosis.skipped_bundles, result.diagnosis.skipped_bundles);
+});
+
+test('native skipped bundles do not hide a separate fatal startup error', async t => {
+  const f = fixture(); t.after(f.close); f.write(['bad']);
+  nativeProfileOutput(f, `m.normalized=true; fs.writeFileSync(path.join(process.env.DSH_HOME,'profiles',process.argv[3],'package.json'),JSON.stringify(m)); console.error('dsh: skipping profile bundle "retired-plugin": unsupported bundle');`);
+  await assert.rejects(check(f.options), /startup|plugin decision/i);
+  const result = JSON.parse(fs.readFileSync(f.options.output));
+  assert.equal(result.diagnosis.level, 'blocking');
+  assert.equal(result.diagnosis.skipped_bundles.entries[0].package, 'retired-plugin');
+  assert.equal(result.diagnosis.profile_changes[0].file, 'package.json');
+});
+
+test('native profile normalization is reported on the isolated copy and never published to the source', async t => {
+  const f = fixture(); t.after(f.close); f.write(['retired-plugin']);
+  const before = fs.readFileSync(path.join(f.source, 'package.json'));
+  nativeProfileOutput(f, `m.dsh.profile.bundles=[]; fs.writeFileSync(path.join(process.env.DSH_HOME,'profiles',process.argv[3],'package.json'),JSON.stringify(m));`);
+  const result = await check(f.options);
+  assert.equal(result.status, 'passed');
+  assert.equal(result.diagnosis.profile_changes[0].file, 'package.json');
+  assert.notEqual(result.diagnosis.profile_changes[0].before_sha256, result.diagnosis.profile_changes[0].after_sha256);
+  assert.deepEqual(fs.readFileSync(path.join(f.source, 'package.json')), before);
+  assert.deepEqual(fs.readdirSync(f.options.work), []);
+});
+
+test('Canary cannot certify plugins that native Harness skipped', async t => {
+  const f = fixture(); t.after(f.close); f.write(['retired-plugin']);
+  nativeProfileOutput(f, `console.error('dsh: skipping profile bundle "retired-plugin": incompatible');`);
+  const result = await checkCanary({...f.options, mode:'diagnostic_only'});
+  assert.equal(result.outcome, 'inconclusive');
+  assert.equal(result.rounds[0].skipped_bundles.entries[0].package, 'retired-plugin');
+  assert.deepEqual(result.suspect_combination, []);
+});
 
 test('path aliases preserve generated-asset exclusion, fallback identity and official declaration containment', async t => {
   const f = fixture(), alias = f.root + '-alias';

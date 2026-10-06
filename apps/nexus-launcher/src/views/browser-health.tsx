@@ -1,4 +1,7 @@
-import { diagnoseStartup } from "../../../../crates/nexus-agent/src/startup-diagnosis.mjs";
+import {
+  diagnoseStartup,
+  parseSkippedBundles,
+} from "../../../../crates/nexus-agent/src/startup-diagnosis.mjs";
 import { type Snapshot, type HarnessPanelProps } from "../app-types";
 import {
   asObject,
@@ -13,6 +16,30 @@ import { ActionButton } from "../ui-components";
 import { harnessControlGate, pluginPolicyVerified } from "../control-state";
 import { StartupRepair } from "./startup-repair";
 
+export function SkippedBundleDetails({ report }: { report: unknown }) {
+  const { t } = useI18n();
+  const entries = arrayValue(report, "entries").map(asObject);
+  if (!entries.length && !asObject(report).truncated) return null;
+  return (
+    <div className="status-block">
+      <strong>{t("Bundles skipped by Harness")}</strong>
+      <p>
+        {t(
+          "Listed bundles were not loaded. Review their reported reasons; readiness does not verify their features.",
+        )}
+      </p>
+      {entries.map((entry, index) => (
+        <p key={index}>
+          <strong>{stringValue(entry, "package")}</strong>: {stringValue(entry, "reason")}
+        </p>
+      ))}
+      {asObject(report).truncated === true && (
+        <p>{t("Some skipped-bundle evidence was truncated. Inspect the full startup log.")}</p>
+      )}
+    </div>
+  );
+}
+
 function currentHealth(snapshot: Snapshot) {
   return harnessUiMatchesRuntime(snapshot.harnessRuntime, snapshot.harnessUi)
     ? asObject(asObject(snapshot.harnessUi).browser_health)
@@ -20,6 +47,20 @@ function currentHealth(snapshot: Snapshot) {
 }
 
 function currentHostWarning(snapshot: Snapshot) {
+  // Agent validates the official ready record's run/PID; currentHealth also
+  // binds it to this UI generation. Unlike log_tail, this survives log growth.
+  const committed = asObject(currentHealth(snapshot).host_skipped_bundles);
+  const hasCommittedSkips =
+    Array.isArray(committed.entries) && typeof committed.truncated === "boolean";
+  if (arrayValue(committed, "entries").length || committed.truncated === true)
+    return {
+      ...diagnoseStartup(""),
+      level: "limited",
+      code: "skipped_bundles",
+      skipped_bundles: committed,
+      summary: "Harness skipped some profile bundles",
+      remedy: "Review the skipped bundles and their reasons before using the affected features.",
+    };
   const runtime = harnessRuntimeValue(snapshot.harnessRuntime);
   const recovery = asObject(snapshot.recovery);
   const observed = asObject(recovery.harness);
@@ -39,17 +80,30 @@ function currentHostWarning(snapshot: Snapshot) {
   // Only an explicit upstream startup warning is eligible. Background errors
   // are outside the startup contract and must not change client readiness.
   const marker = /dsh: warning: \d+ entr(?:y|ies) did not activate/.exec(text);
-  if (!marker) return null;
+  const skipped = hasCommittedSkips ? committed : parseSkippedBundles(text);
+  if (!marker)
+    return arrayValue(skipped, "entries").length || skipped.truncated
+      ? {
+          ...diagnoseStartup(""),
+          level: "limited",
+          code: "skipped_bundles",
+          skipped_bundles: skipped,
+          summary: "Harness skipped some profile bundles",
+          remedy:
+            "Review the skipped bundles and their reasons before using the affected features.",
+        }
+      : null;
   const warning = text.slice(marker.index, marker.index + 8000).split(/\n\s*\n/)[0];
   const diagnosis = diagnoseStartup(warning);
   return diagnosis.code === "unknown"
     ? {
         ...diagnosis,
+        skipped_bundles: skipped,
         summary: "Harness is ready; some optional plugins did not activate",
         remedy:
           "Inspect the reported package and its original cause before choosing a compatible version or disabling it.",
       }
-    : diagnosis;
+    : { ...diagnosis, skipped_bundles: skipped };
 }
 
 export function clientStartupLabel(snapshot: Snapshot, t: Translator, compact = false) {
@@ -93,7 +147,7 @@ export function StartupWarning({
   const entries = arrayValue(asObject(diagnosis.activation), "entries").map(asObject);
   return (
     <div className="startup-warning-summary" role="status">
-      <p>{t("Harness is ready; some optional plugins did not activate")}</p>
+      <p>{t("Harness is ready with startup warnings")}</p>
       {hostWarning && (
         <>
           <p>{t(hostWarning.summary)}</p>
@@ -110,6 +164,7 @@ export function StartupWarning({
             {stringValue(entry, "reason")}
           </p>
         ))}
+      <SkippedBundleDetails report={hostWarning?.skipped_bundles ?? diagnosis.skipped_bundles} />
       <ActionButton onClick={onDetails}>{t("Service and plugin details")}</ActionButton>
     </div>
   );
@@ -142,6 +197,7 @@ export function BrowserHealth({
       snapshot.startup?.available === true,
     ).controlsDisabled;
   const state = stringValue(health, "state") || "unverified";
+  const hostWarning = currentHostWarning(snapshot);
   const entries = arrayValue(health, "entries").map(asObject);
   const waiting = new Map<string, string[]>();
   for (const entry of entries)
@@ -184,6 +240,7 @@ export function BrowserHealth({
                     "Client verification did not complete. Review the startup log and retry startup; an accessible web address alone does not prove readiness.",
                   )}
       </p>
+      <SkippedBundleDetails report={hostWarning?.skipped_bundles} />
       {stringValue(health, "reason") === "client_audit_load_failed" && (
         <p>{t("The client check page could not load or stopped responding.")}</p>
       )}

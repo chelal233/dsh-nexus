@@ -76,3 +76,54 @@ test("current host startup warnings remain visible with an active browser and ne
   assert.match(render(),/Startup checks passed/);
  } finally {await loader.close();}
 });
+
+test("native skipped bundles keep an active client limited without trusting a stale process or unverified browser", async () => {
+  const loader = await createUiTestLoader();
+  try {
+    const { BrowserHealth } = await loader.loadModule("/src/App.tsx");
+    const runtime = {state:"running",pid:42,started_at_unix:100};
+    const snapshot = {harnessRuntime:{harness:runtime,generation:1,log_session_run_id:"a"},
+      harnessUi:{available:true,generation:1,run_id:"a",browser_health:{state:"active",entries:[],missing_core:[]}},
+      recovery:{harness:runtime,log_tail:[{content:'dsh: skipping profile bundle "legacy-addon": export removed'}]}};
+    const render = () => renderToStaticMarkup(createElement(BrowserHealth,{snapshot}));
+    assert.match(render(), /Startup checks found limited functionality/);
+    assert.match(render(), /legacy-addon<\/strong>: export removed/);
+    assert.doesNotMatch(render(), /Client startup failed|Recommended recovery/);
+    snapshot.harnessUi.browser_health.state="checking";
+    assert.match(render(), /Checking client plugins/);
+    assert.doesNotMatch(render(), /Startup checks passed/);
+    snapshot.recovery.harness={...runtime,pid:41};
+    assert.doesNotMatch(render(), /legacy-addon/);
+    snapshot.harnessUi.browser_health.state="active";
+    assert.match(render(), /Startup checks passed/);
+  } finally { await loader.close(); }
+});
+
+test("committed skips survive log growth and remain bound to the current UI generation", async () => {
+  const loader = await createUiTestLoader();
+  try {
+    const { BrowserHealth } = await loader.loadModule("/src/App.tsx");
+    const runtime = { state: "running", pid: 42, started_at_unix: 100 };
+    const snapshot = { harnessRuntime: { harness: runtime, generation: 2, log_session_run_id: "new-run" },
+      harnessUi: { available: true, generation: 2, run_id: "new-run", browser_health: { state: "active", entries: [],
+        host_skipped_bundles: { entries: [{ package: "legacy-addon", reason: "export removed" }], truncated: false } } },
+      recovery: { harness: runtime, log_tail: [{ content: "only later output remains" }] } };
+    const render = () => renderToStaticMarkup(createElement(BrowserHealth, { snapshot }));
+    assert.match(render(), /Startup checks found limited functionality/);
+    assert.match(render(), /legacy-addon<\/strong>: export removed/);
+    snapshot.harnessUi.browser_health.state = "checking";
+    assert.match(render(), /Checking client plugins/);
+    assert.doesNotMatch(render(), /Startup checks passed/);
+    snapshot.harnessUi.browser_health.state = "active";
+    snapshot.harnessUi.run_id = "old-run";
+    assert.doesNotMatch(render(), /legacy-addon|Startup checks passed/);
+    snapshot.harnessUi.run_id = "new-run";
+    snapshot.harnessUi.generation = 1;
+    assert.doesNotMatch(render(), /legacy-addon|Startup checks passed/);
+    snapshot.harnessUi.generation = 2;
+    snapshot.harnessUi.browser_health.host_skipped_bundles.entries = [];
+    snapshot.recovery.log_tail = [{ content: 'dsh: skipping profile bundle "late-background": after readiness' }];
+    assert.match(render(), /Startup checks passed/);
+    assert.doesNotMatch(render(), /late-background/);
+  } finally { await loader.close(); }
+});

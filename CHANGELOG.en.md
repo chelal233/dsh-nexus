@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.0.7 — 2026-10-06
+
+- Update startup diagnosis and recovery against pinned Harness `dsh-v0.2.1-alpha.1`. Distinguish host-skipped bundles, actual client import failures and missing services, and bind readiness to the current run and owned process.
+- Move full external-source verification off asynchronous request threads and allow profile listing to finish verification while preserving the ordinary short request timeout.
+- Keep large configuration previews read-only while allowing complete backup recovery. Validate current-file identity, back up current contents and require UI confirmation; cancellation does not write.
+- Include bounded, redacted Host/browser startup records in diagnostic exports without treating forensic snapshots as current readiness evidence.
+- Complete isolated real Windows Web and native recovery UI acceptance against the pinned upstream. Bundled Harness remains 0.1.6-alpha.2; user installations are not automatically upgraded. Uncovered platforms, official Desktop Node24.21 startup, real-session migration and every third-party plugin are not counted as passing.
+
 ## 1.0.4 — 2026-10-04
 
 - Add native Linux x86_64 AppImage, DEB and RPM packages alongside Linux ARM64, Windows x64/ARM64 and macOS Intel/Apple Silicon.

@@ -31,7 +31,7 @@ import { Gear, Package, CheckCircle, SlidersHorizontal } from "@phosphor-icons/r
 import { formatTimestamp, errorMessage, preflightReasonLabel } from "../display-format";
 import { proxyRequest } from "../agent-bridge";
 import { RecoveryLogTail } from "./recovery";
-import { BrowserHealth } from "./browser-health";
+import { BrowserHealth, SkippedBundleDetails } from "./browser-health";
 import { StartupRepair, startupRepairPlan } from "./startup-repair";
 
 export function GuideView(props: ViewProps) {
@@ -539,7 +539,9 @@ export function CompatibilitySummary({
                 ? t("Choose how to handle plugin errors")
                 : policyVerified
                   ? stringValue(diagnosis, "level") === "limited"
-                    ? t("Optional plugin issue")
+                    ? arrayValue(diagnosis.skipped_bundles, "entries").length > 0
+                      ? t("Bundles skipped by Harness")
+                      : t("Optional plugin issue")
                     : t("Startup check passed")
                   : t("Startup not yet verified")
           }
@@ -568,6 +570,29 @@ export function CompatibilitySummary({
             </strong>
             <p>{t(stringValue(diagnosis, "remedy") || "")}</p>
             {activationReport}
+          </div>
+        )}
+        <SkippedBundleDetails report={diagnosis.skipped_bundles} />
+        {arrayValue(diagnosis, "profile_changes").length > 0 && (
+          <div className="status-block">
+            <strong>{t("Native profile adjustments observed")}</strong>
+            <p>
+              {t(
+                "Harness changed these files in the check copy. Your original profile was preserved. Nexus saves a configuration recovery point before a managed CLI startup.",
+              )}
+            </p>
+            <ul>
+              {arrayValue(diagnosis, "profile_changes").map((entry, index) => (
+                <li key={index}>
+                  <code>{stringValue(entry, "file")}</code>
+                </li>
+              ))}
+            </ul>
+            {!!onRepair && (
+              <ActionButton disabled={blocked} onClick={() => onRepair("configuration_recovery")}>
+                {t("Open configuration recovery")}
+              </ActionButton>
+            )}
           </div>
         )}
         {(failedReport || needsChoice) && (

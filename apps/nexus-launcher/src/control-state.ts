@@ -178,6 +178,7 @@ export function startupRepairTarget(id: string): {
       "pending_restore",
       "transaction",
       "installation",
+      "configuration_recovery",
     ].includes(id)
   ) {
     return { module: "maintenance" };

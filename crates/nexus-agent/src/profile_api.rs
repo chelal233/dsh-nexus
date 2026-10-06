@@ -54,7 +54,7 @@ pub(super) fn profile_list_response(
 }
 
 pub(super) async fn profile_list(State(state): State<AppState>) -> axum::response::Response {
-    let _lifecycle = match try_read_lifecycle(&state) {
+    let lifecycle = match try_read_lifecycle(&state) {
         Ok(guard) => guard,
         Err(response) => return response,
     };
@@ -64,13 +64,15 @@ pub(super) async fn profile_list(State(state): State<AppState>) -> axum::respons
             "checkpoint_recovery_failed",
         );
     }
-    match state
-        .profiles
-        .load()
-        .and_then(|catalog| profile_list_response(&state, catalog))
-    {
-        Ok(response) => (StatusCode::OK, Json(response)).into_response(),
-        Err(error) => data_error_response(error, "profile_catalog_unavailable"),
+    // External source verification can scan a full built tree. Keep that work
+    // off async workers, and retain lifecycle ownership if the caller leaves.
+    match tokio::task::spawn_blocking(move || {
+        let _lifecycle = lifecycle;
+        state.profiles.load().and_then(|catalog| profile_list_response(&state, catalog))
+    }).await {
+        Ok(Ok(response)) => (StatusCode::OK, Json(response)).into_response(),
+        Ok(Err(error)) => data_error_response(error, "profile_catalog_unavailable"),
+        Err(error) => data_error_response(io::Error::other(error), "profile_catalog_unavailable"),
     }
 }
 

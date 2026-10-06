@@ -40,6 +40,26 @@ const snapshotFor = (help: string, status: string, code: string) => ({
   },
 });
 
+test("native profile observations retain skipped reasons, configuration recovery and separate fatal diagnoses", async () => {
+  const loader = await createUiTestLoader();
+  try {
+    const { CompatibilitySummary } = await loader.loadModule("/src/App.tsx");
+    const snapshot = snapshotFor("logs", "failed", "process_exit");
+    Object.assign(snapshot.profiles.compatibility.diagnosis, {
+      skipped_bundles: {entries:[{package:"legacy-addon",reason:"unsupported invariant export"}],truncated:true},
+      profile_changes: [{file:"package.json",before_sha256:"old",after_sha256:"new"}],
+    });
+    const markup = renderToStaticMarkup(createElement(CompatibilitySummary, {...props,snapshot,onRepair:()=>undefined}));
+    assert.match(markup, /Blocking startup error/);
+    assert.match(markup, /Bundles skipped by Harness/);
+    assert.match(markup, /legacy-addon<\/strong>: unsupported invariant export/);
+    assert.match(markup, /Some skipped-bundle evidence was truncated/);
+    assert.match(markup, /check copy.*original profile was preserved/);
+    assert.match(markup, /Open configuration recovery/);
+    assert.doesNotMatch(markup, /old|value="legacy-addon"/);
+  } finally { await loader.close(); }
+});
+
 test("a blocking startup failure offers a repair entry for its diagnosis domain", async () => {
   const loader = await createUiTestLoader();
   try {

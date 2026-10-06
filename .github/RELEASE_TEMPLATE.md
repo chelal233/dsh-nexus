@@ -1,12 +1,13 @@
-# Nexus 1.0.6
+# Nexus 1.0.7
 
-## 1.0.6 — 2026-10-05
+## 1.0.7 — 2026-10-06
 
-- 将集成的第三方插件市场首次安装版本从 `dshmarket@1.52.0` 更新为 `dshmarket@1.66.8`，同步中英文提示与文档。
-- 新版市场声明兼容 Harness 0.2 设置接口；发布包完整性和 npm／GitHub 操作与 Nexus 的 Desktop 安装接口已核对。
-- 保留按当前配置档安装、失败记录与重试、已有依赖保护和启用／禁用行为。仅未安装市场时使用新版本；已有市场不会自动重装或升级。
+- 按固定上游 Harness `dsh-v0.2.1-alpha.1`（`5badb15009ae1756c3afe0ae0cef1faafc290ccc`）更新诊断文档与适配。区分宿主跳过、不兼容插件、真实客户端导入失败和等待服务；就绪判断绑定当前运行和实际所有者进程，避免沿用陈旧记录。
+- 将完整外部源码检查移出异步请求线程，配置档列表可等待验证完成，普通读取保持 8 秒默认超时。修复启动观察器同步检查阻塞界面请求的问题。
+- 大配置保留只读预览和完整恢复路径。超过 32 KiB 预览限制时禁用编辑与保存；恢复前检查文件指纹、备份当前内容并要求界面确认。取消不写入，过期指纹拒绝覆盖。恢复成功不代表恢复后启动已验证。
+- 诊断导出加入 16／64 KiB 上限的 Host／浏览器记录，拒绝非普通文件及父目录重定向，保留真实 `import_failed/blocked` 原因并结构化脱敏。诊断快照不代替当前运行的就绪检查。
 
-### 下载
+### 下载与来源
 
 | 系统 | 架构 | 安装包 |
 | --- | --- | --- |
@@ -14,38 +15,37 @@
 | macOS | Intel x64、Apple Silicon ARM64 | DMG、portable ZIP |
 | Linux | x86_64、ARM64 | AppImage、DEB、RPM |
 
-每个平台的 `_build.json` 记录提交、构建身份和检查范围；`_SHA256SUMS.txt` 及总清单用于核对实际下载字节。总清单附带 GitHub Actions 身份绑定的 Sigstore 签名与证书，这是来源证明，不是操作系统生产代码签名。
+每个平台的 `_build.json` 记录提交、构建身份和检查范围；下载字节使用 `_SHA256SUMS.txt` 或总清单核对。总清单附 GitHub Actions 身份绑定的 Sigstore 签名与证书，这是来源证明，不是操作系统生产代码签名。公开附件包含六平台包和 Git 源码伴随材料，单独的 Linux x64 RPM QA artifact 不作为额外发行附件。
 
-### 验证范围
+### 验收范围
 
-本次市场更新的本地检查通过 11 项，包括安装命令／配置档保护、界面／桥接回归，以及真实 1.66.8 发布代码与 Nexus 模拟子进程句柄的 npm／GitHub 操作检查。后者没有执行真实插件安装，真实 Cordis 挂载检查尚未运行。发行门禁覆盖本版本同提交的冻结依赖、前端／Rust 回归、六平台构建、资源核验及 CI runner 上的实际安装包启动。八份 CI artifact 包含六平台包、Git 源码伴随包和单独的 Linux x64 RPM QA 包；QA 包不作为额外公开发行附件。
+发布前要求本提交六平台冻结依赖、前端／Rust 回归、资源核验及 CI runner 上的实际安装包启动全部成功。Windows x86_64 使用 Node 24.20.0、原始固定上游 CLI／Cordis／Web、真实认证 Agent／RustBridge 和实际 Electron ClientAudit，验证不兼容插件跳过、缺依赖／缺服务阻断、配置归一化、指纹冲突拒绝、完整备份恢复、新旧运行身份及原生 Nexus 恢复确认界面。R7 诊断另经真实 CLI 导出核验，Host／browser 对应同一运行、导出字节一致，实际凭据和 Harness token 未泄漏；10 项诊断回归通过，零失败、零忽略。
 
-双架构 Mac 的此前原始 v1.0.4 DMG／ZIP 已通过隔离启动及官方 Harness 0.2.0-rc.2 Desktop producer 子集检查，包含合成会话读取、传递 Cordis 测试插件、重启、变更锁和正常清理。这些记录属于此前原包，不能称为 v1.0.6 的完整真实会话迁移验收。v1.0.6 的 Agent Stop 回归以本版本同提交原生安装包日志为准。
+Dot 独立复核 25 个完整源码文件、完整诊断修改语义窗口及证据一致性，没有重复执行 Windows 实测或独立物化整个 core 文件。未变功能证据按原候选复用，不能称所有实测均在最终包上重跑。
 
-真实 Harness 市场界面、完整浏览器内 Web 会话、真实会话／完整离线迁移、全部第三方插件、用户 Mac 真机升级、Gatekeeper 首次打开、生产公证及崩溃恢复仍未验收。Mac runner 的默认 Safari 设置受系统权限限制，且目前没有可用用户 Mac；相关项没有被计为通过。此前失败和取消记录保留。
+Dot 所在 Linux 环境的真实上游构建／运行受 tsx IPC 权限限制，正常审批后仍不可执行；这项未计为通过。Mac 实机、本上游官方 Desktop Node 24.21.0 启动、真实会话／完整离线迁移、完整浏览器内会话、全部第三方插件、Gatekeeper 首次打开及生产公证未验收。此前 Mac 原包子集记录不能替代本版完整验收。未调用模型或外部 provider。
 
-内置 Harness 锁仍为 0.1.6-alpha.2，不自动升级用户 Harness；该锁无官方 Linux Desktop 资源，Linux 保留 Web 模式。明确指定的运行时优先，否则使用内置工具；捆绑 Git 不包含 GCM。macOS 包使用临时签名且未公证，其他平台为 unsigned；CI 通过不等于生产签名或用户真机升级。
+内置 Harness 锁仍为 0.1.6-alpha.2，不自动升级用户 Harness；该锁无官方 Linux Desktop 资源，Linux 保留 Web 模式。显式运行时优先，否则使用内置工具，捆绑 Git 不含 GCM。macOS 包临时签名且未公证，Windows／Linux 为 unsigned；CI 不等于全平台真机升级。本次发布不替换 D 盘或用户数据。
 
 ---
 
-## 1.0.6 — 2026-10-05
+## 1.0.7 — 2026-10-06
 
-- Update Nexus's integrated third-party market first-install pin from `dshmarket@1.52.0` to `dshmarket@1.66.8`, including English/Chinese prompts and documentation.
-- The new market declares Harness 0.2 settings compatibility. Verify the published package's integrity and its npm/GitHub operations consuming the Nexus Desktop package interface.
-- Preserve selected-profile installation, recorded failures and retry, existing dependencies, and enable/disable behavior. The new version is used only when absent; existing markets are not automatically reinstalled or upgraded.
+- Update diagnosis and adaptation against pinned Harness `dsh-v0.2.1-alpha.1` (`5badb15009ae1756c3afe0ae0cef1faafc290ccc`). Distinguish host-skipped/incompatible bundles, actual client import failures and pending services; bind readiness to the current run and owned process instead of stale records.
+- Move full external-source verification off asynchronous request threads. Profile listing can wait for verification while ordinary reads retain their eight-second default timeout. Fix startup observation blocking UI requests.
+- Separate bounded read-only configuration previews from complete backup recovery. Disable editing/saving above the 32 KiB preview limit, verify current-file identity, back up current contents and require confirmation. Cancellation does not write, stale fingerprints cannot overwrite changes, and successful recovery does not certify a subsequent startup.
+- Export bounded 16/64 KiB Host/browser startup records with structured redaction and rejection of non-regular files or redirected parent directories. Preserve actual `import_failed/blocked` reasons without promoting forensic snapshots into readiness evidence.
 
 ### Downloads and provenance
 
-Windows x64/ARM64: EXE and portable ZIP. macOS Intel x64/Apple Silicon ARM64: DMG and portable ZIP. Linux x86_64/ARM64: AppImage, DEB and RPM.
-
-Each platform `_build.json` records its source commit, build identity and check scope. Verify actual downloads against the per-platform or aggregate SHA256 manifest. The aggregate manifest has a GitHub Actions identity-bound Sigstore signature and certificate. This is provenance, not production OS code signing.
+Windows x64/ARM64: EXE and portable ZIP. macOS Intel x64/Apple Silicon ARM64: DMG and portable ZIP. Linux x86_64/ARM64: AppImage, DEB and RPM. Per-platform build metadata and SHA256 manifests accompany the downloads, with an aggregate GitHub Actions identity-bound Sigstore signature/certificate. Provenance is separate from production OS signing. The separate Linux x64 RPM QA artifact is not an additional public release attachment.
 
 ### Verification scope
 
-Eleven local checks passed for this market update, including installation commands/profile preservation, UI/bridge regressions, and the actual 1.66.8 published code consuming Nexus's simulated subprocess handles for npm/GitHub operations. The latter does not install a real plugin; the real Cordis mounting check was not run. Release gates cover frozen dependencies, frontend/Rust regressions, six-platform builds, bundled resources and actual installed-package startup on CI runners for this exact commit. The eight CI artifacts comprise six platform packages, the Git source companion and a separate Linux x64 RPM QA package; the QA package is not an extra public release asset.
+Publication requires successful frozen dependencies, frontend/Rust regressions, resource verification and actual installed-package startup on CI runners for all six targets at this exact commit. Real isolated Windows x86_64 acceptance used Node 24.20.0, the original pinned CLI/Cordis/Web, authenticated Agent/RustBridge and actual Electron ClientAudit. It covers skipped incompatible bundles, missing dependencies/services, upstream normalization, stale-fingerprint rejection, complete backup recovery, run/PID ownership and the native Nexus confirmation UI. R7 diagnostics additionally passed genuine CLI/export identity and credential-redaction checks; ten diagnostic regressions passed without failures or ignored tests.
 
-Earlier original v1.0.4 DMG/ZIP packages passed isolated native checks on both Mac architectures and an official Harness 0.2.0-rc.2 Desktop producer subset, including a synthetic session, a transitive Cordis test plugin, restart, mutation locks and normal cleanup. Those receipts belong to the earlier original packages and do not establish full real-session migration acceptance for v1.0.6. The v1.0.6 Agent Stop regression is verified by its own same-commit native installed-package logs.
+Dot independently checked 25 complete source files, the complete diagnostic semantic window and evidence consistency; Dot did not repeat Windows execution or materialize the entire core file. Unchanged functional evidence was reused from the accepted candidate, not all rerun on the final installer.
 
-The real Harness market UI, full in-browser Web sessions, real-session/full offline migration, every third-party plugin, user Mac upgrades, Gatekeeper first-open, production notarization and crash recovery remain unaccepted. Default Safari configuration is restricted on Mac runners and no user Mac is available. These gaps are not counted as passing; earlier failures and cancellations remain recorded.
+Real upstream Linux build/runtime in Dot's environment remains blocked by tsx IPC restrictions even after normal platform approval; it is not counted as passing. Mac devices, official upstream Desktop Node 24.21.0 launch, real-session/full offline migration, full in-browser sessions, every third-party plugin, Gatekeeper first-open and production notarization remain unaccepted. Earlier Mac package subsets do not establish full acceptance for this version. No model/provider calls were made.
 
-Bundled Harness remains 0.1.6-alpha.2 and user installations are not automatically upgraded. That lock has no official Linux Desktop runtime, so Linux retains Web mode. Explicit runtime paths take precedence; otherwise bundled tools are used. Bundled Git excludes GCM. macOS packages are ad-hoc signed and not notarized; other platforms are unsigned. CI success does not establish production signing or real-device upgrade acceptance.
+Bundled Harness remains 0.1.6-alpha.2 and user installations are not automatically upgraded. That lock has no official Linux Desktop resource; Linux retains Web mode. Explicit runtimes take precedence, and bundled Git excludes GCM. macOS packages are ad-hoc signed and not notarized; Windows/Linux are unsigned. CI success is not full-platform device-upgrade acceptance. This release does not replace D-drive installations or user data.

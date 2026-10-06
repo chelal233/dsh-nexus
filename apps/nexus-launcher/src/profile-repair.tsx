@@ -7,7 +7,13 @@ import { errorMessage } from "./display-format";
 import { useI18n } from "./i18n";
 import type { ViewProps } from "./app-types";
 import { asObject } from "./json-values";
-type File = { file: string; content: string | null; fingerprint: string; error?: string };
+type File = {
+  file: string;
+  content: string | null;
+  content_truncated?: boolean;
+  fingerprint: string;
+  error?: string;
+};
 type Report = {
   profile: string;
   files: File[];
@@ -163,7 +169,9 @@ export function OfflineProfileRepair(props: ViewProps) {
                     )}
                   {item.error && (
                     <ActionButton disabled={disabled} onClick={() => loadFile(item.file)}>
-                      {text("Edit this file", "修复此文件")}
+                      {item.content_truncated
+                        ? text("View this file", "查看此文件")
+                        : text("Edit this file", "修复此文件")}
                     </ActionButton>
                   )}
                 </li>
@@ -181,17 +189,25 @@ export function OfflineProfileRepair(props: ViewProps) {
                 ))}
               </select>
             </label>
+            {selected?.content_truncated && (
+              <p role="status">
+                {text(
+                  "This preview is incomplete and cannot be saved. You can still restore a recovery point.",
+                  "当前预览不完整，不能保存；仍可恢复已有配置恢复点。",
+                )}
+              </p>
+            )}
             <textarea
               aria-label={text("Configuration source", "配置源码")}
               value={draft}
-              disabled={disabled}
+              disabled={disabled || selected?.content_truncated}
               onChange={(event) => setDraft(event.target.value)}
               rows={14}
               spellCheck={false}
               style={{ width: "100%", fontFamily: "monospace" }}
             />
             <ActionButton
-              disabled={disabled || !selected}
+              disabled={disabled || !selected || selected.content_truncated}
               onClick={async () => {
                 if (
                   await confirmAction(

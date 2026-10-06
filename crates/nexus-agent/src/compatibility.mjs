@@ -7,9 +7,9 @@ import { spawn } from 'node:child_process';
 import { pathToFileURL } from 'node:url';
 import semver from './vendor/semver.cjs';
 
-export const checkerVersion = 16;
+export const checkerVersion = 18;
 
-import { diagnoseStartup } from './startup-diagnosis.mjs';
+import { diagnoseStartup, parseSkippedBundles } from './startup-diagnosis.mjs';
 export { diagnoseStartup };
 
 // Upstream renders every inactive entry as `<id> (<package>): <reason>` under a
@@ -541,20 +541,49 @@ export async function probe(node, entry, home, profile, timeoutMs, patches = [],
     env: { ...process.env, DSH_HOME: home }, stdio: ['ignore', 'pipe', 'pipe'],
   });
   let text = '', exit = null, spawnError;
+  const skippedLines = [];
+  let skippedBytes = 0, skippedTruncated = false;
+  const skippedBundles = () => {
+    const parsed = parseSkippedBundles(skippedLines.join('\n'));
+    parsed.truncated ||= skippedTruncated;
+    return parsed;
+  };
   child.on('error', e => { spawnError = e; });
   child.on('exit', code => { exit = code ?? -1; });
-  for (const stream of [child.stdout, child.stderr]) stream.on('data', data => {
-    text = (text + data.toString()).slice(-256 * 1024);
-  });
+  for (const stream of [child.stdout, child.stderr]) {
+    let pending = '', afterSkip = false;
+    stream.setEncoding('utf8');
+    const collect = line => {
+      if (!/^dsh(?: [\w-]+){0,3}: skipping profile bundle /.test(line)) {
+        if (line && afterSkip) skippedTruncated = true;
+        if (line) afterSkip = false;
+        return;
+      }
+      afterSkip = true;
+      if (skippedLines.length >= 48 || skippedBytes + Buffer.byteLength(line) > 16000) { skippedTruncated = true; return; }
+      skippedLines.push(line); skippedBytes += Buffer.byteLength(line);
+    };
+    stream.on('data', data => {
+      text = (text + data).slice(-256 * 1024);
+      const lines = (pending + data).split(/\r?\n/);
+      pending = lines.pop();
+      for (const line of lines) collect(line);
+      if (pending.length > 16000) {
+        if (/^dsh(?: [\w-]+){0,3}: skipping profile bundle /.test(pending)) skippedTruncated = true;
+        pending = pending.slice(-16000);
+      }
+    });
+    stream.on('end', () => collect(pending));
+  }
   const deadline = Date.now() + timeoutMs;
   let readySince = 0, errorSince = 0;
   try {
     while (Date.now() < deadline) {
       if (spawnError) throw spawnError;
-      if (exit !== null) return { ok: false, text, exitCode: exit };
+      if (exit !== null) return { ok: false, text, exitCode: exit, skipped_bundles: skippedBundles() };
       if (fatalLoaderOutput()) {
         errorSince ||= Date.now();
-        if (Date.now() - errorSince >= 300) return { ok: false, text };
+        if (Date.now() - errorSince >= 300) return { ok: false, text, skipped_bundles: skippedBundles() };
         await new Promise(resolve => setTimeout(resolve, 100));
         continue;
       }
@@ -565,14 +594,14 @@ export async function probe(node, entry, home, profile, timeoutMs, patches = [],
             readySince ||= Date.now();
             if (Date.now() - readySince >= 1000 && !fatalLoaderOutput()) {
               const warning = /dsh: warning: \d+ entr(?:y|ies) did not activate/.exec(text);
-              return { ok: true, text: '', warning: upstreamActivationPolicy && warning ? text.slice(warning.index, warning.index + 2400) : null };
+              return { ok: true, text: '', skipped_bundles: skippedBundles(), warning: upstreamActivationPolicy && warning ? text.slice(warning.index, warning.index + 2400) : null };
             }
           }
         } catch { /* readiness may precede the listener */ }
       }
       await new Promise(resolve => setTimeout(resolve, 100));
     }
-    throw Object.assign(Error('Compatibility startup probe timed out; no plugins were guessed or disabled'), { probeOutput: text });
+    throw Object.assign(Error('Compatibility startup probe timed out; no plugins were guessed or disabled'), { probeOutput: text, skipped_bundles: skippedBundles() });
   } finally { await stopProbe(child, !owned); }
 }
 
@@ -633,10 +662,30 @@ export async function check(options) {
   const disabled = source.manualDisabled.map(packageName => ({ package: packageName, reason: 'Disabled by user' }));
   let failureText = '';
   let failureStage = 'dependency_preparation';
+  let skippedBundles = { entries: [], truncated: false }, profileChanges = [];
+  const nativeDiagnostic = diagnosis => {
+    if (!skippedBundles.entries.length && !skippedBundles.truncated && !profileChanges.length) return diagnosis;
+    return { ...(diagnosis ?? {
+      level: skippedBundles.entries.length || skippedBundles.truncated ? 'limited' : 'info', certainty: 'native_probe_observation',
+      code: skippedBundles.entries.length || skippedBundles.truncated ? 'skipped_bundles' : 'profile_normalization', help: 'plugins',
+      summary: 'Harness loaded the profile with native adjustments',
+      remedy: 'Review the skipped bundles and configuration changes. The check did not modify your original profile.',
+      evidence: [],
+    }), skipped_bundles: skippedBundles, profile_changes: profileChanges };
+  };
+  const candidateIdentity = () => Object.fromEntries(profileFiles.map(file => {
+    const directory = fs.lstatSync(candidate);
+    if (!directory.isDirectory() || directory.isSymbolicLink()) throw Error('Native check profile directory must remain an ordinary directory');
+    const target = path.join(candidate, file);
+    let stat;
+    try { stat = fs.lstatSync(target); } catch (error) { if (error.code === 'ENOENT') return [file, null]; throw error; }
+    if (!stat.isFile() || stat.isSymbolicLink() || stat.size > 1024 * 1024) throw Error('Native check produced an unsafe or oversized profile file: ' + file);
+    return [file, crypto.createHash('sha256').update(fs.readFileSync(target)).digest('hex')];
+  }));
   const missing = new Set();
   const report = status => boundDeclarationReport({ checker_version: checkerVersion, status, source_profile: source.source,
     effective_profile: source.source, release_id, fingerprint: source.fingerprint, checked_at_unix: Math.floor(Date.now() / 1000),
-    disabled, declarations, dependency_origins: dependencyOrigins(source, missing, failureText), checked_disabled_plugins: source.manualDisabled, trigger, last_trigger: trigger,
+    disabled, declarations, diagnosis: nativeDiagnostic(), dependency_origins: dependencyOrigins(source, missing, failureText), checked_disabled_plugins: source.manualDisabled, trigger, last_trigger: trigger,
     last_used_at_unix: Math.floor(Date.now() / 1000), cache_reused: false });
   try {
     const argumentSource = path.join(slot, 'apps/cli/src/args.ts');
@@ -663,7 +712,14 @@ export async function check(options) {
     // A check sees the same manifest as the real launch. Disabling a plugin is
     // an explicit, atomic edit to the user's profile, never a hidden projection.
     failureStage = 'startup_probe';
-    const result = await probe(node, path.join(slot, 'apps/cli/lib/bin.js'), testHome, source.source, timeout_ms, patches, options.owned_round === true);
+    const before = candidateIdentity();
+    let result;
+    try { result = await probe(node, path.join(slot, 'apps/cli/lib/bin.js'), testHome, source.source, timeout_ms, patches, options.owned_round === true); }
+    finally {
+      const after = candidateIdentity();
+      profileChanges = profileFiles.filter(file => before[file] !== after[file]).map(file => ({ file, before_sha256: before[file], after_sha256: after[file] }));
+    }
+    skippedBundles = result.skipped_bundles;
     failureText = result.text;
     if (!result.ok && /failed to (?:import|apply) loader entry nexus-(?:desktop-compat|desktop-bridge|notifications)\b/.test(result.text)) {
       throw Error('A Nexus built-in plugin failed to load. Update or repair Nexus; do not disable third-party plugins. Original error: ' + result.text.slice(-4000));
@@ -680,6 +736,7 @@ export async function check(options) {
           summary: 'Plugin failures or replacements prevent Harness services from becoming ready',
           remedy: 'Temporarily disable the recommended third-party plugins, then check and start again. Installed packages and data are retained.',
           activation, replacements, repair_candidates: repairCandidates, evidence: [] } : { ...diagnoseStartup(result.warning), activation } });
+      repair.diagnosis = nativeDiagnostic(repair.diagnosis);
       atomicJson(output, repair);
       return repair;
     }
@@ -692,6 +749,7 @@ export async function check(options) {
       evidence: result.warning.split(/\r?\n/).filter(Boolean).slice(0, 12).map(line => line.slice(0, 200)),
       activation: parseActivation(result.warning),
     };
+    passed.diagnosis = nativeDiagnostic(passed.diagnosis);
     // Store only under the pre-probe input identity. Every reuse computes a new
     // full identity before accepting this key; edits during/after the probe make
     // it unreachable. A second full scan here only discarded such stale keys,
@@ -701,6 +759,7 @@ export async function check(options) {
     }
     atomicJson(output, passed); return passed;
   } catch (error) {
+    if (error.skipped_bundles) skippedBundles = error.skipped_bundles;
     if (typeof error.probeOutput === 'string') { failureText = error.probeOutput; error = Error(`${error.message}\n${failureText.slice(-4000)}`); }
     for (const match of String(error.message).matchAll(/Cannot find (?:package|module) ['"]((?:@[\w.-]+\/)?[\w.-]+)/g)) missing.add(match[1]);
     if (/profile "desktop" is managed exclusively by the Electron application/i.test(failureText)) {
@@ -738,7 +797,7 @@ export async function check(options) {
     if (!pluginChoice) error = Error(String(error.message).replace(
       'Startup check needs an explicit plugin decision; original profile preserved. Original error:',
       'Harness startup check failed; original profile preserved. Original error:'));
-    atomicJson(output, boundDeclarationReport({ ...report(pluginChoice ? 'needs_choice' : 'failed'), diagnosis, failure_stage: failureStage, error: String(error.message).slice(0, 4600),
+    atomicJson(output, boundDeclarationReport({ ...report(pluginChoice ? 'needs_choice' : 'failed'), diagnosis: nativeDiagnostic(diagnosis), failure_stage: failureStage, error: String(error.message).slice(0, 4600),
       candidates: (pluginChoice ? source.manifest.dsh.profile.bundles : []).filter(p => !p.startsWith('@deepseek-ai/')).map(packageName => ({ package: packageName,
         reason: repairCandidates.find(row => row.package === packageName)?.reason || (duplicates.some(row => row.package === packageName) ? 'Declares the duplicate loader entry ID' : failures.has(packageName) ? 'DSH reported a loader error for this plugin' : 'Not identified as faulty; optional isolation for troubleshooting') })) }));
     throw error;
@@ -826,6 +885,8 @@ export async function checkCanary(options) {
       const remaining = 540000 - (Date.now() - started);
       if (remaining <= 0) return { outcome: 'inconclusive', reason: 'Total Canary budget exceeded', duration_ms: Date.now() - began };
       const result = await probe(node, path.join(slot, 'apps/cli/lib/bin.js'), testHome, 'canary', Math.min(45000, remaining), probePatches, options.owned_round === true);
+      if (result.ok && (result.skipped_bundles.entries.length || result.skipped_bundles.truncated)) return {
+        outcome: 'inconclusive', reason: 'Native Harness skipped profile bundles; their activation was not verified', skipped_bundles: result.skipped_bundles, duration_ms: Date.now() - began };
       return { outcome: result.ok ? 'passed' : 'failed', reason: result.ok ? 'Loader and HTML readiness passed' : 'Process exited or reported a loader failure', raw_error: result.ok ? undefined : result.text.slice(-4000), duration_ms: Date.now() - began };
     } catch (error) {
       // Rust redacts the bounded report before publishing it to the API.

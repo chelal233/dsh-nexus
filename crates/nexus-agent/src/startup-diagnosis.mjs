@@ -1,6 +1,43 @@
-// Signatures verified against app-boot/{index,profile}.ts, profile-resolution/
-// resolver.ts, loader/config/tree.ts and CLI args.ts in dsh-v0.1.6-alpha.2.
+// Last source review: 2026-10-05, dsh-v0.2.1-alpha.1 (prerelease), commit
+// 5badb15009ae1756c3afe0ae0cef1faafc290ccc: app-boot/{index,profile}.ts,
+// profile-resolution/resolver.ts, loader/config/tree.ts and CLI args.ts.
+// Keep older signatures; bundled runtime locks and real-upgrade acceptance
+// are separate from this source review. See docs/startup-failure-coverage.md.
 // Classify only a failed operation, never arbitrary background log warnings.
+// Native profile loading may skip bundles and still become ready. These are
+// observations, not fatal errors or authorization to disable a plugin.
+export function parseSkippedBundles(text) {
+  const entries = [];
+  let truncated = false, afterSkip = false;
+  for (const line of String(text || '').split(/\r?\n/)) {
+    const match = /^dsh(?: [\w-]+){0,3}: skipping profile bundle ("(?:[^"\\]|\\.)*"): (.+)$/.exec(line);
+    if (!match) {
+      // Native reasons may contain newlines, but the text stream supplies no
+      // record boundary. Do not attribute unrelated output to a bundle. Flag
+      // unclassified continuation text instead of claiming a complete reason.
+      if (line && afterSkip) truncated = true;
+      if (line) afterSkip = false;
+      continue;
+    }
+    afterSkip = true;
+    let name;
+    try { name = JSON.parse(match[1]); } catch { continue; }
+    if (entries.some(entry => entry.package === name && entry.reason === match[2])) continue;
+    if (entries.length >= 48) { truncated = true; continue; }
+    // Do not split a surrogate pair: Rust must be able to read the entire ready
+    // record even when an unusually long package name/reason is truncated.
+    const bounded = (value, limit) => {
+      let part = value.slice(0, limit);
+      if (/[\uD800-\uDBFF]$/.test(part)) part = part.slice(0, -1);
+      return new TextDecoder().decode(new TextEncoder().encode(part));
+    };
+    const entry = { package: bounded(name, 240), reason: bounded(match[2], 400) };
+    if (entry.package !== name || entry.reason !== match[2]) truncated = true;
+    entries.push(entry);
+  }
+  while (new TextEncoder().encode(JSON.stringify(entries)).length > 8000) { entries.pop(); truncated = true; }
+  return { entries, truncated };
+}
 export function diagnoseStartup(text) {
   const rules = [
     ['nexus_integration', /A Nexus built-in plugin failed to load|failed to (?:import|apply) loader entry nexus-(?:desktop-compat|desktop-bridge|notifications)\b/i, 'Nexus integration failed to load', 'Repair or update the Nexus installation, then check startup again. Do not disable unrelated Harness plugins.'],

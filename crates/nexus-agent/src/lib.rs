@@ -1415,6 +1415,11 @@ async fn harness_ui(State(state): State<AppState>) -> axum::response::Response {
 
     let mut response = serde_json::to_value(info).expect("Harness UI response is serializable");
     response["browser_health"] = desktop_plugins::browser_health(&state.paths, &session.run_id);
+    if let Some(pid) = state.supervisor.current_host_startup_pid(&session.run_id).await {
+        if let Some(skipped) = desktop_plugins::host_skipped_bundles(&state.paths, &session.run_id, pid) {
+            response["browser_health"]["host_skipped_bundles"] = skipped;
+        }
+    }
     response["open_browser_after_ready"] = desktop_plugins::browser_open_deferred(&state.paths, &session.run_id).into();
     (StatusCode::OK, Json(response)).into_response()
 }
@@ -1611,7 +1616,7 @@ async fn observe_startup_failure_until(state: AppState, profile: String, operati
     use nexus_protocol::HarnessState;
     let (_, _, initial_logs) = state.supervisor.status_observation().await;
     let revision = state.config.snapshot().ok().map(|snapshot| snapshot.revision);
-    let initial_source = source_context::resolve(&state.paths, &state.releases).ok();
+    let initial_source = source_context::resolve_async(&state.paths, &state.releases).await.ok();
     let deadline = tokio::time::Instant::now() + timeout;
     let (generation, failed_run) = loop {
         let current_operation = state.supervisor.startup_status().await;

@@ -393,7 +393,7 @@ impl AgentClient {
                 Some((credential, nonce))
             } else { None }
         } else { None };
-        if method == Method::GET && path == "/v1/preflight" { request=request.timeout(Duration::from_secs(45)); }
+        if method == Method::GET && matches!(path, "/v1/preflight" | "/v1/profiles") { request=request.timeout(Duration::from_secs(45)); }
         if method == Method::GET && path == "/v1/releases/tags" {
             request = request.timeout(Duration::from_secs(nexus_protocol::RELEASE_TAG_REQUEST_TIMEOUT_SECS));
         }
@@ -1510,6 +1510,49 @@ mod tests {
         });
         let response:Value=client.request_json(Method::POST,"/v1/updates",Some(br#"{"action":"offline_inspect"}"#.to_vec())).await.unwrap();
         assert_eq!(response["preview"],true);server.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn profile_list_waits_for_source_verification_without_extending_other_reads() {
+        let profiles = TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0)).await.unwrap();
+        let ordinary = TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0)).await.unwrap();
+        let profile_client = AgentClient::new(profiles.local_addr().unwrap().port()).unwrap();
+        let ordinary_client = AgentClient::new(ordinary.local_addr().unwrap().port()).unwrap();
+        let profile_server = tokio::spawn(async move {
+            let (mut socket, _) = profiles.accept().await.unwrap();
+            let mut bytes = [0; 4096];
+            let count = socket.read(&mut bytes).await.unwrap();
+            assert!(String::from_utf8_lossy(&bytes[..count]).starts_with("GET /v1/profiles "));
+            sleep(DEFAULT_REQUEST_TIMEOUT + Duration::from_secs(1)).await;
+            write_json_response(&mut socket, "200 OK", &serde_json::json!({"profiles":["web"]})).await;
+        });
+        let ordinary_server = tokio::spawn(async move {
+            let (mut socket, _) = ordinary.accept().await.unwrap();
+            let mut bytes = [0; 4096];
+            socket.read(&mut bytes).await.unwrap();
+            sleep(DEFAULT_REQUEST_TIMEOUT + Duration::from_secs(1)).await;
+            // A valid delayed response must succeed if this route wrongly
+            // inherits the longer profile timeout; closing the connection
+            // without a response cannot distinguish the two timeouts.
+            let body = br#"{"config":true}"#;
+            let mut response = format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                body.len()
+            ).into_bytes();
+            response.extend_from_slice(body);
+            // The expected short timeout may have already closed its socket.
+            let _ = socket.write_all(&response).await;
+        });
+        let started = std::time::Instant::now();
+        let (profiles, ordinary) = tokio::join!(
+            profile_client.get_json::<Value>("/v1/profiles"),
+            ordinary_client.get_json::<Value>("/v1/config")
+        );
+        assert_eq!(profiles.unwrap()["profiles"][0], "web");
+        assert!(matches!(ordinary, Err(AgentClientError::Transport(_))));
+        assert!(started.elapsed() >= DEFAULT_REQUEST_TIMEOUT);
+        profile_server.await.unwrap();
+        ordinary_server.await.unwrap();
     }
 
     #[tokio::test]

@@ -535,6 +535,16 @@ impl HarnessSupervisor {
         }
     }
 
+    /// Read startup evidence only from the current, provably owned Host.
+    pub(crate) async fn current_host_startup_pid(&self, run: &str) -> Option<u32> {
+        let inner = self.inner.lock().await;
+        if inner.runtime.state != HarnessState::Running || inner.log_session.run_id != run { return None; }
+        let pid = crate::desktop_plugins::host_startup_pid(&self.paths, run)?;
+        // Official CLI may delegate Host to an owned descendant. A recovered
+        // process with no provable owner cannot supply native startup evidence.
+        (inner.runtime.pid == Some(pid) || committed_host_owned(&self.paths, &inner)).then_some(pid)
+    }
+
     /// Durably claim the healthy-snapshot attempt for one concrete Harness log
     /// session. Returns false when this run was already claimed or is no longer
     /// the current Running observation.
@@ -1035,10 +1045,21 @@ impl HarnessSupervisor {
                 let managed = fs::canonicalize(entry).ok().zip(fs::canonicalize(root).ok())
                     .is_some_and(|(entry, root)| entry.starts_with(root));
                 if managed {
+                    // Native loadProfile may normalize the manifest or drop
+                    // retired bundles. Preserve the exact pre-launch files in
+                    // the existing offline recovery UI before executing it.
+                    crate::profile_repair::backup_before_startup(&self.paths, &selected_home, profile)
+                        .map_err(HarnessSupervisorError::Configuration)?;
                     ReleaseStore::heal_module_farm(&selected_home, root).map_err(HarnessSupervisorError::Configuration)?;
                     ReleaseStore::heal_profile_modules(&selected_home, profile, root).map_err(HarnessSupervisorError::Configuration)?;
                 }
             }
+            // Stage before reserving process ownership; a staging failure must
+            // not leave launch_pending behind. CLI entry resolution stays intact.
+            let startup_observer = if direct_startup {
+                Some(crate::desktop_plugins::stage_startup_observer(&self.paths)
+                    .map_err(HarnessSupervisorError::Configuration)?)
+            } else { None };
             let generation = inner.generation.wrapping_add(1).max(1);
             let (mut session, stdout, stderr) = self
                 .prepare_log_session(&inner, generation)
@@ -1115,6 +1136,7 @@ impl HarnessSupervisor {
                 return Err(HarnessSupervisorError::Persistence(error));
             }
             let mut command = Command::new(&program);
+            if let Some(observer) = startup_observer { command.args(["--import", &observer]); }
             command.envs(runtime_env.iter().map(|(key, value)| (key, value)));
             command.envs(nexus_core::harness_preferences_environment(&preferences, &capabilities));
             command.env("DSH_HOME", &selected_home);
@@ -7237,9 +7259,10 @@ mod startup_operation_tests {
         fs::create_dir_all(home.join("profiles/web")).unwrap();
         fs::write(slot.join("package.json"),br#"{"name":"@deepseek-ai/dsh-root","version":"0.1.2-rc.1"}"#).unwrap();
         fs::write(home.join("profiles/web/package.json"),br#"{"name":"web","private":true,"dsh":{"profile":{"bundles":[]}}}"#).unwrap();
+        let original_manifest = fs::read(home.join("profiles/web/package.json")).unwrap();
         let marker=state.paths.root.join("probe-pid.json");
         let entry=slot.join("apps/cli/lib/bin.js");
-        fs::write(&entry,format!("require('node:fs').writeFileSync({},JSON.stringify({{pid:process.pid,args:process.argv}}));setInterval(()=>{{}},1000);",serde_json::to_string(&marker).unwrap())).unwrap();
+        fs::write(&entry,format!("const fs=require('node:fs');const child=require('node:child_process').spawn(process.execPath,['-e','setInterval(()=>{{}},1000)'],{{stdio:'ignore'}});fs.writeFileSync({},JSON.stringify({{dsh:{{profile:{{bundles:[]}}}},normalized:true}}));fs.writeFileSync({},JSON.stringify({{pid:process.pid,hostPid:child.pid,args:process.argv}}));setInterval(()=>{{}},1000);",serde_json::to_string(&home.join("profiles/web/package.json")).unwrap(),serde_json::to_string(&marker).unwrap())).unwrap();
         let mut spec=nexus_core::HarnessLaunchSpec::new(node);
         spec.mode=nexus_protocol::HarnessLaunchMode::Node;
         spec.args=vec![entry.to_string_lossy().into_owned(),"--profile".into(),"{profile}".into()];
@@ -7262,6 +7285,15 @@ mod startup_operation_tests {
         assert!(state.timeout_capture_run.lock().await.completed, "timeout must leave diagnostics");
         assert!(!state.crash_capture_run.lock().await.completed, "timeout must not consume failure evidence");
         let (generation, mut runtime, log_session) = state.supervisor.status_observation().await;
+        let actual = observed.as_ref().expect("actual Harness must launch");
+        let host_record = state.paths.run_dir.join("host-startup.json");
+        for pid in [actual["pid"].as_u64().unwrap() as u32, actual["hostPid"].as_u64().unwrap() as u32] {
+            fs::write(&host_record, serde_json::to_vec(&serde_json::json!({"run":log_session.run_id,"pid":pid,"state":"ready"})).unwrap()).unwrap();
+            assert_eq!(state.supervisor.current_host_startup_pid(&log_session.run_id).await, Some(pid), "current host may be an owned descendant");
+            assert_eq!(state.supervisor.current_host_startup_pid("old-run").await, None);
+        }
+        fs::write(&host_record, serde_json::to_vec(&serde_json::json!({"run":log_session.run_id,"pid":std::process::id(),"state":"ready"})).unwrap()).unwrap();
+        assert_eq!(state.supervisor.current_host_startup_pid(&log_session.run_id).await, None, "a foreign process is not a Host owner");
         runtime.state = nexus_protocol::HarnessState::Failed;
         crate::schedule_crash_capture(&state, &crate::HarnessSnapshot { generation, runtime, log_session }).await;
         assert!(state.crash_capture_run.lock().await.completed, "later failure must capture its own diagnostics");
@@ -7273,6 +7305,11 @@ mod startup_operation_tests {
         assert!(!state.paths.root.join("compatibility/work").exists());
         assert!(!home.join("profiles/.nexus-compatibility-work").exists());
         assert!(!state.paths.root.join("dependency-repair-history").exists());
+        assert_ne!(fs::read(home.join("profiles/web/package.json")).unwrap(), original_manifest);
+        let backups = fs::read_dir(state.paths.root.join("profile-repair-history")).unwrap().map(|entry| {
+            serde_json::from_slice::<serde_json::Value>(&fs::read(entry.unwrap().path()).unwrap()).unwrap()
+        }).collect::<Vec<_>>();
+        assert!(backups.iter().any(|record| record["file"] == "package.json" && record["content"].as_str().map(str::as_bytes) == Some(original_manifest.as_slice())), "the actual managed launch must preserve the pre-normalization manifest");
         fs::remove_dir_all(&state.paths.root).unwrap();
     }
     #[cfg(windows)]

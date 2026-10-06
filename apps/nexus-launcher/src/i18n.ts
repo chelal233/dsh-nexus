@@ -338,6 +338,25 @@ const english: Record<string, string> = {
   "You can continue using Harness. Inspect only the listed optional plugins if you need their features.":
     "You can continue using Harness. Inspect only the listed optional plugins if you need their features.",
   "Limited functionality": "Limited functionality",
+  "Bundles skipped by Harness": "Bundles skipped by Harness",
+  "Listed bundles were not loaded. Review their reported reasons; readiness does not verify their features.":
+    "Listed bundles were not loaded. Review their reported reasons; readiness does not verify their features.",
+  "Some skipped-bundle evidence was truncated. Inspect the full startup log.":
+    "Some skipped-bundle evidence was truncated. Inspect the full startup log.",
+  "Harness skipped some profile bundles": "Harness skipped some profile bundles",
+  "Review the skipped bundles and their reasons before using the affected features.":
+    "Review the skipped bundles and their reasons before using the affected features.",
+  "Harness is ready with startup warnings": "Harness is ready with startup warnings",
+  "Harness loaded the profile with native adjustments":
+    "Harness loaded the profile with native adjustments",
+  "Review the skipped bundles and configuration changes. The check did not modify your original profile.":
+    "Review the skipped bundles and configuration changes. The check did not modify your original profile.",
+  "Native profile adjustments observed": "Native profile adjustments observed",
+  "Harness changed these files in the check copy. Your original profile was preserved. Nexus saves a configuration recovery point before a managed CLI startup.":
+    "Harness changed these files in the check copy. Your original profile was preserved. Nexus saves a configuration recovery point before a managed CLI startup.",
+  "Open configuration recovery": "Open configuration recovery",
+  "Native Harness skipped profile bundles; their activation was not verified":
+    "Native Harness skipped profile bundles; their activation was not verified",
   "Affected optional plugins": "Affected optional plugins",
   "Cause not confirmed. No plugin is identified as responsible.":
     "Cause not confirmed. No plugin is identified as responsible.",
@@ -2421,6 +2440,24 @@ const chinese: Record<string, string> = {
   "You can continue using Harness. Inspect only the listed optional plugins if you need their features.":
     "可以继续使用 Harness；如需相关功能，再处理列出的可选插件。",
   "Limited functionality": "功能受限",
+  "Bundles skipped by Harness": "Harness 跳过的组合包",
+  "Listed bundles were not loaded. Review their reported reasons; readiness does not verify their features.":
+    "列出的组合包没有加载。请查看上游报告的原因；整体就绪不代表这些包的功能已经验证。",
+  "Some skipped-bundle evidence was truncated. Inspect the full startup log.":
+    "部分跳过信息已截断，请查看完整启动日志。",
+  "Harness skipped some profile bundles": "Harness 跳过了部分配置组合包",
+  "Review the skipped bundles and their reasons before using the affected features.":
+    "使用受影响功能前，请检查跳过的组合包及其原因。",
+  "Harness is ready with startup warnings": "Harness 已就绪，但有启动告警",
+  "Harness loaded the profile with native adjustments": "Harness 加载配置时进行了原生调整",
+  "Review the skipped bundles and configuration changes. The check did not modify your original profile.":
+    "请查看跳过的组合包及配置变化，本次检查没有改动原配置。",
+  "Native profile adjustments observed": "检测到原生配置调整",
+  "Harness changed these files in the check copy. Your original profile was preserved. Nexus saves a configuration recovery point before a managed CLI startup.":
+    "Harness 在检查副本中改写了以下文件，原配置已保留。Nexus 会在受管 CLI 启动前保存配置恢复点。",
+  "Open configuration recovery": "打开配置恢复",
+  "Native Harness skipped profile bundles; their activation was not verified":
+    "原生 Harness 跳过了配置组合包，未能验证其激活情况",
   "Affected optional plugins": "受影响的可选插件",
   "Cause not confirmed. No plugin is identified as responsible.":
     "原因尚未确认，未判定任何插件为责任方。",

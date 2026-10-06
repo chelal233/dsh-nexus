@@ -19,10 +19,11 @@ test("offline repair exposes a damaged non-current profile without launching plu
     const {OfflineProfileRepair}=await loader.loadModule("/src/App.tsx");
     const {I18nProvider}=await loader.loadModule("/src/i18n.ts");
     const calls:any[]=[];
+    let truncated = false;
     mockIPC((_command,args:any)=>{
       const body=typeof args.body==="string"?JSON.parse(args.body):args.body; calls.push({path:args.path,...body});
       if(body.action==="list") return {profiles:["broken"]};
-      return {profile:"broken",files:[{file:"package.json",content:"{broken",fingerprint:"test",error:"expected JSON at line 1"},{file:"cordis.patch.yml",content:null,fingerprint:"none"}],backups:[],startup_verified:false};
+      return {profile:"broken",files:[{file:"package.json",content:"{broken",content_truncated:truncated,fingerprint:"full-file-identity",error:"expected JSON at line 1"},{file:"cordis.patch.yml",content:null,fingerprint:"none"}],backups:truncated?[{id:"abc",file:"package.json",created:1}]:[],startup_verified:false};
     });
     const props={snapshot:{profiles:{active_profile:"web",official_plugin_management:true},recovery:{harness:{state:"stopped"}}},busyAction:null,refresh:async()=>{}};
     await React.act(async()=>root.render(React.createElement(I18nProvider,{initialLocale:"en"},React.createElement(OfflineProfileRepair,props))));
@@ -34,6 +35,14 @@ test("offline repair exposes a damaged non-current profile without launching plu
     assert.ok(calls.every(x=>x.path==="/v1/profile-repair"));
     await React.act(async()=>[...document.querySelectorAll<HTMLButtonElement>('button')].find(x=>x.textContent==="Check configuration again")!.click());
     assert.equal(calls.filter(x=>x.action==="inspect").length,2);
+    assert.equal(document.querySelector('textarea')?.disabled, false);
+    truncated = true;
+    await React.act(async()=>[...document.querySelectorAll<HTMLButtonElement>('button')].find(x=>x.textContent==="Check configuration again")!.click());
+    assert.equal(document.querySelector('textarea')?.disabled, true);
+    assert.equal([...document.querySelectorAll<HTMLButtonElement>('button')].find(x=>x.textContent==="Back up, save and check")!.disabled, true);
+    assert.equal([...document.querySelectorAll<HTMLButtonElement>('button')].find(x=>x.textContent==="Restore this file")!.disabled, false);
+    assert.ok(document.body.textContent?.includes("This preview is incomplete and cannot be saved"));
+    assert.ok(calls.every(x=>x.action!=="save"));
   } finally {
     await React.act(async () => root.unmount());
     await loader.close(); clearMocks(); dom.window.close();
