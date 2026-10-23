@@ -1,5 +1,7 @@
 # Nexus Launcher
 
+> **Archived:** As official support continues to improve, the complementary value of dsh-nexus has gradually diminished. Long-term maintenance is no longer necessary, so the project has been archived.
+
 [简体中文](README.zh-CN.md)
 
 **Manage Harness versions, launch it your way, and keep control of your local data.**

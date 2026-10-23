@@ -1,5 +1,7 @@
 # Nexus Launcher
 
+> **归档说明：** 随着官方支持日益完善，dsh-nexus 的补充价值逐渐降低，继续长期维护的必要性已不大，因此决定将项目归档。
+
 [English](README.md)
 
 **管理 Harness 版本，选择启动方式，掌握本地数据。**

@@ -1,5 +1,7 @@
 # Nexus Launcher
 
+> **Archived:** As official support continues to improve, the complementary value of dsh-nexus has gradually diminished. Long-term maintenance is no longer necessary, so the project has been archived.
+
 The complete English overview is maintained in [README.md](README.md), including current downloads, quick start, version and profile management, offline transfer, and screenshots.
 
 This file preserves existing links to the English README.
